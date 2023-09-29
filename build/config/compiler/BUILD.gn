@@ -185,6 +185,10 @@ declare_args() {
   # a reproducer file to be saved.
   save_reproducers_on_lld_crash = false
 
+  # Allow projects that wish to stay on C++17 to override Chromium's default.
+  # TODO(crbug.com/1402249): evaluate removing this end of 2023
+  use_cxx17 = false
+
   # Enable ShadowCallStack for compiled binaries. SCS stores a pointer to a
   # shadow call stack in register x18. Hence, x18 must not be used by the OS
   # or libraries. We assume that to be the case for high end Android
@@ -403,7 +407,9 @@ config("compiler") {
       ldflags += [ "-Wl,--fatal-warnings" ]
     }
     if (fatal_linker_warnings && is_apple) {
-      ldflags += [ "-Wl,-fatal_warnings" ]
+        if (!(is_ios && target_cpu == "x64")) {
+          ldflags += [ "-Wl,-fatal_warnings" ]
+        }
     }
   }
 
@@ -484,8 +490,8 @@ config("compiler") {
     # faster.
     # On arm64, this is already the default behavior.
     if (current_cpu == "x64") {
-      asmflags += [ "-femit-dwarf-unwind=no-compact-unwind" ]
-      cflags += [ "-femit-dwarf-unwind=no-compact-unwind" ]
+#      asmflags += [ "-femit-dwarf-unwind=no-compact-unwind" ]
+#      cflags += [ "-femit-dwarf-unwind=no-compact-unwind" ]
     }
 
     # dsymutil is not available in the system, on bots, for rustc to call. Our
@@ -1863,7 +1869,7 @@ config("default_warnings") {
       if (!is_nacl) {
         cflags += [
           # TODO(crbug.com/1343975) Evaluate and possibly enable.
-          "-Wno-deprecated-builtins",
+          #cjh "-Wno-deprecated-builtins",
 
           # TODO(crbug.com/1352183) Evaluate and possibly enable.
           "-Wno-bitfield-constant-conversion",

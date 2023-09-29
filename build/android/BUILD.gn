@@ -95,7 +95,7 @@ python_library("test_result_presentations_py") {
   data = [
     "//build/android/pylib/results/presentation/template",
     "//build/android/pylib/results/presentation/javascript/main_html.js",
-    "//third_party/catapult/third_party/gsutil/",
+    # "//third_party/catapult/third_party/gsutil/",
     "//third_party/jinja2/debug.py",
     "//third_party/six",
   ]
@@ -106,8 +106,8 @@ python_library("devil_chromium_py") {
   data = [
     "devil_chromium.py",
     "devil_chromium.json",
-    "//third_party/catapult/third_party/gsutil/",
-    "//third_party/catapult/devil/devil/devil_dependencies.json",
+    # "//third_party/catapult/third_party/gsutil/",
+    # "//third_party/catapult/devil/devil/devil_dependencies.json",
 
     # Read by gn_helpers.BuildWithChromium()
     "//build/config/gclient_args.gni",
@@ -207,7 +207,7 @@ python_library("resource_sizes_py") {
   pydeps_file = "resource_sizes.pydeps"
   data_deps = [
     ":devil_chromium_py",
-    "//third_party/catapult/tracing:convert_chart_json",
+    # "//third_party/catapult/tracing:convert_chart_json",
   ]
 
   data = [

@@ -49,7 +49,9 @@ android_ndk_major_version=21
 android32_ndk_api_level=19
 android64_ndk_api_level=21
 use_custom_libunwind=false
-use_ml_inliner=false"
+use_ml_inliner=false
+llvm_android_mainline=true
+"
 
 
 gn gen out/android --args="${ARGS}"

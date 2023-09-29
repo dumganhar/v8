@@ -482,7 +482,7 @@ path. Add it with -I<path> to the command line
 
 #if V8_HAS_BUILTIN_ASSUME_ALIGNED
 # define V8_ASSUME_ALIGNED(ptr, alignment) \
-  __builtin_assume_aligned((ptr), (alignment))
+  (ptr)
 #else
 # define V8_ASSUME_ALIGNED(ptr, alignment) (ptr)
 #endif

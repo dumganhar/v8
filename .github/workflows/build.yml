@@ -494,6 +494,10 @@ jobs:
         with:
           python-version: '3.8'
 
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+
       - name: Check is_debug
         shell: bash
         run: |
