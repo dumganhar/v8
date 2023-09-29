@@ -38,9 +38,9 @@
 .torquelint-cache
 .vscode
 /_*
-/base
-/build
-/buildtools
+#/base
+#/build
+#/buildtools
 /check-header-includes
 /Default/
 /out
@@ -105,4 +105,5 @@ turbo*.cfg
 turbo*.dot
 turbo*.json
 v8.ignition_dispatches_table.json
+.cipdpkg
 
