@@ -1615,7 +1615,7 @@ config("default_warnings") {
 
         cflags_c += [
           # TODO(https://crbug.com/995993): Clean up and enable.
-          "-Wno-implicit-fallthrough",
+          "-Wno-deprecated-builtins",
         ]
 
         if (enable_wmax_tokens) {

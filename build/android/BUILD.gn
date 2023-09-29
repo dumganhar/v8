@@ -51,8 +51,8 @@ python_library("devil_chromium_py") {
   data = [
     "devil_chromium.py",
     "devil_chromium.json",
-    "//third_party/catapult/third_party/gsutil/",
-    "//third_party/catapult/devil/devil/devil_dependencies.json",
+    # "//third_party/catapult/third_party/gsutil/",
+    # "//third_party/catapult/devil/devil/devil_dependencies.json",
 
     # Read by gn_helpers.BuildWithChromium()
     "//build/config/gclient_args.gni",
@@ -123,7 +123,7 @@ python_library("resource_sizes_py") {
   pydeps_file = "resource_sizes.pydeps"
   data_deps = [
     ":devil_chromium_py",
-    "//third_party/catapult/tracing:convert_chart_json",
+    # "//third_party/catapult/tracing:convert_chart_json",
   ]
   data = [
     build_vars_file,
