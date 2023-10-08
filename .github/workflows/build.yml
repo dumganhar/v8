@@ -319,19 +319,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install NDK r21e
+      - name: Install NDK r23c
         uses: nttld/setup-ndk@v1
-        id: setup-ndk-r21e
+        id: setup-ndk
         with:
-          ndk-version: r21e
-          add-to-path: false
-          local-cache: true
-
-      - name: Install NDK r26
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk-r26
-        with:
-          ndk-version: r26
+          ndk-version: r23c
           add-to-path: false
           local-cache: false
 
@@ -389,6 +381,15 @@ jobs:
 
           python3 build/linux/sysroot_scripts/install-sysroot.py --arch=${INSTALL_SYSROOT_ARCH}
 
+      - name: Patch
+        run: |
+          sed -i "s@\"-gsimple-template-names\"@@g" build/config/compiler/BUILD.gn
+          sed -i "s@\"-ffile-compilation-dir=.\"@@g" build/config/compiler/BUILD.gn
+          rm $NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/12.0.9/lib/linux/x86_64/libatomic.a
+
+        env:
+            NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+
       - name: Build ${{ matrix.arch }}
         run: |
           export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
@@ -397,8 +398,7 @@ jobs:
           
           ./build-android.sh ${{ matrix.arch }}
         env:
-          NDK_ROOT_R21: ${{ steps.setup-ndk-r21e.outputs.ndk-path }}
-          NDK_ROOT_R26: ${{ steps.setup-ndk-r26.outputs.ndk-path }}
+          NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
 
       - name: Copy to dist folder
         run: |

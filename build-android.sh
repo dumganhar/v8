@@ -20,8 +20,7 @@ fi
 # If there is 1 argument and its value is "arm64" or "x64", continue with the rest of the script
 echo "Valid architecture: ${ARCH}"
 
-echo "NDK_ROOT_R21=${NDK_ROOT_R21}"
-echo "NDK_ROOT_R26=${NDK_ROOT_R26}"
+echo "NDK_ROOT=${NDK_ROOT}"
 
 ARGS="target_os=\"android\"
 target_cpu=\"${ARCH}\"
@@ -42,9 +41,9 @@ symbol_level=0
 v8_enable_webassembly=true
 use_cxx17=true
 v8_enable_sandbox=false
-android_ndk_root=\"${NDK_ROOT_R21}\"
-clang_base_path=\"${NDK_ROOT_R26}/toolchains/llvm/prebuilt/linux-x86_64\"
-android_ndk_version=\"r21e\"
+android_ndk_root=\"${NDK_ROOT}\"
+clang_base_path=\"${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64\"
+android_ndk_version=\"r23c\"
 android_ndk_major_version=21
 android32_ndk_api_level=19
 android64_ndk_api_level=21
