@@ -36,6 +36,10 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      - name: Update setuptools
+        run: |
+          python3 -m pip install --upgrade pip setuptools
+
       - name: Clone DepotTools
         run: |
             cd ..
@@ -155,6 +159,10 @@ jobs:
         uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd
         with:
           xcode-version: latest-stable
+
+      - name: Update setuptools
+        run: |
+          python3 -m pip install --upgrade pip setuptools
 
       - name: Clone DepotTools
         run: |
