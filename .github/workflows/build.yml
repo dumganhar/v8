@@ -571,6 +571,7 @@ jobs:
           cp ./out/windows/*.exe ./dist/
           cp ./out/windows/*.lib ./dist/
           cp ./out/windows/*.dll ./dist/
+          cp ./out/windows/*.dat ./dist/
           cp -r ./include ./dist/
 
       - name: Upload artifact
