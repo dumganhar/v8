@@ -25,7 +25,11 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Select XCode Version
         uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd
@@ -83,7 +87,7 @@ jobs:
           cp -r ./include ./dist/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: v8-mac-${{ matrix.arch }}
           path: ./dist
@@ -97,13 +101,13 @@ jobs:
     needs: build_mac
     steps:
       - name: Download arm64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-mac-arm64
           path: v8-mac-arm64
 
       - name: Download x64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-mac-x64
           path: v8-mac-x64
@@ -141,7 +145,11 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Select XCode Version
         uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd
@@ -183,9 +191,12 @@ jobs:
       - name: Install llvm
         run: |
           brew install llvm
-          export PATH="/usr/local/opt/llvm/bin:$PATH"
+          echo "Install llvm succeed!"
+          export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
           LLVM_AR_PATH=$(which llvm-ar)
+          echo "LLVM_AR_PATH: ${LLVM_AR_PATH}"
           XCODE_DEV_PATH=$(xcode-select -p)
+          echo "XCODE_DEV_PATH: ${XCODE_DEV_PATH}"
           sudo ln -s ${LLVM_AR_PATH} ${XCODE_DEV_PATH}/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-ar
 
       - name: Build ${{ matrix.arch }}
@@ -211,7 +222,7 @@ jobs:
           cp -r ./include ./dist/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: v8-ios-${{ matrix.arch }}
           path: ./dist
@@ -226,19 +237,19 @@ jobs:
     needs: build_ios
     steps:
       - name: Download arm64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-ios-arm64
           path: v8-ios-arm64
 
       - name: Download x64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-ios-x64
           path: v8-ios-x64
 
       - name: Download simulator-arm64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-ios-simulator-arm64
           path: v8-ios-simulator-arm64
@@ -277,8 +288,36 @@ jobs:
     name: "android"
     runs-on: ubuntu-latest
     steps:
+      - name: Show ubuntu libraries
+        run: |
+          if [[ -d "/usr/lib/i386-linux-gnu" ]]; then
+            echo "/usr/lib/i386-linux-gnu exists."
+            ls -la /usr/lib/i386-linux-gnu/libatomic.so.1*
+          else
+            echo "/usr/lib/i386-linux-gnu doesn't not exist."
+          fi
+
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y libc6:i386 libstdc++6:i386 libatomic1:i386
+
+          if [[ -d "/usr/lib/i386-linux-gnu" ]]; then
+            echo "/usr/lib/i386-linux-gnu exists."
+            ls -la /usr/lib/i386-linux-gnu/
+            ls -la /usr/lib/i386-linux-gnu/libatomic.so.1*
+          else
+            echo "/usr/lib/i386-linux-gnu doesn't not exist."
+          fi
+
+          if [[ -d "/usr/lib/x86_64-linux-gnu" ]]; then
+            echo "/usr/lib/x86_64-linux-gnu exists."
+            ls -la /usr/lib/x86_64-linux-gnu/libatomic.so.1*
+          else
+            echo "/usr/lib/x86_64-linux-gnu doesn't not exist."
+          fi
+
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install NDK r21e
         uses: nttld/setup-ndk@v1
@@ -294,7 +333,18 @@ jobs:
         with:
           ndk-version: r26
           add-to-path: false
-          local-cache: true
+          local-cache: false
+
+      - name: Show Android NDK
+        run: |
+          echo "Show home"
+          ls -l $HOME
+          echo "Show ndk-path"
+          ls -l ${{ steps.setup-ndk.outputs.ndk-path }}
+          echo "Show clang"
+          ls -l ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++
+          echo "Show ndk in hostedtoolcache"
+          ls -l /opt/hostedtoolcache/ndk/r23c/x64/toolchains/llvm/prebuilt/linux-x86_64/bin/
 
       - name: Clone DepotTools
         run: |
@@ -361,7 +411,7 @@ jobs:
           cp -r ./include ./dist/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: v8-android-${{ matrix.arch }}
           path: ./dist
@@ -375,25 +425,25 @@ jobs:
     needs: build_android
     steps:
       - name: Download arm64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-android-arm64
           path: v8-android-arm64
 
       - name: Download arm artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-android-arm
           path: v8-android-arm
 
       - name: Download x64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-android-x64
           path: v8-android-x64
 
       - name: Download x86 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-android-x86
           path: v8-android-x86
@@ -438,9 +488,9 @@ jobs:
     runs-on: windows-2019
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.8'
 
@@ -511,7 +561,7 @@ jobs:
           cp -r ./include ./dist/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: v8-windows-${{ matrix.arch }}-${{ matrix.build_type }}
           path: ./dist
@@ -525,13 +575,13 @@ jobs:
     needs: build_windows
     steps:
       - name: Download x64(debug) artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-windows-x64-debug
           path: v8-windows-x64-debug
 
       - name: Download x64(release) artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-windows-x64-release
           path: v8-windows-x64-release
@@ -598,8 +648,8 @@ jobs:
             echo "/usr/lib/x86_64-linux-gnu doesn't not exist."
           fi
           
-      - uses: actions/checkout@v3
-      - uses: actions/setup-java@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         id: setup-jdk
         with:
           distribution: 'zulu'
@@ -754,7 +804,7 @@ jobs:
           cp -r ./include ./dist/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: v8-oh-${{ matrix.arch }}
           path: ./dist
@@ -768,13 +818,13 @@ jobs:
     needs: build_openharmony
     steps:
       - name: Download arm64 artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-oh-arm64
           path: v8-oh-arm64
 
       - name: Download arm artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: v8-oh-arm
           path: v8-oh-arm
@@ -816,7 +866,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Clone DepotTools
         run: |
@@ -884,7 +934,7 @@ jobs:
           cp -r ./include ./dist/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: v8-linux-${{ matrix.arch }}
           path: ./dist
