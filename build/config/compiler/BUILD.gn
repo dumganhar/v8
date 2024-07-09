@@ -628,7 +628,7 @@ config("compiler") {
     if (default_toolchain != "//build/toolchain/cros:target" &&
         !llvm_android_mainline) {
       cflags += [
-        "-mllvm",
+#cjh        "-mllvm",
 #cjh        "-split-threshold-for-reg-with-hint=0",
       ]
       if (use_thin_lto && is_a_target_toolchain) {
@@ -1884,10 +1884,10 @@ config("default_warnings") {
           "-Wno-vla-extension",
 
           # TODO(https://crbug.com/1490607): Fix and re-enable.
-          "-Wno-thread-safety-reference-return",
+          #cjh "-Wno-thread-safety-reference-return",
 
           # TODO(crbug.com/1495100): Evaluate and possibly enable.
-          "-Wno-delayed-template-parsing-in-cxx20",
+          #cjh "-Wno-delayed-template-parsing-in-cxx20",
         ]
       }
     }
