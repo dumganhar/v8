@@ -580,7 +580,7 @@ config("compiler") {
     if (default_toolchain != "//build/toolchain/cros:target" &&
         !llvm_android_mainline) {
       cflags += [
-        "-mllvm",
+#cjh        "-mllvm",
 #cjh        "-split-threshold-for-reg-with-hint=0",
       ]
       if (use_thin_lto && is_a_target_toolchain) {
@@ -1882,7 +1882,7 @@ config("default_warnings") {
         "-Wno-ignored-pragma-optimize",
 
         # TODO(crbug.com/40231599) Evaluate and possibly enable.
-        "-Wno-deprecated-builtins",
+        #cjh "-Wno-deprecated-builtins",
 
         # TODO(crbug.com/40234766) Evaluate and possibly enable.
         "-Wno-bitfield-constant-conversion",
@@ -1897,7 +1897,7 @@ config("default_warnings") {
         "-Wno-vla-extension",
 
         # TODO(crbug.com/40284799): Fix and re-enable.
-        "-Wno-thread-safety-reference-return",
+        #cjh "-Wno-thread-safety-reference-return",
       ]
 
       cflags_cc += [
