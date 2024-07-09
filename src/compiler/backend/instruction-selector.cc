@@ -1578,6 +1578,31 @@ bool InstructionSelectorT<Adapter>::IsSourcePositionUsed(node_t node) {
       case IrOpcode::kProtectedStore:
       case IrOpcode::kLoadTrapOnNull:
       case IrOpcode::kStoreTrapOnNull:
+      case IrOpcode::kLoadTransform:
+      case IrOpcode::kLoadLane:
+      case IrOpcode::kLoad:
+      case IrOpcode::kStore:
+      case IrOpcode::kStoreLane:
+      case IrOpcode::kWord32AtomicLoad:
+      case IrOpcode::kWord32AtomicStore:
+      case IrOpcode::kWord32AtomicAdd:
+      case IrOpcode::kWord32AtomicSub:
+      case IrOpcode::kWord32AtomicAnd:
+      case IrOpcode::kWord32AtomicOr:
+      case IrOpcode::kWord32AtomicXor:
+      case IrOpcode::kWord32AtomicExchange:
+      case IrOpcode::kWord32AtomicCompareExchange:
+      case IrOpcode::kWord64AtomicLoad:
+      case IrOpcode::kWord64AtomicStore:
+      case IrOpcode::kWord64AtomicAdd:
+      case IrOpcode::kWord64AtomicSub:
+      case IrOpcode::kWord64AtomicAnd:
+      case IrOpcode::kWord64AtomicOr:
+      case IrOpcode::kWord64AtomicXor:
+      case IrOpcode::kWord64AtomicExchange:
+      case IrOpcode::kWord64AtomicCompareExchange:
+      case IrOpcode::kUnalignedLoad:
+      case IrOpcode::kUnalignedStore:
         return true;
       default:
         return false;
@@ -1666,8 +1691,12 @@ void InstructionSelectorT<Adapter>::VisitBlock(block_t block) {
   // matching may cover more than one node at a time.
   for (node_t node : base::Reversed(this->nodes(block))) {
     int current_node_end = current_num_instructions();
-    // Skip nodes that are unused or already defined.
-    if (IsUsed(node) && !IsDefined(node)) {
+    if (!IsUsed(node)) {
+      // Skip nodes that are unused, while marking them as Defined so that it's
+      // clear that these unused nodes have been visited and will not be Defined
+      // later.
+      MarkAsDefined(node);
+    } else if (!IsDefined(node)) {
       // Generate code for this node "top down", but schedule the code "bottom
       // up".
       VisitNode(node);
@@ -4243,9 +4272,6 @@ void InstructionSelectorT<TurboshaftAdapter>::VisitNode(
       DCHECK(op.IsBlockTerminator());
       break;
     case Opcode::kParameter: {
-      // DeadCodeElimination does not eliminate unused parameter operations, so
-      // we just eliminate them here.
-      if (op.saturated_use_count.IsZero()) return;
       // Parameters should always be scheduled to the first block.
       DCHECK_EQ(this->rpo_number(this->block(schedule(), node)).ToInt(), 0);
       MachineType type = linkage()->GetParameterType(
@@ -5018,8 +5044,6 @@ void InstructionSelectorT<TurboshaftAdapter>::VisitNode(
       }
       UNREACHABLE();
     }
-    case Opcode::kComment:
-      return VisitComment(node);
 #ifdef V8_ENABLE_WEBASSEMBLY
     case Opcode::kSimd128Constant: {
       const Simd128ConstantOp& constant = op.Cast<Simd128ConstantOp>();

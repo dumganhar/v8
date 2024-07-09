@@ -22,6 +22,7 @@
 #include "src/base/enum-set.h"
 #include "src/base/platform/condition-variable.h"
 #include "src/base/platform/mutex.h"
+#include "src/base/small-vector.h"
 #include "src/builtins/accessors.h"
 #include "src/common/assert-scope.h"
 #include "src/common/code-memory-access.h"
@@ -46,7 +47,7 @@
 #include "src/roots/roots.h"
 #include "src/sandbox/code-pointer-table.h"
 #include "src/sandbox/external-pointer-table.h"
-#include "src/sandbox/indirect-pointer-table.h"
+#include "src/sandbox/trusted-pointer-table.h"
 #include "src/utils/allocation.h"
 #include "testing/gtest/include/gtest/gtest_prod.h"  // nogncheck
 
@@ -122,6 +123,7 @@ class RwxMemoryWriteScope;
 class SafepointScope;
 class Scavenger;
 class ScavengerCollector;
+class SemiSpaceNewSpace;
 class SharedLargeObjectSpace;
 class SharedReadOnlySpace;
 class SharedSpace;
@@ -136,6 +138,8 @@ class WeakObjectRetainer;
 enum class ClearRecordedSlots { kYes, kNo };
 
 enum class InvalidateRecordedSlots { kYes, kNo };
+
+enum class InvalidateExternalPointerSlots { kYes, kNo };
 
 enum class ClearFreedMemoryMode { kClearFreedMemory, kDontClearFreedMemory };
 
@@ -433,8 +437,9 @@ class Heap final {
   // Copy len non-weak tagged elements from src_slot to dst_slot of dst_object.
   // The source and destination memory ranges must not overlap.
   template <typename TSlot>
-  void CopyRange(Tagged<HeapObject> dst_object, TSlot dst_slot, TSlot src_slot,
-                 int len, WriteBarrierMode mode);
+  V8_EXPORT_PRIVATE void CopyRange(Tagged<HeapObject> dst_object,
+                                   TSlot dst_slot, TSlot src_slot, int len,
+                                   WriteBarrierMode mode);
 
   // Initialize a filler object to keep the ability to iterate over the heap
   // when introducing gaps within pages. This method will verify that no slots
@@ -454,10 +459,6 @@ class Heap final {
   // slots since the sweeper can run concurrently.
   void CreateFillerObjectAtSweeper(Address addr, int size);
 
-  template <typename T>
-  void CreateFillerForArray(Tagged<T> object, int elements_to_trim,
-                            int bytes_to_trim);
-
   bool CanMoveObjectStart(Tagged<HeapObject> object);
 
   bool IsImmovable(Tagged<HeapObject> object);
@@ -469,11 +470,17 @@ class Heap final {
   V8_EXPORT_PRIVATE Tagged<FixedArrayBase> LeftTrimFixedArray(
       Tagged<FixedArrayBase> obj, int elements_to_trim);
 
+#define RIGHT_TRIMMABLE_ARRAY_LIST(V) \
+  V(ArrayList)                        \
+  V(ByteArray)                        \
+  V(FixedArray)                       \
+  V(FixedDoubleArray)                 \
+  V(TransitionArray)                  \
+  V(WeakFixedArray)
+
   // Trim the given array from the right.
-  V8_EXPORT_PRIVATE void RightTrimFixedArray(Tagged<FixedArrayBase> obj,
-                                             int elements_to_trim);
-  void RightTrimWeakFixedArray(Tagged<WeakFixedArray> obj,
-                               int elements_to_trim);
+  template <typename Array>
+  void RightTrimArray(Tagged<Array> object, int new_capacity, int old_capacity);
 
   // Converts the given boolean condition to JavaScript boolean value.
   inline Tagged<Boolean> ToBoolean(bool condition);
@@ -628,13 +635,14 @@ class Heap final {
 
   void VisitExternalResources(v8::ExternalResourceVisitor* visitor);
 
-  void IncrementDeferredCount(v8::Isolate::UseCounterFeature feature);
+  void IncrementDeferredCounts(
+      base::Vector<const v8::Isolate::UseCounterFeature> features);
 
   inline int NextScriptId();
   inline int NextDebuggingId();
   inline int GetNextTemplateSerialNumber();
 
-  void SetSerializedObjects(Tagged<FixedArray> objects);
+  void SetSerializedObjects(Tagged<HeapObject> objects);
   void SetSerializedGlobalProxySizes(Tagged<FixedArray> sizes);
 
   void SetBasicBlockProfilingData(Handle<ArrayList> list);
@@ -757,6 +765,7 @@ class Heap final {
 
   NewSpace* new_space() const { return new_space_; }
   inline PagedNewSpace* paged_new_space() const;
+  inline SemiSpaceNewSpace* semi_space_new_space() const;
   OldSpace* old_space() const { return old_space_; }
   CodeSpace* code_space() const { return code_space_; }
   SharedSpace* shared_space() const { return shared_space_; }
@@ -788,8 +797,8 @@ class Heap final {
     return &read_only_external_pointer_space_;
   }
 
-  IndirectPointerTable::Space* indirect_pointer_space() {
-    return &indirect_pointer_space_;
+  TrustedPointerTable::Space* trusted_pointer_space() {
+    return &trusted_pointer_space_;
   }
 #endif  // V8_COMPRESS_POINTERS
 
@@ -1070,9 +1079,14 @@ class Heap final {
   // By default recorded slots in the object are invalidated. Pass
   // InvalidateRecordedSlots::kNo if this is not necessary or to perform this
   // manually.
+  // If the object contains external pointer slots, then these need to be
+  // invalidated as well if a GC marker may have observed them previously. To
+  // do this, pass HasExernalPointerSlots::kYes.
   void NotifyObjectLayoutChange(
       Tagged<HeapObject> object, const DisallowGarbageCollection&,
-      InvalidateRecordedSlots invalidate_recorded_slots, int new_size = 0);
+      InvalidateRecordedSlots invalidate_recorded_slots,
+      InvalidateExternalPointerSlots invalidate_external_pointer_slots,
+      int new_size = 0);
   V8_EXPORT_PRIVATE static void NotifyObjectLayoutChangeDone(
       Tagged<HeapObject> object);
 
@@ -1466,7 +1480,7 @@ class Heap final {
   // Notifies that all previously allocated objects are properly initialized
   // and ensures that IsPendingAllocation returns false for them. This function
   // may be invoked only on the main thread.
-  V8_EXPORT_PRIVATE void PublishPendingAllocations();
+  V8_EXPORT_PRIVATE void PublishMainThreadPendingAllocations();
 
   // ===========================================================================
   // Heap object allocation tracking. ==========================================
@@ -1586,6 +1600,9 @@ class Heap final {
   // Free all LABs in the heap.
   V8_EXPORT_PRIVATE void FreeLinearAllocationAreas();
 
+  // Frees all LABs owned by the main thread.
+  V8_EXPORT_PRIVATE void FreeMainThreadLinearAllocationAreas();
+
   V8_EXPORT_PRIVATE bool CanPromoteYoungAndExpandOldGeneration(
       size_t size) const;
   V8_EXPORT_PRIVATE bool CanExpandOldGeneration(size_t size) const;
@@ -1615,6 +1632,8 @@ class Heap final {
   std::shared_ptr<v8::TaskRunner> GetForegroundTaskRunner() const;
 
   bool ShouldUseBackgroundThreads() const;
+
+  HeapAllocator* allocator() { return &heap_allocator_; }
 
  private:
   class AllocationTrackerForDebugging;
@@ -1702,17 +1721,8 @@ class Heap final {
                                           GarbageCollectionReason gc_reason,
                                           const char** reason) const;
 
-  // Frees all LABs owned by the main thread.
-  void FreeMainThreadLinearAllocationAreas();
-
-  // Free all shared LABs.
-  void FreeSharedLinearAllocationAreas();
-
-  // Makes all shared LABs iterable.
-  void MakeSharedLinearAllocationAreasIterable();
-
-  // Free all shared LABs of main thread.
-  void FreeMainThreadSharedLinearAllocationAreas();
+  // Make all LABs of all threads iterable.
+  void MakeLinearAllocationAreasIterable();
 
   // Enables/Disables black allocation in shared LABs.
   void MarkSharedLinearAllocationAreasBlack();
@@ -1730,7 +1740,7 @@ class Heap final {
 
   // For static-roots builds, pads the object to the required size.
   void StaticRootsEnsureAllocatedSize(Handle<HeapObject> obj, int required);
-  bool CreateEarlyReadOnlyMaps();
+  bool CreateEarlyReadOnlyMapsAndObjects();
   bool CreateImportantReadOnlyObjects();
   bool CreateLateReadOnlyNonJSReceiverMaps();
   bool CreateLateReadOnlyJSReceiverMaps();
@@ -1959,8 +1969,6 @@ class Heap final {
   // Allocation methods. =======================================================
   // ===========================================================================
 
-  HeapAllocator* allocator() { return &heap_allocator_; }
-
   // Allocates a JS Map in the heap.
   V8_WARN_UNUSED_RESULT AllocationResult
   AllocateMap(AllocationType allocation_type, InstanceType instance_type,
@@ -2125,9 +2133,6 @@ class Heap final {
   PagedSpace* shared_allocation_space_ = nullptr;
   OldLargeObjectSpace* shared_lo_allocation_space_ = nullptr;
 
-  // Allocators for the shared spaces.
-  std::unique_ptr<ConcurrentAllocator> shared_space_allocator_;
-
   // Map from the space id to the space.
   std::unique_ptr<Space> space_[LAST_SPACE + 1];
 
@@ -2138,8 +2143,8 @@ class Heap final {
   // Likewise but for slots in host objects in ReadOnlySpace.
   ExternalPointerTable::Space read_only_external_pointer_space_;
 
-  // Likewise but for the indirect pointer table.
-  IndirectPointerTable::Space indirect_pointer_space_;
+  // Likewise, but for the trusted pointer table.
+  TrustedPointerTable::Space trusted_pointer_space_;
 #endif  // V8_COMPRESS_POINTERS
 
 #ifdef V8_ENABLE_SANDBOX
@@ -2205,7 +2210,7 @@ class Heap final {
 
   GetExternallyAllocatedMemoryInBytesCallback external_memory_callback_;
 
-  int deferred_counters_[v8::Isolate::kUseCounterFeatureCount];
+  base::SmallVector<v8::Isolate::UseCounterFeature, 8> deferred_counters_;
 
   size_t promoted_objects_size_ = 0;
   double promotion_ratio_ = 0.0;
@@ -2405,6 +2410,7 @@ class Heap final {
   friend class NewSpace;
   friend class ObjectStatsCollector;
   friend class Page;
+  friend class PagedSpaceAllocatorPolicy;
   friend class PagedSpaceBase;
   friend class PagedSpaceForNewSpace;
   friend class PauseAllocationObserversScope;
@@ -2438,6 +2444,13 @@ class Heap final {
   FRIEND_TEST(SpacesTest, AllocationObserver);
   friend class HeapInternalsBase;
 };
+
+#define DECL_RIGHT_TRIM(T)                                        \
+  extern template EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) void \
+  Heap::RightTrimArray<T>(Tagged<T> object, int new_capacity,     \
+                          int old_capacity);
+RIGHT_TRIMMABLE_ARRAY_LIST(DECL_RIGHT_TRIM)
+#undef DECL_RIGHT_TRIM
 
 class HeapStats {
  public:

@@ -58,6 +58,7 @@ class WasmGCTypeAnalyzer {
 
   void StartNewSnapshotFor(const Block& block);
   void ProcessOperations(const Block& block);
+  void ProcessBlock(const Block& block);
   void ProcessBranchOnTarget(const BranchOp& branch, const Block& target);
 
   void ProcessTypeCast(const WasmTypeCastOp& type_cast);
@@ -69,8 +70,16 @@ class WasmGCTypeAnalyzer {
   void ProcessStructGet(const StructGetOp& struct_get);
   void ProcessStructSet(const StructSetOp& struct_set);
   void ProcessArrayLength(const ArrayLengthOp& array_length);
+  void ProcessGlobalGet(const GlobalGetOp& global_get);
+  void ProcessRefFunc(const WasmRefFuncOp& ref_func);
+  void ProcessAllocateArray(const WasmAllocateArrayOp& allocate_array);
+  void ProcessAllocateStruct(const WasmAllocateStructOp& allocate_struct);
+  void ProcessPhi(const PhiOp& phi);
+  void ProcessTypeAnnotation(const WasmTypeAnnotationOp& type_annotation);
 
   void CreateMergeSnapshot(const Block& block);
+  bool CreateMergeSnapshot(base::Vector<const Snapshot> predecessors,
+                           base::Vector<const bool> reachable);
 
   // Updates the knowledge in the side table about the type of {object},
   // returning the previous known type.
@@ -78,6 +87,11 @@ class WasmGCTypeAnalyzer {
   // Updates the knowledge in the side table to be a non-nullable type for
   // {object}, returning the previous known type.
   wasm::ValueType RefineTypeKnowledgeNotNull(OpIndex object);
+
+  OpIndex ResolveAliases(OpIndex object) const;
+  wasm::ValueType GetResolvedType(OpIndex object) const;
+
+  bool IsReachable(const Block& block) const;
 
   Graph& graph_;
   Zone* phase_zone_;
@@ -87,11 +101,18 @@ class WasmGCTypeAnalyzer {
   TypeSnapshotTable types_table_{phase_zone_};
   // Maps the block id to a snapshot in the table defining the type knowledge
   // at the end of the block.
-  FixedSidetable<MaybeSnapshot, BlockIndex> block_to_snapshot_{
-      graph_.block_count(), phase_zone_};
+  FixedBlockSidetable<MaybeSnapshot> block_to_snapshot_{graph_.block_count(),
+                                                        phase_zone_};
+  BitVector block_is_unreachable_{static_cast<int>(graph_.block_count()),
+                                  phase_zone_};
+  const Block* current_block_ = nullptr;
   // For any operation that could potentially refined, this map stores an entry
   // to the inferred input type based on the analysis.
   ZoneUnorderedMap<OpIndex, wasm::ValueType> input_type_map_{phase_zone_};
+  // Marker wheteher it is the first time visiting a loop header. In that case,
+  // loop phis can only use type information based on the forward edge of the
+  // loop. The value is false outside of loop headers.
+  bool is_first_loop_header_evaluation_ = false;
 };
 
 #include "src/compiler/turboshaft/define-assembler-macros.inc"
@@ -108,6 +129,11 @@ class WasmGCTypeReducer : public Next {
 
   OpIndex REDUCE_INPUT_GRAPH(WasmTypeCast)(OpIndex op_idx,
                                            const WasmTypeCastOp& cast_op) {
+    LABEL_BLOCK(no_change) {
+      return Next::ReduceInputGraphWasmTypeCast(op_idx, cast_op);
+    }
+    if (ShouldSkipOptimizationStep()) goto no_change;
+
     wasm::ValueType type = analyzer_.GetInputType(op_idx);
     if (type != wasm::ValueType() && type != wasm::kWasmBottom) {
       bool to_nullable = cast_op.config.to.is_nullable();
@@ -138,6 +164,9 @@ class WasmGCTypeReducer : public Next {
                                               : __ Word32Constant(0);
         __ TrapIfNot(non_trapping_condition, OpIndex::Invalid(),
                      TrapId::kTrapIllegalCast);
+        if (!to_nullable) {
+          __ Unreachable();
+        }
         return __ MapToNewGraph(cast_op.object());
       }
       // The cast cannot be replaced. Still, we can refine the source type, so
@@ -149,11 +178,16 @@ class WasmGCTypeReducer : public Next {
       return __ WasmTypeCast(__ MapToNewGraph(cast_op.object()),
                              __ MapToNewGraphIfValid(cast_op.rtt()), config);
     }
-    return Next::ReduceInputGraphWasmTypeCast(op_idx, cast_op);
+    goto no_change;
   }
 
   OpIndex REDUCE_INPUT_GRAPH(WasmTypeCheck)(OpIndex op_idx,
                                             const WasmTypeCheckOp& type_check) {
+    LABEL_BLOCK(no_change) {
+      return Next::ReduceInputGraphWasmTypeCheck(op_idx, type_check);
+    }
+    if (ShouldSkipOptimizationStep()) goto no_change;
+
     wasm::ValueType type = analyzer_.GetInputType(op_idx);
     if (type != wasm::ValueType() && type != wasm::kWasmBottom) {
       bool to_nullable = type_check.config.to.is_nullable();
@@ -191,19 +225,29 @@ class WasmGCTypeReducer : public Next {
                               __ MapToNewGraphIfValid(type_check.rtt()),
                               config);
     }
-    return Next::ReduceInputGraphWasmTypeCheck(op_idx, type_check);
+    goto no_change;
   }
 
   OpIndex REDUCE_INPUT_GRAPH(AssertNotNull)(
       OpIndex op_idx, const AssertNotNullOp& assert_not_null) {
+    LABEL_BLOCK(no_change) {
+      return Next::ReduceInputGraphAssertNotNull(op_idx, assert_not_null);
+    }
+    if (ShouldSkipOptimizationStep()) goto no_change;
+
     wasm::ValueType type = analyzer_.GetInputType(op_idx);
     if (type.is_non_nullable()) {
       return __ MapToNewGraph(assert_not_null.object());
     }
-    return Next::ReduceInputGraphAssertNotNull(op_idx, assert_not_null);
+    goto no_change;
   }
 
   OpIndex REDUCE_INPUT_GRAPH(IsNull)(OpIndex op_idx, const IsNullOp& is_null) {
+    LABEL_BLOCK(no_change) {
+      return Next::ReduceInputGraphIsNull(op_idx, is_null);
+    }
+    if (ShouldSkipOptimizationStep()) goto no_change;
+
     const wasm::ValueType type = analyzer_.GetInputType(op_idx);
     if (type.is_non_nullable()) {
       return __ Word32Constant(0);
@@ -212,58 +256,84 @@ class WasmGCTypeReducer : public Next {
         wasm::ToNullSentinel({type, module_}) == type) {
       return __ Word32Constant(1);
     }
-    return Next::ReduceInputGraphIsNull(op_idx, is_null);
+    goto no_change;
+  }
+
+  OpIndex REDUCE_INPUT_GRAPH(WasmTypeAnnotation)(
+      OpIndex op_idx, const WasmTypeAnnotationOp& type_annotation) {
+    // Remove type annotation operations as they are not needed any more.
+    return __ MapToNewGraph(type_annotation.value());
   }
 
   OpIndex REDUCE_INPUT_GRAPH(StructGet)(OpIndex op_idx,
                                         const StructGetOp& struct_get) {
+    LABEL_BLOCK(no_change) {
+      return Next::ReduceInputGraphStructGet(op_idx, struct_get);
+    }
+    if (ShouldSkipOptimizationStep()) goto no_change;
+
     const wasm::ValueType type = analyzer_.GetInputType(op_idx);
     // Remove the null check if it is known to be not null.
     if (struct_get.null_check == kWithNullCheck && type.is_non_nullable()) {
       return __ StructGet(__ MapToNewGraph(struct_get.object()),
-                          struct_get.type, struct_get.field_index,
-                          struct_get.is_signed, kWithoutNullCheck);
+                          struct_get.type, struct_get.type_index,
+                          struct_get.field_index, struct_get.is_signed,
+                          kWithoutNullCheck);
     }
-    return Next::ReduceInputGraphStructGet(op_idx, struct_get);
+    goto no_change;
   }
 
   OpIndex REDUCE_INPUT_GRAPH(StructSet)(OpIndex op_idx,
                                         const StructSetOp& struct_set) {
+    LABEL_BLOCK(no_change) {
+      return Next::ReduceInputGraphStructSet(op_idx, struct_set);
+    }
+    if (ShouldSkipOptimizationStep()) goto no_change;
+
     const wasm::ValueType type = analyzer_.GetInputType(op_idx);
     // Remove the null check if it is known to be not null.
     if (struct_set.null_check == kWithNullCheck && type.is_non_nullable()) {
       __ StructSet(__ MapToNewGraph(struct_set.object()),
                    __ MapToNewGraph(struct_set.value()), struct_set.type,
-                   struct_set.field_index, kWithoutNullCheck);
+                   struct_set.type_index, struct_set.field_index,
+                   kWithoutNullCheck);
       return OpIndex::Invalid();
     }
-    return Next::ReduceInputGraphStructSet(op_idx, struct_set);
+    goto no_change;
   }
 
   OpIndex REDUCE_INPUT_GRAPH(ArrayLength)(OpIndex op_idx,
                                           const ArrayLengthOp& array_length) {
+    LABEL_BLOCK(no_change) {
+      return Next::ReduceInputGraphArrayLength(op_idx, array_length);
+    }
+    if (ShouldSkipOptimizationStep()) goto no_change;
+
     const wasm::ValueType type = analyzer_.GetInputType(op_idx);
     // Remove the null check if it is known to be not null.
     if (array_length.null_check == kWithNullCheck && type.is_non_nullable()) {
       return __ ArrayLength(__ MapToNewGraph(array_length.array()),
                             kWithoutNullCheck);
     }
-    return Next::ReduceInputGraphArrayLength(op_idx, array_length);
+    goto no_change;
   }
 
   // TODO(14108): This isn't a type optimization and doesn't fit well into this
   // reducer.
-  OpIndex REDUCE(ExternInternalize)(V<Tagged> object) {
+  OpIndex REDUCE(AnyConvertExtern)(V<Tagged> object) {
+    LABEL_BLOCK(no_change) { return Next::ReduceAnyConvertExtern(object); }
+    if (ShouldSkipOptimizationStep()) goto no_change;
+
     if (object.valid()) {
-      const ExternExternalizeOp* externalize =
-          __ output_graph().Get(object).template TryCast<ExternExternalizeOp>();
+      const ExternConvertAnyOp* externalize =
+          __ output_graph().Get(object).template TryCast<ExternConvertAnyOp>();
       if (externalize != nullptr) {
         // Directly return the object as
-        // extern.internalize(extern.externalize(x)) == x.
-        return __ MapToNewGraph(externalize->object());
+        // any.convert_extern(extern.convert_any(x)) == x.
+        return externalize->object();
       }
     }
-    return Next::ReduceExternInternalize(object);
+    goto no_change;
   }
 
  private:

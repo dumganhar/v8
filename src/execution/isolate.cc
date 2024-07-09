@@ -893,7 +893,7 @@ class CallSiteBuilder {
   bool Full() { return index_ >= limit_; }
 
   Handle<FixedArray> Build() {
-    return FixedArray::ShrinkOrEmpty(isolate_, elements_, index_);
+    return FixedArray::RightTrimOrEmpty(isolate_, elements_, index_);
   }
 
  private:
@@ -1043,7 +1043,13 @@ void CaptureAsyncStackTrace(Isolate* isolate, Handle<JSPromise> promise,
                                     isolate);
       builder->AppendPromiseCombinatorFrame(function, combinator);
 
-      // Now peak into the Promise.all() resolve element context to
+      if (IsNativeContext(*context)) {
+        // NativeContext is used as a marker that the closure was already
+        // called. We can't access the reject element context any more.
+        return;
+      }
+
+      // Now peek into the Promise.all() resolve element context to
       // find the promise capability that's being resolved when all
       // the concurrent promises resolve.
       int const index =
@@ -1062,7 +1068,13 @@ void CaptureAsyncStackTrace(Isolate* isolate, Handle<JSPromise> promise,
           context->native_context()->promise_all_settled(), isolate);
       builder->AppendPromiseCombinatorFrame(function, combinator);
 
-      // Now peak into the Promise.allSettled() resolve element context to
+      if (IsNativeContext(*context)) {
+        // NativeContext is used as a marker that the closure was already
+        // called. We can't access the reject element context any more.
+        return;
+      }
+
+      // Now peek into the Promise.allSettled() resolve element context to
       // find the promise capability that's being resolved when all
       // the concurrent promises resolve.
       int const index =
@@ -1080,7 +1092,13 @@ void CaptureAsyncStackTrace(Isolate* isolate, Handle<JSPromise> promise,
                                     isolate);
       builder->AppendPromiseCombinatorFrame(function, combinator);
 
-      // Now peak into the Promise.any() reject element context to
+      if (IsNativeContext(*context)) {
+        // NativeContext is used as a marker that the closure was already
+        // called. We can't access the reject element context any more.
+        return;
+      }
+
+      // Now peek into the Promise.any() reject element context to
       // find the promise capability that's being resolved when any of
       // the concurrent promises resolve.
       int const index = PromiseBuiltins::kPromiseAnyRejectElementCapabilitySlot;
@@ -1400,7 +1418,7 @@ class StackFrameBuilder {
   }
 
   Handle<FixedArray> Build() {
-    return FixedArray::ShrinkOrEmpty(isolate_, frames_, index_);
+    return FixedArray::RightTrimOrEmpty(isolate_, frames_, index_);
   }
 
  private:
@@ -2521,6 +2539,7 @@ void Isolate::PrintCurrentStackTrace(std::ostream& out) {
   for (int i = 0; i < frames->length(); ++i) {
     Handle<CallSiteInfo> frame(CallSiteInfo::cast(frames->get(i)), this);
     SerializeCallSiteInfo(this, frame, &builder);
+    if (i != frames->length() - 1) builder.AppendCharacter('\n');
   }
 
   Handle<String> stack_trace = builder.Finish().ToHandleChecked();
@@ -2859,7 +2878,9 @@ bool WalkPromiseTreeInternal(
         if (!IsUndefined(reaction->reject_handler(), isolate)) {
           reject_handler =
               handle(JSReceiver::cast(reaction->reject_handler()), isolate);
-          if (!ReceiverIsForwardingHandler(isolate, reject_handler)) {
+          if (!ReceiverIsForwardingHandler(isolate, reject_handler) &&
+              !IsBuiltinFunction(isolate, reaction->reject_handler(),
+                                 Builtin::kPromiseCatchFinally)) {
             caught = true;
             // If there is no callback, just return true if anything catches
             if (!callback) return true;
@@ -2882,6 +2903,18 @@ bool WalkPromiseTreeInternal(
               Handle<JSReceiver> fulfill_handler(
                   JSReceiver::cast(reaction->fulfill_handler()), isolate);
               if (!ReceiverIsForwardingHandler(isolate, fulfill_handler)) {
+                if (IsBuiltinFunction(isolate, reaction->fulfill_handler(),
+                                      Builtin::kPromiseThenFinally)) {
+                  // If this is the finally handler, get the wrapped callback
+                  // from the context to use instead
+                  Handle<Context> context(
+                      JSFunction::cast(reaction->fulfill_handler())->context(),
+                      isolate);
+                  int const index = PromiseBuiltins::PromiseFinallyContextSlot::
+                      kOnFinallySlot;
+                  fulfill_handler =
+                      handle(JSReceiver::cast(context->get(index)), isolate);
+                }
                 if (callback({fulfill_handler, false})) {
                   return true;
                 }
@@ -3623,6 +3656,25 @@ Isolate::Isolate(std::unique_ptr<i::IsolateAllocator> isolate_allocator)
 
   InitializeDefaultEmbeddedBlob();
 
+#if V8_ENABLE_WEBASSEMBLY
+  // If we are in production V8 and not in mksnapshot we have to pass the
+  // landing pad builtin to the WebAssembly TrapHandler.
+  // TODO(ahaas): Isolate creation is the earliest point in time when builtins
+  // are available, so we cannot set the landing pad earlier at the moment.
+  // However, if builtins ever get loaded during process initialization time,
+  // then the initialization of the trap handler landing pad should also go
+  // there.
+  // TODO(ahaas): The code of the landing pad does not have to be a builtin,
+  // we could also just move it to the trap handler, and implement it e.g. with
+  // inline assembly. It's not clear if that's worth it.
+  if (Isolate::CurrentEmbeddedBlobCodeSize()) {
+    EmbeddedData embedded_data = EmbeddedData::FromBlob();
+    Address landing_pad =
+        embedded_data.InstructionStartOf(Builtin::kWasmTrapHandlerLandingPad);
+    i::trap_handler::SetLandingPad(landing_pad);
+  }
+#endif  // V8_ENABLE_WEBASSEMBLY
+
   MicrotaskQueue::SetUpDefaultMicrotaskQueue(this);
 }
 
@@ -3630,16 +3682,16 @@ void Isolate::CheckIsolateLayout() {
 #ifdef V8_ENABLE_SANDBOX
   CHECK_EQ(static_cast<int>(OFFSET_OF(ExternalPointerTable, base_)),
            Internals::kExternalPointerTableBasePointerOffset);
-  CHECK_EQ(static_cast<int>(OFFSET_OF(IndirectPointerTable, base_)),
-           Internals::kIndirectPointerTableBasePointerOffset);
+  CHECK_EQ(static_cast<int>(OFFSET_OF(TrustedPointerTable, base_)),
+           Internals::kTrustedPointerTableBasePointerOffset);
   CHECK_EQ(static_cast<int>(sizeof(ExternalPointerTable)),
            Internals::kExternalPointerTableSize);
   CHECK_EQ(static_cast<int>(sizeof(ExternalPointerTable)),
            ExternalPointerTable::kSize);
-  CHECK_EQ(static_cast<int>(sizeof(IndirectPointerTable)),
-           Internals::kIndirectPointerTableSize);
-  CHECK_EQ(static_cast<int>(sizeof(IndirectPointerTable)),
-           IndirectPointerTable::kSize);
+  CHECK_EQ(static_cast<int>(sizeof(TrustedPointerTable)),
+           Internals::kTrustedPointerTableSize);
+  CHECK_EQ(static_cast<int>(sizeof(TrustedPointerTable)),
+           TrustedPointerTable::kSize);
 #endif
 
   CHECK_EQ(OFFSET_OF(Isolate, isolate_data_), 0);
@@ -3686,8 +3738,8 @@ void Isolate::CheckIsolateLayout() {
                OFFSET_OF(Isolate, isolate_data_.external_pointer_table_)),
            Internals::kIsolateExternalPointerTableOffset);
   CHECK_EQ(static_cast<int>(
-               OFFSET_OF(Isolate, isolate_data_.indirect_pointer_table_)),
-           Internals::kIsolateIndirectPointerTableOffset);
+               OFFSET_OF(Isolate, isolate_data_.trusted_pointer_table_)),
+           Internals::kIsolateTrustedPointerTableOffset);
 #endif
   CHECK_EQ(static_cast<int>(
                OFFSET_OF(Isolate, isolate_data_.api_callback_thunk_argument_)),
@@ -3781,8 +3833,10 @@ void Isolate::Deinit() {
   cancelable_task_manager()->CancelAndWait();
 
   // Cancel all compiler tasks.
+#ifdef V8_ENABLE_SPARKPLUG
   delete baseline_batch_compiler_;
   baseline_batch_compiler_ = nullptr;
+#endif  // V8_ENABLE_SPARKPLUG
 
 #ifdef V8_ENABLE_MAGLEV
   delete maglev_concurrent_dispatcher_;
@@ -3900,8 +3954,8 @@ void Isolate::Deinit() {
     delete shared_external_pointer_space_;
     shared_external_pointer_space_ = nullptr;
   }
-  indirect_pointer_table().TearDownSpace(heap()->indirect_pointer_space());
-  indirect_pointer_table().TearDown();
+  trusted_pointer_table().TearDownSpace(heap()->trusted_pointer_space());
+  trusted_pointer_table().TearDown();
 #endif  // V8_COMPRESS_POINTERS
 
 #ifdef V8_ENABLE_SANDBOX
@@ -4536,7 +4590,9 @@ bool Isolate::Init(SnapshotData* startup_snapshot_data,
     lazy_compile_dispatcher_ = std::make_unique<LazyCompileDispatcher>(
         this, V8::GetCurrentPlatform(), v8_flags.stack_size);
   }
+#ifdef V8_ENABLE_SPARKPLUG
   baseline_batch_compiler_ = new baseline::BaselineBatchCompiler(this);
+#endif  // V8_ENABLE_SPARKPLUG
 #ifdef V8_ENABLE_MAGLEV
   maglev_concurrent_dispatcher_ = new maglev::MaglevConcurrentDispatcher(this);
 #endif  // V8_ENABLE_MAGLEV
@@ -4613,8 +4669,8 @@ bool Isolate::Init(SnapshotData* startup_snapshot_data,
         heap()->read_only_external_pointer_space());
     external_pointer_table().InitializeSpace(heap()->external_pointer_space());
 
-    indirect_pointer_table().Initialize();
-    indirect_pointer_table().InitializeSpace(heap()->indirect_pointer_space());
+    trusted_pointer_table().Initialize();
+    trusted_pointer_table().InitializeSpace(heap()->trusted_pointer_space());
 #endif  // V8_COMPRESS_POINTERS
   }
   ReadOnlyHeap::SetUp(this, read_only_snapshot_data, can_rehash);
@@ -5928,6 +5984,11 @@ void Isolate::SetUseCounterCallback(v8::Isolate::UseCounterCallback callback) {
 }
 
 void Isolate::CountUsage(v8::Isolate::UseCounterFeature feature) {
+  CountUsage(base::VectorOf({feature}));
+}
+
+void Isolate::CountUsage(
+    base::Vector<const v8::Isolate::UseCounterFeature> features) {
   // The counter callback
   // - may cause the embedder to call into V8, which is not generally possible
   //   during GC.
@@ -5939,16 +6000,12 @@ void Isolate::CountUsage(v8::Isolate::UseCounterFeature feature) {
     DCHECK(IsNativeContext(context()->native_context()));
     if (use_counter_callback_) {
       HandleScope handle_scope(this);
-      use_counter_callback_(reinterpret_cast<v8::Isolate*>(this), feature);
+      for (auto feature : features) {
+        use_counter_callback_(reinterpret_cast<v8::Isolate*>(this), feature);
+      }
     }
   } else {
-    heap_.IncrementDeferredCount(feature);
-  }
-}
-
-void Isolate::CountUsage(v8::Isolate::UseCounterFeature feature, int count) {
-  for (int i = 0; i < count; ++i) {
-    CountUsage(feature);
+    heap_.IncrementDeferredCounts(features);
   }
 }
 

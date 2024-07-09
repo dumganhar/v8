@@ -180,6 +180,7 @@ class MachineRepresentationInferrer {
           case IrOpcode::kChangeInt32ToTagged:
           case IrOpcode::kChangeUint32ToTagged:
           case IrOpcode::kBitcastWordToTagged:
+          case IrOpcode::kTaggedIndexConstant:
             representation_vector_[node->id()] = MachineRepresentation::kTagged;
             break;
           case IrOpcode::kCompressedHeapConstant:
@@ -444,7 +445,10 @@ class MachineRepresentationChecker {
           case IrOpcode::kWord32Popcnt:
             MACHINE_UNOP_32_LIST(LABEL) { CheckValueInputForInt32Op(node, 0); }
             break;
+          // Allow tagged pointers to be compared directly, and range checked.
           case IrOpcode::kWord32Equal:
+          case IrOpcode::kUint32LessThan:
+          case IrOpcode::kUint32LessThanOrEqual:
             if (Is32()) {
               CheckValueInputIsTaggedOrPointer(node, 0);
               CheckValueInputIsTaggedOrPointer(node, 1);
@@ -465,8 +469,6 @@ class MachineRepresentationChecker {
 
           case IrOpcode::kInt32LessThan:
           case IrOpcode::kInt32LessThanOrEqual:
-          case IrOpcode::kUint32LessThan:
-          case IrOpcode::kUint32LessThanOrEqual:
             MACHINE_BINOP_32_LIST(LABEL) {
               CheckValueInputForInt32Op(node, 0);
               CheckValueInputForInt32Op(node, 1);

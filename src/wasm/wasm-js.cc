@@ -1463,6 +1463,9 @@ bool GetValueType(Isolate* isolate, MaybeLocal<Value> maybe,
   } else if (enabled_features.has_gc() &&
              string->StringEquals(v8_str(isolate, "i31ref"))) {
     *type = i::wasm::kWasmI31Ref;
+  } else if (enabled_features.has_exnref() &&
+             string->StringEquals(v8_str(isolate, "exnref"))) {
+    *type = i::wasm::kWasmExnRef;
   } else {
     // Unrecognized type.
     *type = i::wasm::kWasmVoid;
@@ -1769,9 +1772,9 @@ namespace {
 
 uint32_t GetEncodedSize(i::Handle<i::WasmTagObject> tag_object) {
   auto serialized_sig = tag_object->serialized_signature();
-  i::wasm::WasmTagSig sig{0, static_cast<size_t>(serialized_sig->length()),
-                          reinterpret_cast<i::wasm::ValueType*>(
-                              serialized_sig->GetDataStartAddress())};
+  i::wasm::WasmTagSig sig{
+      0, static_cast<size_t>(serialized_sig->length()),
+      reinterpret_cast<i::wasm::ValueType*>(serialized_sig->begin())};
   return i::WasmExceptionPackage::GetEncodedSize(&sig);
 }
 
@@ -2114,36 +2117,6 @@ void WebAssemblyFunction(const v8::FunctionCallbackInfo<v8::Value>& info) {
   bool is_wasm_exported_function =
       i::WasmExportedFunction::IsWasmExportedFunction(*callable);
   bool is_wasm_js_function = i::WasmJSFunction::IsWasmJSFunction(*callable);
-
-  if (is_wasm_exported_function && !suspend && !promise) {
-    uint32_t canonical_sig_index =
-        i::wasm::GetWasmEngine()->type_canonicalizer()->AddRecursiveGroup(sig);
-    if (i::Handle<i::WasmExportedFunction>::cast(callable)->MatchesSignature(
-            canonical_sig_index)) {
-      info.GetReturnValue().Set(Utils::ToLocal(callable));
-      return;
-    }
-
-    thrower.TypeError(
-        "The signature of Argument 1 (a WebAssembly function) does "
-        "not match the signature specified in Argument 0");
-    return;
-  }
-
-  if (is_wasm_js_function && !suspend && !promise) {
-    uint32_t canonical_sig_index =
-        i::wasm::GetWasmEngine()->type_canonicalizer()->AddRecursiveGroup(sig);
-    if (i::Handle<i::WasmJSFunction>::cast(callable)->MatchesSignature(
-            canonical_sig_index)) {
-      info.GetReturnValue().Set(Utils::ToLocal(callable));
-      return;
-    }
-
-    thrower.TypeError(
-        "The signature of Argument 1 (a WebAssembly function) does "
-        "not match the signature specified in Argument 0");
-    return;
-  }
 
   if (is_wasm_exported_function && suspend) {
     // TODO(thibaudm): Support wasm-to-wasm calls with suspending behavior, and

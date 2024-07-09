@@ -116,7 +116,8 @@ void SourceCodeCache::Add(Isolate* isolate, base::Vector<const char> name,
   int length = cache_->length();
   Handle<FixedArray> new_array =
       factory->NewFixedArray(length + 2, AllocationType::kOld);
-  cache_->CopyTo(0, *new_array, 0, cache_->length());
+  FixedArray::CopyElements(isolate, *new_array, 0, *cache_, 0,
+                           cache_->length());
   cache_ = *new_array;
   Handle<String> str =
       factory
@@ -1318,8 +1319,6 @@ void Genesis::CreateRoots() {
 }
 
 void Genesis::InstallGlobalThisBinding() {
-  Handle<ScriptContextTable> script_contexts(
-      native_context()->script_context_table(), isolate());
   Handle<ScopeInfo> scope_info =
       ReadOnlyRoots(isolate()).global_this_binding_scope_info_handle();
   Handle<Context> context =
@@ -1330,8 +1329,10 @@ void Genesis::InstallGlobalThisBinding() {
   DCHECK_EQ(slot, Context::MIN_CONTEXT_SLOTS);
   context->set(slot, native_context()->global_proxy());
 
+  Handle<ScriptContextTable> script_contexts(
+      native_context()->script_context_table(), isolate());
   Handle<ScriptContextTable> new_script_contexts =
-      ScriptContextTable::Extend(isolate(), script_contexts, context);
+      ScriptContextTable::Add(isolate(), script_contexts, context, false);
   native_context()->set_script_context_table(*new_script_contexts);
 }
 
@@ -2820,6 +2821,8 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
                           Builtin::kStringPrototypeIncludes, 1, false);
     SimpleInstallFunction(isolate_, prototype, "indexOf",
                           Builtin::kStringPrototypeIndexOf, 1, false);
+    SimpleInstallFunction(isolate(), prototype, "isWellFormed",
+                          Builtin::kStringPrototypeIsWellFormed, 0, false);
     SimpleInstallFunction(isolate_, prototype, "italics",
                           Builtin::kStringPrototypeItalics, 0, false);
     SimpleInstallFunction(isolate_, prototype, "lastIndexOf",
@@ -2876,6 +2879,8 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
                           Builtin::kStringPrototypeStartsWith, 1, false);
     SimpleInstallFunction(isolate_, prototype, "toString",
                           Builtin::kStringPrototypeToString, 0, true);
+    SimpleInstallFunction(isolate(), prototype, "toWellFormed",
+                          Builtin::kStringPrototypeToWellFormed, 0, false);
     SimpleInstallFunction(isolate_, prototype, "trim",
                           Builtin::kStringPrototypeTrim, 0, false);
 
@@ -3394,7 +3399,8 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
     initial_map->AppendDescriptor(isolate(), &d);
 
     // Create the last match info.
-    Handle<RegExpMatchInfo> last_match_info = factory->NewRegExpMatchInfo();
+    Handle<RegExpMatchInfo> last_match_info =
+        RegExpMatchInfo::New(isolate(), RegExpMatchInfo::kMinCapacity);
     native_context()->set_regexp_last_match_info(*last_match_info);
 
     // Install the species protector cell.
@@ -5730,18 +5736,6 @@ void Genesis::InitializeGlobal_harmony_rab_gsab() {
                         Builtin::kSharedArrayBufferPrototypeGrow, 1, true);
 }
 
-void Genesis::InitializeGlobal_harmony_string_is_well_formed() {
-  if (!v8_flags.harmony_string_is_well_formed) return;
-  Handle<JSFunction> string_function(native_context()->string_function(),
-                                     isolate());
-  Handle<JSObject> string_prototype(
-      JSObject::cast(string_function->initial_map()->prototype()), isolate());
-  SimpleInstallFunction(isolate(), string_prototype, "isWellFormed",
-                        Builtin::kStringPrototypeIsWellFormed, 0, false);
-  SimpleInstallFunction(isolate(), string_prototype, "toWellFormed",
-                        Builtin::kStringPrototypeToWellFormed, 0, false);
-}
-
 void Genesis::InitializeGlobal_harmony_temporal() {
   if (!v8_flags.harmony_temporal) return;
 
@@ -6345,12 +6339,12 @@ void Genesis::InitializeMapCaches() {
 
     DisallowGarbageCollection no_gc;
     for (int i = 0; i < JSObject::kMapCacheSize; i++) {
-      cache->Set(i, HeapObjectReference::ClearedValue(isolate()));
+      cache->set(i, HeapObjectReference::ClearedValue(isolate()));
     }
     native_context()->set_map_cache(*cache);
     Tagged<Map> initial = native_context()->object_function()->initial_map();
-    cache->Set(0, HeapObjectReference::Weak(initial));
-    cache->Set(initial->GetInObjectProperties(),
+    cache->set(0, HeapObjectReference::Weak(initial));
+    cache->set(initial->GetInObjectProperties(),
                HeapObjectReference::Weak(initial));
   }
 }

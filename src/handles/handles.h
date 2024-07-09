@@ -134,9 +134,9 @@ class Handle final : public HandleBase {
       //
       // If you got an error here and want to access the Tagged<T>, use
       // operator* -- e.g. for `Tagged<Smi>::value()`, use `(*handle).value()`.
-      //cjh static_assert(
-      //     false,
-      //     "This handle does not reference a heap object. Use `(*handle).foo`.");
+      static_assert(
+          false,
+          "This handle does not reference a heap object. Use `(*handle).foo`.");
 #endif
     }
   }

@@ -176,7 +176,8 @@ class CallWithReduceArgsHelper {
   OpIndex operator()(const StoreOp& op) {
     return callback_(op.base(), op.index(), op.value(), op.kind, op.stored_rep,
                      op.write_barrier, op.offset, op.element_size_log2,
-                     op.maybe_initializing_or_transitioning);
+                     op.maybe_initializing_or_transitioning,
+                     op.indirect_pointer_tag());
   }
 
   OpIndex operator()(const AllocateOp& op) {
@@ -263,8 +264,6 @@ class CallWithReduceArgsHelper {
   OpIndex operator()(const DebugPrintOp& op) {
     return callback_(op.input(), op.rep);
   }
-
-  OpIndex operator()(const CommentOp& op) { return callback_(op.message); }
 
   OpIndex operator()(const BigIntBinopOp& op) {
     return callback_(op.left(), op.right(), op.frame_state(), op.kind);
@@ -435,8 +434,7 @@ class CallWithReduceArgsHelper {
 
   OpIndex operator()(const AtomicWord32PairOp& op) {
     return callback_(op.base(), op.index(), op.value_low(), op.value_high(),
-                     op.expected_low(), op.expected_high(), op.op_kind,
-                     op.offset);
+                     op.expected_low(), op.expected_high(), op.kind, op.offset);
   }
 
   OpIndex operator()(const MemoryBarrierOp& op) {
@@ -479,13 +477,13 @@ class CallWithReduceArgsHelper {
   }
 
   OpIndex operator()(const StructGetOp& op) {
-    return callback_(op.object(), op.type, op.field_index, op.is_signed,
-                     op.null_check);
+    return callback_(op.object(), op.type, op.type_index, op.field_index,
+                     op.is_signed, op.null_check);
   }
 
   OpIndex operator()(const StructSetOp& op) {
-    return callback_(op.object(), op.value(), op.type, op.field_index,
-                     op.null_check);
+    return callback_(op.object(), op.value(), op.type, op.type_index,
+                     op.field_index, op.null_check);
   }
 
   OpIndex operator()(const ArrayGetOp& op) {
@@ -498,6 +496,18 @@ class CallWithReduceArgsHelper {
 
   OpIndex operator()(const ArrayLengthOp& op) {
     return callback_(op.array(), op.null_check);
+  }
+
+  OpIndex operator()(const WasmAllocateArrayOp& op) {
+    return callback_(op.rtt(), op.length(), op.array_type);
+  }
+
+  OpIndex operator()(const WasmAllocateStructOp& op) {
+    return callback_(op.rtt(), op.struct_type);
+  }
+
+  OpIndex operator()(const WasmRefFuncOp& op) {
+    return callback_(op.instance(), op.function_index);
   }
 
   OpIndex operator()(const Simd128ConstantOp& op) {
@@ -558,12 +568,16 @@ class CallWithReduceArgsHelper {
     return callback_(op.string());
   }
 
-  OpIndex operator()(const ExternExternalizeOp& op) {
+  OpIndex operator()(const ExternConvertAnyOp& op) {
     return callback_(op.object());
   }
 
-  OpIndex operator()(const ExternInternalizeOp& op) {
+  OpIndex operator()(const AnyConvertExternOp& op) {
     return callback_(op.object());
+  }
+
+  OpIndex operator()(const WasmTypeAnnotationOp& op) {
+    return callback_(op.value(), op.type);
   }
 #endif
 

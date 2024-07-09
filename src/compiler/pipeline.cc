@@ -91,6 +91,7 @@
 #include "src/compiler/turboshaft/optimize-phase.h"
 #include "src/compiler/turboshaft/phase.h"
 #include "src/compiler/turboshaft/recreate-schedule-phase.h"
+#include "src/compiler/turboshaft/simplified-lowering-phase.h"
 #include "src/compiler/turboshaft/simplify-tf-loops.h"
 #include "src/compiler/turboshaft/store-store-elimination-phase.h"
 #include "src/compiler/turboshaft/tracing.h"
@@ -122,6 +123,7 @@
 #include "src/compiler/turboshaft/int64-lowering-phase.h"
 #include "src/compiler/turboshaft/wasm-dead-code-elimination-phase.h"
 #include "src/compiler/turboshaft/wasm-gc-optimize-phase.h"
+#include "src/compiler/turboshaft/wasm-lowering-phase.h"
 #include "src/compiler/turboshaft/wasm-optimize-phase.h"
 #include "src/compiler/wasm-compiler.h"
 #include "src/compiler/wasm-escape-analysis.h"
@@ -379,10 +381,8 @@ class PipelineData {
   Zone* graph_zone() const { return graph_zone_; }
   Graph* graph() const { return graph_; }
   void set_graph(Graph* graph) { graph_ = graph; }
-  turboshaft::PipelineData CreateTurboshaftPipeline(
-      turboshaft::TurboshaftPipelineKind kind) {
-    return turboshaft::PipelineData{kind,
-                                    info_,
+  turboshaft::PipelineData CreateTurboshaftPipeline() {
+    return turboshaft::PipelineData{info_,
                                     schedule_,
                                     graph_zone_,
                                     broker_,
@@ -764,8 +764,7 @@ class PipelineImpl final {
 
   // Substep B.1. Produce a scheduled graph.
   void ComputeScheduledGraph();
-  turboshaft::PipelineData CreateTurboshaftPipeline(
-      turboshaft::TurboshaftPipelineKind kind);
+  turboshaft::PipelineData CreateTurboshaftPipeline();
 
 #if V8_ENABLE_WASM_SIMD256_REVEC
   void Revectorize();
@@ -1285,12 +1284,12 @@ PipelineCompilationJob::Status PipelineCompilationJob::PrepareJobImpl(
 
   // InitializeHeapBroker() and CreateGraph() may already use
   // IsPendingAllocation.
-  isolate->heap()->PublishPendingAllocations();
+  isolate->heap()->PublishMainThreadPendingAllocations();
 
   pipeline_.InitializeHeapBroker();
 
   // Serialization may have allocated.
-  isolate->heap()->PublishPendingAllocations();
+  isolate->heap()->PublishMainThreadPendingAllocations();
 
   return SUCCEEDED;
 }
@@ -1341,7 +1340,8 @@ PipelineCompilationJob::Status PipelineCompilationJob::FinalizeJobImpl(
   }
 
   compilation_info()->SetCode(code);
-  RegisterWeakObjectsInOptimizedCode(isolate, context, code);
+  GlobalHandleVector<Map> maps = CollectRetainedMaps(isolate, code);
+  RegisterWeakObjectsInOptimizedCode(isolate, context, code, std::move(maps));
   return SUCCEEDED;
 }
 
@@ -2396,7 +2396,8 @@ struct RevectorizePhase {
   DECL_PIPELINE_PHASE_CONSTANTS(Revectorizer)
 
   void Run(PipelineData* data, Zone* temp_zone) {
-    Revectorizer revec(temp_zone, data->graph(), data->mcgraph());
+    Revectorizer revec(temp_zone, data->graph(), data->mcgraph(),
+                       data->source_positions());
     revec.TryRevectorize(data->info()->GetDebugName().get());
   }
 };
@@ -2958,54 +2959,57 @@ bool PipelineImpl::OptimizeGraph(Linkage* linkage) {
     RunPrintAndVerify(TypeAssertionsPhase::phase_name());
   }
 
-  // Perform simplified lowering. This has to run w/o the Typer decorator,
-  // because we cannot compute meaningful types anyways, and the computed types
-  // might even conflict with the representation/truncation logic.
-  Run<SimplifiedLoweringPhase>(linkage);
-  RunPrintAndVerify(SimplifiedLoweringPhase::phase_name(), true);
+  if (!v8_flags.turboshaft_frontend) {
+    // Perform simplified lowering. This has to run w/o the Typer decorator,
+    // because we cannot compute meaningful types anyways, and the computed
+    // types might even conflict with the representation/truncation logic.
+    Run<SimplifiedLoweringPhase>(linkage);
+    RunPrintAndVerify(SimplifiedLoweringPhase::phase_name(), true);
 
 #if V8_ENABLE_WEBASSEMBLY
-  if (data->has_js_wasm_calls()) {
-    DCHECK(data->info()->inline_js_wasm_calls());
-    Run<JSWasmInliningPhase>();
-    RunPrintAndVerify(JSWasmInliningPhase::phase_name(), true);
-    if (data->inline_wasm_into_js()) {
-      Run<WasmTypingPhase>(-1);
-      RunPrintAndVerify(WasmTypingPhase::phase_name(), true);
-      if (v8_flags.wasm_opt) {
-        Run<WasmGCOptimizationPhase>(data->wasm_module_for_inlining(),
-                                     data->jsgraph());
-        RunPrintAndVerify(WasmGCOptimizationPhase::phase_name(), true);
+    if (data->has_js_wasm_calls()) {
+      DCHECK(data->info()->inline_js_wasm_calls());
+      Run<JSWasmInliningPhase>();
+      RunPrintAndVerify(JSWasmInliningPhase::phase_name(), true);
+      if (data->inline_wasm_into_js()) {
+        Run<WasmTypingPhase>(-1);
+        RunPrintAndVerify(WasmTypingPhase::phase_name(), true);
+        if (v8_flags.wasm_opt) {
+          Run<WasmGCOptimizationPhase>(data->wasm_module_for_inlining(),
+                                       data->jsgraph());
+          RunPrintAndVerify(WasmGCOptimizationPhase::phase_name(), true);
+        }
+        Run<JSWasmLoweringPhase>();
+        RunPrintAndVerify(JSWasmLoweringPhase::phase_name(), true);
       }
-      Run<JSWasmLoweringPhase>();
-      RunPrintAndVerify(JSWasmLoweringPhase::phase_name(), true);
     }
-  }
 #endif  // V8_ENABLE_WEBASSEMBLY
 
-  // From now on it is invalid to look at types on the nodes, because the types
-  // on the nodes might not make sense after representation selection due to the
-  // way we handle truncations; if we'd want to look at types afterwards we'd
-  // essentially need to re-type (large portions of) the graph.
+    // From now on it is invalid to look at types on the nodes, because the
+    // types on the nodes might not make sense after representation selection
+    // due to the way we handle truncations; if we'd want to look at types
+    // afterwards we'd essentially need to re-type (large portions of) the
+    // graph.
 
-  // In order to catch bugs related to type access after this point, we now
-  // remove the types from the nodes (currently only in Debug builds).
+    // In order to catch bugs related to type access after this point, we now
+    // remove the types from the nodes (currently only in Debug builds).
 #ifdef DEBUG
-  Run<UntyperPhase>();
-  RunPrintAndVerify(UntyperPhase::phase_name(), true);
+    Run<UntyperPhase>();
+    RunPrintAndVerify(UntyperPhase::phase_name(), true);
 #endif
 
-  // Run generic lowering pass.
-  Run<GenericLoweringPhase>();
-  RunPrintAndVerify(GenericLoweringPhase::phase_name(), true);
+    // Run generic lowering pass.
+    Run<GenericLoweringPhase>();
+    RunPrintAndVerify(GenericLoweringPhase::phase_name(), true);
 
-  data->BeginPhaseKind("V8.TFBlockBuilding");
+    data->BeginPhaseKind("V8.TFBlockBuilding");
 
-  data->InitializeFrameData(linkage->GetIncomingDescriptor());
+    data->InitializeFrameData(linkage->GetIncomingDescriptor());
 
-  // Run early optimization pass.
-  Run<EarlyOptimizationPhase>();
-  RunPrintAndVerify(EarlyOptimizationPhase::phase_name(), true);
+    // Run early optimization pass.
+    Run<EarlyOptimizationPhase>();
+    RunPrintAndVerify(EarlyOptimizationPhase::phase_name(), true);
+  }
 
   if (!v8_flags.turboshaft) {
     Run<EffectControlLinearizationPhase>();
@@ -3062,8 +3066,7 @@ bool PipelineImpl::OptimizeGraph(Linkage* linkage) {
                                 v8_flags.turboshaft_trace_reduction);
 
     base::Optional<turboshaft::PipelineData::Scope> turboshaft_pipeline(
-        data->CreateTurboshaftPipeline(
-            turboshaft::TurboshaftPipelineKind::kJS));
+        data->CreateTurboshaftPipeline());
     turboshaft::Tracing::Scope tracing_scope(data->info());
 
     if (base::Optional<BailoutReason> bailout =
@@ -3071,6 +3074,10 @@ bool PipelineImpl::OptimizeGraph(Linkage* linkage) {
       info()->AbortOptimization(*bailout);
       data->EndPhaseKind();
       return false;
+    }
+
+    if (v8_flags.turboshaft_frontend) {
+      Run<turboshaft::SimplifiedLoweringPhase>();
     }
 
     Run<turboshaft::MachineLoweringPhase>();
@@ -3103,6 +3110,7 @@ bool PipelineImpl::OptimizeGraph(Linkage* linkage) {
 
     Run<turboshaft::DecompressionOptimizationPhase>();
 
+#if defined(V8_TARGET_ARCH_X64)
     if (v8_flags.turboshaft_instruction_selection) {
       // Run Turboshaft instruction selection.
       if (!SelectInstructionsTurboshaft(linkage)) {
@@ -3113,6 +3121,7 @@ bool PipelineImpl::OptimizeGraph(Linkage* linkage) {
       data->DeleteGraphZone();
       return AllocateRegisters(linkage->GetIncomingDescriptor(), false);
     }
+#endif  // defined(V8_TARGET_ARCH_X64)
 
     // Otherwise, translate back to Turbofan and run instruction selection on
     // the sea of nodes graph.
@@ -3295,50 +3304,25 @@ MaybeHandle<Code> Pipeline::GenerateCodeForCodeStub(
   pipeline.Run<CsaEarlyOptimizationPhase>();
   pipeline.RunPrintAndVerify(CsaEarlyOptimizationPhase::phase_name(), true);
 
-  if (!v8_flags.turboshaft_csa) {
-    // Optimize memory access and allocation operations.
-    pipeline.Run<MemoryOptimizationPhase>();
-    pipeline.RunPrintAndVerify(MemoryOptimizationPhase::phase_name(), true);
+  // Optimize memory access and allocation operations.
+  pipeline.Run<MemoryOptimizationPhase>();
+  pipeline.RunPrintAndVerify(MemoryOptimizationPhase::phase_name(), true);
 
-    pipeline.Run<CsaOptimizationPhase>();
-    pipeline.RunPrintAndVerify(CsaOptimizationPhase::phase_name(), true);
+  pipeline.Run<CsaOptimizationPhase>();
+  pipeline.RunPrintAndVerify(CsaOptimizationPhase::phase_name(), true);
 
-    pipeline.Run<DecompressionOptimizationPhase>();
-    pipeline.RunPrintAndVerify(DecompressionOptimizationPhase::phase_name(),
-                               true);
+  pipeline.Run<DecompressionOptimizationPhase>();
+  pipeline.RunPrintAndVerify(DecompressionOptimizationPhase::phase_name(),
+                             true);
 
-    pipeline.Run<BranchConditionDuplicationPhase>();
-    pipeline.RunPrintAndVerify(BranchConditionDuplicationPhase::phase_name(),
-                               true);
+  pipeline.Run<BranchConditionDuplicationPhase>();
+  pipeline.RunPrintAndVerify(BranchConditionDuplicationPhase::phase_name(),
+                             true);
 
-    pipeline.Run<VerifyGraphPhase>(true);
-  }
+  pipeline.Run<VerifyGraphPhase>(true);
 
   pipeline.ComputeScheduledGraph();
   DCHECK_NOT_NULL(data.schedule());
-
-  if (v8_flags.turboshaft_csa) {
-    UnparkedScopeIfNeeded scope(data.broker(),
-                                v8_flags.turboshaft_trace_reduction);
-    base::Optional<turboshaft::PipelineData::Scope> turboshaft_pipeline(
-        data.CreateTurboshaftPipeline(
-            turboshaft::TurboshaftPipelineKind::kCSA));
-    turboshaft::Tracing::Scope tracing_scope(data.info());
-
-    Linkage linkage(call_descriptor);
-    base::Optional<BailoutReason> bailout =
-        pipeline.Run<turboshaft::BuildGraphPhase>(&linkage);
-    CHECK(!bailout.has_value());
-
-    pipeline.Run<turboshaft::OptimizePhase>();
-
-    auto [new_graph, new_schedule] =
-        pipeline.Run<turboshaft::RecreateSchedulePhase>(&linkage);
-    data.set_graph(new_graph);
-    data.set_schedule(new_schedule);
-    TraceSchedule(data.info(), &data, data.schedule(),
-                  turboshaft::RecreateSchedulePhase::phase_name());
-  }
 
   // First run code generation on a copy of the pipeline, in order to be able to
   // repeat it for jump optimization. The first run has to happen on a temporary
@@ -3734,8 +3718,7 @@ void Pipeline::GenerateCodeForWasmFunction(
 bool Pipeline::GenerateWasmCodeFromTurboshaftGraph(
     OptimizedCompilationInfo* info, wasm::CompilationEnv* env,
     WasmCompilationData& compilation_data, MachineGraph* mcgraph,
-    const wasm::FunctionBody& body, wasm::WasmFeatures* detected,
-    CallDescriptor* call_descriptor) {
+    wasm::WasmFeatures* detected, CallDescriptor* call_descriptor) {
   auto* wasm_engine = wasm::GetWasmEngine();
   const wasm::WasmModule* module = env->module;
   base::TimeTicks start_time;
@@ -3767,10 +3750,12 @@ bool Pipeline::GenerateWasmCodeFromTurboshaftGraph(
   }
   Linkage linkage(call_descriptor);
 
+  Zone inlining_positions_zone(wasm_engine->allocator(), ZONE_NAME);
+  ZoneVector<WasmInliningPosition> inlining_positions(&inlining_positions_zone);
+
   {
     base::Optional<turboshaft::PipelineData::Scope> turboshaft_scope(
-        pipeline.CreateTurboshaftPipeline(
-            turboshaft::TurboshaftPipelineKind::kWasm));
+        pipeline.CreateTurboshaftPipeline());
     auto& turboshaft_pipeline = turboshaft_scope.value();
     turboshaft_pipeline.Value().SetIsWasm(env->module,
                                           compilation_data.func_body.sig);
@@ -3778,9 +3763,11 @@ bool Pipeline::GenerateWasmCodeFromTurboshaftGraph(
 
     AccountingAllocator allocator;
     if (!wasm::BuildTSGraph(&allocator, env->enabled_features, env->module,
-                            detected, body, turboshaft_pipeline.Value().graph(),
+                            detected, turboshaft_pipeline.Value().graph(),
+                            compilation_data.func_body,
+                            compilation_data.wire_bytes_storage,
                             data.node_origins(), compilation_data.assumptions,
-                            compilation_data.func_index)) {
+                            &inlining_positions, compilation_data.func_index)) {
       return false;
     }
     CodeTracer* code_tracer = nullptr;
@@ -3794,20 +3781,33 @@ bool Pipeline::GenerateWasmCodeFromTurboshaftGraph(
     turboshaft::PrintTurboshaftGraph(&printing_zone, code_tracer,
                                      "Graph generation");
 
+    if (v8_flags.wasm_loop_unrolling) {
+      pipeline.Run<turboshaft::LoopUnrollingPhase>();
+    }
+
     // TODO(mliedtke): This phase could potentially be skipped for non-wasm-gc
     // functions.
     if (v8_flags.wasm_opt) {
       pipeline.Run<turboshaft::WasmGCOptimizePhase>();
     }
 
-    // This is more than an optimization currently: We need it to sort blocks to
-    // work around a bug in RecreateSchedulePhase.
-    pipeline.Run<turboshaft::WasmOptimizePhase>();
+    // TODO(mliedtke): This phase could be merged with the WasmGCOptimizePhase
+    // if wasm_opt is enabled to improve compile time. Consider potential code
+    // size increase.
+    pipeline.Run<turboshaft::WasmLoweringPhase>();
+
+    // TODO(14108): Do we need value numbering if wasm_opt is turned off?
+    const bool is_asm_js = is_asmjs_module(module);
+    if (v8_flags.wasm_opt || is_asm_js) {
+      pipeline.Run<turboshaft::WasmOptimizePhase>();
+    }
 
     if (mcgraph->machine()->Is32()) {
       pipeline.Run<turboshaft::Int64LoweringPhase>();
     }
 
+    // This is more than an optimization currently: We need it to sort blocks to
+    // work around a bug in RecreateSchedulePhase.
     pipeline.Run<turboshaft::WasmDeadCodeEliminationPhase>();
 
     if (V8_UNLIKELY(v8_flags.turboshaft_enable_debug_features)) {
@@ -3850,6 +3850,7 @@ bool Pipeline::GenerateWasmCodeFromTurboshaftGraph(
   result->frame_slot_count = code_generator->frame()->GetTotalFrameSlotCount();
   result->tagged_parameter_slots = call_descriptor->GetTaggedParameterSlots();
   result->source_positions = code_generator->GetSourcePositionTable();
+  result->inlining_positions = SerializeInliningPositions(inlining_positions);
   result->protected_instructions_data =
       code_generator->GetProtectedInstructionsData();
   result->result_tier = wasm::ExecutionTier::kTurbofan;
@@ -3869,9 +3870,11 @@ bool Pipeline::GenerateWasmCodeFromTurboshaftGraph(
       json_of << AsEscapedUC16ForJSON(c);
     }
 #endif  // ENABLE_DISASSEMBLER
-    json_of << "\"}\n]";
-    // TODO(mliedtke): Add sources of inlined wasm functions once inlining is
-    // supported.
+    json_of << "\"}\n],\n";
+    JsonPrintAllSourceWithPositionsWasm(json_of, module,
+                                        compilation_data.wire_bytes_storage,
+                                        base::VectorOf(inlining_positions));
+    json_of << "}";
     json_of << "\n}";
   }
 
@@ -4027,9 +4030,8 @@ void PipelineImpl::ComputeScheduledGraph() {
   TraceScheduleAndVerify(data->info(), data, data->schedule(), "schedule");
 }
 
-turboshaft::PipelineData PipelineImpl::CreateTurboshaftPipeline(
-    turboshaft::TurboshaftPipelineKind kind) {
-  return data_->CreateTurboshaftPipeline(kind);
+turboshaft::PipelineData PipelineImpl::CreateTurboshaftPipeline() {
+  return data_->CreateTurboshaftPipeline();
 }
 
 #if V8_ENABLE_WASM_SIMD256_REVEC

@@ -553,6 +553,8 @@ class V8_EXPORT Isolate {
     kWasmImportedStrings = 128,
     kSourceMappingUrlMagicCommentAtSign = 129,
     kTemporalObject = 130,
+    kWasmModuleCompilation = 131,
+    kInvalidatedNoUndetectableObjectsProtector = 132,
 
     // If you add new values here, you'll also need to update Chromium's:
     // web_feature.mojom, use_counter_callback.cc, and enums.xml. V8 changes to
@@ -1625,12 +1627,6 @@ class V8_EXPORT Isolate {
    */
   V8_DEPRECATE_SOON("Will be removed without replacement. crbug.com/v8/14172")
   void VisitExternalResources(ExternalResourceVisitor* visitor);
-
-  /**
-   * Iterates through all the persistent handles in the current isolate's heap
-   * that have class_ids.
-   */
-  void VisitHandlesWithClassIds(PersistentHandleVisitor* visitor);
 
   /**
    * Check if this isolate is in use.

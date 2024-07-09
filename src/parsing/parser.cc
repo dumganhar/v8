@@ -1407,16 +1407,8 @@ ImportAssertions* Parser::ParseImportAssertClause() {
   Expect(Token::LBRACE);
 
   while (peek() != Token::RBRACE) {
-    const AstRawString* attribute_key = nullptr;
-    if (Check(Token::STRING) || Check(Token::SMI)) {
-      attribute_key = GetSymbol();
-    } else if (Check(Token::NUMBER)) {
-      attribute_key = GetNumberAsSymbol();
-    } else if (Check(Token::BIGINT)) {
-      attribute_key = GetBigIntAsSymbol();
-    } else {
-      attribute_key = ParsePropertyName();
-    }
+    const AstRawString* attribute_key =
+        Check(Token::STRING) ? GetSymbol() : ParsePropertyName();
 
     Scanner::Location location = scanner()->location();
 
@@ -3483,7 +3475,7 @@ void Parser::UpdateStatistics(
   if (scanner_.SawMagicCommentCompileHintsAll()) {
     use_counts->emplace_back(v8::Isolate::kCompileHintsMagicAll);
   }
-  if (scanner_.SawMagicCommentCompileHintsAll()) {
+  if (scanner_.SawSourceMappingUrlMagicCommentAtSign()) {
     use_counts->emplace_back(v8::Isolate::kSourceMappingUrlMagicCommentAtSign);
   }
 

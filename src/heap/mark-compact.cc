@@ -181,14 +181,18 @@ class FullMarkingVerifier : public MarkingVerifierBase {
 
   V8_INLINE bool ShouldVerifyObject(Tagged<HeapObject> heap_object) {
     const bool in_shared_heap = heap_object.InWritableSharedSpace();
-    return heap_->isolate()->is_shared_space_isolate() ? in_shared_heap
-                                                       : !in_shared_heap;
+    return heap_->isolate()->is_shared_space_isolate() ? true : !in_shared_heap;
   }
 
   template <typename TSlot>
   V8_INLINE void VerifyPointersImpl(TSlot start, TSlot end) {
+    PtrComprCageBase cage_base =
+        GetPtrComprCageBaseFromOnHeapAddress(start.address());
     for (TSlot slot = start; slot < end; ++slot) {
-      typename TSlot::TObject object = slot.load(cage_base());
+      typename TSlot::TObject object = slot.load(cage_base);
+#ifdef V8_ENABLE_DIRECT_LOCAL
+      if (object.ptr() == kTaggedNullAddress) continue;
+#endif
       Tagged<HeapObject> heap_object;
       if (object.GetHeapObjectIfStrong(&heap_object)) {
         VerifyHeapObjectImpl(heap_object);
@@ -349,6 +353,18 @@ bool MarkCompactCollector::StartCompaction(StartCompactionMode mode) {
 }
 
 void MarkCompactCollector::StartMarking() {
+  // The state for background thread is saved here and maintained for the whole
+  // GC cycle. Both CppHeap and regular V8 heap will refer to this flag.
+  use_background_threads_in_cycle_ = heap_->ShouldUseBackgroundThreads();
+
+  // CppHeap's marker must be initialized before the V8 marker to allow
+  // exchanging of worklists.
+  if (heap_->cpp_heap()) {
+    TRACE_GC(heap()->tracer(), GCTracer::Scope::MC_MARK_EMBEDDER_PROLOGUE);
+    CppHeap::From(heap_->cpp_heap())
+        ->InitializeMarking(CppHeap::CollectionType::kMajor);
+  }
+
   std::vector<Address> contexts =
       heap_->memory_measurement()->StartProcessing();
   if (v8_flags.stress_per_context_marking_worklist) {
@@ -360,7 +376,6 @@ void MarkCompactCollector::StartMarking() {
   }
   heap_->tracer()->NotifyMarkingStart();
   code_flush_mode_ = Heap::GetCodeFlushMode(heap_->isolate());
-  use_background_threads_in_cycle_ = heap_->ShouldUseBackgroundThreads();
   marking_worklists_.CreateContextWorklists(contexts);
   auto* cpp_heap = CppHeap::From(heap_->cpp_heap_);
   local_marking_worklists_ = std::make_unique<MarkingWorklists::Local>(
@@ -660,11 +675,6 @@ void MarkCompactCollector::Prepare() {
 
   DCHECK(!sweeper_->sweeping_in_progress());
 
-  // LABs do not survive a GC. Free them here before selecting evacuation
-  // candidates (freeing LABs may give memory back to the free list which does
-  // not exist for evacuation candidates anymore).
-  heap_->FreeLinearAllocationAreas();
-
   // Unmapper tasks needs to be stopped during the GC, otherwise pages queued
   // for freeing might get unmapped during the GC.
   DCHECK(!heap_->memory_allocator()->unmapper()->IsRunning());
@@ -672,20 +682,13 @@ void MarkCompactCollector::Prepare() {
   DCHECK_IMPLIES(heap_->incremental_marking()->IsMarking(),
                  heap_->incremental_marking()->IsMajorMarking());
   if (!heap_->incremental_marking()->IsMarking()) {
-    if (heap_->cpp_heap_) {
-      TRACE_GC(heap_->tracer(), GCTracer::Scope::MC_MARK_EMBEDDER_PROLOGUE);
-      // InitializeTracing should be called before visitor initialization in
-      // StartMarking.
-      CppHeap::From(heap_->cpp_heap_)
-          ->InitializeTracing(CppHeap::CollectionType::kMajor);
-    }
     StartCompaction(StartCompactionMode::kAtomic);
     StartMarking();
     if (heap_->cpp_heap_) {
       TRACE_GC(heap_->tracer(), GCTracer::Scope::MC_MARK_EMBEDDER_PROLOGUE);
       // StartTracing immediately starts marking which requires V8 worklists to
       // be set up.
-      CppHeap::From(heap_->cpp_heap_)->StartTracing();
+      CppHeap::From(heap_->cpp_heap_)->StartMarking();
     }
 #ifdef V8_COMPRESS_POINTERS
     heap_->external_pointer_space()->StartCompactingIfNeeded();
@@ -802,7 +805,10 @@ void MarkCompactCollector::Finish() {
 
   TRACE_GC(heap_->tracer(), GCTracer::Scope::MC_FINISH);
 
-  if (heap_->new_space()) heap_->new_space()->GarbageCollectionEpilogue();
+  if (heap_->new_space()) {
+    DCHECK(!heap_->allocator()->new_space_allocator()->IsLabValid());
+    heap_->new_space()->GarbageCollectionEpilogue();
+  }
 
   auto* isolate = heap_->isolate();
   isolate->global_handles()->ClearListOfYoungNodes();
@@ -913,6 +919,9 @@ class MarkCompactCollector::RootMarkingVisitor final : public RootVisitor {
  private:
   V8_INLINE void MarkObjectByPointer(Root root, FullObjectSlot p) {
     Tagged<Object> object = *p;
+#ifdef V8_ENABLE_DIRECT_LOCAL
+    if (object.ptr() == kTaggedNullAddress) return;
+#endif
     if (!IsHeapObject(object)) return;
     Tagged<HeapObject> heap_object = HeapObject::cast(object);
     if (!collector_->ShouldMarkObject(heap_object)) return;
@@ -1301,20 +1310,26 @@ class RecordMigratedSlotVisitor : public ObjectVisitorWithCageBases {
                                    IndirectPointerSlot slot,
                                    IndirectPointerMode mode) final {}
 
-  inline void VisitIndirectPointerTableEntry(Tagged<HeapObject> host,
-                                             IndirectPointerSlot slot) final {
+  inline void VisitTrustedPointerTableEntry(Tagged<HeapObject> host,
+                                            IndirectPointerSlot slot) final {
 #ifdef V8_ENABLE_SANDBOX
-    // When an object owning an indirect pointer table entry is relocated, it
-    // needs to update the entry to point to its new location.
+    // When an object with a "self" indirect pointer is relocated, it needs to
+    // update the pointer table entry to point to its new location.
     // TODO(saelo): This is probably not quite the right place for this code,
     // since this visitor is for recording slots, not updating them. Figure
     // out if there's a better place for this logic.
     IndirectPointerHandle handle = slot.Relaxed_LoadHandle();
+
+    // We can see an uninitialized slot here, for example if GC is triggered
+    // during snapshot deserialization. In this case, there is nothing to do
+    // since the slot will be initialized later with the correct pointer.
+    if (handle == kNullIndirectPointerHandle) return;
+
     if (slot.tag() == kCodeIndirectPointerTag) {
       DCHECK(IsCode(host));
       GetProcessWideCodePointerTable()->SetCodeObject(handle, host.ptr());
     } else {
-      IndirectPointerTable& table = heap_->isolate()->indirect_pointer_table();
+      TrustedPointerTable& table = heap_->isolate()->trusted_pointer_table();
       table.Set(handle, host.ptr());
     }
 #else
@@ -1377,6 +1392,8 @@ class ProfilingMigrationObserver final : public MigrationObserver {
                                               InstructionStream::cast(dst)));
     } else if ((dest == OLD_SPACE || dest == TRUSTED_SPACE) &&
                IsBytecodeArray(dst)) {
+      // TODO(saelo): remove `dest == OLD_SPACE` once BytecodeArrays are
+      // allocated in trusted space.
       PROFILE(heap_->isolate(), BytecodeMoveEvent(BytecodeArray::cast(src),
                                                   BytecodeArray::cast(dst)));
     }
@@ -1542,15 +1559,13 @@ class EvacuateVisitorBase : public HeapObjectVisitor {
     if (target_space == OLD_SPACE && ShouldPromoteIntoSharedHeap(map)) {
       if (heap_->isolate()->is_shared_space_isolate()) {
         DCHECK_NULL(shared_old_allocator_);
-        allocation = local_allocator_->Allocate(
-            SHARED_SPACE, size, AllocationOrigin::kGC, alignment);
+        allocation = local_allocator_->Allocate(SHARED_SPACE, size, alignment);
       } else {
         allocation = shared_old_allocator_->AllocateRaw(size, alignment,
                                                         AllocationOrigin::kGC);
       }
     } else {
-      allocation = local_allocator_->Allocate(target_space, size,
-                                              AllocationOrigin::kGC, alignment);
+      allocation = local_allocator_->Allocate(target_space, size, alignment);
     }
     if (allocation.To(target_object)) {
       MigrateObject(*target_object, object, size, target_space);
@@ -1659,8 +1674,8 @@ class EvacuateNewSpaceVisitor final : public EvacuateVisitorBase {
     AllocationAlignment alignment =
         HeapObject::RequiredAlignment(old_object->map());
     AllocationSpace space_allocated_in = NEW_SPACE;
-    AllocationResult allocation = local_allocator_->Allocate(
-        NEW_SPACE, size, AllocationOrigin::kGC, alignment);
+    AllocationResult allocation =
+        local_allocator_->Allocate(NEW_SPACE, size, alignment);
     if (allocation.IsFailure()) {
       allocation = AllocateInOldSpace(size, alignment);
       space_allocated_in = OLD_SPACE;
@@ -1673,8 +1688,8 @@ class EvacuateNewSpaceVisitor final : public EvacuateVisitorBase {
 
   inline AllocationResult AllocateInOldSpace(int size_in_bytes,
                                              AllocationAlignment alignment) {
-    AllocationResult allocation = local_allocator_->Allocate(
-        OLD_SPACE, size_in_bytes, AllocationOrigin::kGC, alignment);
+    AllocationResult allocation =
+        local_allocator_->Allocate(OLD_SPACE, size_in_bytes, alignment);
     if (allocation.IsFailure()) {
       heap_->FatalProcessOutOfMemory(
           "MarkCompactCollector: semi-space copy, fallback in old gen");
@@ -1879,8 +1894,7 @@ void MarkCompactCollector::MarkObjectsFromClientHeap(Isolate* client) {
   heap->sweeper()->FinishMajorJobs();
 
   if (auto* new_space = heap->new_space()) {
-    new_space->main_allocator()->MakeLinearAllocationAreaIterable();
-
+    DCHECK(!heap->allocator()->new_space_allocator()->IsLabValid());
     for (Page* page : *new_space) {
       for (Tagged<HeapObject> obj : HeapObjectRange(page)) {
         obj->IterateFast(cage_base, &visitor);
@@ -3240,10 +3254,14 @@ bool MarkCompactCollector::CompactTransitionArray(
   // such that number_of_transitions() == 0. If this assumption changes,
   // TransitionArray::Insert() will need to deal with the case that a transition
   // array disappeared during GC.
-  int trim = transitions->Capacity() - transition_index;
-  if (trim > 0) {
-    heap_->RightTrimWeakFixedArray(transitions,
-                                   trim * TransitionArray::kEntrySize);
+  int old_capacity_in_entries = transitions->Capacity();
+  if (transition_index < old_capacity_in_entries) {
+    int old_capacity = transitions->length();
+    static_assert(TransitionArray::kEntryKeyIndex == 0);
+    DCHECK_EQ(TransitionArray::ToKeyIndex(old_capacity_in_entries),
+              old_capacity);
+    int new_capacity = TransitionArray::ToKeyIndex(transition_index);
+    heap_->RightTrimArray(transitions, new_capacity, old_capacity);
     transitions->SetNumberOfTransitions(transition_index);
   }
   return descriptors_owner_died;
@@ -3336,14 +3354,14 @@ void MarkCompactCollector::TrimEnumCache(Tagged<Map> map,
   Tagged<EnumCache> enum_cache = descriptors->enum_cache();
 
   Tagged<FixedArray> keys = enum_cache->keys();
-  int to_trim = keys->length() - live_enum;
-  if (to_trim <= 0) return;
-  heap_->RightTrimFixedArray(keys, to_trim);
+  int keys_length = keys->length();
+  if (live_enum >= keys_length) return;
+  heap_->RightTrimArray(keys, live_enum, keys_length);
 
   Tagged<FixedArray> indices = enum_cache->indices();
-  to_trim = indices->length() - live_enum;
-  if (to_trim <= 0) return;
-  heap_->RightTrimFixedArray(indices, to_trim);
+  int indices_length = indices->length();
+  if (live_enum >= indices_length) return;
+  heap_->RightTrimArray(indices, live_enum, indices_length);
 }
 
 void MarkCompactCollector::ClearWeakCollections() {
@@ -3675,6 +3693,9 @@ static inline SlotCallbackResult UpdateOldToSharedSlot(
 template <typename TSlot>
 static inline void UpdateStrongSlot(PtrComprCageBase cage_base, TSlot slot) {
   typename TSlot::TObject obj = slot.Relaxed_Load(cage_base);
+#ifdef V8_ENABLE_DIRECT_LOCAL
+  if (obj.ptr() == kTaggedNullAddress) return;
+#endif
   DCHECK(!HAS_WEAK_HEAP_OBJECT_TAG(obj.ptr()));
   Tagged<HeapObject> heap_obj;
   if (obj.GetHeapObject(&heap_obj)) {
@@ -3685,6 +3706,9 @@ static inline void UpdateStrongSlot(PtrComprCageBase cage_base, TSlot slot) {
 static inline SlotCallbackResult UpdateStrongOldToSharedSlot(
     PtrComprCageBase cage_base, FullMaybeObjectSlot slot) {
   MaybeObject obj = slot.Relaxed_Load(cage_base);
+#ifdef V8_ENABLE_DIRECT_LOCAL
+  if (obj.ptr() == kTaggedNullAddress) return REMOVE_SLOT;
+#endif
   DCHECK(!HAS_WEAK_HEAP_OBJECT_TAG(obj.ptr()));
   Tagged<HeapObject> heap_obj;
   if (obj.GetHeapObject(&heap_obj)) {

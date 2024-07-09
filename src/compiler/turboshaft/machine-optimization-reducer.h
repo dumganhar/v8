@@ -36,16 +36,6 @@ namespace v8::internal::compiler::turboshaft {
 
 #include "src/compiler/turboshaft/define-assembler-macros.inc"
 
-template <bool signalling_nan_possible, class Next>
-class MachineOptimizationReducer;
-
-template <class Next>
-using MachineOptimizationReducerSignallingNanPossible =
-    MachineOptimizationReducer<true, Next>;
-template <class Next>
-using MachineOptimizationReducerSignallingNanImpossible =
-    MachineOptimizationReducer<false, Next>;
-
 // The MachineOptimizationAssembler performs basic optimizations on low-level
 // operations that can be performed on-the-fly, without requiring type analysis
 // or analyzing uses. It largely corresponds to MachineOperatorReducer in
@@ -56,7 +46,7 @@ using MachineOptimizationReducerSignallingNanImpossible =
 //    1- Reducing Phis, whose all inputs are the same, replace
 //      them with their input.
 
-template <bool signalling_nan_possible, class Next>
+template <class Next>
 class MachineOptimizationReducer : public Next {
  public:
   TURBOSHAFT_REDUCER_BOILERPLATE()
@@ -671,8 +661,16 @@ class MachineOptimizationReducer : public Next {
                          matcher.MatchWordBinop(left, &a, &k1, kind, rep) &&
                          matcher.Is<ConstantOp>(k1)) {
         OpIndex k2 = right;
-        return ReduceWordBinop(a, ReduceWordBinop(k1, k2, kind, rep), kind,
-                               rep);
+        // This optimization allows to do constant folding of `k1` and `k2`.
+        // However, if (a <op> k1) has to be calculated anyways, then constant
+        // folding does not save any calculations during runtime, and it may
+        // increase register pressure because it extends the lifetime of `a`.
+        // Therefore we do the optimization only when `left = (a <op k1)` has no
+        // other uses.
+        if (matcher.Get(left).saturated_use_count.IsZero()) {
+          return ReduceWordBinop(a, ReduceWordBinop(k1, k2, kind, rep), kind,
+                                 rep);
+        }
       }
       switch (kind) {
         case Kind::kSub:
@@ -1336,11 +1334,26 @@ class MachineOptimizationReducer : public Next {
         if (matcher.MatchConstantShiftRightArithmeticShiftOutZeros(
                 left, &x, rep_w, &k1) &&
             matcher.MatchIntegralWordConstant(right, rep_w, &k2) &&
-            CountLeadingSignBits(k2, rep_w) > k1 &&
-            matcher.Get(left).saturated_use_count.IsZero()) {
-          return __ Comparison(
-              x, __ WordConstant(base::bits::Unsigned(k2) << k1, rep_w), kind,
-              rep_w);
+            CountLeadingSignBits(k2, rep_w) > k1) {
+          if (matcher.Get(left).saturated_use_count.IsZero()) {
+            return __ Comparison(
+                x, __ WordConstant(base::bits::Unsigned(k2) << k1, rep_w), kind,
+                rep_w);
+          } else if constexpr (reducer_list_contains<
+                                   ReducerList, ValueNumberingReducer>::value) {
+            // If the shift has uses, we only apply the transformation if the
+            // result would be GVNed away.
+            OpIndex rhs =
+                __ WordConstant(base::bits::Unsigned(k2) << k1, rep_w);
+            static_assert(ComparisonOp::input_count == 2);
+            static_assert(sizeof(ComparisonOp) == 8);
+            base::SmallVector<OperationStorageSlot, 32> storage;
+            ComparisonOp* cmp =
+                CreateOperation<ComparisonOp>(storage, x, rhs, kind, rep_w);
+            if (__ WillGVNOp(*cmp)) {
+              return __ Comparison(x, rhs, kind, rep_w);
+            }
+          }
         }
         // k2 </<= (x >> k1)  =>  (k2 << k1) </<= x  if shifts reversible
         // Only perform the transformation if the shift is not used yet, to
@@ -1348,11 +1361,26 @@ class MachineOptimizationReducer : public Next {
         if (matcher.MatchConstantShiftRightArithmeticShiftOutZeros(
                 right, &x, rep_w, &k1) &&
             matcher.MatchIntegralWordConstant(left, rep_w, &k2) &&
-            CountLeadingSignBits(k2, rep_w) > k1 &&
-            matcher.Get(right).saturated_use_count.IsZero()) {
-          return __ Comparison(
-              __ WordConstant(base::bits::Unsigned(k2) << k1, rep_w), x, kind,
-              rep_w);
+            CountLeadingSignBits(k2, rep_w) > k1) {
+          if (matcher.Get(right).saturated_use_count.IsZero()) {
+            return __ Comparison(
+                __ WordConstant(base::bits::Unsigned(k2) << k1, rep_w), x, kind,
+                rep_w);
+          } else if constexpr (reducer_list_contains<
+                                   ReducerList, ValueNumberingReducer>::value) {
+            // If the shift has uses, we only apply the transformation if the
+            // result would be GVNed away.
+            OpIndex lhs =
+                __ WordConstant(base::bits::Unsigned(k2) << k1, rep_w);
+            static_assert(ComparisonOp::input_count == 2);
+            static_assert(sizeof(ComparisonOp) == 8);
+            base::SmallVector<OperationStorageSlot, 32> storage;
+            ComparisonOp* cmp =
+                CreateOperation<ComparisonOp>(storage, lhs, x, kind, rep_w);
+            if (__ WillGVNOp(*cmp)) {
+              return __ Comparison(lhs, x, kind, rep_w);
+            }
+          }
         }
       }
       // Map 64bit to 32bit comparisons.
@@ -1646,7 +1674,7 @@ class MachineOptimizationReducer : public Next {
     goto no_change;
   }
 
-  OpIndex REDUCE(Store)(OpIndex base, OpIndex index, OpIndex value,
+  OpIndex REDUCE(Store)(OpIndex base, OptionalOpIndex index, OpIndex value,
                         StoreOp::Kind kind, MemoryRepresentation stored_rep,
                         WriteBarrierKind write_barrier, int32_t offset,
                         uint8_t element_scale,
@@ -1656,7 +1684,8 @@ class MachineOptimizationReducer : public Next {
       if (stored_rep.SizeInBytes() <= 4) {
         value = TryRemoveWord32ToWord64Conversion(value);
       }
-      index = ReduceMemoryIndex(index, &offset, &element_scale);
+      index =
+          ReduceMemoryIndex(index.value_or_invalid(), &offset, &element_scale);
       switch (stored_rep) {
         case MemoryRepresentation::Uint8():
         case MemoryRepresentation::Int8():
@@ -1686,13 +1715,14 @@ class MachineOptimizationReducer : public Next {
                              maybe_indirect_pointer_tag);
   }
 
-  OpIndex REDUCE(Load)(OpIndex base_idx, OpIndex index, LoadOp::Kind kind,
-                       MemoryRepresentation loaded_rep,
+  OpIndex REDUCE(Load)(OpIndex base_idx, OptionalOpIndex index,
+                       LoadOp::Kind kind, MemoryRepresentation loaded_rep,
                        RegisterRepresentation result_rep, int32_t offset,
                        uint8_t element_scale) {
     while (true) {
       if (ShouldSkipOptimizationStep()) break;
-      index = ReduceMemoryIndex(index, &offset, &element_scale);
+      index =
+          ReduceMemoryIndex(index.value_or_invalid(), &offset, &element_scale);
       if (!kind.tagged_base && !index.valid()) {
         if (OpIndex left, right;
             matcher.MatchWordAdd(base_idx, &left, &right,
@@ -1713,15 +1743,13 @@ class MachineOptimizationReducer : public Next {
           // Only few loads should be loading the map from a ConstantOp
           // HeapObject, so unparking the JSHeapBroker here rather than before
           // the optimization pass itself it probably more efficient.
-          if (broker != nullptr) {
-            UnparkedScopeIfNeeded scope(broker);
-            AllowHandleDereference allow_handle_dereference;
+          UnparkedScopeIfNeeded scope(broker);
+          AllowHandleDereference allow_handle_dereference;
 
-            OptionalMapRef map = TryMakeRef(broker, base.handle()->map());
-            if (map.has_value() && map->is_stable() && !map->is_deprecated()) {
-              broker->dependencies()->DependOnStableMap(*map);
-              return __ HeapConstant(map->object());
-            }
+          OptionalMapRef map = TryMakeRef(broker, base.handle()->map());
+          if (map.has_value() && map->is_stable() && !map->is_deprecated()) {
+            broker->dependencies()->DependOnStableMap(*map);
+            return __ HeapConstant(map->object());
           }
         }
         // TODO(dmercadier): consider constant-folding other accesses, in
@@ -1744,8 +1772,7 @@ class MachineOptimizationReducer : public Next {
                        uint8_t element_scale) {
     if (!maybe_constant.Is<ConstantOp>()) return false;
     const ConstantOp& constant = maybe_constant.Cast<ConstantOp>();
-    if (constant.rep != WordRepresentation::PointerSized() ||
-        !constant.IsIntegral()) {
+    if (constant.rep != WordRepresentation::PointerSized()) {
       // This can only happen in unreachable code. Ideally, we identify this
       // situation and use `__ Unreachable()`. However, this is difficult to
       // do from within this helper, so we just don't perform the reduction.
@@ -2088,6 +2115,8 @@ class MachineOptimizationReducer : public Next {
 
   base::Optional<OpIndex> ReduceBranchCondition(OpIndex condition,
                                                 bool* negated) {
+    // TODO(dmercadier): consider generalizing this function both Word32 and
+    // Word64.
     bool reduced = false;
     while (true) {
       condition = TryRemoveWord32ToWord64Conversion(condition);
@@ -2124,6 +2153,24 @@ class MachineOptimizationReducer : public Next {
           continue;
         }
       }
+      // (x >> k1) & k2   =>   x & (k2 << k1)
+      {
+        OpIndex shift, k2_index, x;
+        int k1_int;
+        uint32_t k1, k2;
+        if (matcher.MatchBitwiseAnd(condition, &shift, &k2_index,
+                                    WordRepresentation::Word32()) &&
+            matcher.MatchConstantRightShift(
+                shift, &x, WordRepresentation::Word32(), &k1_int) &&
+            matcher.MatchIntegralWord32Constant(k2_index, &k2)) {
+          k1 = static_cast<uint32_t>(k1_int);
+          if (k1 <= base::bits::CountLeadingZeros(k2) &&
+              (static_cast<uint64_t>(k2) << k1 <=
+               std::numeric_limits<uint32_t>::max())) {
+            return __ Word32BitwiseAnd(x, k2 << k1);
+          }
+        }
+      }
       // Select(x, true, false) => x
       if (const SelectOp* select = matcher.TryCast<SelectOp>(condition)) {
         auto left_val = MatchBoolConstant(select->vtrue());
@@ -2139,6 +2186,7 @@ class MachineOptimizationReducer : public Next {
           }
           condition = select->cond();
           reduced = true;
+          continue;
         }
       }
       break;
@@ -2160,6 +2208,11 @@ class MachineOptimizationReducer : public Next {
 
   JSHeapBroker* broker = PipelineData::Get().broker();
   const OperationMatcher& matcher = __ matcher();
+#if V8_ENABLE_WEBASSEMBLY
+  const bool signalling_nan_possible = PipelineData::Get().is_wasm();
+#else
+  static constexpr bool signalling_nan_possible = false;
+#endif  // V8_ENABLE_WEBASSEMBLY
 };
 
 #include "src/compiler/turboshaft/undef-assembler-macros.inc"

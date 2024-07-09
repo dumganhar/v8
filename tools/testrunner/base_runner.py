@@ -237,6 +237,10 @@ class BaseTestRunner(object):
                            "color, mono)")
     parser.add_option("--json-test-results",
                       help="Path to a file for storing json results.")
+    parser.add_option("--log-system-memory",
+                      help="Path to a file for storing system memory stats.")
+    parser.add_option("--log-test-schedule",
+                      help="Path to a file for streaming the test schedule to.")
     parser.add_option('--slow-tests-cutoff', type="int", default=100,
                       help='Collect N slowest tests')
     parser.add_option("--exit-after-n-failures", type="int", default=100,
@@ -300,6 +304,15 @@ class BaseTestRunner(object):
     if options.arch and ',' in options.arch:  # pragma: no cover
       print('Multiple architectures are deprecated')
       raise TestRunnerError()
+
+    # We write a test schedule and the system memory stats by default
+    # alongside json test results on bots.
+    if options.json_test_results:
+      result_dir = Path(options.json_test_results).parent
+      if not options.log_test_schedule:
+        options.log_test_schedule = result_dir / 'test_schedule.log'
+      if not options.log_system_memory:
+        options.log_system_memory = result_dir / 'memory_stats.log'
 
     return AugmentedOptions.augment(options), args
 
@@ -609,6 +622,7 @@ class BaseTestRunner(object):
         extra_flags=self.options.extra_flags,
         framework_name=self.framework_name,
         isolates=self.options.isolates,
+        log_process_stats=self.options.json_test_results,
         mode_flags=self.mode_options.flags + self._runner_flags(),
         no_harness=self.options.no_harness,
         noi18n=not self.build_config.i18n,

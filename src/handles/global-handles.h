@@ -123,7 +123,7 @@ class V8_EXPORT_PRIVATE GlobalHandles final {
   size_t handles_count() const;
   size_t last_gc_custom_callbacks() const { return last_gc_custom_callbacks_; }
 
-  void IterateAllRootsWithClassIds(v8::PersistentHandleVisitor* v);
+  void IterateAllRootsForTesting(v8::PersistentHandleVisitor* v);
 
 #ifdef DEBUG
   void PrintStats();
@@ -266,6 +266,7 @@ class GlobalHandleVector {
   size_t size() const { return locations_.size(); }
   bool empty() const { return locations_.empty(); }
 
+  void Reserve(size_t size) { locations_.reserve(size); }
   void Push(Tagged<T> val) { locations_.push_back(val.ptr()); }
   // Handles into the GlobalHandleVector become invalid when they are removed,
   // so "pop" returns a raw object rather than a handle.

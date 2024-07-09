@@ -81,10 +81,12 @@ class GraphVisitor {
         phase_zone_(phase_zone),
         origins_(origins),
         current_input_block_(nullptr),
-        op_mapping_(input_graph.op_id_count(), OpIndex::Invalid(), phase_zone),
+        op_mapping_(input_graph.op_id_count(), OpIndex::Invalid(), phase_zone,
+                    &input_graph),
         block_mapping_(input_graph.block_count(), nullptr, phase_zone),
         blocks_needing_variables_(phase_zone),
-        old_opindex_to_variables(input_graph.op_id_count(), phase_zone) {
+        old_opindex_to_variables(input_graph.op_id_count(), phase_zone,
+                                 &input_graph) {
     output_graph_.Reset();
   }
 
@@ -300,6 +302,13 @@ class GraphVisitor {
     return old_index.valid()
                ? MapToNewGraph<can_be_invalid>(old_index, predecessor_index)
                : OpIndex::Invalid();
+  }
+
+  template <bool can_be_invalid = false>
+  OptionalOpIndex MapToNewGraph(OptionalOpIndex old_index,
+                                int predecessor_index = -1) {
+    if (!old_index.has_value()) return OptionalOpIndex::Invalid();
+    return MapToNewGraph<can_be_invalid>(old_index.value(), predecessor_index);
   }
 
  private:
@@ -841,17 +850,16 @@ class GraphVisitor {
   OpIndex AssembleOutputGraphAtomicRMW(const AtomicRMWOp& op) {
     return assembler().ReduceAtomicRMW(
         MapToNewGraph(op.base()), MapToNewGraph(op.index()),
-        MapToNewGraph(op.value()), MapToNewGraphIfValid(op.expected()),
-        op.bin_op, op.result_rep, op.input_rep, op.memory_access_kind);
+        MapToNewGraph(op.value()), MapToNewGraph(op.expected()), op.bin_op,
+        op.result_rep, op.input_rep, op.memory_access_kind);
   }
 
   OpIndex AssembleOutputGraphAtomicWord32Pair(const AtomicWord32PairOp& op) {
     return assembler().ReduceAtomicWord32Pair(
-        MapToNewGraph(op.base()), MapToNewGraphIfValid(op.index()),
-        MapToNewGraphIfValid(op.value_low()),
-        MapToNewGraphIfValid(op.value_high()),
-        MapToNewGraphIfValid(op.expected_low()),
-        MapToNewGraphIfValid(op.expected_high()), op.op_kind, op.offset);
+        MapToNewGraph(op.base()), MapToNewGraph(op.index()),
+        MapToNewGraph(op.value_low()), MapToNewGraph(op.value_high()),
+        MapToNewGraph(op.expected_low()), MapToNewGraph(op.expected_high()),
+        op.kind, op.offset);
   }
 
   OpIndex AssembleOutputGraphMemoryBarrier(const MemoryBarrierOp& op) {
@@ -860,12 +868,12 @@ class GraphVisitor {
 
   OpIndex AssembleOutputGraphLoad(const LoadOp& op) {
     return assembler().ReduceLoad(
-        MapToNewGraph(op.base()), MapToNewGraphIfValid(op.index()), op.kind,
+        MapToNewGraph(op.base()), MapToNewGraph(op.index()), op.kind,
         op.loaded_rep, op.result_rep, op.offset, op.element_size_log2);
   }
   OpIndex AssembleOutputGraphStore(const StoreOp& op) {
     return assembler().ReduceStore(
-        MapToNewGraph(op.base()), MapToNewGraphIfValid(op.index()),
+        MapToNewGraph(op.base()), MapToNewGraph(op.index()),
         MapToNewGraph(op.value()), op.kind, op.stored_rep, op.write_barrier,
         op.offset, op.element_size_log2, op.maybe_initializing_or_transitioning,
         op.indirect_pointer_tag());
@@ -1154,10 +1162,6 @@ class GraphVisitor {
         MapToNewGraph(op.right_low()), MapToNewGraph(op.right_high()), op.kind);
   }
 
-  OpIndex AssembleOutputGraphComment(const CommentOp& op) {
-    return assembler().ReduceComment(op.message);
-  }
-
 #ifdef V8_ENABLE_WEBASSEMBLY
   OpIndex AssembleOutputGraphGlobalGet(const GlobalGetOp& op) {
     return assembler().ReduceGlobalGet(MapToNewGraph(op.instance()), op.global);
@@ -1196,24 +1200,30 @@ class GraphVisitor {
         MapToNewGraph(op.object()), MapToNewGraphIfValid(op.rtt()), op.config);
   }
 
-  OpIndex AssembleOutputGraphExternInternalize(const ExternInternalizeOp& op) {
-    return assembler().ReduceExternInternalize(MapToNewGraph(op.object()));
+  OpIndex AssembleOutputGraphAnyConvertExtern(const AnyConvertExternOp& op) {
+    return assembler().ReduceAnyConvertExtern(MapToNewGraph(op.object()));
   }
 
-  OpIndex AssembleOutputGraphExternExternalize(const ExternExternalizeOp& op) {
-    return assembler().ReduceExternExternalize(MapToNewGraph(op.object()));
+  OpIndex AssembleOutputGraphExternConvertAny(const ExternConvertAnyOp& op) {
+    return assembler().ReduceExternConvertAny(MapToNewGraph(op.object()));
+  }
+
+  OpIndex AssembleOutputGraphWasmTypeAnnotation(
+      const WasmTypeAnnotationOp& op) {
+    return assembler().ReduceWasmTypeAnnotation(MapToNewGraph(op.value()),
+                                                op.type);
   }
 
   OpIndex AssembleOutputGraphStructGet(const StructGetOp& op) {
     return assembler().ReduceStructGet(MapToNewGraph(op.object()), op.type,
-                                       op.field_index, op.is_signed,
-                                       op.null_check);
+                                       op.type_index, op.field_index,
+                                       op.is_signed, op.null_check);
   }
 
   OpIndex AssembleOutputGraphStructSet(const StructSetOp& op) {
-    return assembler().ReduceStructSet(MapToNewGraph(op.object()),
-                                       MapToNewGraph(op.value()), op.type,
-                                       op.field_index, op.null_check);
+    return assembler().ReduceStructSet(
+        MapToNewGraph(op.object()), MapToNewGraph(op.value()), op.type,
+        op.type_index, op.field_index, op.null_check);
   }
 
   OpIndex AssembleOutputGraphArrayGet(const ArrayGetOp& op) {
@@ -1231,6 +1241,22 @@ class GraphVisitor {
   OpIndex AssembleOutputGraphArrayLength(const ArrayLengthOp& op) {
     return assembler().ReduceArrayLength(MapToNewGraph(op.array()),
                                          op.null_check);
+  }
+
+  OpIndex AssembleOutputGraphWasmAllocateArray(const WasmAllocateArrayOp& op) {
+    return assembler().ReduceWasmAllocateArray(
+        MapToNewGraph(op.rtt()), MapToNewGraph(op.length()), op.array_type);
+  }
+
+  OpIndex AssembleOutputGraphWasmAllocateStruct(
+      const WasmAllocateStructOp& op) {
+    return assembler().ReduceWasmAllocateStruct(MapToNewGraph(op.rtt()),
+                                                op.struct_type);
+  }
+
+  OpIndex AssembleOutputGraphWasmRefFunc(const WasmRefFuncOp& op) {
+    return assembler().ReduceWasmRefFunc(MapToNewGraph(op.instance()),
+                                         op.function_index);
   }
 
   OpIndex AssembleOutputGraphStringAsWtf16(const StringAsWtf16Op& op) {
@@ -1383,7 +1409,7 @@ class GraphVisitor {
   const Block* current_input_block_;
 
   // Mappings from old OpIndices to new OpIndices.
-  FixedSidetable<OpIndex> op_mapping_;
+  FixedOpIndexSidetable<OpIndex> op_mapping_;
 
   // Mappings from old blocks to new blocks.
   FixedBlockSidetable<Block*> block_mapping_;
@@ -1404,7 +1430,7 @@ class GraphVisitor {
   ZoneSet<BlockIndex> blocks_needing_variables_;
 
   // Mapping from old OpIndex to Variables.
-  FixedSidetable<MaybeVariable> old_opindex_to_variables;
+  FixedOpIndexSidetable<MaybeVariable> old_opindex_to_variables;
 };
 
 }  // namespace v8::internal::compiler::turboshaft

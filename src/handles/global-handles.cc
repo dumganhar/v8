@@ -945,10 +945,10 @@ void GlobalHandles::ApplyPersistentHandleVisitor(
       node->wrapper_class_id());
 }
 
-void GlobalHandles::IterateAllRootsWithClassIds(
+void GlobalHandles::IterateAllRootsForTesting(
     v8::PersistentHandleVisitor* visitor) {
   for (Node* node : *regular_nodes_) {
-    if (node->IsWeakOrStrongRetainer() && node->has_wrapper_class_id()) {
+    if (node->IsWeakOrStrongRetainer()) {
       ApplyPersistentHandleVisitor(visitor, node);
     }
   }
