@@ -629,13 +629,13 @@ config("compiler") {
         !llvm_android_mainline) {
       cflags += [
         "-mllvm",
-        "-split-threshold-for-reg-with-hint=0",
+#cjh        "-split-threshold-for-reg-with-hint=0",
       ]
       if (use_thin_lto && is_a_target_toolchain) {
         if (is_win) {
           ldflags += [ "-mllvm:-split-threshold-for-reg-with-hint=0" ]
         } else {
-          ldflags += [ "-Wl,-mllvm,-split-threshold-for-reg-with-hint=0" ]
+#cjh          ldflags += [ "-Wl,-mllvm,-split-threshold-for-reg-with-hint=0" ]
         }
       }
     }
