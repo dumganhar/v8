@@ -642,9 +642,9 @@ config("compiler") {
 
     # TODO(crbug.com/1235145): Investigate why/if this should be needed.
     if (is_win) {
-      cflags += [ "/clang:-ffp-contract=off" ]
+#cjh      cflags += [ "/clang:-ffp-contract=off" ]
     } else {
-      cflags += [ "-ffp-contract=off" ]
+#cjh      cflags += [ "-ffp-contract=off" ]
     }
   }
 
