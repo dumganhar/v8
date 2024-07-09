@@ -40,7 +40,7 @@ config("compiler") {
   }
 
   # OS.
-  triplet_os = "apple-ios"
+  triplet_os = "apple-xros"
 
   # Set target.
   common_flags = [

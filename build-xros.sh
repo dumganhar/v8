@@ -29,7 +29,7 @@ symbol_level=0
 v8_enable_webassembly=false
 use_cxx17=true
 v8_enable_sandbox=false
-ios_deployment_target=\"1.0\"
+ios_deployment_target=\"11.0\"
 ios_enable_code_signing=false"
 
 if [[ "${TARGET_ENV}" == "" ]]; then

@@ -74,11 +74,11 @@ if (target_environment == "device" && ios_enable_code_signing) {
 if (ios_sdk_path == "") {
   # Compute default target.
   if (target_environment == "simulator") {
-    ios_sdk_name = "iphonesimulator"
-    ios_sdk_platform = "iPhoneSimulator"
+    ios_sdk_name = "xrsimulator"
+    ios_sdk_platform = "XRSimulator"
   } else if (target_environment == "device") {
-    ios_sdk_name = "iphoneos"
-    ios_sdk_platform = "iPhoneOS"
+    ios_sdk_name = "xros"
+    ios_sdk_platform = "XROS"
   } else if (target_environment == "catalyst") {
     ios_sdk_name = "macosx"
     ios_sdk_platform = "MacOSX"
