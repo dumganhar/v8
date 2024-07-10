@@ -571,9 +571,8 @@ jobs:
           set DEPOT_TOOLS_WIN_TOOLCHAIN=0
           set PATH=C:\depot_tools;%PATH%
           set ARGS="is_clang=false is_debug=${{ env.IS_DEBUG }} target_cpu=""${{ matrix.arch }}"" v8_target_cpu=""${{ matrix.arch }}"" use_thin_lto=false use_lld=false clang_use_chrome_plugins=false chrome_pgo_phase=0 is_component_build=true use_custom_libcxx=false v8_use_external_startup_data=false is_official_build=false v8_enable_i18n_support=false treat_warnings_as_errors=false symbol_level=0 v8_enable_webassembly=true v8_enable_sandbox=false"
-          
           set VSINSTALLDIR=C:\Program Files\Microsoft Visual Studio\2022\Community\
-          call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" amd64
+          set vs2022_install=%VSINSTALLDIR%
 
           gn gen out/windows --args=%ARGS%
 
