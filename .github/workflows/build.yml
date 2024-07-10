@@ -490,7 +490,7 @@ jobs:
         build_type: [debug, release]
 
     name: "Windows"
-    runs-on: windows-2019
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
