@@ -558,6 +558,11 @@ jobs:
           # https://community.chocolatey.org/packages/visualstudio2022buildtools/117.9.7.0
           choco install visualstudio2022buildtools --version=117.9.7.0
       
+      - name: Disable the default VS2022 Enterprise 
+        run: |
+          move "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" "C:\Program Files\Microsoft Visual Studio\2022\Enterprise.default"
+        shell: cmd
+
       - name: Checking VS product path ...
         continue-on-error: true
         run: |
