@@ -547,7 +547,7 @@ jobs:
       - name: Install windows deps
         run: |
           choco upgrade chocolatey -y
-          choco install nasm vswhere
+          choco install vswhere
       
       - name: Install Visual Studio 2022 Community 17.9.7.0
         run: |
