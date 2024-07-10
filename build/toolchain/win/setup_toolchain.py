@@ -175,8 +175,7 @@ def _LoadToolchainEnv(cpu, toolchain_root, sdk_dir, target_store):
                                         os.environ['GYP_MSVS_OVERRIDE_PATH'],
                                         '../BuildTools/VC/Auxiliary/Build/vcvarsall.bat'))
         if not os.path.exists(other_path):
-          raise Exception('%s, %s is missing - make sure VC++ tools are installed.' %
-                          script_path, other_path)
+          raise Exception('%s, %s is missing - make sure VC++ tools are installed.' % (script_path, other_path))
       script_path = other_path
     cpu_arg = "amd64"
     if (cpu != 'x64'):
