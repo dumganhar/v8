@@ -552,11 +552,11 @@ jobs:
       - name: Install Visual Studio 2022 Community 17.9.7.0
         run: |
           # https://github.com/actions/runner-images/issues/9154
-          # choco upgrade visualstudio2022enterprise
+          choco upgrade visualstudio2022enterprise
           # https://community.chocolatey.org/packages/visualstudio2022community/117.9.7.0
           choco install visualstudio2022community --version=117.9.7.0
           # https://community.chocolatey.org/packages/visualstudio2022buildtools/117.9.7.0
-          # choco install visualstudio2022buildtools --version=117.9.7.0
+          choco install visualstudio2022buildtools --version=117.9.7.0
       
       - name: Checking VS product path ...
         continue-on-error: true
