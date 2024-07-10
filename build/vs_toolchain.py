@@ -193,9 +193,9 @@ def GetVisualStudioVersion():
                               '/Microsoft Visual Studio/%s' % version)
     if path and any(
         os.path.exists(os.path.join(path, edition))
-        #cjh for edition inex ('Enterprise', 'Professional', 'Community', 'Preview',
+        #cjh for edition in ('Enterprise', 'Professional', 'Community', 'Preview',
         #                 'BuildTools')):
-        for edition inex ('Community', 'Preview', 'BuildTools')):
+        for edition in ('Community', 'Preview', 'BuildTools')):
       available_versions.append(version)
       break
 
