@@ -61,8 +61,10 @@ jobs:
 
       - name: Install dsymutil
         run: |
-          export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
-          python3 ${{ env.DEPOT_TOOLS_PATH }}/download_from_google_storage.py --no_resume --no_auth --bucket chromium-browser-clang -s tools/clang/dsymutil/bin/dsymutil.x64.sha1 -o tools/clang/dsymutil/bin/dsymutil
+          # export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
+          # python3 ${{ env.DEPOT_TOOLS_PATH }}/download_from_google_storage.py --no_resume --no_auth --bucket chromium-browser-clang -s tools/clang/dsymutil/bin/dsymutil.x64.sha1 -o tools/clang/dsymutil/bin/dsymutil
+          wget https://github.com/dumganhar/v8/releases/download/for-tool-packages/v8-9.1-llvm-build-tools-dsymutil.zip -O ./llvm-build-tools-dsymutil.zip
+          unzip llvm-build-tools-dsymutil.zip -d buildtools/mac/
 
       - name: Install ninja
         run: |
