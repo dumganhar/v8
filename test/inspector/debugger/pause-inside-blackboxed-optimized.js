@@ -26,9 +26,7 @@ contextGroup.addScript(`
   //# sourceURL=test.js
 `);
 
-session.setupScriptMap();
-
-InspectorTest.runAsyncTestSuite([async function test() {
+(async function test(){
   Protocol.Debugger.enable();
   Protocol.Debugger.setBlackboxPatterns({patterns: ['framework\.js']});
   Protocol.Runtime.evaluate({expression: `
@@ -37,4 +35,5 @@ InspectorTest.runAsyncTestSuite([async function test() {
   `});
   const {params:{callFrames}} = await Protocol.Debugger.oncePaused();
   session.logCallFrames(callFrames);
-}]);
+  InspectorTest.completeTest();
+})();

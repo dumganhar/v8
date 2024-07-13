@@ -27,7 +27,8 @@
 
 #include <stdlib.h>
 
-#include "include/v8-function.h"
+#include "src/init/v8.h"
+
 #include "src/api/api-inl.h"
 #include "src/debug/liveedit.h"
 #include "src/objects/objects-inl.h"
@@ -188,11 +189,11 @@ TEST(LiveEditTranslatePosition) {
   CompareStringsOneWay("aabbaaaa", "aaaabbaa", &changes);
   CHECK_EQ(LiveEdit::TranslatePosition(changes, 0), 0);
   CHECK_EQ(LiveEdit::TranslatePosition(changes, 1), 1);
-  CHECK_EQ(LiveEdit::TranslatePosition(changes, 2), 2);
-  CHECK_EQ(LiveEdit::TranslatePosition(changes, 3), 3);
-  CHECK_EQ(LiveEdit::TranslatePosition(changes, 4), 2);
-  CHECK_EQ(LiveEdit::TranslatePosition(changes, 5), 3);
-  CHECK_EQ(LiveEdit::TranslatePosition(changes, 6), 6);
+  CHECK_EQ(LiveEdit::TranslatePosition(changes, 2), 4);
+  CHECK_EQ(LiveEdit::TranslatePosition(changes, 3), 5);
+  CHECK_EQ(LiveEdit::TranslatePosition(changes, 4), 6);
+  CHECK_EQ(LiveEdit::TranslatePosition(changes, 5), 7);
+  CHECK_EQ(LiveEdit::TranslatePosition(changes, 6), 8);
   CHECK_EQ(LiveEdit::TranslatePosition(changes, 8), 8);
 }
 
@@ -213,18 +214,18 @@ void PatchFunctions(v8::Local<v8::Context> context, const char* source_a,
   if (result) {
     LiveEdit::PatchScript(
         i_isolate, i_script_a,
-        i_isolate->factory()->NewStringFromAsciiChecked(source_b), false, false,
+        i_isolate->factory()->NewStringFromAsciiChecked(source_b), false,
         result);
     if (result->status == v8::debug::LiveEditResult::COMPILE_ERROR) {
       result->message = scope.Escape(result->message);
     }
   } else {
-    v8::debug::LiveEditResult r;
+    v8::debug::LiveEditResult result;
     LiveEdit::PatchScript(
         i_isolate, i_script_a,
-        i_isolate->factory()->NewStringFromAsciiChecked(source_b), false, false,
-        &r);
-    CHECK_EQ(r.status, v8::debug::LiveEditResult::OK);
+        i_isolate->factory()->NewStringFromAsciiChecked(source_b), false,
+        &result);
+    CHECK_EQ(result.status, v8::debug::LiveEditResult::OK);
   }
 }
 }  // anonymous namespace
@@ -234,10 +235,10 @@ TEST(LiveEditPatchFunctions) {
   v8::HandleScope scope(env->GetIsolate());
   v8::Local<v8::Context> context = env.local();
   // Check that function is removed from compilation cache.
-  i::v8_flags.allow_natives_syntax = true;
+  i::FLAG_allow_natives_syntax = true;
   PatchFunctions(context, "42;", "%AbortJS('')");
   PatchFunctions(context, "42;", "239;");
-  i::v8_flags.allow_natives_syntax = false;
+  i::FLAG_allow_natives_syntax = false;
 
   // Basic test cases.
   PatchFunctions(context, "42;", "2;");
@@ -349,7 +350,7 @@ TEST(LiveEditPatchFunctions) {
                ->Value(),
            6);
 
-  i::v8_flags.allow_natives_syntax = true;
+  i::FLAG_allow_natives_syntax = true;
   PatchFunctions(context,
                  "function foo(a, b) { return a + b; }; "
                  "%PrepareFunctionForOptimization(foo);"
@@ -360,7 +361,7 @@ TEST(LiveEditPatchFunctions) {
                .ToLocalChecked()
                ->Value(),
            35);
-  i::v8_flags.allow_natives_syntax = false;
+  i::FLAG_allow_natives_syntax = false;
 
   // Check inner function.
   PatchFunctions(
@@ -415,25 +416,22 @@ TEST(LiveEditPatchFunctions) {
                  "  };\n"
                  "}\n");
   CompileRunChecked(env->GetIsolate(), "var new_closure = ChooseAnimal(3, 4);");
-
-  {
-    v8::Local<v8::String> call_result =
-        CompileRunChecked(env->GetIsolate(), "new_closure()").As<v8::String>();
-    v8::String::Utf8Value new_result_utf8(env->GetIsolate(), call_result);
-    CHECK_NOT_NULL(strstr(*new_result_utf8, "Capybara4"));
-    call_result =
-        CompileRunChecked(env->GetIsolate(), "old_closure()").As<v8::String>();
-    v8::String::Utf8Value old_result_utf8(env->GetIsolate(), call_result);
-    CHECK_NOT_NULL(strstr(*old_result_utf8, "Cat2"));
-  }
+  v8::Local<v8::String> call_result =
+      CompileRunChecked(env->GetIsolate(), "new_closure()").As<v8::String>();
+  v8::String::Utf8Value new_result_utf8(env->GetIsolate(), call_result);
+  CHECK_NOT_NULL(strstr(*new_result_utf8, "Capybara4"));
+  call_result =
+      CompileRunChecked(env->GetIsolate(), "old_closure()").As<v8::String>();
+  v8::String::Utf8Value old_result_utf8(env->GetIsolate(), call_result);
+  CHECK_NOT_NULL(strstr(*old_result_utf8, "Cat2"));
 
   // Update const literals.
   PatchFunctions(context, "function foo() { return 'a' + 'b'; }",
                  "function foo() { return 'c' + 'b'; }");
   {
-    v8::Local<v8::String> result_str =
+    v8::Local<v8::String> result =
         CompileRunChecked(env->GetIsolate(), "foo()").As<v8::String>();
-    v8::String::Utf8Value new_result_utf8(env->GetIsolate(), result_str);
+    v8::String::Utf8Value new_result_utf8(env->GetIsolate(), result);
     CHECK_NOT_NULL(strstr(*new_result_utf8, "cb"));
   }
 
@@ -510,9 +508,9 @@ TEST(LiveEditCompileError) {
       strstr(*result_message, "Uncaught SyntaxError: Unexpected token ')'"));
 
   {
-    v8::Local<v8::String> result_str =
+    v8::Local<v8::String> result =
         CompileRunChecked(env->GetIsolate(), "ChooseAnimal()").As<v8::String>();
-    v8::String::Utf8Value new_result_utf8(env->GetIsolate(), result_str);
+    v8::String::Utf8Value new_result_utf8(env->GetIsolate(), result);
     CHECK_NOT_NULL(strstr(*new_result_utf8, "Cat"));
   }
 
@@ -549,14 +547,14 @@ TEST(LiveEditFunctionExpression) {
   LiveEdit::PatchScript(
       i_isolate, i_script,
       i_isolate->factory()->NewStringFromAsciiChecked(updated_source), false,
-      false, &result);
+      &result);
   CHECK_EQ(result.status, debug::LiveEditResult::OK);
   {
-    v8::Local<v8::String> result_str =
+    v8::Local<v8::String> result =
         f->Call(context, context->Global(), 0, nullptr)
             .ToLocalChecked()
             .As<v8::String>();
-    v8::String::Utf8Value new_result_utf8(env->GetIsolate(), result_str);
+    v8::String::Utf8Value new_result_utf8(env->GetIsolate(), result);
     CHECK_NOT_NULL(strstr(*new_result_utf8, "Capybara"));
   }
 }

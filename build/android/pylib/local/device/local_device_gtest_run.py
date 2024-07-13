@@ -1,11 +1,9 @@
-# Copyright 2014 The Chromium Authors
+# Copyright 2014 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-
 import contextlib
 import collections
-import fnmatch
 import itertools
 import logging
 import math
@@ -15,7 +13,6 @@ import subprocess
 import shutil
 import time
 
-from six.moves import range  # pylint: disable=redefined-builtin
 from devil import base_error
 from devil.android import crash_handler
 from devil.android import device_errors
@@ -31,7 +28,6 @@ from pylib.gtest import gtest_test_instance
 from pylib.local import local_test_server_spawner
 from pylib.local.device import local_device_environment
 from pylib.local.device import local_device_test_run
-from pylib.symbols import stack_symbolizer
 from pylib.utils import google_storage_helper
 from pylib.utils import logdog_helper
 from py_trace_event import trace_event
@@ -56,9 +52,6 @@ _EXTRA_TEST_LIST = (
     'org.chromium.native_test.NativeTestInstrumentationTestRunner'
         '.TestList')
 
-# Used to identify the prefix in gtests.
-_GTEST_PRETEST_PREFIX = 'PRE_'
-
 _SECONDS_TO_NANOS = int(1e9)
 
 # Tests that use SpawnedTestServer must run the LocalTestServerSpawner on the
@@ -81,7 +74,7 @@ _MERGE_PROFDATA_FILE_NAME = 'coverage_merged.' + _PROFRAW_FILE_EXTENSION
 
 # No-op context manager. If we used Python 3, we could change this to
 # contextlib.ExitStack()
-class _NullContextManager:
+class _NullContextManager(object):
   def __enter__(self):
     pass
   def __exit__(self, *args):
@@ -96,39 +89,29 @@ def _GenerateSequentialFileNames(filename):
     yield '%s_%d%s' % (base, i, ext)
 
 
-def _ExtractTestsFromFilters(gtest_filters):
-  """Returns the list of tests specified by the given filters.
+def _ExtractTestsFromFilter(gtest_filter):
+  """Returns the list of tests specified by the given filter.
 
   Returns:
     None if the device should be queried for the test list instead.
   """
-  # - means exclude filter.
-  for gtest_filter in gtest_filters:
-    if '-' in gtest_filter:
-      return None
-  # Empty means all tests
-  if not any(gtest_filters):
+  # Empty means all tests, - means exclude filter.
+  if not gtest_filter or '-' in gtest_filter:
     return None
 
-  if len(gtest_filters) == 1:
-    patterns = gtest_filters[0].split(':')
-    # For a single pattern, allow it even if it has a wildcard so long as the
-    # wildcard comes at the end and there is at least one . to prove the scope
-    # is not too large.
-    # This heuristic is not necessarily faster, but normally is.
-    if len(patterns) == 1 and patterns[0].endswith('*'):
-      no_suffix = patterns[0].rstrip('*')
-      if '*' not in no_suffix and '.' in no_suffix:
-        return patterns
+  patterns = gtest_filter.split(':')
+  # For a single pattern, allow it even if it has a wildcard so long as the
+  # wildcard comes at the end and there is at least one . to prove the scope is
+  # not too large.
+  # This heuristic is not necessarily faster, but normally is.
+  if len(patterns) == 1 and patterns[0].endswith('*'):
+    no_suffix = patterns[0].rstrip('*')
+    if '*' not in no_suffix and '.' in no_suffix:
+      return patterns
 
-  all_patterns = set(gtest_filters[0].split(':'))
-  for gtest_filter in gtest_filters:
-    patterns = gtest_filter.split(':')
-    for pattern in patterns:
-      if '*' in pattern:
-        return None
-    all_patterns = all_patterns.intersection(set(patterns))
-  return list(all_patterns)
+  if '*' in gtest_filter:
+    return None
+  return patterns
 
 
 def _GetDeviceTimeoutMultiplier():
@@ -247,7 +230,7 @@ def _GetLLVMProfilePath(device_coverage_dir, suite, coverage_index):
                                   str(coverage_index), '%2m.profraw']))
 
 
-class _ApkDelegate:
+class _ApkDelegate(object):
   def __init__(self, test_instance, tool):
     self._activity = test_instance.activity
     self._apk_helper = test_instance.apk_helper
@@ -263,7 +246,6 @@ class _ApkDelegate:
     self._tool = tool
     self._coverage_dir = test_instance.coverage_dir
     self._coverage_index = 0
-    self._use_existing_test_data = test_instance.use_existing_test_data
 
   def GetTestDataRoot(self, device):
     # pylint: disable=no-self-use
@@ -271,8 +253,6 @@ class _ApkDelegate:
                           'chromium_tests_root')
 
   def Install(self, device):
-    if self._use_existing_test_data:
-      return
     if self._test_apk_incremental_install_json:
       installer.Install(device, self._test_apk_incremental_install_json,
                         apk=self._apk_helper, permissions=self._permissions)
@@ -283,8 +263,8 @@ class _ApkDelegate:
           reinstall=True,
           permissions=self._permissions)
 
-  def ResultsDirectory(self, device):  # pylint: disable=no-self-use
-    return device.GetExternalStoragePath()
+  def ResultsDirectory(self, device):
+    return device.GetApplicationDataDirectory(self._package)
 
   def Run(self, test, device, flags=None, **kwargs):
     extras = dict(self._extras)
@@ -305,6 +285,7 @@ class _ApkDelegate:
       extras[gtest_test_instance.EXTRA_SHARD_NANO_TIMEOUT] = int(
           kwargs['timeout'] * _SECONDS_TO_NANOS)
 
+    # pylint: disable=redefined-variable-type
     command_line_file = _NullContextManager()
     if flags:
       if len(flags) > _MAX_INLINE_FLAGS_LENGTH:
@@ -322,6 +303,7 @@ class _ApkDelegate:
         extras[_EXTRA_TEST_LIST] = test_list_file.name
       else:
         extras[_EXTRA_TEST] = test[0]
+    # pylint: enable=redefined-variable-type
 
     # We need to use GetAppWritablePath here instead of GetExternalStoragePath
     # since we will not have yet applied legacy storage permission workarounds
@@ -378,7 +360,7 @@ class _ApkDelegate:
     device.ClearApplicationState(self._package, permissions=self._permissions)
 
 
-class _ExeDelegate:
+class _ExeDelegate(object):
 
   def __init__(self, tr, test_instance, tool):
     self._host_dist_dir = test_instance.exe_dist_dir
@@ -472,13 +454,14 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
   def __init__(self, env, test_instance):
     assert isinstance(env, local_device_environment.LocalDeviceEnvironment)
     assert isinstance(test_instance, gtest_test_instance.GtestTestInstance)
-    super().__init__(env, test_instance)
+    super(LocalDeviceGtestRun, self).__init__(env, test_instance)
 
     if self._test_instance.apk_helper:
       self._installed_packages = [
           self._test_instance.apk_helper.GetPackageName()
       ]
 
+    # pylint: disable=redefined-variable-type
     if self._test_instance.apk:
       self._delegate = _ApkDelegate(self._test_instance, env.tool)
     elif self._test_instance.exe_dist_dir:
@@ -488,6 +471,7 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
           self._test_instance.isolated_script_test_perf_output)
     else:
       self._test_perf_output_filenames = itertools.repeat(None)
+    # pylint: enable=redefined-variable-type
     self._crashes = set()
     self._servers = collections.defaultdict(list)
 
@@ -506,8 +490,6 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
         self._delegate.Install(dev)
 
       def push_test_data(dev):
-        if self._test_instance.use_existing_test_data:
-          return
         # Push data dependencies.
         device_root = self._delegate.GetTestDataRoot(dev)
         host_device_tuples_substituted = [
@@ -530,17 +512,13 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
         tool.CopyFiles(dev)
         tool.SetupEnvironment()
 
-        if self._env.disable_test_server:
-          logging.warning('Not starting test server. Some tests may fail.')
-          return
-
         try:
           # See https://crbug.com/1030827.
           # This is a hack that may break in the future. We're relying on the
           # fact that adb doesn't use ipv6 for it's server, and so doesn't
           # listen on ipv6, but ssh remote forwarding does. 5037 is the port
           # number adb uses for its server.
-          if b"[::1]:5037" in subprocess.check_output(
+          if "[::1]:5037" in subprocess.check_output(
               "ss -o state listening 'sport = 5037'", shell=True):
             logging.error(
                 'Test Server cannot be started with a remote-forwarded adb '
@@ -561,6 +539,15 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
       def bind_crash_handler(step, dev):
         return lambda: crash_handler.RetryOnSystemCrash(step, dev)
 
+      # Explicitly enable root to ensure that tests run under deterministic
+      # conditions. Without this explicit call, EnableRoot() is called from
+      # push_test_data() when PushChangedFiles() determines that it should use
+      # _PushChangedFilesZipped(), which is only most of the time.
+      # Root is required (amongst maybe other reasons) to pull the results file
+      # from the device, since it lives within the application's data directory
+      # (via GetApplicationDataDirectory()).
+      device.EnableRoot()
+
       steps = [
           bind_crash_handler(s, device)
           for s in (install_apk, push_test_data, init_tool_and_start_servers)]
@@ -575,25 +562,11 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
         self._test_instance.GetDataDependencies())
 
   #override
-  def _ShouldShardTestsForDevices(self):
-    """Shard tests across several devices.
-
-    Returns:
-      True if tests should be sharded across several devices,
-      False otherwise.
-    """
+  def _ShouldShard(self):
     return True
 
   #override
-  def _CreateShardsForDevices(self, tests):
-    """Create shards of tests to run on devices.
-
-    Args:
-      tests: List containing tests or test batches.
-
-    Returns:
-      List of test batches.
-    """
+  def _CreateShards(self, tests):
     # _crashes are tests that might crash and make the tests in the same shard
     # following the crashed testcase not run.
     # Thus we need to create separate shards for each crashed testcase,
@@ -607,10 +580,6 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
     # Delete suspect testcase from tests.
     tests = [test for test in tests if not test in self._crashes]
 
-    # Sort tests by hash.
-    # TODO(crbug.com/1257820): Add sorting logic back to _PartitionTests.
-    tests = self._SortTests(tests)
-
     max_shard_size = self._test_instance.test_launcher_batch_limit
 
     shards.extend(self._PartitionTests(tests, device_count, max_shard_size))
@@ -622,7 +591,7 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
       # When the exact list of tests to run is given via command-line (e.g. when
       # locally iterating on a specific test), skip querying the device (which
       # takes ~3 seconds).
-      tests = _ExtractTestsFromFilters(self._test_instance.gtest_filters)
+      tests = _ExtractTestsFromFilter(self._test_instance.gtest_filter)
       if tests:
         return tests
 
@@ -638,10 +607,8 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
         timeout = None
 
       flags = [
-          f for f in self._test_instance.flags if f not in [
-              '--wait-for-debugger', '--wait-for-java-debugger',
-              '--gtest_also_run_disabled_tests'
-          ]
+          f for f in self._test_instance.flags
+          if f not in ['--wait-for-debugger', '--wait-for-java-debugger']
       ]
       flags.append('--gtest_list_tests')
 
@@ -682,42 +649,6 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
         tests, self._test_instance.external_shard_index,
         self._test_instance.total_external_shards)
     return tests
-
-  #override
-  def _GroupTests(self, tests):
-    pre_tests = dict()
-    other_tests = []
-    for test in tests:
-      test_name_start = max(test.find('.') + 1, 0)
-      test_name = test[test_name_start:]
-      if test_name_start == 0 or not test_name.startswith(
-          _GTEST_PRETEST_PREFIX):
-        other_tests.append(test)
-      else:
-        test_suite = test[:test_name_start - 1]
-        trim_test = test
-        trim_tests = [test]
-
-        while test_name.startswith(_GTEST_PRETEST_PREFIX):
-          test_name = test_name[len(_GTEST_PRETEST_PREFIX):]
-          trim_test = '%s.%s' % (test_suite, test_name)
-          trim_tests.append(trim_test)
-
-        if not trim_test in pre_tests or len(
-            pre_tests[trim_test]) < len(trim_tests):
-          pre_tests[trim_test] = trim_tests
-
-    all_tests = []
-    for other_test in other_tests:
-      if not other_test in pre_tests:
-        all_tests.append(other_test)
-
-    # TODO(crbug.com/1257820): Add logic to support grouping tests.
-    # Once grouping logic is added, switch to 'append' from 'extend'.
-    for _, test_list in pre_tests.items():
-      all_tests.extend(test_list)
-
-    return all_tests
 
   def _UploadTestArtifacts(self, device, test_artifacts_dir):
     # TODO(jbudorick): Reconcile this with the output manager once
@@ -773,23 +704,19 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
     try:
       with self._env.output_manager.ArchivedTempfile(stream_name,
                                                      'logcat') as logcat_file:
-        symbolizer = stack_symbolizer.PassThroughSymbolizerPool(
-            device.product_cpu_abi)
-        with symbolizer:
-          with logcat_monitor.LogcatMonitor(
-              device.adb,
-              filter_specs=local_device_environment.LOGCAT_FILTERS,
-              output_file=logcat_file.name,
-              transform_func=symbolizer.TransformLines,
-              check_error=False) as logmon:
-            with contextlib_ext.Optional(trace_event.trace(str(test)),
-                                         self._env.trace_output):
-              yield logcat_file
+        with logcat_monitor.LogcatMonitor(
+            device.adb,
+            filter_specs=local_device_environment.LOGCAT_FILTERS,
+            output_file=logcat_file.name,
+            check_error=False) as logmon:
+          with contextlib_ext.Optional(trace_event.trace(str(test)),
+                                       self._env.trace_output):
+            yield logcat_file
     finally:
       if logmon:
         logmon.Close()
       if logcat_file and logcat_file.Link():
-        logging.critical('Logcat saved to %s', logcat_file.Link())
+        logging.info('Logcat saved to %s', logcat_file.Link())
 
   #override
   def _RunTest(self, device, test):
@@ -938,19 +865,6 @@ class LocalDeviceGtestRun(local_device_test_run.LocalDeviceTestRun):
           gtest_test_instance.TestNameWithoutDisabledPrefix(t))
     not_run_tests = tests_stripped_disabled_prefix.difference(
         set(r.GetName() for r in results))
-
-    if self._test_instance.extract_test_list_from_filter:
-      # A test string might end with a * in this mode, and so may not match any
-      # r.GetName() for the set difference. It's possible a filter like foo.*
-      # can match two tests, ie foo.baz and foo.foo.
-      # When running it's possible Foo.baz is ran, foo.foo is not, but the test
-      # list foo.* will not be reran as at least one result matched it.
-      not_run_tests = {
-          t
-          for t in not_run_tests
-          if not any(fnmatch.fnmatch(r.GetName(), t) for r in results)
-      }
-
     return results, list(not_run_tests) if results else None
 
   #override

@@ -5,31 +5,31 @@
 #include <cmath>
 
 #include "src/api/api-inl.h"
-#include "src/base/strings.h"
 #include "src/base/utils/random-number-generator.h"
 #include "src/builtins/builtins-promise-gen.h"
 #include "src/builtins/builtins-promise.h"
 #include "src/builtins/builtins-string-gen.h"
-#include "src/builtins/builtins-utils-inl.h"
+#include "src/codegen/code-factory.h"
 #include "src/codegen/code-stub-assembler.h"
-#include "src/codegen/interface-descriptors-inl.h"
 #include "src/compiler/node.h"
 #include "src/debug/debug.h"
 #include "src/execution/isolate.h"
 #include "src/heap/heap-inl.h"
-#include "src/heap/heap-verifier.h"
 #include "src/numbers/hash-seed-inl.h"
+#include "src/objects/hash-table-inl.h"
+#include "src/objects/heap-number-inl.h"
+#include "src/objects/js-array-buffer-inl.h"
 #include "src/objects/js-array-inl.h"
-#include "src/objects/js-promise-inl.h"
 #include "src/objects/objects-inl.h"
 #include "src/objects/ordered-hash-table-inl.h"
 #include "src/objects/promise-inl.h"
 #include "src/objects/smi.h"
+#include "src/objects/struct-inl.h"
 #include "src/objects/transitions-inl.h"
 #include "src/strings/char-predicates.h"
 #include "test/cctest/cctest-utils.h"
+#include "test/cctest/compiler/code-assembler-tester.h"
 #include "test/cctest/compiler/function-tester.h"
-#include "test/common/code-assembler-tester.h"
 
 namespace v8 {
 namespace internal {
@@ -56,7 +56,7 @@ TEST(CallCFunction) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
 
   {
@@ -90,7 +90,7 @@ TEST(CallCFunctionWithCallerSavedRegisters) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
 
   {
@@ -101,7 +101,7 @@ TEST(CallCFunctionWithCallerSavedRegisters) {
 
     TNode<IntPtrT> const result =
         m.UncheckedCast<IntPtrT>(m.CallCFunctionWithCallerSavedRegisters(
-            fun_constant, type_intptr, SaveFPRegsMode::kSave,
+            fun_constant, type_intptr, kSaveFPRegs,
             std::make_pair(type_intptr, m.IntPtrConstant(0)),
             std::make_pair(type_intptr, m.IntPtrConstant(1)),
             std::make_pair(type_intptr, m.IntPtrConstant(2))));
@@ -119,7 +119,7 @@ TEST(NumberToString) {
   Factory* factory = isolate->factory();
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   {
@@ -199,14 +199,14 @@ TEST(ToUint32) {
   Factory* factory = isolate->factory();
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
-  {
-    auto context = m.GetJSContextParameter();
-    auto input = m.Parameter<Object>(1);
-    m.Return(m.ToUint32(context, input));
-  }
+  const int kContextOffset = 3;
+  auto context = m.Parameter<Context>(kNumParams + kContextOffset);
+  auto input = m.Parameter<Object>(1);
+  m.Return(m.ToUint32(context, input));
+
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
 
   // clang-format off
@@ -235,7 +235,7 @@ TEST(ToUint32) {
   };
   // clang-format on
 
-  static_assert(arraysize(inputs) == arraysize(expectations));
+  STATIC_ASSERT(arraysize(inputs) == arraysize(expectations));
 
   const int test_count = arraysize(inputs);
   for (int i = 0; i < test_count; i++) {
@@ -275,7 +275,7 @@ TEST(ToUint32) {
 namespace {
 void IsValidPositiveSmiCase(Isolate* isolate, intptr_t value) {
   const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
 
   CodeStubAssembler m(asm_tester.state());
   m.Return(
@@ -316,11 +316,11 @@ TEST(IsValidPositiveSmi) {
 #endif
 }
 
-TEST(ConvertAndClampRelativeIndex) {
+TEST(ConvertToRelativeIndex) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 3;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   enum Result { kFound, kNotFound };
@@ -333,7 +333,7 @@ TEST(ConvertAndClampRelativeIndex) {
     TNode<UintPtrT> expected =
         m.ChangeUintPtrNumberToUintPtr(expected_relative_index);
 
-    TNode<UintPtrT> result = m.ConvertAndClampRelativeIndex(index, length);
+    TNode<UintPtrT> result = m.ConvertToRelativeIndex(index, length);
 
     m.Return(m.SelectBooleanConstant(m.WordEqual(result, expected)));
   }
@@ -470,7 +470,7 @@ TEST(DecodeWordFromWord32) {
 TEST(JSFunction) {
   const int kNumParams = 2;  // left, right.
   Isolate* isolate(CcTest::InitIsolateOnce());
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
   m.Return(m.SmiFromInt32(m.Int32Add(m.SmiToInt32(m.Parameter<Smi>(1)),
                                      m.SmiToInt32(m.Parameter<Smi>(2)))));
@@ -485,7 +485,7 @@ TEST(JSFunction) {
 TEST(ComputeIntegerHash) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   m.Return(m.SmiFromInt32(m.UncheckedCast<Int32T>(
@@ -493,7 +493,7 @@ TEST(ComputeIntegerHash) {
 
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
 
-  base::RandomNumberGenerator rand_gen(v8_flags.random_seed);
+  base::RandomNumberGenerator rand_gen(FLAG_random_seed);
 
   for (int i = 0; i < 1024; i++) {
     int k = rand_gen.NextInt(Smi::kMaxValue);
@@ -510,9 +510,10 @@ TEST(ComputeIntegerHash) {
 TEST(ToString) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
-  m.Return(m.ToStringImpl(m.GetJSContextParameter(), m.Parameter<Object>(1)));
+  m.Return(m.ToStringImpl(m.Parameter<Context>(kNumParams + 3),
+                          m.Parameter<Object>(1)));
 
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
 
@@ -568,7 +569,7 @@ TEST(TryToName) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 3;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   enum Result { kKeyIsIndex, kKeyIsUnique, kBailout };
@@ -601,7 +602,7 @@ TEST(TryToName) {
       m.Goto(&check_result);
 
       m.BIND(&if_expectedisheapnumber);
-      CSA_DCHECK(&m, m.IsHeapNumber(m.CAST(expected_arg)));
+      CSA_ASSERT(&m, m.IsHeapNumber(m.CAST(expected_arg)));
       TNode<Float64T> value = m.LoadHeapNumberValue(m.CAST(expected_arg));
       // We know this to be safe as all expected values are in intptr
       // range.
@@ -766,18 +767,18 @@ TEST(TryToName) {
     ft.CheckTrue(key, expect_bailout);
   }
 
-  {
+  if (FLAG_thin_strings) {
     // TryToName(<thin string>) => internalized version.
     Handle<String> s = isolate->factory()->NewStringFromAsciiChecked("foo");
     Handle<String> internalized = isolate->factory()->InternalizeString(s);
     ft.CheckTrue(s, expect_unique, internalized);
   }
 
-  {
+  if (FLAG_thin_strings) {
     // TryToName(<thin two-byte string>) => internalized version.
-    base::uc16 array1[] = {2001, 2002, 2003};
+    uc16 array1[] = {2001, 2002, 2003};
     Handle<String> s = isolate->factory()
-                           ->NewStringFromTwoByte(base::ArrayVector(array1))
+                           ->NewStringFromTwoByte(ArrayVector(array1))
                            .ToHandleChecked();
     Handle<String> internalized = isolate->factory()->InternalizeString(s);
     ft.CheckTrue(s, expect_unique, internalized);
@@ -791,7 +792,7 @@ void TestEntryToIndex() {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
   {
     TNode<IntPtrT> entry = m.SmiUntag(m.Parameter<Smi>(1));
@@ -823,7 +824,7 @@ void TestNameDictionaryLookup() {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 4;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   enum Result { kFound, kNotFound };
@@ -927,7 +928,7 @@ TEST(NumberDictionaryLookup) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 4;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   enum Result { kFound, kNotFound };
@@ -975,7 +976,7 @@ TEST(NumberDictionaryLookup) {
   Handle<Object> fake_value(Smi::FromInt(42), isolate);
   PropertyDetails fake_details = PropertyDetails::Empty();
 
-  base::RandomNumberGenerator rand_gen(v8_flags.random_seed);
+  base::RandomNumberGenerator rand_gen(FLAG_random_seed);
 
   for (int i = 0; i < kKeysCount; i++) {
     int random_key = rand_gen.NextInt(Smi::kMaxValue);
@@ -1012,7 +1013,7 @@ TEST(TransitionLookup) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 4;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
 
   enum Result { kFound, kNotFound };
 
@@ -1058,13 +1059,13 @@ TEST(TransitionLookup) {
   Handle<Object> expect_not_found(Smi::FromInt(kNotFound), isolate);
 
   const int ATTRS_COUNT = (READ_ONLY | DONT_ENUM | DONT_DELETE) + 1;
-  static_assert(ATTRS_COUNT == 8);
+  STATIC_ASSERT(ATTRS_COUNT == 8);
 
   const int kKeysCount = 300;
   Handle<Map> root_map = Map::Create(isolate, 0);
   Handle<Name> keys[kKeysCount];
 
-  base::RandomNumberGenerator rand_gen(v8_flags.random_seed);
+  base::RandomNumberGenerator rand_gen(FLAG_random_seed);
 
   Factory* factory = isolate->factory();
   Handle<FieldType> any = FieldType::Any(isolate);
@@ -1096,7 +1097,7 @@ TEST(TransitionLookup) {
 
     if ((i & 2) == 0) {
       for (int j = 0; j < ATTRS_COUNT; j++) {
-        auto attributes = PropertyAttributesFromInt(j);
+        PropertyAttributes attributes = static_cast<PropertyAttributes>(j);
         if (attributes == base_attributes) continue;
         // Don't add private symbols with enumerable attributes.
         if (is_private && ((attributes & DONT_ENUM) == 0)) continue;
@@ -1119,7 +1120,7 @@ TEST(TransitionLookup) {
 
   // Ensure we didn't overflow transition array and therefore all the
   // combinations of cases are covered.
-  CHECK(TransitionsAccessor::CanHaveMoreTransitions(isolate, root_map));
+  CHECK(TransitionsAccessor(isolate, root_map).CanHaveMoreTransitions());
 
   // Now try querying keys.
   bool positive_lookup_tested = false;
@@ -1178,9 +1179,7 @@ void AddProperties(Handle<JSObject> object, Handle<Name> names[],
       Handle<AccessorPair> pair = Handle<AccessorPair>::cast(value);
       Handle<Object> getter(pair->getter(), isolate);
       Handle<Object> setter(pair->setter(), isolate);
-      JSObject::DefineOwnAccessorIgnoreAttributes(object, names[i], getter,
-                                                  setter, NONE)
-          .Check();
+      JSObject::DefineAccessor(object, names[i], getter, setter, NONE).Check();
     } else {
       JSObject::AddProperty(isolate, object, names[i], value, NONE);
     }
@@ -1193,7 +1192,7 @@ TEST(TryHasOwnProperty) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 3;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   enum Result { kFound, kNotFound, kBailout };
@@ -1321,7 +1320,7 @@ TEST(TryHasOwnProperty) {
     function->initial_map().set_instance_type(JS_GLOBAL_OBJECT_TYPE);
     function->initial_map().set_is_prototype_map(true);
     function->initial_map().set_is_dictionary_map(true);
-    function->initial_map().set_may_have_interesting_properties(true);
+    function->initial_map().set_may_have_interesting_symbols(true);
     Handle<JSObject> object = factory->NewJSGlobalObject(function);
     AddProperties(object, names, arraysize(names));
 
@@ -1339,7 +1338,7 @@ TEST(TryHasOwnProperty) {
     for (Handle<JSObject> object : objects) {
       for (size_t name_index = 0; name_index < arraysize(names); name_index++) {
         Handle<Name> name = names[name_index];
-        CHECK(JSReceiver::HasProperty(isolate, object, name).FromJust());
+        CHECK(JSReceiver::HasProperty(object, name).FromJust());
         ft.CheckTrue(object, name, expect_found);
       }
     }
@@ -1359,7 +1358,7 @@ TEST(TryHasOwnProperty) {
       for (size_t key_index = 0; key_index < arraysize(non_existing_names);
            key_index++) {
         Handle<Name> name = non_existing_names[key_index];
-        CHECK(!JSReceiver::HasProperty(isolate, object, name).FromJust());
+        CHECK(!JSReceiver::HasProperty(object, name).FromJust());
         ft.CheckTrue(object, name, expect_not_found);
       }
     }
@@ -1385,7 +1384,7 @@ TEST(TryGetOwnProperty) {
   Factory* factory = isolate->factory();
 
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   Handle<Symbol> not_found_symbol = factory->NewSymbol();
@@ -1393,7 +1392,7 @@ TEST(TryGetOwnProperty) {
   {
     auto object = m.Parameter<JSReceiver>(1);
     auto unique_name = m.Parameter<Name>(2);
-    auto context = m.GetJSContextParameter();
+    auto context = m.Parameter<Context>(kNumParams + 3);
 
     TVariable<Object> var_value(&m);
     Label if_found(&m), if_not_found(&m), if_bailout(&m);
@@ -1456,9 +1455,9 @@ TEST(TryGetOwnProperty) {
           factory->NewFunctionForTesting(factory->empty_string())),
       factory->NewPrivateSymbol(),
   };
-  static_assert(arraysize(values) < arraysize(names));
+  STATIC_ASSERT(arraysize(values) < arraysize(names));
 
-  base::RandomNumberGenerator rand_gen(v8_flags.random_seed);
+  base::RandomNumberGenerator rand_gen(FLAG_random_seed);
 
   std::vector<Handle<JSObject>> objects;
 
@@ -1606,7 +1605,7 @@ TEST(TryLookupElement) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 3;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   enum Result { kFound, kAbsent, kNotFound, kBailout };
@@ -1665,18 +1664,18 @@ TEST(TryLookupElement) {
   Handle<Object> expect_not_found(Smi::FromInt(kNotFound), isolate);
   Handle<Object> expect_bailout(Smi::FromInt(kBailout), isolate);
 
-#define CHECK_FOUND(object, index)                                  \
-  CHECK(JSReceiver::HasElement(isolate, object, index).FromJust()); \
+#define CHECK_FOUND(object, index)                         \
+  CHECK(JSReceiver::HasElement(object, index).FromJust()); \
   ft.CheckTrue(object, smi##index, expect_found);
 
-#define CHECK_NOT_FOUND(object, index)                               \
-  CHECK(!JSReceiver::HasElement(isolate, object, index).FromJust()); \
+#define CHECK_NOT_FOUND(object, index)                      \
+  CHECK(!JSReceiver::HasElement(object, index).FromJust()); \
   ft.CheckTrue(object, smi##index, expect_not_found);
 
 #define CHECK_ABSENT(object, index)                  \
   {                                                  \
     Handle<Smi> smi(Smi::FromInt(index), isolate);   \
-    PropertyKey key(isolate, smi);                   \
+    LookupIterator::Key key(isolate, smi);           \
     LookupIterator it(isolate, object, key);         \
     CHECK(!JSReceiver::HasProperty(&it).FromJust()); \
     ft.CheckTrue(object, smi, expect_absent);        \
@@ -1751,7 +1750,7 @@ TEST(TryLookupElement) {
     {
       std::shared_ptr<v8::BackingStore> backing_store =
           buffer->GetBackingStore();
-      buffer->Detach(v8::Local<v8::Value>()).Check();
+      buffer->Detach();
     }
     CHECK_ABSENT(object, 0);
     CHECK_ABSENT(object, 1);
@@ -1836,7 +1835,7 @@ TEST(AllocateJSObjectFromMap) {
   Factory* factory = isolate->factory();
 
   const int kNumParams = 3;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   {
@@ -1879,7 +1878,7 @@ TEST(AllocateJSObjectFromMap) {
       CHECK_EQ(result->elements(), *empty_fixed_array);
       CHECK(result->HasFastProperties());
 #ifdef VERIFY_HEAP
-      HeapVerifier::VerifyHeap(isolate->heap());
+      isolate->heap()->Verify();
 #endif
     }
   }
@@ -1908,64 +1907,7 @@ TEST(AllocateJSObjectFromMap) {
     }
     CHECK(!result->HasFastProperties());
 #ifdef VERIFY_HEAP
-    HeapVerifier::VerifyHeap(isolate->heap());
-#endif
-  }
-}
-
-TEST(AllocationFoldingCSA) {
-  Isolate* isolate(CcTest::InitIsolateOnce());
-
-  const int kNumParams = 1;
-  const int kNumArrays = 7;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams),
-                                 CodeKind::FOR_TESTING);
-  CodeStubAssembler m(asm_tester.state());
-
-  {
-    TNode<IntPtrT> length = m.SmiUntag(m.Parameter<Smi>(1));
-    TNode<FixedArray> result = m.UncheckedCast<FixedArray>(m.AllocateFixedArray(
-        PACKED_ELEMENTS, length, CodeStubAssembler::AllocationFlag::kNone));
-    for (int i = 1; i <= kNumArrays; ++i) {
-      int array_length = i * kTaggedSize;
-      TNode<ByteArray> array =
-          m.AllocateByteArray(m.UintPtrConstant(array_length));
-      m.StoreFixedArrayElement(result, i - 1, array);
-    }
-    m.Return(result);
-  }
-
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
-
-  {
-    auto fixed_array_length = Handle<Smi>(Smi::FromInt(kNumArrays), isolate);
-    Handle<FixedArray> result =
-        Handle<FixedArray>::cast(ft.Call(fixed_array_length).ToHandleChecked());
-    CHECK_EQ(result->length(), kNumArrays);
-    if (V8_COMPRESS_POINTERS_8GB_BOOL) {
-      CHECK(IsAligned(result->address(), kObjectAlignment8GbHeap));
-    } else {
-      CHECK(IsAligned(result->address(), kTaggedSize));
-    }
-    ByteArray prev_array;
-    for (int i = 1; i <= kNumArrays; ++i) {
-      ByteArray current_array = ByteArray::cast(result->get(i - 1));
-      if (V8_COMPRESS_POINTERS_8GB_BOOL) {
-        CHECK(IsAligned(current_array.address(), kObjectAlignment8GbHeap));
-      } else {
-        CHECK(IsAligned(current_array.address(), kTaggedSize));
-      }
-      CHECK_EQ(current_array.length(), i * kTaggedSize);
-      if (i != 1) {
-        // TODO(v8:13070): Align prev_array.AllocatedSize() to the allocation
-        // size.
-        CHECK_EQ(prev_array.address() + prev_array.AllocatedSize(),
-                 current_array.address());
-      }
-      prev_array = current_array;
-    }
-#ifdef VERIFY_HEAP
-    HeapVerifier::VerifyHeap(isolate->heap());
+    isolate->heap()->Verify();
 #endif
   }
 }
@@ -1987,7 +1929,7 @@ void TestDictionaryAllocation(CSAAllocator<Dictionary> csa_alloc,
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   {
@@ -2061,10 +2003,10 @@ TEST(PopAndReturnFromJSBuiltinWithStackParameters) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumStackParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumStackParams));
+  CodeAssemblerTester asm_tester(isolate, kNumStackParams);
   {
     CodeStubAssembler m(asm_tester.state());
-    m.PopAndReturn(m.SmiUntag(m.Parameter<Smi>(1)),
+    m.PopAndReturn(m.SmiUntag(m.Parameter<Smi>(0)),
                    m.SmiConstant(Smi::FromInt(1234)));
   }
 
@@ -2082,7 +2024,7 @@ TEST(PopAndReturnFromTFCBuiltinWithStackParameters) {
   // least one argument passed on stack.
   using Descriptor = FlatMapIntoArrayDescriptor;
   Descriptor descriptor;
-  CHECK_LT(0, Descriptor::GetStackParameterCount());
+  CHECK_LT(0, descriptor.GetStackParameterCount());
 
   CodeAssemblerTester asm_tester(isolate, Descriptor());
   {
@@ -2150,8 +2092,7 @@ void CallFunctionWithStackPointerChecks(Isolate* isolate,
           CSA_CHECK(
               &m, m.TaggedEqual(result, MakeConstantNode(m, expected_result)));
         },
-        1, CodeStubAssembler::LoopUnrollingMode::kNo,
-        CodeStubAssembler::IndexAdvanceMode::kPost);
+        1, CodeStubAssembler::IndexAdvanceMode::kPost);
 
 #ifdef V8_CC_GNU
     TNode<WordT> stack_pointer1 =
@@ -2160,7 +2101,7 @@ void CallFunctionWithStackPointerChecks(Isolate* isolate,
 #endif
     m.Return(m.SmiConstant(42));
   }
-  FunctionTester ft(asm_tester.GenerateCode(), 1);
+  FunctionTester ft(asm_tester.GenerateCode(), 1);  // Include receiver.
 
   Handle<Object> result;
   for (int test_count = 0; test_count < 100; ++test_count) {
@@ -2178,15 +2119,15 @@ TEST(PopAndReturnConstant) {
   using Descriptor = JSTrampolineDescriptor;
   CodeAssemblerTester asm_tester(isolate, Descriptor());
 
-  const int kNumParams = 4 + kJSArgcReceiverSlots;
+  const int kNumParams = 4;  // Not including receiver
   {
     CodeStubAssembler m(asm_tester.state());
     TNode<Int32T> argc =
         m.UncheckedParameter<Int32T>(Descriptor::kActualArgumentsCount);
     CSA_CHECK(&m, m.Word32Equal(argc, m.Int32Constant(kNumParams)));
 
-    int pop_count = kNumParams;
-    m.PopAndReturn(m.IntPtrConstant(pop_count), m.SmiConstant(1234));
+    m.PopAndReturn(m.IntPtrConstant(kNumParams + 1),  // Include receiver.
+                   m.SmiConstant(1234));
   }
 
   FunctionTester ft(asm_tester.GenerateCode(), 0);
@@ -2212,15 +2153,16 @@ TEST(PopAndReturnVariable) {
   using Descriptor = JSTrampolineDescriptor;
   CodeAssemblerTester asm_tester(isolate, Descriptor());
 
-  const int kNumParams = 4 + kJSArgcReceiverSlots;
+  const int kNumParams = 4;  // Not including receiver
   {
     CodeStubAssembler m(asm_tester.state());
     TNode<Int32T> argc =
         m.UncheckedParameter<Int32T>(Descriptor::kActualArgumentsCount);
     CSA_CHECK(&m, m.Word32Equal(argc, m.Int32Constant(kNumParams)));
 
-    int pop_count = kNumParams;
-    m.PopAndReturn(m.IntPtrConstant(pop_count), m.SmiConstant(1234));
+    TNode<Int32T> argc_with_receiver = m.Int32Add(argc, m.Int32Constant(1));
+    m.PopAndReturn(m.ChangeInt32ToIntPtr(argc_with_receiver),
+                   m.SmiConstant(1234));
   }
 
   FunctionTester ft(asm_tester.GenerateCode(), 0);
@@ -2243,7 +2185,7 @@ TEST(OneToTwoByteStringCopy) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   StringBuiltinsAssembler m(asm_tester.state());
 
   m.CopyStringCharacters<String>(m.Parameter<String>(1), m.Parameter<String>(2),
@@ -2253,9 +2195,9 @@ TEST(OneToTwoByteStringCopy) {
   m.Return(m.SmiConstant(Smi::FromInt(0)));
 
   Handle<String> string1 = isolate->factory()->InternalizeUtf8String("abcde");
-  base::uc16 array[] = {1000, 1001, 1002, 1003, 1004};
+  uc16 array[] = {1000, 1001, 1002, 1003, 1004};
   Handle<String> string2 = isolate->factory()
-                               ->NewStringFromTwoByte(base::ArrayVector(array))
+                               ->NewStringFromTwoByte(ArrayVector(array))
                                .ToHandleChecked();
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
   ft.Call(string1, string2);
@@ -2276,7 +2218,7 @@ TEST(OneToOneByteStringCopy) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   StringBuiltinsAssembler m(asm_tester.state());
 
   m.CopyStringCharacters<String>(m.Parameter<String>(1), m.Parameter<String>(2),
@@ -2288,7 +2230,7 @@ TEST(OneToOneByteStringCopy) {
   Handle<String> string1 = isolate->factory()->InternalizeUtf8String("abcde");
   uint8_t array[] = {100, 101, 102, 103, 104};
   Handle<String> string2 = isolate->factory()
-                               ->NewStringFromOneByte(base::ArrayVector(array))
+                               ->NewStringFromOneByte(ArrayVector(array))
                                .ToHandleChecked();
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
   ft.Call(string1, string2);
@@ -2309,7 +2251,7 @@ TEST(OneToOneByteStringCopyNonZeroStart) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   StringBuiltinsAssembler m(asm_tester.state());
 
   m.CopyStringCharacters<String>(m.Parameter<String>(1), m.Parameter<String>(2),
@@ -2321,7 +2263,7 @@ TEST(OneToOneByteStringCopyNonZeroStart) {
   Handle<String> string1 = isolate->factory()->InternalizeUtf8String("abcde");
   uint8_t array[] = {100, 101, 102, 103, 104};
   Handle<String> string2 = isolate->factory()
-                               ->NewStringFromOneByte(base::ArrayVector(array))
+                               ->NewStringFromOneByte(ArrayVector(array))
                                .ToHandleChecked();
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
   ft.Call(string1, string2);
@@ -2339,7 +2281,7 @@ TEST(TwoToTwoByteStringCopy) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   StringBuiltinsAssembler m(asm_tester.state());
 
   m.CopyStringCharacters<String>(m.Parameter<String>(1), m.Parameter<String>(2),
@@ -2348,13 +2290,13 @@ TEST(TwoToTwoByteStringCopy) {
                                  String::TWO_BYTE_ENCODING);
   m.Return(m.SmiConstant(Smi::FromInt(0)));
 
-  base::uc16 array1[] = {2000, 2001, 2002, 2003, 2004};
+  uc16 array1[] = {2000, 2001, 2002, 2003, 2004};
   Handle<String> string1 = isolate->factory()
-                               ->NewStringFromTwoByte(base::ArrayVector(array1))
+                               ->NewStringFromTwoByte(ArrayVector(array1))
                                .ToHandleChecked();
-  base::uc16 array2[] = {1000, 1001, 1002, 1003, 1004};
+  uc16 array2[] = {1000, 1001, 1002, 1003, 1004};
   Handle<String> string2 = isolate->factory()
-                               ->NewStringFromTwoByte(base::ArrayVector(array2))
+                               ->NewStringFromTwoByte(ArrayVector(array2))
                                .ToHandleChecked();
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
   ft.Call(string1, string2);
@@ -2481,7 +2423,7 @@ TEST(IsDebugActive) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   Label if_active(&m), if_not_active(&m);
@@ -2511,13 +2453,9 @@ TEST(IsDebugActive) {
   *debug_is_active = false;
 }
 
-#if !defined(V8_OS_ANDROID)
 // Ensure that the kShortBuiltinCallsOldSpaceSizeThreshold constant can be used
 // for detecting whether the machine has >= 4GB of physical memory by checking
 // the max old space size.
-//
-// Not on Android as short builtins do not depend on RAM on this platform, see
-// comment in isolate.cc.
 TEST(ShortBuiltinCallsThreshold) {
   if (!V8_SHORT_BUILTIN_CALLS_BOOL) return;
 
@@ -2541,21 +2479,21 @@ TEST(ShortBuiltinCallsThreshold) {
   i::Heap::GenerationSizesFromHeapSize(heap_size, &young, &old);
   CHECK_GE(old, kShortBuiltinCallsOldSpaceSizeThreshold);
 }
-#endif  // !defined(V8_OS_ANDROID)
 
 TEST(CallBuiltin) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate,
+                                 kNumParams + 1);  // Include receiver.
   PromiseBuiltinsAssembler m(asm_tester.state());
 
   {
     auto receiver = m.Parameter<Object>(1);
     auto name = m.Parameter<Name>(2);
-    auto context = m.GetJSContextParameter();
+    auto context = m.Parameter<Context>(kNumParams + 3);
 
-    auto value = m.CallBuiltin(Builtin::kGetProperty, context, receiver, name);
+    auto value = m.CallBuiltin(Builtins::kGetProperty, context, receiver, name);
     m.Return(value);
   }
 
@@ -2575,15 +2513,16 @@ TEST(TailCallBuiltin) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate,
+                                 kNumParams + 1);  // Include receiver.
   PromiseBuiltinsAssembler m(asm_tester.state());
 
   {
     auto receiver = m.Parameter<Object>(1);
     auto name = m.Parameter<Name>(2);
-    auto context = m.GetJSContextParameter();
+    auto context = m.Parameter<Context>(kNumParams + 3);
 
-    m.TailCallBuiltin(Builtin::kGetProperty, context, receiver, name);
+    m.TailCallBuiltin(Builtins::kGetProperty, context, receiver, name);
   }
 
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
@@ -2609,16 +2548,14 @@ class AppendJSArrayCodeStubAssembler : public CodeStubAssembler {
                              Handle<Object> o3, Handle<Object> o4,
                              int initial_size, int result_size) {
     Handle<JSArray> array = isolate->factory()->NewJSArray(
-        kind_, 2, initial_size,
-        ArrayStorageAllocationMode::INITIALIZE_ARRAY_ELEMENTS_WITH_HOLE);
+        kind_, 2, initial_size, INITIALIZE_ARRAY_ELEMENTS_WITH_HOLE);
     Object::SetElement(isolate, array, 0, Handle<Smi>(Smi::FromInt(1), isolate),
                        kDontThrow)
         .Check();
     Object::SetElement(isolate, array, 1, Handle<Smi>(Smi::FromInt(2), isolate),
                        kDontThrow)
         .Check();
-    CodeStubArguments args(this,
-                           IntPtrConstant(kNumParams + kJSArgcReceiverSlots));
+    CodeStubArguments args(this, IntPtrConstant(kNumParams));
     TVariable<IntPtrT> arg_index(this);
     Label bailout(this);
     arg_index = IntPtrConstant(0);
@@ -2652,7 +2589,7 @@ class AppendJSArrayCodeStubAssembler : public CodeStubAssembler {
   static void TestAppendJSArray(Isolate* isolate, ElementsKind kind, Object o1,
                                 Object o2, Object o3, Object o4,
                                 int initial_size, int result_size) {
-    CodeAssemblerTester asm_tester(isolate, i::JSParameterCount(kNumParams));
+    CodeAssemblerTester asm_tester(isolate, kNumParams);
     AppendJSArrayCodeStubAssembler m(asm_tester.state(), kind);
     m.TestAppendJSArrayImpl(
         isolate, &asm_tester, Handle<Object>(o1, isolate),
@@ -2746,12 +2683,11 @@ TEST(IsPromiseHookEnabled) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
 
   m.Return(
-      m.SelectBooleanConstant(
-          m.IsIsolatePromiseHookEnabledOrHasAsyncEventDelegate()));
+      m.SelectBooleanConstant(m.IsPromiseHookEnabledOrHasAsyncEventDelegate()));
 
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
   Handle<Object> result =
@@ -2771,10 +2707,10 @@ TEST(NewJSPromise) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   PromiseBuiltinsAssembler m(asm_tester.state());
 
-  auto context = m.GetJSContextParameter();
+  auto context = m.Parameter<Context>(kNumParams + 2);
   const TNode<JSPromise> promise = m.NewJSPromise(context);
   m.Return(promise);
 
@@ -2788,10 +2724,10 @@ TEST(NewJSPromise2) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   PromiseBuiltinsAssembler m(asm_tester.state());
 
-  auto context = m.GetJSContextParameter();
+  auto context = m.Parameter<Context>(kNumParams + 2);
   const TNode<JSPromise> promise =
       m.NewJSPromise(context, v8::Promise::kRejected, m.SmiConstant(1));
   m.Return(promise);
@@ -2810,7 +2746,7 @@ TEST(IsSymbol) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   auto symbol = m.Parameter<HeapObject>(1);
@@ -2829,7 +2765,7 @@ TEST(IsPrivateSymbol) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   auto symbol = m.Parameter<HeapObject>(1);
@@ -2851,10 +2787,10 @@ TEST(PromiseHasHandler) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   PromiseBuiltinsAssembler m(asm_tester.state());
 
-  auto context = m.GetJSContextParameter();
+  auto context = m.Parameter<Context>(kNumParams + 2);
   const TNode<JSPromise> promise =
       m.NewJSPromise(context, m.UndefinedConstant());
   m.Return(m.SelectBooleanConstant(m.PromiseHasHandler(promise)));
@@ -2869,10 +2805,10 @@ TEST(CreatePromiseResolvingFunctionsContext) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   PromiseBuiltinsAssembler m(asm_tester.state());
 
-  auto context = m.GetJSContextParameter();
+  const auto context = m.Parameter<Context>(kNumParams + 3);
   const TNode<NativeContext> native_context = m.LoadNativeContext(context);
   const TNode<JSPromise> promise =
       m.NewJSPromise(context, m.UndefinedConstant());
@@ -2896,10 +2832,10 @@ TEST(CreatePromiseResolvingFunctions) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   PromiseBuiltinsAssembler m(asm_tester.state());
 
-  auto context = m.GetJSContextParameter();
+  auto context = m.Parameter<Context>(kNumParams + 2);
   const TNode<NativeContext> native_context = m.LoadNativeContext(context);
   const TNode<JSPromise> promise =
       m.NewJSPromise(context, m.UndefinedConstant());
@@ -2925,13 +2861,12 @@ TEST(CreatePromiseResolvingFunctions) {
 
 TEST(NewElementsCapacity) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 2);
   CodeStubAssembler m(asm_tester.state());
   m.Return(m.SmiTag(
       m.CalculateNewElementsCapacity(m.SmiUntag(m.Parameter<Smi>(1)))));
 
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 1);
   Handle<Smi> test_value = Handle<Smi>(Smi::FromInt(1), isolate);
   Handle<Smi> result_obj = ft.CallChecked<Smi>(test_value);
   CHECK_EQ(
@@ -2956,12 +2891,11 @@ TEST(NewElementsCapacity) {
 
 TEST(NewElementsCapacitySmi) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 2);
   CodeStubAssembler m(asm_tester.state());
   m.Return(m.CalculateNewElementsCapacity(m.UncheckedParameter<Smi>(1)));
 
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 1);
   Handle<Smi> test_value = Handle<Smi>(Smi::FromInt(0), isolate);
   Handle<Smi> result_obj = ft.CallChecked<Smi>(test_value);
   CHECK_EQ(
@@ -2988,10 +2922,10 @@ TEST(AllocateFunctionWithMapAndContext) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   PromiseBuiltinsAssembler m(asm_tester.state());
 
-  const auto context = m.GetJSContextParameter();
+  const auto context = m.Parameter<Context>(kNumParams + 2);
   const TNode<NativeContext> native_context = m.LoadNativeContext(context);
   const TNode<JSPromise> promise =
       m.NewJSPromise(context, m.UndefinedConstant());
@@ -3019,7 +2953,7 @@ TEST(AllocateFunctionWithMapAndContext) {
            fun->shared());
   CHECK_EQ(isolate->factory()
                ->promise_capability_default_resolve_shared_fun()
-               ->GetCode(isolate),
+               ->GetCode(),
            fun->code());
 }
 
@@ -3027,10 +2961,10 @@ TEST(CreatePromiseGetCapabilitiesExecutorContext) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   PromiseBuiltinsAssembler m(asm_tester.state());
 
-  auto context = m.GetJSContextParameter();
+  auto context = m.Parameter<Context>(kNumParams + 2);
   TNode<NativeContext> native_context = m.LoadNativeContext(context);
 
   TNode<PromiseCapability> capability = m.CreatePromiseCapability(
@@ -3056,17 +2990,18 @@ TEST(NewPromiseCapability) {
 
   {  // Builtin Promise
     const int kNumParams = 0;
-    CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+    CodeAssemblerTester asm_tester(isolate,
+                                   kNumParams + 1);  // Include receiver.
     PromiseBuiltinsAssembler m(asm_tester.state());
 
-    auto context = m.GetJSContextParameter();
+    auto context = m.Parameter<Context>(kNumParams + 3);
     const TNode<NativeContext> native_context = m.LoadNativeContext(context);
     const TNode<Object> promise_constructor =
         m.LoadContextElement(native_context, Context::PROMISE_FUNCTION_INDEX);
 
     const TNode<Oddball> debug_event = m.TrueConstant();
     const TNode<Object> capability =
-        m.CallBuiltin(Builtin::kNewPromiseCapability, context,
+        m.CallBuiltin(Builtins::kNewPromiseCapability, context,
                       promise_constructor, debug_event);
     m.Return(capability);
 
@@ -3092,29 +3027,27 @@ TEST(NewPromiseCapability) {
         handle(JSFunction::cast(result->reject()), isolate)};
 
     for (auto&& callback : callbacks) {
-      Handle<Context> callback_context(Context::cast(callback->context()),
-                                       isolate);
+      Handle<Context> context(Context::cast(callback->context()), isolate);
       CHECK_EQ(isolate->root(RootIndex::kEmptyScopeInfo),
-               callback_context->scope_info());
-      CHECK_EQ(*isolate->native_context(), callback_context->native_context());
-      CHECK_EQ(PromiseBuiltins::kPromiseContextLength,
-               callback_context->length());
-      CHECK_EQ(callback_context->get(PromiseBuiltins::kPromiseSlot),
-               result->promise());
+               context->scope_info());
+      CHECK_EQ(*isolate->native_context(), context->native_context());
+      CHECK_EQ(PromiseBuiltins::kPromiseContextLength, context->length());
+      CHECK_EQ(context->get(PromiseBuiltins::kPromiseSlot), result->promise());
     }
   }
 
   {  // Custom Promise
     const int kNumParams = 1;
-    CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+    CodeAssemblerTester asm_tester(isolate,
+                                   kNumParams + 1);  // Include receiver.
     PromiseBuiltinsAssembler m(asm_tester.state());
 
-    auto context = m.GetJSContextParameter();
+    auto context = m.Parameter<Context>(kNumParams + 3);
 
     auto constructor = m.Parameter<Object>(1);
     const TNode<Oddball> debug_event = m.TrueConstant();
     const TNode<Object> capability = m.CallBuiltin(
-        Builtin::kNewPromiseCapability, context, constructor, debug_event);
+        Builtins::kNewPromiseCapability, context, constructor, debug_event);
     m.Return(capability);
 
     FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
@@ -3135,8 +3068,7 @@ TEST(NewPromiseCapability) {
 
     CHECK(result->promise().IsJSObject());
     Handle<JSObject> promise(JSObject::cast(result->promise()), isolate);
-    CHECK_EQ(constructor_fn->prototype_or_initial_map(kAcquireLoad),
-             promise->map());
+    CHECK_EQ(constructor_fn->prototype_or_initial_map(), promise->map());
     CHECK(result->resolve().IsJSFunction());
     CHECK(result->reject().IsJSFunction());
 
@@ -3171,7 +3103,7 @@ TEST(DirectMemoryTest8BitWord32Immediate) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
   int8_t buffer[] = {1, 2, 4, 8, 17, 33, 65, 127};
   const int element_count = 8;
@@ -3203,7 +3135,7 @@ TEST(DirectMemoryTest8BitWord32Immediate) {
 TEST(DirectMemoryTest16BitWord32Immediate) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
   int16_t buffer[] = {156, 2234, 4544, 8444, 1723, 3888, 658, 1278};
   const int element_count = 8;
@@ -3235,7 +3167,7 @@ TEST(DirectMemoryTest16BitWord32Immediate) {
 TEST(DirectMemoryTest8BitWord32) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
   int8_t buffer[] = {1, 2, 4, 8, 17, 33, 65, 127, 67, 38};
   const int element_count = 10;
@@ -3279,7 +3211,7 @@ TEST(DirectMemoryTest8BitWord32) {
 TEST(DirectMemoryTest16BitWord32) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
   int16_t buffer[] = {1, 2, 4, 8, 12345, 33, 65, 255, 67, 3823};
   const int element_count = 10;
@@ -3335,10 +3267,10 @@ TEST(DirectMemoryTest16BitWord32) {
 TEST(LoadJSArrayElementsMap) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
-    auto context = m.GetJSContextParameter();
+    auto context = m.Parameter<Context>(kNumParams + 3);
     TNode<NativeContext> native_context = m.LoadNativeContext(context);
     TNode<Int32T> kind = m.SmiToInt32(m.Parameter<Smi>(1));
     m.Return(m.LoadJSArrayElementsMap(kind, native_context));
@@ -3360,7 +3292,7 @@ TEST(IsWhiteSpaceOrLineTerminator) {
   Isolate* isolate(CcTest::InitIsolateOnce());
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
 
   {  // Returns true if whitespace, false otherwise.
     CodeStubAssembler m(asm_tester.state());
@@ -3378,7 +3310,7 @@ TEST(IsWhiteSpaceOrLineTerminator) {
   Handle<Object> true_value = ft.true_value();
   Handle<Object> false_value = ft.false_value();
 
-  for (base::uc16 c = 0; c < 0xFFFF; c++) {
+  for (uc16 c = 0; c < 0xFFFF; c++) {
     Handle<Object> expected_value =
         IsWhiteSpaceOrLineTerminator(c) ? true_value : false_value;
     ft.CheckCall(expected_value, handle(Smi::FromInt(c), isolate));
@@ -3389,7 +3321,7 @@ TEST(BranchIfNumberRelationalComparison) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   Factory* f = isolate->factory();
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
     Label return_true(&m), return_false(&m);
@@ -3419,7 +3351,7 @@ TEST(BranchIfNumberRelationalComparison) {
 TEST(IsNumberArrayIndex) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
     auto number = m.Parameter<Number>(1);
@@ -3467,14 +3399,16 @@ TEST(IsNumberArrayIndex) {
 TEST(NumberMinMax) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester_min(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester_min(isolate,
+                                     kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester_min.state());
     m.Return(m.NumberMin(m.Parameter<Number>(1), m.Parameter<Number>(2)));
   }
   FunctionTester ft_min(asm_tester_min.GenerateCode(), kNumParams);
 
-  CodeAssemblerTester asm_tester_max(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester_max(isolate,
+                                     kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester_max.state());
     m.Return(m.NumberMax(m.Parameter<Number>(1), m.Parameter<Number>(2)));
@@ -3523,14 +3457,16 @@ TEST(NumberMinMax) {
 TEST(NumberAddSub) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester_add(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester_add(isolate,
+                                     kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester_add.state());
     m.Return(m.NumberAdd(m.Parameter<Number>(1), m.Parameter<Number>(2)));
   }
   FunctionTester ft_add(asm_tester_add.GenerateCode(), kNumParams);
 
-  CodeAssemblerTester asm_tester_sub(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester_sub(isolate,
+                                     kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester_sub.state());
     m.Return(m.NumberSub(m.Parameter<Number>(1), m.Parameter<Number>(2)));
@@ -3567,7 +3503,7 @@ TEST(NumberAddSub) {
 TEST(CloneEmptyFixedArray) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
     m.Return(m.CloneFixedArray(m.Parameter<FixedArrayBase>(1)));
@@ -3584,7 +3520,7 @@ TEST(CloneEmptyFixedArray) {
 TEST(CloneFixedArray) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
     m.Return(m.CloneFixedArray(m.Parameter<FixedArrayBase>(1)));
@@ -3606,7 +3542,7 @@ TEST(CloneFixedArray) {
 TEST(CloneFixedArrayCOW) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
     m.Return(m.CloneFixedArray(m.Parameter<FixedArrayBase>(1)));
@@ -3624,7 +3560,7 @@ TEST(CloneFixedArrayCOW) {
 TEST(ExtractFixedArrayCOWForceCopy) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
     CodeStubAssembler::ExtractFixedArrayFlags flags;
@@ -3654,7 +3590,7 @@ TEST(ExtractFixedArrayCOWForceCopy) {
 TEST(ExtractFixedArraySimple) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 3;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
     CodeStubAssembler::ExtractFixedArrayFlags flags;
@@ -3683,7 +3619,7 @@ TEST(ExtractFixedArraySimple) {
 TEST(ExtractFixedArraySimpleSmiConstant) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
     CodeStubAssembler::ExtractFixedArrayFlags flags;
@@ -3709,7 +3645,7 @@ TEST(ExtractFixedArraySimpleSmiConstant) {
 TEST(ExtractFixedArraySimpleIntPtrConstant) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
     CodeStubAssembler::ExtractFixedArrayFlags flags;
@@ -3735,7 +3671,7 @@ TEST(ExtractFixedArraySimpleIntPtrConstant) {
 TEST(ExtractFixedArraySimpleIntPtrConstantNoDoubles) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
     base::Optional<TNode<IntPtrT>> constant_1(m.IntPtrConstant(1));
@@ -3759,7 +3695,7 @@ TEST(ExtractFixedArraySimpleIntPtrConstantNoDoubles) {
 TEST(ExtractFixedArraySimpleIntPtrParameters) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 3;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
     base::Optional<TNode<IntPtrT>> p1_untagged(m.SmiUntag(m.Parameter<Smi>(2)));
@@ -3800,7 +3736,7 @@ TEST(ExtractFixedArraySimpleIntPtrParameters) {
 TEST(SingleInputPhiElimination) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   {
     CodeStubAssembler m(asm_tester.state());
     TVariable<Smi> temp1(&m);
@@ -3809,7 +3745,8 @@ TEST(SingleInputPhiElimination) {
     Label end_label(&m, {&temp1, &temp2});
     temp1 = m.Parameter<Smi>(1);
     temp2 = m.Parameter<Smi>(1);
-    m.Branch(m.TaggedEqual(m.Parameter<Object>(0), m.Parameter<Object>(1)),
+    m.Branch(m.TaggedEqual(m.UncheckedParameter<Object>(0),
+                           m.UncheckedParameter<Object>(1)),
              &end_label, &temp_label);
     m.BIND(&temp_label);
     temp1 = m.Parameter<Smi>(2);
@@ -3826,7 +3763,7 @@ TEST(SingleInputPhiElimination) {
 TEST(SmallOrderedHashMapAllocate) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
     auto capacity = m.Parameter<Smi>(1);
@@ -3857,14 +3794,14 @@ TEST(SmallOrderedHashMapAllocate) {
     capacity = capacity << 1;
   }
 #ifdef VERIFY_HEAP
-  HeapVerifier::VerifyHeap(isolate->heap());
+  isolate->heap()->Verify();
 #endif
 }
 
 TEST(SmallOrderedHashSetAllocate) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(asm_tester.state());
     auto capacity = m.Parameter<Smi>(1);
@@ -3895,14 +3832,14 @@ TEST(SmallOrderedHashSetAllocate) {
     capacity = capacity << 1;
   }
 #ifdef VERIFY_HEAP
-  HeapVerifier::VerifyHeap(isolate->heap());
+  isolate->heap()->Verify();
 #endif
 }
 
 TEST(IsDoubleElementsKind) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 2;
-  CodeAssemblerTester ft_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester ft_tester(isolate, kNumParams + 1);  // Include receiver.
   {
     CodeStubAssembler m(ft_tester.state());
     m.Return(m.SmiFromInt32(m.UncheckedCast<Int32T>(
@@ -3948,39 +3885,23 @@ TEST(IsDoubleElementsKind) {
            0);
 }
 
-namespace {
-
-enum CallJumpMode { kCall, kTailCall };
-
-void TestCallJumpBuiltin(CallJumpMode mode,
-                         BuiltinCallJumpMode builtin_call_jump_mode) {
+TEST(TestCallBuiltinInlineTrampoline) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  if (builtin_call_jump_mode == BuiltinCallJumpMode::kPCRelative &&
-      !isolate->is_short_builtin_calls_enabled()) {
-    // PC-relative mode requires short builtin calls to be enabled.
-    return;
-  }
-
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
-  {
-    auto str = m.Parameter<String>(1);
-    auto context = m.GetJSContextParameter();
+  const int kContextOffset = 3;
+  auto str = m.Parameter<String>(1);
+  auto context = m.Parameter<Context>(kNumParams + kContextOffset);
 
-    TNode<Smi> index = m.SmiConstant(2);
+  TNode<Smi> index = m.SmiConstant(2);
 
-    Callable callable = Builtins::CallableFor(isolate, Builtin::kStringRepeat);
-    if (mode == kCall) {
-      m.Return(m.CallStub(callable, context, str, index));
-    } else {
-      DCHECK_EQ(mode, kTailCall);
-      m.TailCallStub(callable, context, str, index);
-    }
-  }
+  m.Return(m.CallStub(Builtins::CallableFor(isolate, Builtins::kStringRepeat),
+                      context, str, index));
   AssemblerOptions options = AssemblerOptions::Default(isolate);
-  options.builtin_call_jump_mode = builtin_call_jump_mode;
+  options.inline_offheap_trampolines = true;
+  options.use_pc_relative_calls_and_jumps = false;
   options.isolate_independent_code = false;
   FunctionTester ft(asm_tester.GenerateCode(options), kNumParams);
   MaybeHandle<Object> result = ft.Call(CcTest::MakeString("abcdef"));
@@ -3988,42 +3909,42 @@ void TestCallJumpBuiltin(CallJumpMode mode,
                        Handle<String>::cast(result.ToHandleChecked())));
 }
 
-}  // namespace
+// TODO(v8:9821): Remove the option to disable inlining off-heap trampolines
+// along with this test.
+DISABLED_TEST(TestCallBuiltinIndirectLoad) {
+  Isolate* isolate(CcTest::InitIsolateOnce());
+  const int kNumParams = 1;
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
+  CodeStubAssembler m(asm_tester.state());
 
-TEST(TestCallBuiltinAbsolute) {
-  TestCallJumpBuiltin(kCall, BuiltinCallJumpMode::kAbsolute);
-}
+  const int kContextOffset = 2;
+  auto str = m.Parameter<String>(0);
+  auto context = m.Parameter<Context>(kNumParams + kContextOffset);
 
-TEST(TestCallBuiltinPCRelative) {
-  TestCallJumpBuiltin(kCall, BuiltinCallJumpMode::kPCRelative);
-}
+  TNode<Smi> index = m.SmiConstant(2);
 
-TEST(TestCallBuiltinIndirect) {
-  TestCallJumpBuiltin(kCall, BuiltinCallJumpMode::kIndirect);
-}
-
-TEST(TestTailCallBuiltinAbsolute) {
-  TestCallJumpBuiltin(kTailCall, BuiltinCallJumpMode::kAbsolute);
-}
-
-TEST(TestTailCallBuiltinPCRelative) {
-  TestCallJumpBuiltin(kTailCall, BuiltinCallJumpMode::kPCRelative);
-}
-
-TEST(TestTailCallBuiltinIndirect) {
-  TestCallJumpBuiltin(kTailCall, BuiltinCallJumpMode::kIndirect);
+  m.Return(m.CallStub(Builtins::CallableFor(isolate, Builtins::kStringRepeat),
+                      context, str, index));
+  AssemblerOptions options = AssemblerOptions::Default(isolate);
+  options.inline_offheap_trampolines = false;
+  options.use_pc_relative_calls_and_jumps = false;
+  options.isolate_independent_code = true;
+  FunctionTester ft(asm_tester.GenerateCode(options), kNumParams);
+  MaybeHandle<Object> result = ft.Call(CcTest::MakeString("abcdef"));
+  CHECK(String::Equals(isolate, CcTest::MakeString("abcdefabcdef"),
+                       Handle<String>::cast(result.ToHandleChecked())));
 }
 
 TEST(InstructionSchedulingCallerSavedRegisters) {
   // This is a regression test for v8:9775, where TF's instruction scheduler
   // incorrectly moved pure operations in between a ArchSaveCallerRegisters and
   // a ArchRestoreCallerRegisters instruction.
-  bool old_turbo_instruction_scheduling = v8_flags.turbo_instruction_scheduling;
-  v8_flags.turbo_instruction_scheduling = true;
+  bool old_turbo_instruction_scheduling = FLAG_turbo_instruction_scheduling;
+  FLAG_turbo_instruction_scheduling = true;
 
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
 
   {
@@ -4034,7 +3955,7 @@ TEST(InstructionSchedulingCallerSavedRegisters) {
     m.CallCFunctionWithCallerSavedRegisters(
         m.ExternalConstant(
             ExternalReference::smi_lexicographic_compare_function()),
-        MachineType::Int32(), SaveFPRegsMode::kSave,
+        MachineType::Int32(), kSaveFPRegs,
         std::make_pair(MachineType::Pointer(), isolate_ptr),
         std::make_pair(MachineType::TaggedSigned(), m.SmiConstant(0)),
         std::make_pair(MachineType::TaggedSigned(), m.SmiConstant(0)));
@@ -4048,7 +3969,7 @@ TEST(InstructionSchedulingCallerSavedRegisters) {
   CHECK(result.ToHandleChecked()->IsSmi());
   CHECK_EQ(result.ToHandleChecked()->Number(), 13);
 
-  v8_flags.turbo_instruction_scheduling = old_turbo_instruction_scheduling;
+  FLAG_turbo_instruction_scheduling = old_turbo_instruction_scheduling;
 }
 
 #if V8_ENABLE_WEBASSEMBLY
@@ -4075,11 +3996,11 @@ TEST(WasmInt32ToHeapNumber) {
   const int kNumParams = 1;
   for (size_t i = 0; i < arraysize(test_values); ++i) {
     int32_t test_value = test_values[i];
-    CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+    CodeAssemblerTester asm_tester(isolate, kNumParams);
     CodeStubAssembler m(asm_tester.state());
     const TNode<Int32T> arg = m.Int32Constant(test_value);
     const TNode<Object> call_result = m.CallBuiltin(
-        Builtin::kWasmInt32ToHeapNumber, m.NoContextConstant(), arg);
+        Builtins::kWasmInt32ToHeapNumber, m.NoContextConstant(), arg);
     m.Return(call_result);
 
     FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
@@ -4119,13 +4040,13 @@ TEST(WasmTaggedNonSmiToInt32) {
   };
 
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
-  auto context = m.GetJSContextParameter();
+  auto context = m.Parameter<Context>(kNumParams + 3);
   const auto arg = m.Parameter<Object>(1);
   int32_t result = 0;
   Node* base = m.IntPtrConstant(reinterpret_cast<intptr_t>(&result));
-  Node* value = m.CallBuiltin(Builtin::kWasmTaggedNonSmiToInt32, context, arg);
+  Node* value = m.CallBuiltin(Builtins::kWasmTaggedNonSmiToInt32, context, arg);
   m.StoreNoWriteBarrier(MachineRepresentation::kWord32, base, value);
   m.Return(m.UndefinedConstant());
 
@@ -4161,11 +4082,11 @@ TEST(WasmFloat32ToNumber) {
   const int kNumParams = 1;
   for (size_t i = 0; i < arraysize(test_values); ++i) {
     double test_value = test_values[i];
-    CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+    CodeAssemblerTester asm_tester(isolate, kNumParams);
     CodeStubAssembler m(asm_tester.state());
     const TNode<Float32T> arg = m.Float32Constant(test_value);
     const TNode<Object> call_result = m.CallBuiltin(
-        Builtin::kWasmFloat32ToNumber, m.NoContextConstant(), arg);
+        Builtins::kWasmFloat32ToNumber, m.NoContextConstant(), arg);
     m.Return(call_result);
 
     FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
@@ -4201,11 +4122,11 @@ TEST(WasmFloat64ToNumber) {
   const int kNumParams = 1;
   for (size_t i = 0; i < arraysize(test_values); ++i) {
     double test_value = test_values[i];
-    CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+    CodeAssemblerTester asm_tester(isolate, kNumParams);
     CodeStubAssembler m(asm_tester.state());
     const TNode<Float64T> arg = m.Float64Constant(test_value);
     const TNode<Object> call_result = m.CallBuiltin(
-        Builtin::kWasmFloat64ToNumber, m.NoContextConstant(), arg);
+        Builtins::kWasmFloat64ToNumber, m.NoContextConstant(), arg);
     m.Return(call_result);
 
     FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
@@ -4255,13 +4176,13 @@ TEST(WasmTaggedToFloat64) {
   };
 
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeStubAssembler m(asm_tester.state());
-  auto context = m.GetJSContextParameter();
+  auto context = m.Parameter<Context>(kNumParams + 3);
   const auto arg = m.Parameter<Object>(1);
   double result = 0;
   Node* base = m.IntPtrConstant(reinterpret_cast<intptr_t>(&result));
-  Node* value = m.CallBuiltin(Builtin::kWasmTaggedToFloat64, context, arg);
+  Node* value = m.CallBuiltin(Builtins::kWasmTaggedToFloat64, context, arg);
   m.StoreNoWriteBarrier(MachineRepresentation::kFloat64, base, value);
   m.Return(m.UndefinedConstant());
 
@@ -4283,7 +4204,7 @@ TEST(WasmTaggedToFloat64) {
 TEST(SmiUntagLeftShiftOptimization) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
 
   {
@@ -4303,7 +4224,7 @@ TEST(SmiUntagLeftShiftOptimization) {
 TEST(SmiUntagComparisonOptimization) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
 
   {
@@ -4404,141 +4325,6 @@ TEST(CountTrailingZeros) {
 
   FunctionTester ft(asm_tester.GenerateCode());
   ft.Call();
-}
-
-TEST(IntPtrMulHigh) {
-  Isolate* isolate(CcTest::InitIsolateOnce());
-
-  const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
-  CodeStubAssembler m(asm_tester.state());
-
-  TNode<IntPtrT> a = m.IntPtrConstant(std::numeric_limits<intptr_t>::min());
-  TNode<IntPtrT> b = m.SmiUntag(m.Parameter<Smi>(1));
-  TNode<IntPtrT> res = m.IntPtrMulHigh(a, b);
-  m.Return(m.SmiTag(res));
-
-  FunctionTester ft(asm_tester.GenerateCode());
-  CHECK_EQ(-147694,
-           ft.CallChecked<Smi>(handle(Smi::FromInt(295387), isolate))->value());
-  CHECK_EQ(-147694, base::bits::SignedMulHigh32(
-                        std::numeric_limits<int32_t>::min(), 295387));
-  CHECK_EQ(-147694, base::bits::SignedMulHigh64(
-                        std::numeric_limits<int64_t>::min(), 295387));
-}
-
-TEST(IntPtrMulHighConstantFoldable) {
-  Isolate* isolate(CcTest::InitIsolateOnce());
-  CodeAssemblerTester asm_tester(isolate);
-  CodeStubAssembler m(asm_tester.state());
-
-  TNode<IntPtrT> a = m.IntPtrConstant(std::numeric_limits<intptr_t>::min());
-  TNode<IntPtrT> b = m.IntPtrConstant(295387);
-  TNode<IntPtrT> res = m.IntPtrMulHigh(a, b);
-  m.Return(m.SmiTag(res));
-
-  FunctionTester ft(asm_tester.GenerateCode());
-  CHECK_EQ(-147694, ft.CallChecked<Smi>()->value());
-  CHECK_EQ(-147694, base::bits::SignedMulHigh32(
-                        std::numeric_limits<int32_t>::min(), 295387));
-  CHECK_EQ(-147694, base::bits::SignedMulHigh64(
-                        std::numeric_limits<int64_t>::min(), 295387));
-}
-
-TEST(UintPtrMulHigh) {
-  Isolate* isolate(CcTest::InitIsolateOnce());
-
-  const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
-  CodeStubAssembler m(asm_tester.state());
-
-  TNode<IntPtrT> a = m.IntPtrConstant(std::numeric_limits<intptr_t>::min());
-  TNode<IntPtrT> b = m.SmiUntag(m.Parameter<Smi>(1));
-  TNode<IntPtrT> res = m.Signed(m.UintPtrMulHigh(m.Unsigned(a), m.Unsigned(b)));
-  m.Return(m.SmiTag(res));
-
-  FunctionTester ft(asm_tester.GenerateCode());
-  CHECK_EQ(147693,
-           ft.CallChecked<Smi>(handle(Smi::FromInt(295387), isolate))->value());
-  CHECK_EQ(147693, base::bits::UnsignedMulHigh32(
-                       std::numeric_limits<int32_t>::min(), 295387));
-  CHECK_EQ(147693, base::bits::UnsignedMulHigh64(
-                       std::numeric_limits<int64_t>::min(), 295387));
-}
-
-TEST(UintPtrMulHighConstantFoldable) {
-  Isolate* isolate(CcTest::InitIsolateOnce());
-  CodeAssemblerTester asm_tester(isolate);
-  CodeStubAssembler m(asm_tester.state());
-
-  TNode<IntPtrT> a = m.IntPtrConstant(std::numeric_limits<intptr_t>::min());
-  TNode<IntPtrT> b = m.IntPtrConstant(295387);
-  TNode<IntPtrT> res = m.Signed(m.UintPtrMulHigh(m.Unsigned(a), m.Unsigned(b)));
-  m.Return(m.SmiTag(res));
-
-  FunctionTester ft(asm_tester.GenerateCode());
-  CHECK_EQ(147693, ft.CallChecked<Smi>()->value());
-  CHECK_EQ(
-      147693,
-      base::bits::UnsignedMulHigh32(
-          static_cast<uint32_t>(std::numeric_limits<int32_t>::min()), 295387));
-  CHECK_EQ(
-      147693,
-      base::bits::UnsignedMulHigh64(
-          static_cast<uint64_t>(std::numeric_limits<int64_t>::min()), 295387));
-}
-
-TEST(IntPtrMulWithOverflow) {
-  Isolate* isolate(CcTest::InitIsolateOnce());
-
-  const int kNumParams = 1;
-
-  {
-    CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
-    CodeStubAssembler m(asm_tester.state());
-
-    TNode<IntPtrT> a = m.IntPtrConstant(std::numeric_limits<intptr_t>::min());
-    TNode<IntPtrT> b = m.SmiUntag(m.Parameter<Smi>(1));
-    TNode<PairT<IntPtrT, BoolT>> pair = m.IntPtrMulWithOverflow(a, b);
-    TNode<BoolT> overflow = m.Projection<1>(pair);
-    m.Return(m.SelectBooleanConstant(overflow));
-
-    FunctionTester ft(asm_tester.GenerateCode());
-    CHECK(ft.Call(handle(Smi::FromInt(-1), isolate))
-              .ToHandleChecked()
-              ->IsTrue(isolate));
-    CHECK(ft.Call(handle(Smi::FromInt(1), isolate))
-              .ToHandleChecked()
-              ->IsFalse(isolate));
-    CHECK(ft.Call(handle(Smi::FromInt(2), isolate))
-              .ToHandleChecked()
-              ->IsTrue(isolate));
-    CHECK(ft.Call(handle(Smi::FromInt(0), isolate))
-              .ToHandleChecked()
-              ->IsFalse(isolate));
-  }
-
-  {
-    CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
-    CodeStubAssembler m(asm_tester.state());
-
-    TNode<IntPtrT> a = m.IntPtrConstant(std::numeric_limits<intptr_t>::max());
-    TNode<IntPtrT> b = m.SmiUntag(m.Parameter<Smi>(1));
-    TNode<PairT<IntPtrT, BoolT>> pair = m.IntPtrMulWithOverflow(a, b);
-    TNode<BoolT> overflow = m.Projection<1>(pair);
-    m.Return(m.SelectBooleanConstant(overflow));
-
-    FunctionTester ft(asm_tester.GenerateCode());
-    CHECK(ft.Call(handle(Smi::FromInt(-1), isolate))
-              .ToHandleChecked()
-              ->IsFalse(isolate));
-    CHECK(ft.Call(handle(Smi::FromInt(1), isolate))
-              .ToHandleChecked()
-              ->IsFalse(isolate));
-    CHECK(ft.Call(handle(Smi::FromInt(2), isolate))
-              .ToHandleChecked()
-              ->IsTrue(isolate));
-  }
 }
 
 }  // namespace compiler

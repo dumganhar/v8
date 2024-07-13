@@ -15,10 +15,6 @@ InspectorTest.runAsyncTestSuite([
     return logExpressionProperties('({ a: 2, set b(_) {}, get b() {return 5;}, __proto__: { a: 3, c: 4, get d() {return 6;} }})', { ownProperties: false });
   },
 
-  function testNotOwnSet() {
-    return logExpressionProperties('new Set([1, 2, 3])', { ownProperties: false });
-  },
-
   function testAccessorsOnly() {
     return logExpressionProperties('({ a: 2, set b(_) {}, get b() {return 5;}, c: \'c\', set d(_){} })', { ownProperties: true, accessorPropertiesOnly: true});
   },
@@ -49,6 +45,8 @@ InspectorTest.runAsyncTestSuite([
     let objectId = await evaluateToObjectId('new Uint8Array([1, 1, 1, 1, 1, 1, 1, 1]).buffer');
     let props = await Protocol.Runtime.getProperties({ objectId, ownProperties: true });
     for (let prop of props.result.result) {
+      if (prop.name === '__proto__')
+        continue;
       InspectorTest.log(prop.name);
       await logGetPropertiesResult(prop.value.objectId);
     }
@@ -63,6 +61,8 @@ InspectorTest.runAsyncTestSuite([
     let objectId = await evaluateToObjectId('new WebAssembly.Memory({initial: 1}).buffer');
     let props = await Protocol.Runtime.getProperties({ objectId, ownProperties: true });
     for (let prop of props.result.result) {
+      if (prop.name === '__proto__')
+        continue;
       InspectorTest.log(prop.name);
       await logGetPropertiesResult(prop.value.objectId);
     }
@@ -84,6 +84,8 @@ InspectorTest.runAsyncTestSuite([
     await Protocol.Runtime.evaluate({ expression: 'b', generatePreview: true })
     let props = await Protocol.Runtime.getProperties({ objectId, ownProperties: true });
     for (let prop of props.result.result) {
+      if (prop.name === '__proto__')
+        continue;
       InspectorTest.log(prop.name);
       await logGetPropertiesResult(prop.value.objectId);
     }
@@ -106,18 +108,6 @@ InspectorTest.runAsyncTestSuite([
 
   async function testObjectWithProtoProperty() {
     await logExpressionProperties('Object.defineProperty({}, "__proto__", {enumerable: true, value: {b:"aaa"}})');
-  },
-
-  function testArrayNonIndexedPropertiesOnly() {
-    return logExpressionProperties('[1, 2]', {nonIndexedPropertiesOnly: true, ownProperties: true});
-  },
-
-  function testTypedArrayNonIndexedPropertiesOnly() {
-    return logExpressionProperties('new Int8Array(1)', {nonIndexedPropertiesOnly: true, ownProperties: true});
-  },
-
-  function testWeakRef() {
-    return logExpressionProperties('new WeakRef(globalThis)');
   }
 ]);
 
@@ -159,7 +149,11 @@ async function logGetPropertiesResult(objectId, flags = { ownProperties: true })
     for (var i = 0; i < array.length; i++) {
       var p = array[i];
       var v = p.value;
-      InspectorTest.log(`  ${p.name} ${v.type} ${v.value}`);
+      if (p.name == "[[ArrayBufferData]]")
+        // Hex value for pointer is non-deterministic
+        InspectorTest.log(`  ${p.name} ${v.type} ${v.value.substr(0, 2)}...`);
+      else
+        InspectorTest.log(`  ${p.name} ${v.type} ${v.value}`);
     }
   }
 

@@ -10,7 +10,6 @@
 // memory
 // https://clang.llvm.org/docs/SanitizerCoverage.html
 
-#include <cstdint>
 #include <vector>
 
 void sanitizer_cov_reset_edgeguards();

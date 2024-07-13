@@ -49,7 +49,7 @@ class V8_EXPORT_PRIVATE BytecodeArrayRandomIterator final
 
   int current_index() const { return current_index_; }
 
-  int size() const { return static_cast<int>(offsets_.size()); }
+  size_t size() const { return offsets_.size(); }
 
   void GoToIndex(int index) {
     current_index_ = index;
@@ -60,7 +60,8 @@ class V8_EXPORT_PRIVATE BytecodeArrayRandomIterator final
     UpdateOffsetFromIndex();
   }
   void GoToEnd() {
-    current_index_ = size() - 1;
+    DCHECK_LT(offsets_.size() - 1, static_cast<size_t>(INT_MAX));
+    current_index_ = static_cast<int>(offsets_.size() - 1);
     UpdateOffsetFromIndex();
   }
 

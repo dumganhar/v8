@@ -5,8 +5,7 @@
 #ifndef V8_DEOPTIMIZER_FRAME_DESCRIPTION_H_
 #define V8_DEOPTIMIZER_FRAME_DESCRIPTION_H_
 
-#include "src/base/platform/memory.h"
-#include "src/codegen/register.h"
+#include "src/codegen/register-arch.h"
 #include "src/execution/frame-constants.h"
 #include "src/utils/boxed-float.h"
 
@@ -58,16 +57,14 @@ class RegisterValues {
 
 class FrameDescription {
  public:
-  FrameDescription(uint32_t frame_size, int parameter_count, Isolate* isolate)
+  FrameDescription(uint32_t frame_size, int parameter_count)
       : frame_size_(frame_size),
         parameter_count_(parameter_count),
         top_(kZapUint32),
         pc_(kZapUint32),
         fp_(kZapUint32),
         context_(kZapUint32),
-        constant_pool_(kZapUint32),
-        isolate_(isolate) {
-    USE(isolate_);
+        constant_pool_(kZapUint32) {
     // Zap all the registers.
     for (int r = 0; r < Register::kNumRegisters; r++) {
       // TODO(jbramley): It isn't safe to use kZapUint32 here. If the register
@@ -213,8 +210,6 @@ class FrameDescription {
   intptr_t fp_;
   intptr_t context_;
   intptr_t constant_pool_;
-
-  Isolate* isolate_;
 
   // Continuation is the PC where the execution continues after
   // deoptimizing.

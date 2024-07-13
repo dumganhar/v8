@@ -10,6 +10,7 @@
 #include "src/compiler/graph.h"
 #include "src/compiler/js-operator.h"
 #include "src/compiler/machine-graph.h"
+#include "src/compiler/node-properties.h"
 #include "src/execution/isolate.h"
 
 namespace v8 {
@@ -38,7 +39,8 @@ class V8_EXPORT_PRIVATE JSGraph : public MachineGraph {
 
   // CEntryStubs are cached depending on the result size and other flags.
   Node* CEntryStubConstant(int result_size,
-                           ArgvMode argv_mode = ArgvMode::kStack,
+                           SaveFPRegsMode save_doubles = kDontSaveFPRegs,
+                           ArgvMode argv_mode = kArgvOnStack,
                            bool builtin_exit_frame = false);
 
   // Used for padding frames. (alias: the hole)
@@ -53,7 +55,7 @@ class V8_EXPORT_PRIVATE JSGraph : public MachineGraph {
   // Creates a Constant node of the appropriate type for the given object.
   // Inspect the (serialized) object and determine whether one of the
   // canonicalized globals or a number constant should be returned.
-  Node* Constant(ObjectRef value, JSHeapBroker* broker);
+  Node* Constant(const ObjectRef& value);
 
   // Creates a NumberConstant node, usually canonicalized.
   Node* Constant(double value);
@@ -107,13 +109,12 @@ class V8_EXPORT_PRIVATE JSGraph : public MachineGraph {
   V(MinusOneConstant)                             \
   V(NaNConstant)                                  \
   V(EmptyStateValues)                             \
-  V(SingleDeadTypedStateValues)                   \
-  V(ExternalObjectMapConstant)
+  V(SingleDeadTypedStateValues)
 
 // Cached global node accessor methods.
 #define DECLARE_GETTER(name) Node* name();
   CACHED_GLOBAL_LIST(DECLARE_GETTER)
-#undef DECLARE_GETTER
+#undef DECLARE_FIELD
 
  private:
   Isolate* isolate_;

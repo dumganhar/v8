@@ -1,11 +1,12 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 #
-# Copyright 2014 The Chromium Authors
+# Copyright 2014 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 """Copies files to a directory."""
 
+from __future__ import print_function
 
 import filecmp
 import itertools
@@ -15,7 +16,6 @@ import shutil
 import sys
 
 from util import build_utils
-import action_helpers  # build_utils adds //build to sys.path.
 
 
 def _get_all_files(base):
@@ -50,9 +50,8 @@ def CopyFile(f, dest, deps):
 
 def DoCopy(options, deps):
   """Copy files or directories given in options.files and update deps."""
-  files = list(
-      itertools.chain.from_iterable(
-          action_helpers.parse_gn_list(f) for f in options.files))
+  files = list(itertools.chain.from_iterable(build_utils.ParseGnList(f)
+                                             for f in options.files))
 
   for f in files:
     if os.path.isdir(f) and not options.clear:
@@ -63,14 +62,13 @@ def DoCopy(options, deps):
 
 def DoRenaming(options, deps):
   """Copy and rename files given in options.renaming_sources and update deps."""
-  src_files = list(
-      itertools.chain.from_iterable(
-          action_helpers.parse_gn_list(f) for f in options.renaming_sources))
+  src_files = list(itertools.chain.from_iterable(
+                   build_utils.ParseGnList(f)
+                   for f in options.renaming_sources))
 
-  dest_files = list(
-      itertools.chain.from_iterable(
-          action_helpers.parse_gn_list(f)
-          for f in options.renaming_destinations))
+  dest_files = list(itertools.chain.from_iterable(
+                    build_utils.ParseGnList(f)
+                    for f in options.renaming_destinations))
 
   if (len(src_files) != len(dest_files)):
     print('Renaming source and destination files not match.')
@@ -87,7 +85,7 @@ def main(args):
   args = build_utils.ExpandFileArgs(args)
 
   parser = optparse.OptionParser()
-  action_helpers.add_depfile_arg(parser)
+  build_utils.AddDepfileOption(parser)
 
   parser.add_option('--dest', help='Directory to copy files to.')
   parser.add_option('--files', action='append',
@@ -121,7 +119,7 @@ def main(args):
     DoRenaming(options, deps)
 
   if options.depfile:
-    action_helpers.write_depfile(options.depfile, options.stamp, deps)
+    build_utils.WriteDepfile(options.depfile, options.stamp, deps)
 
   if options.stamp:
     build_utils.Touch(options.stamp)

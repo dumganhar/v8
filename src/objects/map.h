@@ -11,9 +11,8 @@
 #include "src/objects/heap-object.h"
 #include "src/objects/internal-index.h"
 #include "src/objects/objects.h"
-#include "src/objects/prototype-info.h"
 #include "torque-generated/bit-fields.h"
-#include "torque-generated/visitor-lists.h"
+#include "torque-generated/field-offsets.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -31,45 +30,34 @@ enum InstanceType : uint16_t;
   V(CoverageInfo)                    \
   V(DataObject)                      \
   V(FeedbackMetadata)                \
-  V(FixedDoubleArray)                \
-  IF_WASM(V, WasmNull)
+  V(FixedDoubleArray)
 
 #define POINTER_VISITOR_ID_LIST(V)      \
-  V(AccessorInfo)                       \
   V(AllocationSite)                     \
   V(BytecodeArray)                      \
-  V(CallHandlerInfo)                    \
   V(Cell)                               \
-  V(InstructionStream)                  \
   V(Code)                               \
+  V(CodeDataContainer)                  \
   V(DataHandler)                        \
   V(EmbedderDataArray)                  \
   V(EphemeronHashTable)                 \
-  V(ExternalString)                     \
   V(FeedbackCell)                       \
   V(FreeSpace)                          \
   V(JSApiObject)                        \
   V(JSArrayBuffer)                      \
-  V(JSDataViewOrRabGsabDataView)        \
-  V(JSExternalObject)                   \
-  V(JSFinalizationRegistry)             \
+  V(JSDataView)                         \
   V(JSFunction)                         \
   V(JSObject)                           \
   V(JSObjectFast)                       \
-  V(JSSynchronizationPrimitive)         \
   V(JSTypedArray)                       \
   V(JSWeakRef)                          \
   V(JSWeakCollection)                   \
   V(Map)                                \
   V(NativeContext)                      \
-  V(Oddball)                            \
-  V(Hole)                               \
   V(PreparseData)                       \
-  V(PromiseOnStack)                     \
   V(PropertyArray)                      \
   V(PropertyCell)                       \
   V(PrototypeInfo)                      \
-  V(SharedFunctionInfo)                 \
   V(ShortcutCandidate)                  \
   V(SmallOrderedHashMap)                \
   V(SmallOrderedHashSet)                \
@@ -80,20 +68,11 @@ enum InstanceType : uint16_t;
   V(Symbol)                             \
   V(SyntheticModule)                    \
   V(TransitionArray)                    \
-  IF_WASM(V, WasmApiFunctionRef)        \
-  IF_WASM(V, WasmArray)                 \
-  IF_WASM(V, WasmCapiFunctionData)      \
-  IF_WASM(V, WasmExportedFunctionData)  \
-  IF_WASM(V, WasmFunctionData)          \
   IF_WASM(V, WasmIndirectFunctionTable) \
   IF_WASM(V, WasmInstanceObject)        \
-  IF_WASM(V, WasmInternalFunction)      \
-  IF_WASM(V, WasmJSFunctionData)        \
-  IF_WASM(V, WasmResumeData)            \
+  IF_WASM(V, WasmArray)                 \
   IF_WASM(V, WasmStruct)                \
-  IF_WASM(V, WasmSuspenderObject)       \
   IF_WASM(V, WasmTypeInfo)              \
-  IF_WASM(V, WasmContinuationObject)    \
   V(WeakCell)
 
 #define TORQUE_VISITOR_ID_LIST(V)     \
@@ -169,7 +148,8 @@ using MapHandles = std::vector<Handle<Map>>;
 //      | Byte     | [bit_field2]                                    |
 //      |          |   - new_target_is_base (bit 0)                  |
 //      |          |   - is_immutable_proto (bit 1)                  |
-//      |          |   - elements_kind (bits 2..7)                   |
+//      |          |   - unused bit (bit 2)                          |
+//      |          |   - elements_kind (bits 3..7)                   |
 // +----+----------+-------------------------------------------------+
 // | Int           | [bit_field3]                                    |
 // |               |   - enum_length (bit 0..9)                      |
@@ -182,7 +162,7 @@ using MapHandles = std::vector<Handle<Map>>;
 // |               |   - is_unstable (bit 25)                        |
 // |               |   - is_migration_target (bit 26)                |
 // |               |   - is_extensible (bit 28)                      |
-// |               |   - may_have_interesting_properties (bit 28)    |
+// |               |   - may_have_interesting_symbols (bit 28)       |
 // |               |   - construction_counter (bit 29..31)           |
 // |               |                                                 |
 // +*****************************************************************+
@@ -205,7 +185,7 @@ using MapHandles = std::vector<Handle<Map>>;
 // |               |   [raw_transitions]                             |
 // +---------------+-------------------------------------------------+
 
-class Map : public TorqueGeneratedMap<Map, HeapObject> {
+class Map : public HeapObject {
  public:
   // Instance size.
   // Size in bytes or kVariableSizeSentinel if instances do not have
@@ -231,8 +211,8 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   static const int kNoConstructorFunctionIndex = 0;
   inline int GetConstructorFunctionIndex() const;
   inline void SetConstructorFunctionIndex(int value);
-  static base::Optional<JSFunction> GetConstructorFunction(
-      Map map, Context native_context);
+  static MaybeHandle<JSFunction> GetConstructorFunction(
+      Handle<Map> map, Handle<Context> native_context);
 
   // Retrieve interceptors.
   DECL_GETTER(GetNamedInterceptor, InterceptorInfo)
@@ -245,8 +225,6 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   // (only used for JSObject in fast mode, for the other kinds of objects it
   // is equal to the instance size).
   inline int UsedInstanceSize() const;
-
-  inline bool HasOutOfObjectProperties() const;
 
   // Tells how many unused property fields (in-object or out-of object) are
   // available in the instance (only used for JSObject in fast mode).
@@ -266,14 +244,9 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   //
   // Bit field.
   //
-  // The setter in this pair calls the relaxed setter if concurrent marking is
-  // on, or performs the write non-atomically if it's off. The read is always
-  // non-atomically. This is done to have wider TSAN coverage on the cases where
-  // it's possible.
-  DECL_PRIMITIVE_ACCESSORS(bit_field, uint8_t)
-
+  DECL_PRIMITIVE_ACCESSORS(bit_field, byte)
   // Atomic accessors, used for allowlisting legitimate concurrent accesses.
-  DECL_PRIMITIVE_ACCESSORS(relaxed_bit_field, uint8_t)
+  DECL_PRIMITIVE_ACCESSORS(relaxed_bit_field, byte)
 
   // Bit positions for |bit_field|.
   struct Bits1 {
@@ -283,7 +256,7 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   //
   // Bit field 2.
   //
-  DECL_PRIMITIVE_ACCESSORS(bit_field2, uint8_t)
+  DECL_PRIMITIVE_ACCESSORS(bit_field2, byte)
 
   // Bit positions for |bit_field2|.
   struct Bits2 {
@@ -293,13 +266,7 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   //
   // Bit field 3.
   //
-  // {bit_field3} calls the relaxed accessors if concurrent marking is on, or
-  // performs the read/write non-atomically if it's off. This is done to have
-  // wider TSAN coverage on the cases where it's possible.
   DECL_PRIMITIVE_ACCESSORS(bit_field3, uint32_t)
-
-  DECL_PRIMITIVE_ACCESSORS(relaxed_bit_field3, uint32_t)
-  DECL_PRIMITIVE_ACCESSORS(release_acquire_bit_field3, uint32_t)
 
   // Clear uninitialized padding space. This ensures that the snapshot content
   // is deterministic. Depending on the V8 build mode there could be no padding.
@@ -311,17 +278,17 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   };
 
   // Ensure that Torque-defined bit widths for |bit_field3| are as expected.
-  static_assert(Bits3::EnumLengthBits::kSize == kDescriptorIndexBitCount);
-  static_assert(Bits3::NumberOfOwnDescriptorsBits::kSize ==
+  STATIC_ASSERT(Bits3::EnumLengthBits::kSize == kDescriptorIndexBitCount);
+  STATIC_ASSERT(Bits3::NumberOfOwnDescriptorsBits::kSize ==
                 kDescriptorIndexBitCount);
 
-  static_assert(Bits3::NumberOfOwnDescriptorsBits::kMax >=
+  STATIC_ASSERT(Bits3::NumberOfOwnDescriptorsBits::kMax >=
                 kMaxNumberOfDescriptors);
 
   static const int kSlackTrackingCounterStart = 7;
   static const int kSlackTrackingCounterEnd = 1;
   static const int kNoSlackTracking = 0;
-  static_assert(kSlackTrackingCounterStart <=
+  STATIC_ASSERT(kSlackTrackingCounterStart <=
                 Bits3::ConstructionCounterBits::kMax);
 
   // Inobject slack tracking is the way to reclaim unused inobject space.
@@ -371,6 +338,10 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   int ComputeMinObjectSlack(Isolate* isolate);
   inline int InstanceSizeFromSlack(int slack) const;
 
+  // Completes inobject slack tracking for the transition tree starting at this
+  // initial map.
+  V8_EXPORT_PRIVATE void CompleteInobjectSlackTracking(Isolate* isolate);
+
   // Tells whether the object in the prototype property will be used
   // for instances created from this function.  If the prototype
   // property is set to a value that is not a JSObject, the prototype
@@ -384,9 +355,9 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
 
   // Tells whether the instance with this map may have properties for
   // interesting symbols on it.
-  // An "interesting symbol" is one for which Name::IsInteresting()
+  // An "interesting symbol" is one for which Name::IsInterestingSymbol()
   // returns true, i.e. a well-known symbol like @@toStringTag.
-  DECL_BOOLEAN_ACCESSORS(may_have_interesting_properties)
+  DECL_BOOLEAN_ACCESSORS(may_have_interesting_symbols)
 
   DECL_BOOLEAN_ACCESSORS(has_prototype_slot)
 
@@ -412,8 +383,6 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   DECL_BOOLEAN_ACCESSORS(is_extensible)
   DECL_BOOLEAN_ACCESSORS(is_prototype_map)
   inline bool is_abandoned_prototype_map() const;
-  inline bool has_prototype_info() const;
-  inline bool TryGetPrototypeInfo(PrototypeInfo* result) const;
 
   // Whether the instance has been added to the retained map list by
   // Heap::AddRetainedMap.
@@ -429,18 +398,15 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   inline bool has_fast_smi_or_object_elements() const;
   inline bool has_fast_double_elements() const;
   inline bool has_fast_elements() const;
-  inline bool has_fast_packed_elements() const;
   inline bool has_sloppy_arguments_elements() const;
   inline bool has_fast_sloppy_arguments_elements() const;
   inline bool has_fast_string_wrapper_elements() const;
-  inline bool has_typed_array_or_rab_gsab_typed_array_elements() const;
-  inline bool has_any_typed_array_or_wasm_array_elements() const;
+  inline bool has_typed_array_elements() const;
   inline bool has_dictionary_elements() const;
   inline bool has_any_nonextensible_elements() const;
   inline bool has_nonextensible_elements() const;
   inline bool has_sealed_elements() const;
   inline bool has_frozen_elements() const;
-  inline bool has_shared_array_elements() const;
 
   // Weakly checks whether a map is detached from all transition trees. If this
   // returns true, the map is guaranteed to be detached. If it returns false,
@@ -453,7 +419,7 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   // elements or an object with any frozen elements, or a slow arguments object.
   bool MayHaveReadOnlyElementsInPrototypeChain(Isolate* isolate);
 
-  inline Map ElementsTransitionMap(Isolate* isolate, ConcurrencyMode cmode);
+  inline Map ElementsTransitionMap(Isolate* isolate);
 
   inline FixedArrayBase GetInitialElements() const;
 
@@ -464,8 +430,7 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   DECL_RELEASE_ACQUIRE_WEAK_ACCESSORS(raw_transitions)
   // [prototype_info]: Per-prototype metadata. Aliased with transitions
   // (which prototype maps don't have).
-  DECL_GETTER(prototype_info, Object)
-  DECL_RELEASE_ACQUIRE_ACCESSORS(prototype_info, Object)
+  DECL_ACCESSORS(prototype_info, Object)
   // PrototypeInfo is created lazily using this helper (which installs it on
   // the given prototype's map).
   static Handle<PrototypeInfo> GetOrCreatePrototypeInfo(
@@ -492,8 +457,8 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   // Return the map of the root of object's prototype chain.
   Map GetPrototypeChainRootMap(Isolate* isolate) const;
 
-  V8_EXPORT_PRIVATE Map FindRootMap(PtrComprCageBase cage_base) const;
-  V8_EXPORT_PRIVATE Map FindFieldOwner(PtrComprCageBase cage_base,
+  V8_EXPORT_PRIVATE Map FindRootMap(Isolate* isolate) const;
+  V8_EXPORT_PRIVATE Map FindFieldOwner(Isolate* isolate,
                                        InternalIndex descriptor) const;
 
   inline int GetInObjectPropertyOffset(int index) const;
@@ -514,19 +479,27 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   };
 
   FieldCounts GetFieldCounts() const;
-  int NumberOfFields(ConcurrencyMode cmode) const;
+  int NumberOfFields() const;
+
+  bool HasOutOfObjectProperties() const;
 
   // TODO(ishell): candidate with JSObject::MigrateToMap().
-  bool InstancesNeedRewriting(Map target, ConcurrencyMode cmode) const;
+  bool InstancesNeedRewriting(Map target) const;
   bool InstancesNeedRewriting(Map target, int target_number_of_fields,
                               int target_inobject, int target_unused,
-                              int* old_number_of_fields,
-                              ConcurrencyMode cmode) const;
+                              int* old_number_of_fields) const;
+  V8_WARN_UNUSED_RESULT static Handle<FieldType> GeneralizeFieldType(
+      Representation rep1, Handle<FieldType> type1, Representation rep2,
+      Handle<FieldType> type2, Isolate* isolate);
+  static void GeneralizeField(Isolate* isolate, Handle<Map> map,
+                              InternalIndex modify_index,
+                              PropertyConstness new_constness,
+                              Representation new_representation,
+                              Handle<FieldType> new_field_type);
   // Returns true if the |field_type| is the most general one for
   // given |representation|.
   static inline bool IsMostGeneralFieldType(Representation representation,
                                             FieldType field_type);
-  static inline bool FieldTypeIsCleared(Representation rep, FieldType type);
 
   // Generalizes representation and field_type if objects with given
   // instance type can have fast elements that can be transitioned by
@@ -543,17 +516,11 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
       Isolate* isolate, Handle<Map> old_map, InternalIndex descriptor_number,
       PropertyConstness constness, Handle<Object> value);
 
-  V8_EXPORT_PRIVATE static Handle<Map> Normalize(
-      Isolate* isolate, Handle<Map> map, ElementsKind new_elements_kind,
-      PropertyNormalizationMode mode, bool use_cache, const char* reason);
   V8_EXPORT_PRIVATE static Handle<Map> Normalize(Isolate* isolate,
                                                  Handle<Map> map,
                                                  ElementsKind new_elements_kind,
                                                  PropertyNormalizationMode mode,
-                                                 const char* reason) {
-    const bool kUseCache = true;
-    return Normalize(isolate, map, new_elements_kind, mode, kUseCache, reason);
-  }
+                                                 const char* reason);
 
   inline static Handle<Map> Normalize(Isolate* isolate, Handle<Map> fast_map,
                                       PropertyNormalizationMode mode,
@@ -576,11 +543,6 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
       Isolate* isolate, Handle<Map> map, Handle<HeapObject> prototype,
       bool enable_prototype_setup_mode = true);
 
-  // Sets prototype and constructor fields to null. Can be called during
-  // bootstrapping.
-  inline void init_prototype_and_constructor_or_back_pointer(
-      ReadOnlyRoots roots);
-
   // [constructor]: points back to the function or FunctionTemplateInfo
   // responsible for this map.
   // The field overlaps with the back pointer. All maps in a transition tree
@@ -591,19 +553,8 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   // The field also overlaps with the native context pointer for context maps,
   // and with the Wasm type info for WebAssembly object maps.
   DECL_ACCESSORS(constructor_or_back_pointer, Object)
-  DECL_RELAXED_ACCESSORS(constructor_or_back_pointer, Object)
   DECL_ACCESSORS(native_context, NativeContext)
-  DECL_ACCESSORS(native_context_or_null, Object)
   DECL_ACCESSORS(wasm_type_info, WasmTypeInfo)
-
-  // Gets |constructor_or_back_pointer| field value from the root map.
-  // The result might be null, JSFunction, FunctionTemplateInfo or a Tuple2
-  // for JSFunctions with non-instance prototypes.
-  DECL_GETTER(GetConstructorRaw, Object)
-
-  // Gets constructor value from the root map. Unwraps Tuple2 in case of
-  // JSFunction map with non-instance prototype.
-  // The result returned might be null, JSFunction or FunctionTemplateInfo.
   DECL_GETTER(GetConstructor, Object)
   DECL_GETTER(GetFunctionTemplateInfo, FunctionTemplateInfo)
   inline void SetConstructor(Object constructor,
@@ -612,18 +563,11 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   // in the transition tree. Returns either the constructor or the map at
   // which the walk has stopped.
   inline Object TryGetConstructor(Isolate* isolate, int max_steps);
-
-  // Gets non-instance prototype value which is stored in Tuple2 in a
-  // root map's |constructor_or_back_pointer| field.
-  DECL_GETTER(GetNonInstancePrototype, Object)
-
   // [back pointer]: points back to the parent map from which a transition
   // leads to this map. The field overlaps with the constructor (see above).
   DECL_GETTER(GetBackPointer, HeapObject)
   inline void SetBackPointer(HeapObject value,
                              WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
-  inline bool TryGetBackPointer(PtrComprCageBase cage_base,
-                                Map* back_pointer) const;
 
   // [instance descriptors]: describes the object.
   DECL_ACCESSORS(instance_descriptors, DescriptorArray)
@@ -653,7 +597,7 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   // For non-prototype maps which are used as transitioning store handlers this
   // field contains the validity cell which guards modifications of this map's
   // prototype.
-  DECL_RELAXED_ACCESSORS(prototype_validity_cell, Object)
+  DECL_ACCESSORS(prototype_validity_cell, Object)
 
   // Returns true if prototype validity cell value represents "valid" prototype
   // chain state.
@@ -697,7 +641,6 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
 
   DECL_BOOLEAN_ACCESSORS(is_deprecated)
   inline bool CanBeDeprecated() const;
-
   // Returns a non-deprecated version of the input. If the input was not
   // deprecated, it is directly returned. Otherwise, the non-deprecated version
   // is found by re-transitioning from the root of the transition tree using the
@@ -705,6 +648,8 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   // is found.
   V8_EXPORT_PRIVATE static MaybeHandle<Map> TryUpdate(
       Isolate* isolate, Handle<Map> map) V8_WARN_UNUSED_RESULT;
+  V8_EXPORT_PRIVATE static Map TryUpdateSlow(Isolate* isolate,
+                                             Map map) V8_WARN_UNUSED_RESULT;
 
   // Returns a non-deprecated version of the input. This method may deprecate
   // existing maps along the way if encodings conflict. Not for use while
@@ -744,10 +689,6 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   static Handle<Map> TransitionElementsTo(Isolate* isolate, Handle<Map> map,
                                           ElementsKind to_kind);
 
-  static base::Optional<Map> TryAsElementsKind(Isolate* isolate,
-                                               Handle<Map> map,
-                                               ElementsKind kind,
-                                               ConcurrencyMode cmode);
   V8_EXPORT_PRIVATE static Handle<Map> AsElementsKind(Isolate* isolate,
                                                       Handle<Map> map,
                                                       ElementsKind kind);
@@ -775,6 +716,10 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
       Isolate* isolate, Handle<Map> map, Handle<Name> name,
       InternalIndex descriptor, Handle<Object> getter, Handle<Object> setter,
       PropertyAttributes attributes);
+  V8_EXPORT_PRIVATE static Handle<Map> ReconfigureExistingProperty(
+      Isolate* isolate, Handle<Map> map, InternalIndex descriptor,
+      PropertyKind kind, PropertyAttributes attributes,
+      PropertyConstness constness);
 
   inline void AppendDescriptor(Isolate* isolate, Descriptor* desc);
 
@@ -797,6 +742,8 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   // Returns the number of enumerable properties.
   int NumberOfEnumerableProperties() const;
 
+  DECL_CAST(Map)
+
   static inline int SlackForArraySize(int old_size, int size_limit);
 
   V8_EXPORT_PRIVATE static void EnsureDescriptorSlack(Isolate* isolate,
@@ -808,6 +755,11 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   static Handle<Map> GetObjectCreateMap(Isolate* isolate,
                                         Handle<HeapObject> prototype);
 
+  // Similar to {GetObjectCreateMap} but does not transition {prototype} and
+  // fails gracefully by returning an empty handle instead.
+  static MaybeHandle<Map> TryGetObjectCreateMap(Isolate* isolate,
+                                                Handle<HeapObject> prototype);
+
   // Computes a hash value for this map, to be used in HashTables and such.
   int Hash();
 
@@ -815,25 +767,11 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   // elements_kind that's found in |candidates|, or |nullptr| if no match is
   // found at all.
   V8_EXPORT_PRIVATE Map FindElementsKindTransitionedMap(
-      Isolate* isolate, MapHandles const& candidates, ConcurrencyMode cmode);
+      Isolate* isolate, MapHandles const& candidates);
 
   inline bool CanTransition() const;
 
-  static constexpr base::Optional<RootIndex> TryGetMapRootIdxFor(
-      InstanceType type) {
-    switch (type) {
-#define MAKE_CASE(TYPE, Name, name) \
-  case TYPE:                        \
-    return RootIndex::k##Name##Map;
-      STRUCT_LIST(MAKE_CASE)
-      TORQUE_DEFINED_INSTANCE_TYPE_LIST(MAKE_CASE)
-#undef MAKE_CASE
-      default:
-        break;
-    }
-    return {};
-  }
-  static inline Map GetMapFor(ReadOnlyRoots roots, InstanceType type);
+  static Map GetInstanceTypeMap(ReadOnlyRoots roots, InstanceType type);
 
 #define DECL_TESTER(Type, ...) inline bool Is##Type##Map() const;
   INSTANCE_TYPE_CHECKERS(DECL_TESTER)
@@ -856,7 +794,7 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
 
   DECL_PRIMITIVE_ACCESSORS(visitor_id, VisitorId)
 
-  static constexpr ObjectFields ObjectFieldsFrom(VisitorId visitor_id) {
+  static ObjectFields ObjectFieldsFrom(VisitorId visitor_id) {
     return (visitor_id < kDataOnlyVisitorIdCount)
                ? ObjectFields::kDataOnly
                : ObjectFields::kMaybePointers;
@@ -870,7 +808,10 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
 
   static const int kMaxPreAllocatedPropertyFields = 255;
 
-  static_assert(kInstanceTypeOffset == Internals::kMapInstanceTypeOffset);
+  DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize,
+                                TORQUE_GENERATED_MAP_FIELDS)
+
+  STATIC_ASSERT(kInstanceTypeOffset == Internals::kMapInstanceTypeOffset);
 
   class BodyDescriptor;
 
@@ -907,12 +848,6 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
       InstanceType instance_type);
   inline bool CanHaveFastTransitionableElementsKind() const;
 
-  // Maps for Wasm objects can use certain fields for other purposes.
-  inline uint8_t WasmByte1() const;
-  inline uint8_t WasmByte2() const;
-  inline void SetWasmByte1(uint8_t value);
-  inline void SetWasmByte2(uint8_t value);
-
  private:
   // This byte encodes either the instance size without the in-object slack or
   // the slack size in properties backing store.
@@ -929,24 +864,21 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
 
   // Returns the map that this (root) map transitions to if its elements_kind
   // is changed to |elements_kind|, or |nullptr| if no such map is cached yet.
-  Map LookupElementsTransitionMap(Isolate* isolate, ElementsKind elements_kind,
-                                  ConcurrencyMode cmode);
+  Map LookupElementsTransitionMap(Isolate* isolate, ElementsKind elements_kind);
 
   // Tries to replay property transitions starting from this (root) map using
   // the descriptor array of the |map|. The |root_map| is expected to have
   // proper elements kind and therefore elements kinds transitions are not
   // taken by this function. Returns |nullptr| if matching transition map is
   // not found.
-  Map TryReplayPropertyTransitions(Isolate* isolate, Map map,
-                                   ConcurrencyMode cmode);
+  Map TryReplayPropertyTransitions(Isolate* isolate, Map map);
 
   static void ConnectTransition(Isolate* isolate, Handle<Map> parent,
                                 Handle<Map> child, Handle<Name> name,
                                 SimpleTransitionFlag flag);
 
-  bool EquivalentToForTransition(const Map other, ConcurrencyMode cmode) const;
-  bool EquivalentToForElementsKindTransition(const Map other,
-                                             ConcurrencyMode cmode) const;
+  bool EquivalentToForTransition(const Map other) const;
+  bool EquivalentToForElementsKindTransition(const Map other) const;
   static Handle<Map> RawCopy(Isolate* isolate, Handle<Map> map,
                              int instance_size, int inobject_properties);
   static Handle<Map> ShareDescriptor(Isolate* isolate, Handle<Map> map,
@@ -980,6 +912,28 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
 
   void ReplaceDescriptors(Isolate* isolate, DescriptorArray new_descriptors);
 
+  // Update field type of the given descriptor to new representation and new
+  // type. The type must be prepared for storing in descriptor array:
+  // it must be either a simple type or a map wrapped in a weak cell.
+  void UpdateFieldType(Isolate* isolate, InternalIndex descriptor_number,
+                       Handle<Name> name, PropertyConstness new_constness,
+                       Representation new_representation,
+                       const MaybeObjectHandle& new_wrapped_type);
+
+  // TODO(ishell): Move to MapUpdater.
+  void PrintReconfiguration(Isolate* isolate, FILE* file,
+                            InternalIndex modify_index, PropertyKind kind,
+                            PropertyAttributes attributes);
+  // TODO(ishell): Move to MapUpdater.
+  void PrintGeneralization(
+      Isolate* isolate, FILE* file, const char* reason,
+      InternalIndex modify_index, int split, int descriptors,
+      bool constant_to_field, Representation old_representation,
+      Representation new_representation, PropertyConstness old_constness,
+      PropertyConstness new_constness, MaybeHandle<FieldType> old_field_type,
+      MaybeHandle<Object> old_value, MaybeHandle<FieldType> new_field_type,
+      MaybeHandle<Object> new_value);
+
   // This is the equivalent of IsMap() but avoids reading the instance type so
   // it can be used concurrently without acquire load.
   V8_INLINE bool ConcurrentIsMap(PtrComprCageBase cage_base,
@@ -988,10 +942,6 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   // Use the high-level instance_descriptors/SetInstanceDescriptors instead.
   DECL_RELEASE_SETTER(instance_descriptors, DescriptorArray)
 
-  // Hide inherited accessors from the generated superclass.
-  DECL_ACCESSORS(constructor_or_back_pointer_or_native_context, Object)
-  DECL_ACCESSORS(transitions_or_prototype_info, Object)
-
   static const int kFastPropertiesSoftLimit = 12;
   static const int kMaxFastProperties = 128;
 
@@ -999,7 +949,7 @@ class Map : public TorqueGeneratedMap<Map, HeapObject> {
   template <typename ConcreteVisitor, typename MarkingState>
   friend class MarkingVisitorBase;
 
-  TQ_OBJECT_CONSTRUCTORS(Map)
+  OBJECT_CONSTRUCTORS(Map, HeapObject);
 };
 
 // The cache for maps used by normalized (dictionary mode) objects.

@@ -253,7 +253,7 @@ void AtomicsWaitWakeHandle::Wake() {
   isolate_->futex_wait_list_node()->NotifyWake();
 }
 
-enum WaitReturnValue : int { kOk = 0, kNotEqualValue = 1, kTimedOut = 2 };
+enum WaitReturnValue : int { kOk = 0, kNotEqual = 1, kTimedOut = 2 };
 
 namespace {
 
@@ -263,7 +263,7 @@ Object WaitJsTranslateReturn(Isolate* isolate, Object res) {
     switch (val) {
       case WaitReturnValue::kOk:
         return ReadOnlyRoots(isolate).ok_string();
-      case WaitReturnValue::kNotEqualValue:
+      case WaitReturnValue::kNotEqual:
         return ReadOnlyRoots(isolate).not_equal_string();
       case WaitReturnValue::kTimedOut:
         return ReadOnlyRoots(isolate).timed_out_string();
@@ -297,7 +297,7 @@ Object FutexEmulation::WaitWasm32(Isolate* isolate,
                                   size_t addr, int32_t value,
                                   int64_t rel_timeout_ns) {
   return Wait<int32_t>(isolate, WaitMode::kSync, array_buffer, addr, value,
-                       rel_timeout_ns >= 0, rel_timeout_ns, CallType::kIsWasm);
+                       rel_timeout_ns >= 0, rel_timeout_ns);
 }
 
 Object FutexEmulation::WaitWasm64(Isolate* isolate,
@@ -305,14 +305,14 @@ Object FutexEmulation::WaitWasm64(Isolate* isolate,
                                   size_t addr, int64_t value,
                                   int64_t rel_timeout_ns) {
   return Wait<int64_t>(isolate, WaitMode::kSync, array_buffer, addr, value,
-                       rel_timeout_ns >= 0, rel_timeout_ns, CallType::kIsWasm);
+                       rel_timeout_ns >= 0, rel_timeout_ns);
 }
 
 template <typename T>
 Object FutexEmulation::Wait(Isolate* isolate, WaitMode mode,
                             Handle<JSArrayBuffer> array_buffer, size_t addr,
                             T value, double rel_timeout_ms) {
-  DCHECK_LT(addr, array_buffer->GetByteLength());
+  DCHECK_LT(addr, array_buffer->byte_length());
 
   bool use_timeout = rel_timeout_ms != V8_INFINITY;
   int64_t rel_timeout_ns = -1;
@@ -346,22 +346,21 @@ double WaitTimeoutInMs(double timeout_ns) {
 template <typename T>
 Object FutexEmulation::Wait(Isolate* isolate, WaitMode mode,
                             Handle<JSArrayBuffer> array_buffer, size_t addr,
-                            T value, bool use_timeout, int64_t rel_timeout_ns,
-                            CallType call_type) {
+                            T value, bool use_timeout, int64_t rel_timeout_ns) {
   if (mode == WaitMode::kSync) {
     return WaitSync(isolate, array_buffer, addr, value, use_timeout,
-                    rel_timeout_ns, call_type);
+                    rel_timeout_ns);
   }
   DCHECK_EQ(mode, WaitMode::kAsync);
   return WaitAsync(isolate, array_buffer, addr, value, use_timeout,
-                   rel_timeout_ns, call_type);
+                   rel_timeout_ns);
 }
 
 template <typename T>
 Object FutexEmulation::WaitSync(Isolate* isolate,
                                 Handle<JSArrayBuffer> array_buffer, size_t addr,
                                 T value, bool use_timeout,
-                                int64_t rel_timeout_ns, CallType call_type) {
+                                int64_t rel_timeout_ns) {
   VMState<ATOMICS_WAIT> state(isolate);
   base::TimeDelta rel_timeout =
       base::TimeDelta::FromNanoseconds(rel_timeout_ns);
@@ -399,16 +398,8 @@ Object FutexEmulation::WaitSync(Isolate* isolate,
     FutexWaitListNode::ResetWaitingOnScopeExit reset_waiting(node);
 
     std::atomic<T>* p = reinterpret_cast<std::atomic<T>*>(wait_location);
-    T loaded_value = p->load();
-#if defined(V8_TARGET_BIG_ENDIAN)
-    // If loading a Wasm value, it needs to be reversed on Big Endian platforms.
-    if (call_type == CallType::kIsWasm) {
-      DCHECK(sizeof(T) == kInt32Size || sizeof(T) == kInt64Size);
-      loaded_value = ByteReverse(loaded_value);
-    }
-#endif
-    if (loaded_value != value) {
-      result = handle(Smi::FromInt(WaitReturnValue::kNotEqualValue), isolate);
+    if (p->load() != value) {
+      result = handle(Smi::FromInt(WaitReturnValue::kNotEqual), isolate);
       callback_result = AtomicsWaitEvent::kNotEqual;
       break;
     }
@@ -522,7 +513,8 @@ FutexWaitListNode::FutexWaitListNode(
   promise_.Reset(v8_isolate, local_promise);
   promise_.SetWeak();
   Handle<NativeContext> native_context(isolate->native_context());
-  v8::Local<v8::Context> local_native_context = Utils::ToLocal(native_context);
+  v8::Local<v8::Context> local_native_context =
+      Utils::ToLocal(Handle<Context>::cast(native_context));
   native_context_.Reset(v8_isolate, local_native_context);
   native_context_.SetWeak();
 }
@@ -531,7 +523,7 @@ template <typename T>
 Object FutexEmulation::WaitAsync(Isolate* isolate,
                                  Handle<JSArrayBuffer> array_buffer,
                                  size_t addr, T value, bool use_timeout,
-                                 int64_t rel_timeout_ns, CallType call_type) {
+                                 int64_t rel_timeout_ns) {
   base::TimeDelta rel_timeout =
       base::TimeDelta::FromNanoseconds(rel_timeout_ns);
 
@@ -539,8 +531,7 @@ Object FutexEmulation::WaitAsync(Isolate* isolate,
   Handle<JSObject> result = factory->NewJSObject(isolate->object_function());
   Handle<JSObject> promise_capability = factory->NewJSPromise();
 
-  enum class ResultKind { kNotEqual, kTimedOut, kAsync };
-  ResultKind result_kind;
+  enum { kNotEqual, kTimedOut, kAsync } result_kind;
   {
     // 16. Perform EnterCriticalSection(WL).
     NoGarbageCollectionMutexGuard lock_guard(g_mutex.Pointer());
@@ -551,20 +542,12 @@ Object FutexEmulation::WaitAsync(Isolate* isolate,
     // 17. Let w be ! AtomicLoad(typedArray, i).
     std::atomic<T>* p = reinterpret_cast<std::atomic<T>*>(
         static_cast<int8_t*>(backing_store->buffer_start()) + addr);
-    T loaded_value = p->load();
-#if defined(V8_TARGET_BIG_ENDIAN)
-    // If loading a Wasm value, it needs to be reversed on Big Endian platforms.
-    if (call_type == CallType::kIsWasm) {
-      DCHECK(sizeof(T) == kInt32Size || sizeof(T) == kInt64Size);
-      loaded_value = ByteReverse(loaded_value);
-    }
-#endif
-    if (loaded_value != value) {
-      result_kind = ResultKind::kNotEqual;
+    if (p->load() != value) {
+      result_kind = kNotEqual;
     } else if (use_timeout && rel_timeout_ns == 0) {
-      result_kind = ResultKind::kTimedOut;
+      result_kind = kTimedOut;
     } else {
-      result_kind = ResultKind::kAsync;
+      result_kind = kAsync;
 
       FutexWaitListNode* node = new FutexWaitListNode(
           backing_store, addr, promise_capability, isolate);
@@ -588,7 +571,7 @@ Object FutexEmulation::WaitAsync(Isolate* isolate,
   }
 
   switch (result_kind) {
-    case ResultKind::kNotEqual:
+    case kNotEqual:
       // 18. If v is not equal to w, then
       //   ...
       //   c. Perform ! CreateDataPropertyOrThrow(resultObject, "async", false).
@@ -605,7 +588,7 @@ Object FutexEmulation::WaitAsync(Isolate* isolate,
                 .FromJust());
       break;
 
-    case ResultKind::kTimedOut:
+    case kTimedOut:
       // 19. If t is 0 and mode is async, then
       //   ...
       //   c. Perform ! CreateDataPropertyOrThrow(resultObject, "async", false).
@@ -622,7 +605,7 @@ Object FutexEmulation::WaitAsync(Isolate* isolate,
                 .FromJust());
       break;
 
-    case ResultKind::kAsync:
+    case kAsync:
       // Add the Promise into the NativeContext's atomics_waitasync_promises
       // set, so that the list keeps it alive.
       Handle<NativeContext> native_context(isolate->native_context());
@@ -652,7 +635,7 @@ Object FutexEmulation::WaitAsync(Isolate* isolate,
 
 Object FutexEmulation::Wake(Handle<JSArrayBuffer> array_buffer, size_t addr,
                             uint32_t num_waiters_to_wake) {
-  DCHECK_LT(addr, array_buffer->GetByteLength());
+  DCHECK_LT(addr, array_buffer->byte_length());
 
   int waiters_woken = 0;
   std::shared_ptr<BackingStore> backing_store = array_buffer->GetBackingStore();
@@ -915,7 +898,7 @@ void FutexEmulation::IsolateDeinit(Isolate* isolate) {
 
 Object FutexEmulation::NumWaitersForTesting(Handle<JSArrayBuffer> array_buffer,
                                             size_t addr) {
-  DCHECK_LT(addr, array_buffer->GetByteLength());
+  DCHECK_LT(addr, array_buffer->byte_length());
   std::shared_ptr<BackingStore> backing_store = array_buffer->GetBackingStore();
 
   NoGarbageCollectionMutexGuard lock_guard(g_mutex.Pointer());
@@ -960,7 +943,7 @@ Object FutexEmulation::NumAsyncWaitersForTesting(Isolate* isolate) {
 
 Object FutexEmulation::NumUnresolvedAsyncPromisesForTesting(
     Handle<JSArrayBuffer> array_buffer, size_t addr) {
-  DCHECK_LT(addr, array_buffer->GetByteLength());
+  DCHECK_LT(addr, array_buffer->byte_length());
   std::shared_ptr<BackingStore> backing_store = array_buffer->GetBackingStore();
 
   NoGarbageCollectionMutexGuard lock_guard(g_mutex.Pointer());

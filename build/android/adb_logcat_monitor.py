@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 #
-# Copyright 2012 The Chromium Authors
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -16,6 +16,7 @@ resilient across phone disconnects and reconnects and start the logcat
 early enough to not miss anything.
 """
 
+from __future__ import print_function
 
 import logging
 import os
@@ -32,10 +33,12 @@ devices = {}
 
 class TimeoutException(Exception):
   """Exception used to signal a timeout."""
+  pass
 
 
 class SigtermError(Exception):
   """Exception used to catch a sigterm."""
+  pass
 
 
 def StartLogcatIfNecessary(device_id, adb_cmd, base_dir):
@@ -45,11 +48,12 @@ def StartLogcatIfNecessary(device_id, adb_cmd, base_dir):
     if process.poll() is None:
       # Logcat process is still happily running
       return
-    logging.info('Logcat for device %s has died', device_id)
-    error_filter = re.compile('- waiting for device -')
-    for line in process.stderr:
-      if not error_filter.match(line):
-        logging.error(device_id + ':   ' + line)
+    else:
+      logging.info('Logcat for device %s has died', device_id)
+      error_filter = re.compile('- waiting for device -')
+      for line in process.stderr:
+        if not error_filter.match(line):
+          logging.error(device_id + ':   ' + line)
 
   logging.info('Starting logcat %d for device %s', logcat_num,
                device_id)
@@ -81,7 +85,7 @@ def GetAttachedDevices(adb_cmd):
                                 stderr=subprocess.PIPE).communicate()
     if err:
       logging.warning('adb device error %s', err.strip())
-    return re.findall('^(\\S+)\tdevice$', out.decode('latin1'), re.MULTILINE)
+    return re.findall('^(\\S+)\tdevice$', out, re.MULTILINE)
   except TimeoutException:
     logging.warning('"adb devices" command timed out')
     return []
@@ -137,7 +141,7 @@ def main(base_dir, adb_cmd='adb'):
   except: # pylint: disable=bare-except
     logging.exception('Unexpected exception in main.')
   finally:
-    for process, _ in devices.values():
+    for process, _ in devices.itervalues():
       if process:
         try:
           process.terminate()
@@ -147,11 +151,8 @@ def main(base_dir, adb_cmd='adb'):
 
 
 if __name__ == '__main__':
-  logging.basicConfig(level=logging.INFO)
   if 2 <= len(sys.argv) <= 3:
     print('adb_logcat_monitor: Initializing')
-    if len(sys.argv) == 2:
-      sys.exit(main(sys.argv[1]))
-    sys.exit(main(sys.argv[1], sys.argv[2]))
+    sys.exit(main(*sys.argv[1:3]))
 
   print('Usage: %s <base_dir> [<adb_binary_path>]' % sys.argv[0])

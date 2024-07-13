@@ -22,10 +22,7 @@ TEST_F(MarkingWorklistTest, PushPop) {
   MarkingWorklists holder;
   MarkingWorklists::Local worklists(&holder);
   HeapObject pushed_object =
-      HeapObject::cast(i_isolate()
-                           ->roots_table()
-                           .slot(RootIndex::kFirstStrongRoot)
-                           .load(i_isolate()));
+      ReadOnlyRoots(i_isolate()->heap()).undefined_value();
   worklists.Push(pushed_object);
   HeapObject popped_object;
   EXPECT_TRUE(worklists.Pop(&popped_object));
@@ -36,13 +33,21 @@ TEST_F(MarkingWorklistTest, PushPopOnHold) {
   MarkingWorklists holder;
   MarkingWorklists::Local worklists(&holder);
   HeapObject pushed_object =
-      HeapObject::cast(i_isolate()
-                           ->roots_table()
-                           .slot(RootIndex::kFirstStrongRoot)
-                           .load(i_isolate()));
+      ReadOnlyRoots(i_isolate()->heap()).undefined_value();
   worklists.PushOnHold(pushed_object);
   HeapObject popped_object;
   EXPECT_TRUE(worklists.PopOnHold(&popped_object));
+  EXPECT_EQ(popped_object, pushed_object);
+}
+
+TEST_F(MarkingWorklistTest, PushPopEmbedder) {
+  MarkingWorklists holder;
+  MarkingWorklists::Local worklists(&holder);
+  HeapObject pushed_object =
+      ReadOnlyRoots(i_isolate()->heap()).undefined_value();
+  worklists.PushEmbedder(pushed_object);
+  HeapObject popped_object;
+  EXPECT_TRUE(worklists.PopEmbedder(&popped_object));
   EXPECT_EQ(popped_object, pushed_object);
 }
 
@@ -51,10 +56,7 @@ TEST_F(MarkingWorklistTest, MergeOnHold) {
   MarkingWorklists::Local main_worklists(&holder);
   MarkingWorklists::Local worker_worklists(&holder);
   HeapObject pushed_object =
-      HeapObject::cast(i_isolate()
-                           ->roots_table()
-                           .slot(RootIndex::kFirstStrongRoot)
-                           .load(i_isolate()));
+      ReadOnlyRoots(i_isolate()->heap()).undefined_value();
   worker_worklists.PushOnHold(pushed_object);
   worker_worklists.Publish();
   main_worklists.MergeOnHold();
@@ -68,10 +70,7 @@ TEST_F(MarkingWorklistTest, ShareWorkIfGlobalPoolIsEmpty) {
   MarkingWorklists::Local main_worklists(&holder);
   MarkingWorklists::Local worker_worklists(&holder);
   HeapObject pushed_object =
-      HeapObject::cast(i_isolate()
-                           ->roots_table()
-                           .slot(RootIndex::kFirstStrongRoot)
-                           .load(i_isolate()));
+      ReadOnlyRoots(i_isolate()->heap()).undefined_value();
   main_worklists.Push(pushed_object);
   main_worklists.ShareWork();
   HeapObject popped_object;
@@ -85,13 +84,10 @@ TEST_F(MarkingWorklistTest, ContextWorklistsPushPop) {
   holder.CreateContextWorklists({context});
   MarkingWorklists::Local worklists(&holder);
   HeapObject pushed_object =
-      HeapObject::cast(i_isolate()
-                           ->roots_table()
-                           .slot(RootIndex::kFirstStrongRoot)
-                           .load(i_isolate()));
+      ReadOnlyRoots(i_isolate()->heap()).undefined_value();
   worklists.SwitchToContext(context);
   worklists.Push(pushed_object);
-  worklists.SwitchToSharedForTesting();
+  worklists.SwitchToShared();
   HeapObject popped_object;
   EXPECT_TRUE(worklists.Pop(&popped_object));
   EXPECT_EQ(popped_object, pushed_object);
@@ -104,14 +100,11 @@ TEST_F(MarkingWorklistTest, ContextWorklistsEmpty) {
   holder.CreateContextWorklists({context});
   MarkingWorklists::Local worklists(&holder);
   HeapObject pushed_object =
-      HeapObject::cast(i_isolate()
-                           ->roots_table()
-                           .slot(RootIndex::kFirstStrongRoot)
-                           .load(i_isolate()));
+      ReadOnlyRoots(i_isolate()->heap()).undefined_value();
   worklists.SwitchToContext(context);
   worklists.Push(pushed_object);
   EXPECT_FALSE(worklists.IsEmpty());
-  worklists.SwitchToSharedForTesting();
+  worklists.SwitchToShared();
   EXPECT_FALSE(worklists.IsEmpty());
   HeapObject popped_object;
   EXPECT_TRUE(worklists.Pop(&popped_object));
@@ -128,10 +121,7 @@ TEST_F(MarkingWorklistTest, ContextWorklistCrossTask) {
   MarkingWorklists::Local main_worklists(&holder);
   MarkingWorklists::Local worker_worklists(&holder);
   HeapObject pushed_object =
-      HeapObject::cast(i_isolate()
-                           ->roots_table()
-                           .slot(RootIndex::kFirstStrongRoot)
-                           .load(i_isolate()));
+      ReadOnlyRoots(i_isolate()->heap()).undefined_value();
   main_worklists.SwitchToContext(context1);
   main_worklists.Push(pushed_object);
   main_worklists.ShareWork();

@@ -5,9 +5,8 @@
 #ifndef V8_STRINGS_STRING_SEARCH_H_
 #define V8_STRINGS_STRING_SEARCH_H_
 
-#include "src/base/strings.h"
-#include "src/base/vector.h"
 #include "src/execution/isolate.h"
+#include "src/utils/vector.h"
 
 namespace v8 {
 namespace internal {
@@ -41,11 +40,11 @@ class StringSearchBase {
   // to compensate for the algorithmic overhead compared to simple brute force.
   static const int kBMMinPatternLength = 7;
 
-  static inline bool IsOneByteString(base::Vector<const uint8_t> string) {
+  static inline bool IsOneByteString(Vector<const uint8_t> string) {
     return true;
   }
 
-  static inline bool IsOneByteString(base::Vector<const base::uc16> string) {
+  static inline bool IsOneByteString(Vector<const uc16> string) {
     return String::IsOneByte(string.begin(), string.length());
   }
 
@@ -55,7 +54,7 @@ class StringSearchBase {
 template <typename PatternChar, typename SubjectChar>
 class StringSearch : private StringSearchBase {
  public:
-  StringSearch(Isolate* isolate, base::Vector<const PatternChar> pattern)
+  StringSearch(Isolate* isolate, Vector<const PatternChar> pattern)
       : isolate_(isolate),
         pattern_(pattern),
         start_(std::max(0, pattern.length() - kBMMaxShift)) {
@@ -77,7 +76,7 @@ class StringSearch : private StringSearchBase {
     strategy_ = &InitialSearch;
   }
 
-  int Search(base::Vector<const SubjectChar> subject, int index) {
+  int Search(Vector<const SubjectChar> subject, int index) {
     return strategy_(this, subject, index);
   }
 
@@ -94,31 +93,29 @@ class StringSearch : private StringSearchBase {
 
  private:
   using SearchFunction = int (*)(StringSearch<PatternChar, SubjectChar>*,
-                                 base::Vector<const SubjectChar>, int);
+                                 Vector<const SubjectChar>, int);
 
   static int FailSearch(StringSearch<PatternChar, SubjectChar>*,
-                        base::Vector<const SubjectChar>, int) {
+                        Vector<const SubjectChar>, int) {
     return -1;
   }
 
   static int SingleCharSearch(StringSearch<PatternChar, SubjectChar>* search,
-                              base::Vector<const SubjectChar> subject,
+                              Vector<const SubjectChar> subject,
                               int start_index);
 
   static int LinearSearch(StringSearch<PatternChar, SubjectChar>* search,
-                          base::Vector<const SubjectChar> subject,
-                          int start_index);
+                          Vector<const SubjectChar> subject, int start_index);
 
   static int InitialSearch(StringSearch<PatternChar, SubjectChar>* search,
-                           base::Vector<const SubjectChar> subject,
-                           int start_index);
+                           Vector<const SubjectChar> subject, int start_index);
 
   static int BoyerMooreHorspoolSearch(
       StringSearch<PatternChar, SubjectChar>* search,
-      base::Vector<const SubjectChar> subject, int start_index);
+      Vector<const SubjectChar> subject, int start_index);
 
   static int BoyerMooreSearch(StringSearch<PatternChar, SubjectChar>* search,
-                              base::Vector<const SubjectChar> subject,
+                              Vector<const SubjectChar> subject,
                               int start_index);
 
   void PopulateBoyerMooreHorspoolTable();
@@ -142,8 +139,7 @@ class StringSearch : private StringSearchBase {
       }
       return bad_char_occurrence[static_cast<unsigned int>(char_code)];
     }
-    // Both pattern and subject are UC16. Reduce character to equivalence
-    // class.
+    // Both pattern and subject are UC16. Reduce character to equivalence class.
     int equiv_class = char_code % kUC16AlphabetSize;
     return bad_char_occurrence[equiv_class];
   }
@@ -174,7 +170,7 @@ class StringSearch : private StringSearchBase {
 
   Isolate* isolate_;
   // The pattern to search for.
-  base::Vector<const PatternChar> pattern_;
+  Vector<const PatternChar> pattern_;
   // Pointer to implementation of the search.
   SearchFunction strategy_;
   // Cache value of max(0, pattern_length() - kBMMaxShift)
@@ -187,7 +183,7 @@ inline T AlignDown(T value, U alignment) {
       (reinterpret_cast<uintptr_t>(value) & ~(alignment - 1)));
 }
 
-inline uint8_t GetHighestValueByte(base::uc16 character) {
+inline uint8_t GetHighestValueByte(uc16 character) {
   return std::max(static_cast<uint8_t>(character & 0xFF),
                   static_cast<uint8_t>(character >> 8));
 }
@@ -195,9 +191,8 @@ inline uint8_t GetHighestValueByte(base::uc16 character) {
 inline uint8_t GetHighestValueByte(uint8_t character) { return character; }
 
 template <typename PatternChar, typename SubjectChar>
-inline int FindFirstCharacter(base::Vector<const PatternChar> pattern,
-                              base::Vector<const SubjectChar> subject,
-                              int index) {
+inline int FindFirstCharacter(Vector<const PatternChar> pattern,
+                              Vector<const SubjectChar> subject, int index) {
   const PatternChar pattern_first_char = pattern[0];
   const int max_n = (subject.length() - pattern.length() + 1);
 
@@ -234,7 +229,7 @@ inline int FindFirstCharacter(base::Vector<const PatternChar> pattern,
 template <typename PatternChar, typename SubjectChar>
 int StringSearch<PatternChar, SubjectChar>::SingleCharSearch(
     StringSearch<PatternChar, SubjectChar>* search,
-    base::Vector<const SubjectChar> subject, int index) {
+    Vector<const SubjectChar> subject, int index) {
   DCHECK_EQ(1, search->pattern_.length());
   PatternChar pattern_first_char = search->pattern_[0];
   if (sizeof(PatternChar) > sizeof(SubjectChar)) {
@@ -267,8 +262,8 @@ inline bool CharCompare(const PatternChar* pattern, const SubjectChar* subject,
 template <typename PatternChar, typename SubjectChar>
 int StringSearch<PatternChar, SubjectChar>::LinearSearch(
     StringSearch<PatternChar, SubjectChar>* search,
-    base::Vector<const SubjectChar> subject, int index) {
-  base::Vector<const PatternChar> pattern = search->pattern_;
+    Vector<const SubjectChar> subject, int index) {
+  Vector<const PatternChar> pattern = search->pattern_;
   DCHECK_GT(pattern.length(), 1);
   int pattern_length = pattern.length();
   int i = index;
@@ -295,8 +290,8 @@ int StringSearch<PatternChar, SubjectChar>::LinearSearch(
 template <typename PatternChar, typename SubjectChar>
 int StringSearch<PatternChar, SubjectChar>::BoyerMooreSearch(
     StringSearch<PatternChar, SubjectChar>* search,
-    base::Vector<const SubjectChar> subject, int start_index) {
-  base::Vector<const PatternChar> pattern = search->pattern_;
+    Vector<const SubjectChar> subject, int start_index) {
+  Vector<const PatternChar> pattern = search->pattern_;
   int subject_length = subject.length();
   int pattern_length = pattern.length();
   // Only preprocess at most kBMMaxShift last characters of pattern.
@@ -414,8 +409,8 @@ void StringSearch<PatternChar, SubjectChar>::PopulateBoyerMooreTable() {
 template <typename PatternChar, typename SubjectChar>
 int StringSearch<PatternChar, SubjectChar>::BoyerMooreHorspoolSearch(
     StringSearch<PatternChar, SubjectChar>* search,
-    base::Vector<const SubjectChar> subject, int start_index) {
-  base::Vector<const PatternChar> pattern = search->pattern_;
+    Vector<const SubjectChar> subject, int start_index) {
+  Vector<const PatternChar> pattern = search->pattern_;
   int subject_length = subject.length();
   int pattern_length = pattern.length();
   int* char_occurrences = search->bad_char_table();
@@ -496,8 +491,8 @@ void StringSearch<PatternChar, SubjectChar>::PopulateBoyerMooreHorspoolTable() {
 template <typename PatternChar, typename SubjectChar>
 int StringSearch<PatternChar, SubjectChar>::InitialSearch(
     StringSearch<PatternChar, SubjectChar>* search,
-    base::Vector<const SubjectChar> subject, int index) {
-  base::Vector<const PatternChar> pattern = search->pattern_;
+    Vector<const SubjectChar> subject, int index) {
+  Vector<const PatternChar> pattern = search->pattern_;
   int pattern_length = pattern.length();
   // Badness is a count of how much work we have done.  When we have
   // done enough work we decide it's probably worth switching to a better
@@ -537,8 +532,8 @@ int StringSearch<PatternChar, SubjectChar>::InitialSearch(
 // object should be constructed once and the Search function then called
 // for each search.
 template <typename SubjectChar, typename PatternChar>
-int SearchString(Isolate* isolate, base::Vector<const SubjectChar> subject,
-                 base::Vector<const PatternChar> pattern, int start_index) {
+int SearchString(Isolate* isolate, Vector<const SubjectChar> subject,
+                 Vector<const PatternChar> pattern, int start_index) {
   StringSearch<PatternChar, SubjectChar> search(isolate, pattern);
   return search.Search(subject, start_index);
 }
@@ -551,8 +546,8 @@ intptr_t SearchStringRaw(Isolate* isolate, const SubjectChar* subject_ptr,
                          int subject_length, const PatternChar* pattern_ptr,
                          int pattern_length, int start_index) {
   DisallowGarbageCollection no_gc;
-  base::Vector<const SubjectChar> subject(subject_ptr, subject_length);
-  base::Vector<const PatternChar> pattern(pattern_ptr, pattern_length);
+  Vector<const SubjectChar> subject(subject_ptr, subject_length);
+  Vector<const PatternChar> pattern(pattern_ptr, pattern_length);
   return SearchString(isolate, subject, pattern, start_index);
 }
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # Copyright 2016 the V8 project authors. All rights reserved.
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
@@ -27,16 +27,7 @@ import sys
 import subprocess
 import tempfile
 import traceback
-
-# for py2/py3 compatibility
-try:
-  from urllib.parse import quote
-except ImportError:
-  from urllib2 import quote
-try:
-  from urllib.request import urlopen
-except ImportError:
-  from urllib2 import urlopen
+import urllib2
 
 from collections import OrderedDict
 
@@ -53,31 +44,12 @@ except NameError:  # Python 3
     return (x > y) - (x < y)
 
 
-def _v8_builder_fallback(builder, builder_group):
-  """Fallback to V8 builder names before splitting builder/tester.
-
-  This eases splitting builders and testers on release branches and
-  can be removed as soon as all builder have been split and all MB configs
-  exist on all branches.
-  """
-  builders = [builder]
-  if builder.endswith(' - builder'):
-    builders.append(builder[:-len(' - builder')])
-  elif builder.endswith(' builder'):
-    builders.append(builder[:-len(' builder')])
-
-  for b in builders:
-    if b in builder_group:
-      return builder_group[b]
-  return None
-
-
 def main(args):
   mbw = MetaBuildWrapper()
   return mbw.Main(args)
 
 
-class MetaBuildWrapper():
+class MetaBuildWrapper(object):
   def __init__(self):
     self.chromium_src_dir = CHROMIUM_SRC_DIR
     self.default_config = os.path.join(self.chromium_src_dir, 'infra', 'mb',
@@ -242,6 +214,8 @@ class MetaBuildWrapper():
                             ' This can be either a regular path or a '
                             'GN-style source-relative path like '
                             '//out/Default.'))
+    subp.add_argument('-s', '--swarmed', action='store_true',
+                      help='Run under swarming with the default dimensions')
     subp.add_argument('-d', '--dimension', default=[], action='append', nargs=2,
                       dest='dimensions', metavar='FOO bar',
                       help='dimension to filter on')
@@ -373,7 +347,67 @@ class MetaBuildWrapper():
     if ret:
       return ret
 
-    return self._RunLocallyIsolated(build_dir, target)
+    if self.args.swarmed:
+      return self._RunUnderSwarming(build_dir, target)
+    else:
+      return self._RunLocallyIsolated(build_dir, target)
+
+  def _RunUnderSwarming(self, build_dir, target):
+    # TODO(dpranke): Look up the information for the target in
+    # the //testing/buildbot.json file, if possible, so that we
+    # can determine the isolate target, command line, and additional
+    # swarming parameters, if possible.
+    #
+    # TODO(dpranke): Also, add support for sharding and merging results.
+    # TODO(liviurau): While this seems to not be used in V8 yet, we need to add
+    # a switch for internal try-bots, since they need to use 'chrome-swarming'
+    cas_instance = 'chromium-swarm'
+    dimensions = []
+    for k, v in self._DefaultDimensions() + self.args.dimensions:
+      dimensions += ['-d', k, v]
+
+    archive_json_path = self.ToSrcRelPath(
+        '%s/%s.archive.json' % (build_dir, target))
+    cmd = [
+        self.PathJoin(self.chromium_src_dir, 'tools', 'luci-go',
+                      self.isolate_exe),
+        'archive',
+        '-i',
+        self.ToSrcRelPath('%s/%s.isolate' % (build_dir, target)),
+        '-cas-instance', cas_instance,
+        '-dump-json',
+        archive_json_path,
+      ]
+    ret, _, _ = self.Run(cmd, force_verbose=False)
+    if ret:
+      return ret
+
+    try:
+      archive_hashes = json.loads(self.ReadFile(archive_json_path))
+    except Exception:
+      self.Print(
+          'Failed to read JSON file "%s"' % archive_json_path, file=sys.stderr)
+      return 1
+    try:
+      cas_digest = archive_hashes[target]
+    except Exception:
+      self.Print(
+          'Cannot find hash for "%s" in "%s", file content: %s' %
+          (target, archive_json_path, archive_hashes),
+          file=sys.stderr)
+      return 1
+
+    cmd = [
+        self.executable,
+        self.PathJoin('tools', 'swarming_client', 'swarming.py'),
+          'run',
+          '-digests', cas_digest,
+          '-S', 'chromium-swarm.appspot.com',
+      ] + dimensions
+    if self.args.extra_args:
+      cmd += ['--'] + self.args.extra_args
+    ret, _, _ = self.Run(cmd, force_verbose=True, buffer_output=False)
+    return ret
 
   def _RunLocallyIsolated(self, build_dir, target):
     cmd = [
@@ -562,7 +596,7 @@ class MetaBuildWrapper():
       contents = ast.literal_eval(self.ReadFile(self.args.config_file))
     except SyntaxError as e:
       raise MBErr('Failed to parse config file "%s": %s' %
-                 (self.args.config_file, e)) from e
+                 (self.args.config_file, e))
 
     self.configs = contents['configs']
     self.luci_tryservers = contents.get('luci_tryservers', {})
@@ -587,8 +621,8 @@ class MetaBuildWrapper():
               ', '.join(duplicates))
         isolate_maps.update(isolate_map)
       except SyntaxError as e:
-        raise MBErr('Failed to parse isolate map file "%s": %s' %
-                    (isolate_map, e)) from e
+        raise MBErr(
+            'Failed to parse isolate map file "%s": %s' % (isolate_map, e))
     return isolate_maps
 
   def ConfigFromArgs(self):
@@ -608,14 +642,12 @@ class MetaBuildWrapper():
       raise MBErr('Builder groups name "%s" not found in "%s"' %
                   (self.args.builder_group, self.args.config_file))
 
-    config = _v8_builder_fallback(
-        self.args.builder, self.builder_groups[self.args.builder_group])
-
-    if not config:
+    if not self.args.builder in self.builder_groups[self.args.builder_group]:
       raise MBErr(
         'Builder name "%s"  not found under builder_groups[%s] in "%s"' %
         (self.args.builder, self.args.builder_group, self.args.config_file))
 
+    config = self.builder_groups[self.args.builder_group][self.args.builder]
     if isinstance(config, dict):
       if self.args.phase is None:
         raise MBErr('Must specify a build --phase for %s on %s' %
@@ -804,6 +836,8 @@ class MetaBuildWrapper():
     self.WriteJSON(
       {
         'args': [
+          '--isolated',
+          self.ToSrcRelPath('%s/%s.isolated' % (build_dir, target)),
           '--isolate',
           self.ToSrcRelPath('%s/%s.isolate' % (build_dir, target)),
         ],
@@ -835,7 +869,7 @@ class MetaBuildWrapper():
     return err, labels
 
   def GNCmd(self, subcommand, path, *args):
-    if self.platform.startswith('linux'):
+    if self.platform == 'linux2':
       subdir, exe = 'linux64', 'gn'
     elif self.platform == 'darwin':
       subdir, exe = 'mac', 'gn'
@@ -1071,11 +1105,11 @@ class MetaBuildWrapper():
                      force_verbose=force_verbose)
     except Exception as e:
       raise MBErr('Error %s writing to the output path "%s"' %
-                 (e, path)) from e
+                 (e, path))
 
   def CheckCompile(self, builder_group, builder):
     url_template = self.args.url_template + '/{builder}/builds/_all?as_text=1'
-    url = quote(
+    url = urllib2.quote(
             url_template.format(builder_group=builder_group, builder=builder),
             safe=':/()?=')
     try:
@@ -1089,7 +1123,7 @@ class MetaBuildWrapper():
     if not successes:
       return "no successful builds"
     build = builds[str(successes[0])]
-    step_names = {step["name"] for step in build["steps"]}
+    step_names = set([step["name"] for step in build["steps"]])
     compile_indicators = set(["compile", "compile (with patch)", "analyze"])
     if compile_indicators & step_names:
       return "compiles"
@@ -1150,8 +1184,6 @@ class MetaBuildWrapper():
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            env=env)
       out, err = p.communicate()
-      out = out.decode('utf-8')
-      err = err.decode('utf-8')
     else:
       p = subprocess.Popen(cmd, shell=False, cwd=self.chromium_src_dir,
                            env=env)
@@ -1169,7 +1201,7 @@ class MetaBuildWrapper():
 
   def Fetch(self, url):
     # This function largely exists so it can be overridden for testing.
-    f = urlopen(url)
+    f = urllib2.urlopen(url)
     contents = f.read()
     f.close()
     return contents

@@ -1,4 +1,4 @@
-# Copyright 2020 The Chromium Authors
+# Copyright 2020 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Utilities for setting up and tear down WPR and TsProxy service."""
@@ -18,7 +18,7 @@ DEFAULT_DOWNLOAD_BANDWIDTH_KBPS = 72000
 DEFAULT_UPLOAD_BANDWIDTH_KBPS = 72000
 
 
-class WPRServer:
+class WPRServer(object):
   """Utils to set up a webpagereplay_go_server instance."""
 
   def __init__(self):
@@ -88,7 +88,7 @@ class WPRServer:
     return self._archive_path
 
 
-class ChromeProxySession:
+class ChromeProxySession(object):
   """Utils to help set up a Chrome Proxy."""
 
   def __init__(self, device_proxy_port=DEFAULT_DEVICE_PORT):

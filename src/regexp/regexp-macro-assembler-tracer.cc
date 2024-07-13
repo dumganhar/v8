@@ -4,8 +4,8 @@
 
 #include "src/regexp/regexp-macro-assembler-tracer.h"
 
-#include "src/objects/fixed-array-inl.h"
-#include "src/objects/string.h"
+#include "src/ast/ast.h"
+#include "src/objects/objects-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -172,11 +172,9 @@ void RegExpMacroAssemblerTracer::LoadCurrentCharacterImpl(
                                    characters, eats_at_least);
 }
 
-namespace {
-
 class PrintablePrinter {
  public:
-  explicit PrintablePrinter(base::uc16 character) : character_(character) {}
+  explicit PrintablePrinter(uc16 character) : character_(character) { }
 
   const char* operator*() {
     if (character_ >= ' ' && character_ <= '~') {
@@ -191,14 +189,12 @@ class PrintablePrinter {
   }
 
  private:
-  base::uc16 character_;
+  uc16 character_;
   char buffer_[4];
 };
 
-}  // namespace
 
-void RegExpMacroAssemblerTracer::CheckCharacterLT(base::uc16 limit,
-                                                  Label* on_less) {
+void RegExpMacroAssemblerTracer::CheckCharacterLT(uc16 limit, Label* on_less) {
   PrintablePrinter printable(limit);
   PrintF(" CheckCharacterLT(c=0x%04x%s, label[%08x]);\n",
          limit,
@@ -207,7 +203,8 @@ void RegExpMacroAssemblerTracer::CheckCharacterLT(base::uc16 limit,
   assembler_->CheckCharacterLT(limit, on_less);
 }
 
-void RegExpMacroAssemblerTracer::CheckCharacterGT(base::uc16 limit,
+
+void RegExpMacroAssemblerTracer::CheckCharacterGT(uc16 limit,
                                                   Label* on_greater) {
   PrintablePrinter printable(limit);
   PrintF(" CheckCharacterGT(c=0x%04x%s, label[%08x]);\n",
@@ -216,6 +213,7 @@ void RegExpMacroAssemblerTracer::CheckCharacterGT(base::uc16 limit,
          LabelToInt(on_greater));
   assembler_->CheckCharacterGT(limit, on_greater);
 }
+
 
 void RegExpMacroAssemblerTracer::CheckCharacter(unsigned c, Label* on_equal) {
   PrintablePrinter printable(c);
@@ -279,8 +277,12 @@ void RegExpMacroAssemblerTracer::CheckNotCharacterAfterAnd(
   assembler_->CheckNotCharacterAfterAnd(c, mask, on_not_equal);
 }
 
+
 void RegExpMacroAssemblerTracer::CheckNotCharacterAfterMinusAnd(
-    base::uc16 c, base::uc16 minus, base::uc16 mask, Label* on_not_equal) {
+    uc16 c,
+    uc16 minus,
+    uc16 mask,
+    Label* on_not_equal) {
   PrintF(" CheckNotCharacterAfterMinusAnd(c=0x%04x, minus=%04x, mask=0x%04x, "
              "label[%08x]);\n",
          c,
@@ -290,9 +292,11 @@ void RegExpMacroAssemblerTracer::CheckNotCharacterAfterMinusAnd(
   assembler_->CheckNotCharacterAfterMinusAnd(c, minus, mask, on_not_equal);
 }
 
-void RegExpMacroAssemblerTracer::CheckCharacterInRange(base::uc16 from,
-                                                       base::uc16 to,
-                                                       Label* on_not_in_range) {
+
+void RegExpMacroAssemblerTracer::CheckCharacterInRange(
+    uc16 from,
+    uc16 to,
+    Label* on_not_in_range) {
   PrintablePrinter printable_from(from);
   PrintablePrinter printable_to(to);
   PrintF(" CheckCharacterInRange(from=0x%04x%s, to=0x%04x%s, label[%08x]);\n",
@@ -304,9 +308,11 @@ void RegExpMacroAssemblerTracer::CheckCharacterInRange(base::uc16 from,
   assembler_->CheckCharacterInRange(from, to, on_not_in_range);
 }
 
-void RegExpMacroAssemblerTracer::CheckCharacterNotInRange(base::uc16 from,
-                                                          base::uc16 to,
-                                                          Label* on_in_range) {
+
+void RegExpMacroAssemblerTracer::CheckCharacterNotInRange(
+    uc16 from,
+    uc16 to,
+    Label* on_in_range) {
   PrintablePrinter printable_from(from);
   PrintablePrinter printable_to(to);
   PrintF(
@@ -319,40 +325,6 @@ void RegExpMacroAssemblerTracer::CheckCharacterNotInRange(base::uc16 from,
   assembler_->CheckCharacterNotInRange(from, to, on_in_range);
 }
 
-namespace {
-
-void PrintRangeArray(const ZoneList<CharacterRange>* ranges) {
-  for (int i = 0; i < ranges->length(); i++) {
-    base::uc16 from = ranges->at(i).from();
-    base::uc16 to = ranges->at(i).to();
-    PrintablePrinter printable_from(from);
-    PrintablePrinter printable_to(to);
-    PrintF("        [from=0x%04x%s, to=%04x%s],\n", from, *printable_from, to,
-           *printable_to);
-  }
-}
-
-}  // namespace
-
-bool RegExpMacroAssemblerTracer::CheckCharacterInRangeArray(
-    const ZoneList<CharacterRange>* ranges, Label* on_in_range) {
-  PrintF(
-      " CheckCharacterInRangeArray(\n"
-      "        label[%08x]);\n",
-      LabelToInt(on_in_range));
-  PrintRangeArray(ranges);
-  return assembler_->CheckCharacterInRangeArray(ranges, on_in_range);
-}
-
-bool RegExpMacroAssemblerTracer::CheckCharacterNotInRangeArray(
-    const ZoneList<CharacterRange>* ranges, Label* on_not_in_range) {
-  PrintF(
-      " CheckCharacterNotInRangeArray(\n"
-      "        label[%08x]);\n",
-      LabelToInt(on_not_in_range));
-  PrintRangeArray(ranges);
-  return assembler_->CheckCharacterNotInRangeArray(ranges, on_not_in_range);
-}
 
 void RegExpMacroAssemblerTracer::CheckBitInTable(
     Handle<ByteArray> table, Label* on_bit_set) {
@@ -392,14 +364,19 @@ void RegExpMacroAssemblerTracer::CheckPosition(int cp_offset,
   assembler_->CheckPosition(cp_offset, on_outside_input);
 }
 
-bool RegExpMacroAssemblerTracer::CheckSpecialClassRanges(
-    StandardCharacterSet type, Label* on_no_match) {
-  bool supported = assembler_->CheckSpecialClassRanges(type, on_no_match);
-  PrintF(" CheckSpecialClassRanges(type='%c', label[%08x]): %s;\n",
-         static_cast<char>(type), LabelToInt(on_no_match),
+
+bool RegExpMacroAssemblerTracer::CheckSpecialCharacterClass(
+    uc16 type,
+    Label* on_no_match) {
+  bool supported = assembler_->CheckSpecialCharacterClass(type,
+                                                          on_no_match);
+  PrintF(" CheckSpecialCharacterClass(type='%c', label[%08x]): %s;\n",
+         type,
+         LabelToInt(on_no_match),
          supported ? "true" : "false");
   return supported;
 }
+
 
 void RegExpMacroAssemblerTracer::IfRegisterLT(int register_index,
                                               int comparand, Label* if_lt) {

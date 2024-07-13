@@ -14,7 +14,7 @@ class Isolate;
 class Platform;
 
 // Returns a predictable v8::Platform implementation.
-// Worker threads are disabled, idle tasks are disallowed, and the time reported
+// orker threads are disabled, idle tasks are disallowed, and the time reported
 // by {MonotonicallyIncreasingTime} is deterministic.
 std::unique_ptr<Platform> MakePredictablePlatform(
     std::unique_ptr<Platform> platform);

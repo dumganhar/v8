@@ -19,10 +19,10 @@ struct MoveKey {
 
 struct MoveKeyCompare {
   bool operator()(const MoveKey& a, const MoveKey& b) const {
-    if (a.source != b.source) {
-      return a.source.Compare(b.source);
+    if (a.source.EqualsCanonicalized(b.source)) {
+      return a.destination.CompareCanonicalized(b.destination);
     }
-    return a.destination.Compare(b.destination);
+    return a.source.CompareCanonicalized(b.source);
   }
 };
 
@@ -38,7 +38,7 @@ class OperandSet {
   void InsertOp(const InstructionOperand& op) {
     set_->push_back(op);
 
-    if (kFPAliasing == AliasingKind::kCombine && op.IsFPRegister())
+    if (!kSimpleFPAliasing && op.IsFPRegister())
       fp_reps_ |= RepresentationBit(LocationOperand::cast(op).representation());
   }
 
@@ -52,7 +52,7 @@ class OperandSet {
   bool ContainsOpOrAlias(const InstructionOperand& op) const {
     if (Contains(op)) return true;
 
-    if (kFPAliasing == AliasingKind::kCombine && op.IsFPRegister()) {
+    if (!kSimpleFPAliasing && op.IsFPRegister()) {
       // Platforms where FP registers have complex aliasing need extra checks.
       const LocationOperand& loc = LocationOperand::cast(op);
       MachineRepresentation rep = loc.representation();
@@ -76,6 +76,7 @@ class OperandSet {
           break;
         default:
           UNREACHABLE();
+          break;
       }
       const RegisterConfiguration* config = RegisterConfiguration::Default();
       int base = -1;
@@ -500,35 +501,9 @@ bool IsSlot(const InstructionOperand& op) {
   return op.IsStackSlot() || op.IsFPStackSlot();
 }
 
-bool Is64BitsWide(const InstructionOperand& op) {
-  MachineRepresentation rep = LocationOperand::cast(&op)->representation();
-#if V8_COMPRESS_POINTERS
-  // We can't use {ElementSizeInBytes} because it's made for on-heap object
-  // slots and assumes that kTagged == kCompressed, whereas for the purpose
-  // here we specifically need to distinguish those cases.
-  return (rep == MachineRepresentation::kTagged ||
-          rep == MachineRepresentation::kTaggedPointer ||
-          rep == MachineRepresentation::kWord64);
-#else
-  return rep == MachineRepresentation::kWord64;
-#endif
-}
-
 bool LoadCompare(const MoveOperands* a, const MoveOperands* b) {
   if (!a->source().EqualsCanonicalized(b->source())) {
     return a->source().CompareCanonicalized(b->source());
-  }
-  // The replacements below are only safe if wider values are preferred.
-  // In particular, replacing an uncompressed pointer with a compressed
-  // pointer is disallowed.
-  if (a->destination().IsLocationOperand() &&
-      b->destination().IsLocationOperand()) {
-    if (Is64BitsWide(a->destination()) && !Is64BitsWide(b->destination())) {
-      return true;
-    }
-    if (!Is64BitsWide(a->destination()) && Is64BitsWide(b->destination())) {
-      return false;
-    }
   }
   if (IsSlot(a->destination()) && !IsSlot(b->destination())) return false;
   if (!IsSlot(a->destination()) && IsSlot(b->destination())) return true;
@@ -564,13 +539,8 @@ void MoveOptimizer::FinalizeMoves(Instruction* instr) {
       group_begin = load;
       continue;
     }
-    // Nothing to be gained from splitting here. However, due to the sorting
-    // scheme, there could be optimizable groups of loads later in the group,
-    // so bump the {group_begin} along.
-    if (IsSlot(group_begin->destination())) {
-      group_begin = load;
-      continue;
-    }
+    // Nothing to be gained from splitting here.
+    if (IsSlot(group_begin->destination())) continue;
     // Insert new move into slot 1.
     ParallelMove* slot_1 = instr->GetOrCreateParallelMove(
         static_cast<Instruction::GapPosition>(1), code_zone());

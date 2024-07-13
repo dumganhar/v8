@@ -1,1 +1,5 @@
-mixins: "//build/fuchsia/COMMON_METADATA"
+monorail {
+  component: "Fuchsia"
+}
+
+team_email: "cr-fuchsia@chromium.org"

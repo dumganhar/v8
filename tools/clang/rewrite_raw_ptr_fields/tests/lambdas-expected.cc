@@ -1,9 +1,8 @@
-// Copyright 2020 The Chromium Authors
+// Copyright 2020 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/memory/raw_ptr.h"
-#include "base/memory/raw_ref.h"
+#include "base/memory/checked_ptr.h"
 
 class MyClass {
   // Lambdas are backed by a class that may have (depending on what the lambda
@@ -21,12 +20,9 @@ class MyClass {
     // |isLambda|, rather than |hasAncestor|.
     auto lambda = [&]() -> int {
       struct NestedStruct {
-        NestedStruct(int& n) : ref_field(n) {}
-        // Expected rewrite: raw_ptr<int> ptr_field;
-        raw_ptr<int> ptr_field;
-        // Expected rewrite: const raw_ref<int> ref_field;
-        const raw_ref<int> ref_field;
-      } var(x);
+        // Expected rewrite: CheckedPtr<int> ptr_field;
+        CheckedPtr<int> ptr_field;
+      } var;
       var.ptr_field = &x;
 
       return x;

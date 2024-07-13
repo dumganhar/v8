@@ -13,7 +13,7 @@ function listener(event, exec_state, event_data, data) {
   try {
     print(event_data.sourceLineText());
     assertTrue(event_data.sourceLineText().indexOf(`Break ${break_count++}.`) > 0);
-    exec_state.prepareStep(Debug.StepAction.StepInto);
+    exec_state.prepareStep(Debug.StepAction.StepIn);
   } catch (e) {
     exception = e;
   }

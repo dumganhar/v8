@@ -7,7 +7,6 @@
 
 #include "src/compiler/graph-reducer.h"
 #include "src/compiler/js-graph.h"
-#include "src/compiler/node-origin-table.h"
 
 namespace v8 {
 namespace internal {
@@ -26,19 +25,13 @@ class JSInliner final : public AdvancedReducer {
  public:
   JSInliner(Editor* editor, Zone* local_zone, OptimizedCompilationInfo* info,
             JSGraph* jsgraph, JSHeapBroker* broker,
-            SourcePositionTable* source_positions,
-            NodeOriginTable* node_origins, const wasm::WasmModule* wasm_module)
+            SourcePositionTable* source_positions)
       : AdvancedReducer(editor),
         local_zone_(local_zone),
         info_(info),
         jsgraph_(jsgraph),
         broker_(broker),
-        source_positions_(source_positions),
-        node_origins_(node_origins),
-        wasm_module_(wasm_module) {
-    // In case WebAssembly is disabled.
-    USE(wasm_module_);
-  }
+        source_positions_(source_positions) {}
 
   const char* reducer_name() const override { return "JSInliner"; }
 
@@ -50,10 +43,6 @@ class JSInliner final : public AdvancedReducer {
 
 #if V8_ENABLE_WEBASSEMBLY
   Reduction ReduceJSWasmCall(Node* node);
-  void InlineWasmFunction(Node* call, Node* inlinee_start, Node* inlinee_end,
-                          Node* frame_state,
-                          SharedFunctionInfoRef shared_fct_info,
-                          int argument_count, Node* context);
 #endif  // V8_ENABLE_WEBASSEMBLY
 
  private:
@@ -72,17 +61,14 @@ class JSInliner final : public AdvancedReducer {
   JSGraph* const jsgraph_;
   JSHeapBroker* const broker_;
   SourcePositionTable* const source_positions_;
-  NodeOriginTable* const node_origins_;
-  const wasm::WasmModule* wasm_module_;
 
-  OptionalSharedFunctionInfoRef DetermineCallTarget(Node* node);
+  base::Optional<SharedFunctionInfoRef> DetermineCallTarget(Node* node);
   FeedbackCellRef DetermineCallContext(Node* node, Node** context_out);
 
   FrameState CreateArtificialFrameState(
       Node* node, FrameState outer_frame_state, int parameter_count,
       BytecodeOffset bailout_id, FrameStateType frame_state_type,
-      SharedFunctionInfoRef shared, Node* context = nullptr,
-      Node* callee = nullptr);
+      SharedFunctionInfoRef shared, Node* context = nullptr);
 
   Reduction InlineCall(Node* call, Node* new_target, Node* context,
                        Node* frame_state, StartNode start, Node* end,
@@ -90,12 +76,6 @@ class JSInliner final : public AdvancedReducer {
                        const NodeVector& uncaught_subcalls, int argument_count);
 
 #if V8_ENABLE_WEBASSEMBLY
-  struct WasmInlineResult {
-    bool can_inline_body = false;
-    Node* body_start = nullptr;
-    Node* body_end = nullptr;
-  };
-  WasmInlineResult TryWasmInlining(const JSWasmCallNode& call_node);
   Reduction InlineJSWasmCall(Node* call, Node* new_target, Node* context,
                              Node* frame_state, StartNode start, Node* end,
                              Node* exception_target,

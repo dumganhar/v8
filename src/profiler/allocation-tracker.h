@@ -8,11 +8,9 @@
 #include <map>
 #include <vector>
 
-#include "include/v8-persistent-handle.h"
 #include "include/v8-profiler.h"
-#include "include/v8-unwinder.h"
 #include "src/base/hashmap.h"
-#include "src/base/vector.h"
+#include "src/utils/vector.h"
 #include "src/handles/handles.h"
 
 namespace v8 {
@@ -62,7 +60,7 @@ class AllocationTraceTree {
   ~AllocationTraceTree() = default;
   AllocationTraceTree(const AllocationTraceTree&) = delete;
   AllocationTraceTree& operator=(const AllocationTraceTree&) = delete;
-  AllocationTraceNode* AddPathFromEnd(base::Vector<const unsigned> path);
+  AllocationTraceNode* AddPathFromEnd(const Vector<unsigned>& path);
   AllocationTraceNode* root() { return &root_; }
   unsigned next_node_id() { return next_node_id_++; }
   V8_EXPORT_PRIVATE void Print(AllocationTracker* tracker);

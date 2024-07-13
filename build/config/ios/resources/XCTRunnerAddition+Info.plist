@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key>
-  <string>${BUNDLE_IDENTIFIER}</string>
+  <string>com.apple.test.${EXECUTABLE_NAME}</string>
   <key>CFBundleName</key>
   <string>${PRODUCT_NAME}</string>
   <key>CFBundleExecutable</key>

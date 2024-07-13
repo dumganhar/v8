@@ -7,7 +7,9 @@
 
 #include <stdint.h>
 
-#include "include/v8-persistent-handle.h"
+#include <map>
+
+#include "include/v8.h"
 #include "src/base/atomicops.h"
 #include "src/base/lazy-instance.h"
 #include "src/base/macros.h"
@@ -26,8 +28,6 @@
 // found here: https://github.com/tc39/ecmascript_sharedmem
 
 namespace v8 {
-
-class Promise;
 
 namespace base {
 class TimeDelta;
@@ -139,7 +139,6 @@ class FutexWaitListNode {
 class FutexEmulation : public AllStatic {
  public:
   enum WaitMode { kSync = 0, kAsync };
-  enum class CallType { kIsNotWasm = 0, kIsWasm };
 
   // Pass to Wake() to wake all waiters.
   static const uint32_t kWakeAll = UINT32_MAX;
@@ -213,18 +212,17 @@ class FutexEmulation : public AllStatic {
   template <typename T>
   static Object Wait(Isolate* isolate, WaitMode mode,
                      Handle<JSArrayBuffer> array_buffer, size_t addr, T value,
-                     bool use_timeout, int64_t rel_timeout_ns,
-                     CallType call_type = CallType::kIsNotWasm);
+                     bool use_timeout, int64_t rel_timeout_ns);
 
   template <typename T>
   static Object WaitSync(Isolate* isolate, Handle<JSArrayBuffer> array_buffer,
                          size_t addr, T value, bool use_timeout,
-                         int64_t rel_timeout_ns, CallType call_type);
+                         int64_t rel_timeout_ns);
 
   template <typename T>
   static Object WaitAsync(Isolate* isolate, Handle<JSArrayBuffer> array_buffer,
                           size_t addr, T value, bool use_timeout,
-                          int64_t rel_timeout_ns, CallType call_type);
+                          int64_t rel_timeout_ns);
 
   // Resolve the Promises of the async waiters which belong to |isolate|.
   static void ResolveAsyncWaiterPromises(Isolate* isolate);

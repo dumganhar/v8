@@ -11,10 +11,10 @@
 #include "src/base/win32-headers.h"
 #endif
 
-#if V8_OS_DARWIN
-#include <dispatch/dispatch.h>
+#if V8_OS_MACOSX
+#include <dispatch/dispatch.h>  // NOLINT
 #elif V8_OS_POSIX
-#include <semaphore.h>
+#include <semaphore.h>  // NOLINT
 #endif
 
 #if V8_OS_STARBOARD
@@ -36,7 +36,7 @@ class TimeDelta;
 // count reaches zero,  threads waiting for the semaphore blocks until the
 // count becomes non-zero.
 
-class V8_BASE_EXPORT Semaphore {
+class V8_BASE_EXPORT Semaphore final {
  public:
   explicit Semaphore(int count);
   Semaphore(const Semaphore&) = delete;
@@ -55,7 +55,7 @@ class V8_BASE_EXPORT Semaphore {
   // the semaphore counter is decremented and true is returned.
   bool WaitFor(const TimeDelta& rel_time) V8_WARN_UNUSED_RESULT;
 
-#if V8_OS_DARWIN
+#if V8_OS_MACOSX
   using NativeHandle = dispatch_semaphore_t;
 #elif V8_OS_POSIX
   using NativeHandle = sem_t;
@@ -75,6 +75,7 @@ class V8_BASE_EXPORT Semaphore {
  private:
   NativeHandle native_handle_;
 };
+
 
 // POD Semaphore initialized lazily (i.e. the first time Pointer() is called).
 // Usage:

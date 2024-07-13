@@ -14,7 +14,7 @@ ArrayMapPreLoopLazyDeoptContinuation(
   const numberLength = Cast<Number>(length) otherwise unreachable;
 
   const callbackfn = Cast<Callable>(callback)
-      otherwise ThrowCalledNonCallable(callback);
+      otherwise ThrowTypeError(MessageTemplate::kCalledNonCallable, callback);
   return ArrayMapLoopContinuation(
       jsreceiver, callbackfn, thisArg, outputArray, jsreceiver, kZero,
       numberLength);
@@ -97,13 +97,13 @@ transitioning builtin ArrayMapLoopContinuation(implicit context: Context)(
 }
 
 struct Vector {
-  macro ReportSkippedElement(): void {
+  macro ReportSkippedElement() {
     this.skippedElements = true;
   }
 
   macro CreateJSArray(implicit context: Context)(validLength: Smi): JSArray {
     const length: Smi = this.fixedArray.length;
-    dcheck(validLength <= length);
+    assert(validLength <= length);
     let kind: ElementsKind = ElementsKind::PACKED_SMI_ELEMENTS;
     if (!this.onlySmis) {
       if (this.onlyNumbers) {
@@ -153,8 +153,7 @@ struct Vector {
     return a;
   }
 
-  macro StoreResult(implicit context: Context)(
-      index: Smi, result: JSAny): void {
+  macro StoreResult(implicit context: Context)(index: Smi, result: JSAny) {
     typeswitch (result) {
       case (s: Smi): {
         this.fixedArray.objects[index] = s;
@@ -269,7 +268,7 @@ ArrayMap(
 
     return ArrayMapLoopContinuation(o, callbackfn, thisArg, array, o, k, len);
   } label TypeError deferred {
-    ThrowCalledNonCallable(arguments[0]);
+    ThrowTypeError(MessageTemplate::kCalledNonCallable, arguments[0]);
   }
 }
 }

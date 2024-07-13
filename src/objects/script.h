@@ -7,11 +7,7 @@
 
 #include <memory>
 
-#include "include/v8-script.h"
 #include "src/base/export-template.h"
-#include "src/heap/factory-base.h"
-#include "src/heap/factory.h"
-#include "src/heap/local-factory.h"
 #include "src/objects/fixed-array.h"
 #include "src/objects/objects.h"
 #include "src/objects/struct.h"
@@ -24,13 +20,6 @@ namespace v8 {
 
 namespace internal {
 
-class FunctionLiteral;
-class StructBodyDescriptor;
-
-namespace wasm {
-class NativeModule;
-}  // namespace wasm
-
 #include "torque-generated/src/objects/script-tq.inc"
 
 // Script describes a script which has been added to the VM.
@@ -42,24 +31,27 @@ class Script : public TorqueGeneratedScript<Script, Struct> {
 
   NEVER_READ_ONLY_SPACE
   // Script types.
-  enum class Type {
-    kNative = 0,
-    kExtension = 1,
-    kNormal = 2,
+  enum Type {
+    TYPE_NATIVE = 0,
+    TYPE_EXTENSION = 1,
+    TYPE_NORMAL = 2,
 #if V8_ENABLE_WEBASSEMBLY
-    kWasm = 3,
+    TYPE_WASM = 3,
 #endif  // V8_ENABLE_WEBASSEMBLY
-    kInspector = 4
+    TYPE_INSPECTOR = 4
   };
 
   // Script compilation types.
-  enum class CompilationType { kHost = 0, kEval = 1 };
+  enum CompilationType { COMPILATION_TYPE_HOST = 0, COMPILATION_TYPE_EVAL = 1 };
 
   // Script compilation state.
-  enum class CompilationState { kInitial = 0, kCompiled = 1 };
+  enum CompilationState {
+    COMPILATION_STATE_INITIAL = 0,
+    COMPILATION_STATE_COMPILED = 1
+  };
 
   // [type]: the script type.
-  DECL_PRIMITIVE_ACCESSORS(type, Type)
+  DECL_INT_ACCESSORS(type)
 
   DECL_ACCESSORS(eval_from_shared_or_wrapped_arguments, Object)
 
@@ -85,8 +77,6 @@ class Script : public TorqueGeneratedScript<Script, Struct> {
   // [shared_function_infos]: weak fixed array containing all shared
   // function infos created from this script.
   DECL_ACCESSORS(shared_function_infos, WeakFixedArray)
-
-  inline int shared_function_info_count() const;
 
 #if V8_ENABLE_WEBASSEMBLY
   // [wasm_breakpoint_infos]: the list of {BreakPointInfo} objects describing
@@ -121,9 +111,6 @@ class Script : public TorqueGeneratedScript<Script, Struct> {
   inline CompilationType compilation_type();
   inline void set_compilation_type(CompilationType type);
 
-  inline bool produce_compile_hints() const;
-  inline void set_produce_compile_hints(bool produce_compile_hints);
-
   // [compilation_state]: determines whether the script has already been
   // compiled. Encoded in the 'flags' field.
   inline CompilationState compilation_state();
@@ -140,39 +127,19 @@ class Script : public TorqueGeneratedScript<Script, Struct> {
   inline v8::ScriptOriginOptions origin_options();
   inline void set_origin_options(ScriptOriginOptions origin_options);
 
-  DECL_ACCESSORS(compiled_lazy_function_positions, Object)
-
   // If script source is an external string, check that the underlying
   // resource is accessible. Otherwise, always return true.
   inline bool HasValidSource();
 
-  // If the script has a non-empty sourceURL comment.
-  inline bool HasSourceURLComment() const;
-
-  // Streaming compilation only attaches the source to the Script upon
-  // finalization. This predicate returns true, if this script may still be
-  // unfinalized.
-  inline bool IsMaybeUnfinalized(Isolate* isolate) const;
-
   Object GetNameOrSourceURL();
-  static Handle<String> GetScriptHash(Isolate* isolate, Handle<Script> script,
-                                      bool forceForInspector);
 
   // Retrieve source position from where eval was called.
   static int GetEvalPosition(Isolate* isolate, Handle<Script> script);
 
-  // Initialize line_ends array with source code positions of line ends if
-  // it doesn't exist yet.
-  static inline void InitLineEnds(Isolate* isolate, Handle<Script> script);
-  static inline void InitLineEnds(LocalIsolate* isolate, Handle<Script> script);
-
-  inline bool has_line_ends() const;
-
-  // Will initialize the line ends if required.
-  static void SetSource(Isolate* isolate, Handle<Script> script,
-                        Handle<String> source);
-
-  bool inline CanHaveLineEnds() const;
+  // Init line_ends array with source code positions of line ends.
+  template <typename LocalIsolate>
+  EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
+  static void InitLineEnds(LocalIsolate* isolate, Handle<Script> script);
 
   // Carries information about a source position.
   struct PositionInfo {
@@ -185,7 +152,7 @@ class Script : public TorqueGeneratedScript<Script, Struct> {
   };
 
   // Specifies whether to add offsets to position infos.
-  enum class OffsetFlag { kNoOffset, kWithOffset };
+  enum OffsetFlag { NO_OFFSET = 0, WITH_OFFSET = 1 };
 
   // Retrieves information about the given position, optionally with an offset.
   // Returns false on failure, and otherwise writes into the given info object
@@ -195,18 +162,9 @@ class Script : public TorqueGeneratedScript<Script, Struct> {
   // The non-static version is not allocating and safe for unhandlified
   // callsites.
   static bool GetPositionInfo(Handle<Script> script, int position,
-                              PositionInfo* info,
-                              OffsetFlag offset_flag = OffsetFlag::kWithOffset);
-  V8_EXPORT_PRIVATE bool GetPositionInfo(
-      int position, PositionInfo* info,
-      OffsetFlag offset_flag = OffsetFlag::kWithOffset) const;
-
-  // Tells whether this script should be subject to debugging, e.g. for
-  // - scope inspection
-  // - internal break points
-  // - coverage and type profile
-  // - error stack trace
-  bool IsSubjectToDebugging() const;
+                              PositionInfo* info, OffsetFlag offset_flag);
+  V8_EXPORT_PRIVATE bool GetPositionInfo(int position, PositionInfo* info,
+                                         OffsetFlag offset_flag) const;
 
   bool IsUserJavaScript() const;
 
@@ -218,11 +176,10 @@ class Script : public TorqueGeneratedScript<Script, Struct> {
   int GetLineNumber(int code_pos) const;
 
   // Look through the list of existing shared function infos to find one
-  // that matches the function literal. Return empty handle if not found.
-  template <typename IsolateT>
-  static MaybeHandle<SharedFunctionInfo> FindSharedFunctionInfo(
-      Handle<Script> script, IsolateT* isolate,
-      FunctionLiteral* function_literal);
+  // that matches the function literal.  Return empty handle if not found.
+  template <typename LocalIsolate>
+  MaybeHandle<SharedFunctionInfo> FindSharedFunctionInfo(
+      LocalIsolate* isolate, int function_literal_id);
 
   // Iterate over all script objects on the heap.
   class V8_EXPORT_PRIVATE Iterator {
@@ -240,25 +197,11 @@ class Script : public TorqueGeneratedScript<Script, Struct> {
   DECL_PRINTER(Script)
   DECL_VERIFIER(Script)
 
-  using BodyDescriptor = StructBodyDescriptor;
-
  private:
-  friend Factory;
-  friend FactoryBase<Factory>;
-  friend FactoryBase<LocalFactory>;
-
-  // Hide torque-generated accessor, use Script::SetSource instead.
-  using TorqueGeneratedScript::set_source;
-
   // Bit positions in the flags field.
   DEFINE_TORQUE_GENERATED_SCRIPT_FLAGS()
 
   TQ_OBJECT_CONSTRUCTORS(Script)
-
-  template <typename IsolateT>
-  EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
-  static void V8_PRESERVE_MOST
-      InitLineEndsInternal(IsolateT* isolate, Handle<Script> script);
 };
 
 }  // namespace internal

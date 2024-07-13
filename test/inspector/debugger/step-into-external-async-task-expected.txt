@@ -1,6 +1,4 @@
 Test for step-into remote async task
-
-Running test: test
 Setup debugger agents..
 Pause before stack trace is captured..
 Run stepInto with breakOnAsyncCall flag

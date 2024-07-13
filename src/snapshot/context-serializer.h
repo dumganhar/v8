@@ -7,6 +7,7 @@
 
 #include "src/objects/contexts.h"
 #include "src/snapshot/serializer.h"
+#include "src/utils/address-map.h"
 
 namespace v8 {
 namespace internal {
@@ -29,10 +30,9 @@ class V8_EXPORT_PRIVATE ContextSerializer : public Serializer {
   bool can_be_rehashed() const { return can_be_rehashed_; }
 
  private:
-  void SerializeObjectImpl(Handle<HeapObject> o, SlotType slot_type) override;
+  void SerializeObjectImpl(Handle<HeapObject> o) override;
   bool ShouldBeInTheStartupObjectCache(HeapObject o);
-  bool ShouldBeInTheSharedObjectCache(HeapObject o);
-  bool SerializeJSObjectWithEmbedderFields(Handle<JSObject> obj);
+  bool SerializeJSObjectWithEmbedderFields(Handle<HeapObject> obj);
   void CheckRehashability(HeapObject obj);
 
   StartupSerializer* startup_serializer_;

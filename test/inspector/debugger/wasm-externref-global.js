@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// Flags: --experimental-wasm-reftypes
+
 utils.load('test/inspector/wasm-inspector-test.js');
 
 let {session, contextGroup, Protocol} =
@@ -65,14 +67,11 @@ InspectorTest.runAsyncTestSuite([
         if (prop.name != 'globals') continue;
         let subProps = (await Protocol.Runtime.getProperties({
                             objectId: prop.value.objectId
-                          })).result.result[0];
-        let subsubProps = (await Protocol.Runtime.getProperties({
-                            objectId: subProps.value.objectId
                           })).result.result;
         let values =
-            subsubProps.map((value) => `"${value.name}": ${value.value.value}`)
+            subProps.map((value) => `"${value.name}": ${value.value.value}`)
                 .join(', ');
-        InspectorTest.log(`   ${prop.name}: {"name": ${subProps.name}, ${values}}`);
+        InspectorTest.log(`   ${prop.name}: {${values}}`);
       }
     }
   }

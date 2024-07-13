@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors
+// Copyright 2014 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,6 +22,9 @@ private:
 
     HeapHashSet<Member<HeapObject> > m_heapSet;
     HashSet<Member<HeapObject>, void, HeapAllocator> m_wtfSet;
+
+    HeapListHashSet<Member<HeapObject> > m_heapListSet;
+    ListHashSet<Member<HeapObject>, void, HeapAllocator> m_wtfListSet;
 
     HeapLinkedHashSet<Member<HeapObject> > m_heapLinkedSet;
     LinkedHashSet<Member<HeapObject>, void, HeapAllocator> m_wtfLinkedSet;

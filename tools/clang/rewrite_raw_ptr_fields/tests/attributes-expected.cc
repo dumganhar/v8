@@ -1,9 +1,8 @@
-// Copyright 2020 The Chromium Authors
+// Copyright 2020 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/memory/raw_ptr.h"
-#include "base/memory/raw_ref.h"
+#include "base/memory/checked_ptr.h"
 
 class SomeClass;
 
@@ -11,10 +10,7 @@ class SomeClass;
 #define GUARDED_BY(lock) __attribute__((guarded_by(lock)))
 
 class MyClass {
-  MyClass(SomeClass& s) : ref_field(s), lock(0) {}
-  // Expected rewrite: raw_ptr<SomeClass> ptr_field GUARDED_BY(lock);
-  raw_ptr<SomeClass> ptr_field GUARDED_BY(lock);
-  // Expected rewrite: const raw_ref<SomeClass> ref_field GUARDED_BY(lock);
-  const raw_ref<SomeClass> ref_field GUARDED_BY(lock);
+  // Expected rewrite: CheckedPtr<SomeClass> field GUARDED_BY(lock);
+  CheckedPtr<SomeClass> field GUARDED_BY(lock);
   int lock;
 };

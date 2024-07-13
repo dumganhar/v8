@@ -33,7 +33,7 @@ class TimeDelta;
 // the mutex and suspend the execution of the calling thread. When the condition
 // variable is notified, the thread is awakened, and the mutex is reacquired.
 
-class V8_BASE_EXPORT ConditionVariable {
+class V8_BASE_EXPORT ConditionVariable final {
  public:
   ConditionVariable();
   ConditionVariable(const ConditionVariable&) = delete;
@@ -69,7 +69,7 @@ class V8_BASE_EXPORT ConditionVariable {
 #if V8_OS_POSIX
   using NativeHandle = pthread_cond_t;
 #elif V8_OS_WIN
-  using NativeHandle = V8_CONDITION_VARIABLE;
+  using NativeHandle = CONDITION_VARIABLE;
 #elif V8_OS_STARBOARD
   using NativeHandle = SbConditionVariable;
 #endif

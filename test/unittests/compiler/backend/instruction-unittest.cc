@@ -61,22 +61,6 @@ TEST_F(InstructionTest, OperandInterference) {
     }
   }
 
-  // 128 bit slots can interfere with other slots at a different index.
-  for (int i = 0; i < 10; ++i) {
-    for (int j = 0; j < 128 / kBitsPerByte / kSystemPointerSize; ++j) {
-      EXPECT_TRUE(Interfere(LocationOperand::STACK_SLOT,
-                            MachineRepresentation::kSimd128, i, kWord, i - j));
-      EXPECT_TRUE(Interfere(LocationOperand::STACK_SLOT,
-                            MachineRepresentation::kSimd128, i, kFloat, i - j));
-      EXPECT_TRUE(Interfere(LocationOperand::STACK_SLOT,
-                            MachineRepresentation::kSimd128, i, kDouble,
-                            i - j));
-      EXPECT_TRUE(Interfere(LocationOperand::STACK_SLOT,
-                            MachineRepresentation::kSimd128, i,
-                            MachineRepresentation::kSimd128, i - j));
-    }
-  }
-
   // All FP registers interfere with themselves.
   for (int i = 0; i < RegisterConfiguration::kMaxFPRegisters; ++i) {
     EXPECT_TRUE(Interfere(LocationOperand::REGISTER, kFloat, i, kFloat, i));
@@ -85,7 +69,7 @@ TEST_F(InstructionTest, OperandInterference) {
     EXPECT_TRUE(Interfere(LocationOperand::STACK_SLOT, kDouble, i, kDouble, i));
   }
 
-  if (kFPAliasing != AliasingKind::kCombine) {
+  if (kSimpleFPAliasing) {
     // Simple FP aliasing: interfering registers of different reps have the same
     // index.
     for (int i = 0; i < RegisterConfiguration::kMaxFPRegisters; ++i) {
@@ -162,7 +146,7 @@ TEST_F(InstructionTest, PrepareInsertAfter) {
     CHECK(Contains(&to_eliminate, d2, d0));
   }
 
-  if (kFPAliasing == AliasingKind::kCombine) {
+  if (!kSimpleFPAliasing) {
     // Moves inserted after should cause all interfering moves to be eliminated.
     auto s0 = AllocatedOperand(LocationOperand::REGISTER,
                                MachineRepresentation::kFloat32, 0);

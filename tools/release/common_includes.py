@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # Copyright 2013 the V8 project authors. All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
@@ -26,9 +26,12 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# for py2/py3 compatibility
+from __future__ import print_function
+
 import argparse
 import datetime
-from distutils.version import LooseVersion
+import httplib
 import glob
 import imp
 import json
@@ -40,13 +43,10 @@ import sys
 import textwrap
 import time
 import urllib
+import urllib2
 
 from git_recipes import GitRecipesMixin
 from git_recipes import GitFailedException
-
-import http.client as httplib
-import urllib.request as urllib2
-
 
 DAY_IN_SECONDS = 24 * 60 * 60
 PUSH_MSG_GIT_RE = re.compile(r".* \(based on (?P<git_rev>[a-fA-F0-9]+)\)$")
@@ -92,6 +92,16 @@ def MSub(rexp, replacement, text):
   return re.sub(rexp, replacement, text, flags=re.MULTILINE)
 
 
+def SortingKey(version):
+  """Key for sorting version number strings: '3.11' > '3.2.1.1'"""
+  version_keys = map(int, version.split("."))
+  # Fill up to full version numbers to normalize comparison.
+  while len(version_keys) < 4:  # pragma: no cover
+    version_keys.append(0)
+  # Fill digits.
+  return ".".join(map("{0:04d}".format, version_keys))
+
+
 # Some commands don't like the pipe, e.g. calling vi from within the script or
 # from subscripts like git cl upload.
 def Command(cmd, args="", prefix="", pipe=True, cwd=None):
@@ -103,7 +113,7 @@ def Command(cmd, args="", prefix="", pipe=True, cwd=None):
   sys.stdout.flush()
   try:
     if pipe:
-      return subprocess.check_output(cmd_line, shell=True, cwd=cwd).decode('utf-8')
+      return subprocess.check_output(cmd_line, shell=True, cwd=cwd)
     else:
       return subprocess.check_call(cmd_line, shell=True, cwd=cwd)
   except subprocess.CalledProcessError:
@@ -114,15 +124,15 @@ def Command(cmd, args="", prefix="", pipe=True, cwd=None):
 
 
 def SanitizeVersionTag(tag):
-  version_without_prefix = re.compile(r"^\d+\.\d+\.\d+(?:\.\d+)?$")
-  version_with_prefix = re.compile(r"^tags\/\d+\.\d+\.\d+(?:\.\d+)?$")
+    version_without_prefix = re.compile(r"^\d+\.\d+\.\d+(?:\.\d+)?$")
+    version_with_prefix = re.compile(r"^tags\/\d+\.\d+\.\d+(?:\.\d+)?$")
 
-  if version_without_prefix.match(tag):
-    return tag
-  elif version_with_prefix.match(tag):
-    return tag[len("tags/"):]
-  else:
-    return None
+    if version_without_prefix.match(tag):
+      return tag
+    elif version_with_prefix.match(tag):
+        return tag[len("tags/"):]
+    else:
+      return None
 
 
 def NormalizeVersionTags(version_tags):
@@ -146,7 +156,6 @@ class SideEffectHandler(object):  # pragma: no cover
     return Command(cmd, args, prefix, pipe, cwd=cwd)
 
   def ReadLine(self):
-    sys.stdout.flush()
     return sys.stdin.readline().strip()
 
   def ReadURL(self, url, params=None):
@@ -205,13 +214,13 @@ class VCInterface(object):
   def GetBranches(self):
     raise NotImplementedError()
 
-  def MainBranch(self):
+  def MasterBranch(self):
     raise NotImplementedError()
 
   def CandidateBranch(self):
     raise NotImplementedError()
 
-  def RemoteMainBranch(self):
+  def RemoteMasterBranch(self):
     raise NotImplementedError()
 
   def RemoteCandidateBranch(self):
@@ -239,7 +248,7 @@ class GitInterface(VCInterface):
     self.step.Git("fetch")
 
   def GetTags(self):
-    return self.step.Git("tag").strip().splitlines()
+     return self.step.Git("tag").strip().splitlines()
 
   def GetBranches(self):
     # Get relevant remote branches, e.g. "branch-heads/3.25".
@@ -247,16 +256,16 @@ class GitInterface(VCInterface):
         lambda s: re.match(r"^branch\-heads/\d+\.\d+$", s),
         self.step.GitRemotes())
     # Remove 'branch-heads/' prefix.
-    return [b[13:] for b in branches]
+    return map(lambda s: s[13:], branches)
 
-  def MainBranch(self):
-    return "main"
+  def MasterBranch(self):
+    return "master"
 
   def CandidateBranch(self):
     return "candidates"
 
-  def RemoteMainBranch(self):
-    return "origin/main"
+  def RemoteMasterBranch(self):
+    return "origin/master"
 
   def RemoteCandidateBranch(self):
     return "origin/candidates"
@@ -266,7 +275,7 @@ class GitInterface(VCInterface):
     # want.
     if name.startswith('refs/'):
       return name
-    if name in ["candidates", "main"]:
+    if name in ["candidates", "master"]:
       return "refs/remotes/origin/%s" % name
     try:
       # Check if branch is in heads.
@@ -465,8 +474,8 @@ class Step(GitRecipesMixin):
     if not self.GitIsWorkdirClean():  # pragma: no cover
       self.Die("Workspace is not clean. Please commit or undo your changes.")
 
-    # Checkout main in case the script was left on a work branch.
-    self.GitCheckout('origin/main')
+    # Checkout master in case the script was left on a work branch.
+    self.GitCheckout('origin/master')
 
     # Fetch unfetched revisions.
     self.vc.Fetch()
@@ -476,7 +485,7 @@ class Step(GitRecipesMixin):
     self.DeleteBranch(self._config["BRANCHNAME"])
 
   def CommonCleanup(self):
-    self.GitCheckout('origin/main')
+    self.GitCheckout('origin/master')
     self.GitDeleteBranch(self._config["BRANCHNAME"])
 
     # Clean up all temporary files.
@@ -533,13 +542,22 @@ class Step(GitRecipesMixin):
       self.WaitForResolvingConflicts(patch_file)
 
   def GetVersionTag(self, revision):
-    tags = self.Git(f"tag --points-at {revision}").strip().split('\n')
-    for tag in tags:
-      sanitized_tag = SanitizeVersionTag(tag)
-      if sanitized_tag:
-        return sanitized_tag
+    tag = self.Git("describe --tags %s" % revision).strip()
+    return SanitizeVersionTag(tag)
 
-    return None
+  def GetRecentReleases(self, max_age):
+    # Make sure tags are fetched.
+    self.Git("fetch origin +refs/tags/*:refs/tags/*")
+
+    # Current timestamp.
+    time_now = int(self._side_effect_handler.GetUTCStamp())
+
+    # List every tag from a given period.
+    revisions = self.Git("rev-list --max-age=%d --tags" %
+                         int(time_now - max_age)).strip()
+
+    # Filter out revisions who's tag is off by one or more commits.
+    return filter(lambda r: self.GetVersionTag(r), revisions.splitlines())
 
   def GetLatestVersion(self):
     # Use cached version if available.
@@ -553,7 +571,7 @@ class Step(GitRecipesMixin):
     only_version_tags = NormalizeVersionTags(all_tags)
 
     version = sorted(only_version_tags,
-                     key=LooseVersion, reverse=True)[0]
+                     key=SortingKey, reverse=True)[0]
     self["latest_version"] = version
     return version
 
@@ -587,13 +605,13 @@ class Step(GitRecipesMixin):
     if match:
       # Legacy: In the old process there's one level of indirection. The
       # version is on the candidates branch and points to the real release
-      # base on main through the commit message.
+      # base on master through the commit message.
       return match.group("git_rev")
     match = PUSH_MSG_NEW_RE.match(title)
     if match:
-      # This is a new-style v8 version branched from main. The commit
+      # This is a new-style v8 version branched from master. The commit
       # "latest_hash" is the version-file change. Its parent is the release
-      # base on main.
+      # base on master.
       return self.GitLog(n=1, format="%H", git_hash="%s^" % latest_hash)
 
     self.Die("Unknown latest release: %s" % latest_hash)
@@ -671,27 +689,23 @@ class UploadStep(Step):
 
     self.GitUpload(reviewer, self._options.force_upload,
                    bypass_hooks=self._options.bypass_upload_hooks,
-                   tbr_reviewer=tbr_reviewer)
+                   cc=self._options.cc, tbr_reviewer=tbr_reviewer)
 
 
 def MakeStep(step_class=Step, number=0, state=None, config=None,
              options=None, side_effect_handler=DEFAULT_SIDE_EFFECT_HANDLER):
-  # Allow to pass in empty dictionaries.
-  state = state if state is not None else {}
-  config = config if config is not None else {}
+    # Allow to pass in empty dictionaries.
+    state = state if state is not None else {}
+    config = config if config is not None else {}
 
-  try:
-    message = step_class.MESSAGE
-  except AttributeError:
-    message = step_class.__name__
+    try:
+      message = step_class.MESSAGE
+    except AttributeError:
+      message = step_class.__name__
 
-  return step_class(
-      message,
-      number=number,
-      config=config,
-      state=state,
-      options=options,
-      handler=side_effect_handler)
+    return step_class(message, number=number, config=config,
+                      state=state, options=options,
+                      handler=side_effect_handler)
 
 
 class ScriptsBase(object):

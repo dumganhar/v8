@@ -5,7 +5,7 @@
 #ifndef V8_PROFILER_TICK_SAMPLE_H_
 #define V8_PROFILER_TICK_SAMPLE_H_
 
-#include "include/v8-unwinder.h"
+#include "include/v8.h"
 #include "src/base/platform/time.h"
 #include "src/common/globals.h"
 
@@ -21,7 +21,13 @@ struct V8_EXPORT TickSample {
   // samples don't care.
   enum RecordCEntryFrame { kIncludeCEntryFrame, kSkipCEntryFrame };
 
-  TickSample() {}
+  TickSample()
+      : state(OTHER),
+        pc(nullptr),
+        external_callback_entry(nullptr),
+        frames_count(0),
+        has_external_callback(false),
+        update_stats(true) {}
 
   /**
    * Initialize a tick sample from the isolate.
@@ -75,30 +81,21 @@ struct V8_EXPORT TickSample {
 
   void print() const;
 
-  static constexpr unsigned kMaxFramesCountLog2 = 8;
-  static constexpr unsigned kMaxFramesCount = (1 << kMaxFramesCountLog2) - 1;
-
-  void* pc = nullptr;  // Instruction pointer.
+  StateTag state;  // The state of the VM.
+  void* pc;        // Instruction pointer.
   union {
     void* tos;  // Top stack value (*sp).
-    void* external_callback_entry = nullptr;
+    void* external_callback_entry;
   };
-  void* context = nullptr;          // Address of the incumbent native context.
-  void* embedder_context = nullptr;  // Address of the embedder native context.
+  static const unsigned kMaxFramesCountLog2 = 8;
+  static const unsigned kMaxFramesCount = (1 << kMaxFramesCountLog2) - 1;
+  void* stack[kMaxFramesCount];     // Call stack.
+  unsigned frames_count : kMaxFramesCountLog2;  // Number of captured frames.
+  bool has_external_callback : 1;
+  bool update_stats : 1;  // Whether the sample should update aggregated stats.
 
   base::TimeTicks timestamp;
-  base::TimeDelta sampling_interval_;  // Sampling interval used to capture.
-
-  StateTag state = OTHER;  // The state of the VM.
-  EmbedderStateTag embedder_state = EmbedderStateTag::EMPTY;
-
-  uint16_t frames_count = 0;  // Number of captured frames.
-  static_assert(sizeof(frames_count) * kBitsPerByte >= kMaxFramesCountLog2);
-  bool has_external_callback = false;
-  // Whether the sample should update aggregated stats.
-  bool update_stats_ = true;
-
-  void* stack[kMaxFramesCount];  // Call stack.
+  base::TimeDelta sampling_interval;  // Sampling interval used to capture.
 };
 
 }  // namespace internal

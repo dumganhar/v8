@@ -19,9 +19,8 @@ transitioning javascript builtin AggregateErrorConstructor(
   //   [[Writable]]: *true*, [[Enumerable]]: *false*, [[Configurable]]: *true*
   //   c. Perform ! DefinePropertyOrThrow(_O_, *"message"*, _msgDesc_).
   const message: JSAny = arguments[1];
-  const options: JSAny = arguments[2];
-  const obj: JSObject = ConstructAggregateErrorHelper(
-      context, target, newTarget, message, options);
+  const obj: JSObject =
+      ConstructAggregateErrorHelper(context, target, newTarget, message);
 
   // 4. Let errorsList be ? IterableToList(errors).
   const errors: JSAny = arguments[0];
@@ -39,7 +38,7 @@ transitioning javascript builtin AggregateErrorConstructor(
 }
 
 extern transitioning runtime ConstructAggregateErrorHelper(
-    Context, JSFunction, JSAny, Object, Object): JSObject;
+    Context, JSFunction, JSAny, Object): JSObject;
 
 extern transitioning runtime ConstructInternalAggregateErrorHelper(
     Context, Object): JSObject;

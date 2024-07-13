@@ -9,6 +9,7 @@
 #include "src/base/bounded-page-allocator.h"
 #include "src/base/logging.h"
 #include "src/base/macros.h"
+#include "src/base/platform/wrappers.h"
 #include "src/utils/allocation.h"
 #include "src/zone/zone-compression.h"
 #include "src/zone/zone-segment.h"
@@ -53,9 +54,7 @@ std::unique_ptr<v8::base::BoundedPageAllocator> CreateBoundedAllocator(
 
   auto allocator = std::make_unique<v8::base::BoundedPageAllocator>(
       platform_allocator, reservation_start, ZoneCompression::kReservationSize,
-      kZonePageSize,
-      base::PageInitializationMode::kAllocatedPagesCanBeUninitialized,
-      base::PageFreeingMode::kMakeInaccessible);
+      kZonePageSize);
 
   // Exclude first page from allocation to ensure that accesses through
   // decompressed null pointer will seg-fault.
@@ -66,11 +65,7 @@ std::unique_ptr<v8::base::BoundedPageAllocator> CreateBoundedAllocator(
 
 }  // namespace
 
-AccountingAllocator::AccountingAllocator()
-    : zone_backing_malloc_(
-          V8::GetCurrentPlatform()->GetZoneBackingAllocator()->GetMallocFn()),
-      zone_backing_free_(
-          V8::GetCurrentPlatform()->GetZoneBackingAllocator()->GetFreeFn()) {
+AccountingAllocator::AccountingAllocator() {
   if (COMPRESS_ZONES_BOOL) {
     v8::PageAllocator* platform_page_allocator = GetPlatformPageAllocator();
     VirtualMemory memory = ReserveAddressSpace(platform_page_allocator);
@@ -91,9 +86,7 @@ Segment* AccountingAllocator::AllocateSegment(size_t bytes,
                            kZonePageSize, PageAllocator::kReadWrite);
 
   } else {
-    auto result = AllocAtLeastWithRetry(bytes);
-    memory = result.ptr;
-    bytes = result.count;
+    memory = AllocWithRetry(bytes);
   }
   if (memory == nullptr) return nullptr;
 
@@ -115,9 +108,9 @@ void AccountingAllocator::ReturnSegment(Segment* segment,
   current_memory_usage_.fetch_sub(segment_size, std::memory_order_relaxed);
   segment->ZapHeader();
   if (COMPRESS_ZONES_BOOL && supports_compression) {
-    FreePages(bounded_page_allocator_.get(), segment, segment_size);
+    CHECK(FreePages(bounded_page_allocator_.get(), segment, segment_size));
   } else {
-    free(segment);
+    base::Free(segment);
   }
 }
 

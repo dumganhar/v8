@@ -93,12 +93,14 @@ void HeapGrowing::HeapGrowingImpl::AllocatedObjectSizeIncreased(size_t) {
   size_t allocated_object_size = stats_collector_->allocated_object_size();
   if (allocated_object_size > limit_for_atomic_gc_) {
     collector_->CollectGarbage(
-        {CollectionType::kMajor, StackState::kMayContainHeapPointers,
-         GCConfig::MarkingType::kAtomic, sweeping_support_});
+        {GarbageCollector::Config::CollectionType::kMajor,
+         GarbageCollector::Config::StackState::kMayContainHeapPointers,
+         GarbageCollector::Config::MarkingType::kAtomic, sweeping_support_});
   } else if (allocated_object_size > limit_for_incremental_gc_) {
     if (marking_support_ == cppgc::Heap::MarkingType::kAtomic) return;
     collector_->StartIncrementalGarbageCollection(
-        {CollectionType::kMajor, StackState::kMayContainHeapPointers,
+        {GarbageCollector::Config::CollectionType::kMajor,
+         GarbageCollector::Config::StackState::kMayContainHeapPointers,
          marking_support_, sweeping_support_});
   }
 }

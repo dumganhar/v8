@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-utils.load('test/inspector/private-class-member-inspector-test.js');
-
 let {session, contextGroup, Protocol} = InspectorTest.start(
     'Test empty inner classes with private instance methods in the outer class');
 
@@ -34,7 +32,10 @@ InspectorTest.runAsyncTestSuite([async function testScopesPaused() {
       await Protocol.Debugger.oncePaused();  // inside fn()
   let frame = callFrames[0];
 
-  await printPrivateMembers(Protocol, InspectorTest, { objectId: frame.this.objectId });
+  let {result} =
+      await Protocol.Runtime.getProperties({objectId: frame.this.objectId});
+
+  InspectorTest.logObject(result.privateProperties);
 
   Protocol.Debugger.resume();
   Protocol.Debugger.disable();

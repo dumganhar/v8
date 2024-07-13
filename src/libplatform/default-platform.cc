@@ -86,6 +86,13 @@ void RunIdleTasks(v8::Platform* platform, v8::Isolate* isolate,
                                                         idle_time_in_seconds);
 }
 
+void SetTracingController(
+    v8::Platform* platform,
+    v8::platform::tracing::TracingController* tracing_controller) {
+  static_cast<DefaultPlatform*>(platform)->SetTracingController(
+      std::unique_ptr<v8::TracingController>(tracing_controller));
+}
+
 void NotifyIsolateShutdown(v8::Platform* platform, Isolate* isolate) {
   static_cast<DefaultPlatform*>(platform)->NotifyIsolateShutdown(isolate);
 }
@@ -120,7 +127,7 @@ DefaultPlatform::~DefaultPlatform() {
 namespace {
 
 double DefaultTimeFunction() {
-  return base::TimeTicks::Now().ToInternalValue() /
+  return base::TimeTicks::HighResolutionNow().ToInternalValue() /
          static_cast<double>(base::Time::kMicrosecondsPerSecond);
 }
 
@@ -226,7 +233,7 @@ bool DefaultPlatform::IdleTasksEnabled(Isolate* isolate) {
   return idle_task_support_ == IdleTaskSupport::kEnabled;
 }
 
-std::unique_ptr<JobHandle> DefaultPlatform::CreateJob(
+std::unique_ptr<JobHandle> DefaultPlatform::PostJob(
     TaskPriority priority, std::unique_ptr<JobTask> job_task) {
   size_t num_worker_threads = NumberOfWorkerThreads();
   if (priority == TaskPriority::kBestEffort && num_worker_threads > 2) {
@@ -265,24 +272,13 @@ v8::PageAllocator* DefaultPlatform::GetPageAllocator() {
   return page_allocator_.get();
 }
 
-v8::ThreadIsolatedAllocator* DefaultPlatform::GetThreadIsolatedAllocator() {
-  if (thread_isolated_allocator_.Valid()) {
-    return &thread_isolated_allocator_;
-  }
-  return nullptr;
-}
-
 void DefaultPlatform::NotifyIsolateShutdown(Isolate* isolate) {
-  std::shared_ptr<DefaultForegroundTaskRunner> taskrunner;
-  {
-    base::MutexGuard guard(&lock_);
-    auto it = foreground_task_runner_map_.find(isolate);
-    if (it != foreground_task_runner_map_.end()) {
-      taskrunner = it->second;
-      foreground_task_runner_map_.erase(it);
-    }
+  base::MutexGuard guard(&lock_);
+  auto it = foreground_task_runner_map_.find(isolate);
+  if (it != foreground_task_runner_map_.end()) {
+    it->second->Terminate();
+    foreground_task_runner_map_.erase(it);
   }
-  taskrunner->Terminate();
 }
 
 }  // namespace platform

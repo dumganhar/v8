@@ -5,6 +5,9 @@
 #include "src/debug/debug-scope-iterator.h"
 
 #include "src/api/api-inl.h"
+#include "src/debug/debug.h"
+#include "src/debug/liveedit.h"
+#include "src/execution/frames-inl.h"
 #include "src/execution/isolate.h"
 #include "src/objects/js-generator-inl.h"
 
@@ -12,7 +15,8 @@ namespace v8 {
 
 std::unique_ptr<debug::ScopeIterator> debug::ScopeIterator::CreateForFunction(
     v8::Isolate* v8_isolate, v8::Local<v8::Function> v8_func) {
-  internal::Handle<internal::JSReceiver> receiver = Utils::OpenHandle(*v8_func);
+  internal::Handle<internal::JSReceiver> receiver =
+      internal::Handle<internal::JSReceiver>::cast(Utils::OpenHandle(*v8_func));
 
   // Besides JSFunction and JSBoundFunction, {v8_func} could be an
   // ObjectTemplate with a CallAsFunctionHandler. We only handle plain
@@ -22,7 +26,9 @@ std::unique_ptr<debug::ScopeIterator> debug::ScopeIterator::CreateForFunction(
   internal::Handle<internal::JSFunction> function =
       internal::Handle<internal::JSFunction>::cast(receiver);
 
-  CHECK(function->has_context());
+  // Blink has function objects with callable map, JS_SPECIAL_API_OBJECT_TYPE
+  // but without context on heap.
+  if (!function->has_context()) return nullptr;
   return std::unique_ptr<debug::ScopeIterator>(new internal::DebugScopeIterator(
       reinterpret_cast<internal::Isolate*>(v8_isolate), function));
 }

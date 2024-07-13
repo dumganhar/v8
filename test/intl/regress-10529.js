@@ -8,13 +8,13 @@ let dateOK = new Date ("0001-12-31T23:52:58.000Z");
 let dateKO = new Date ("0000-12-30T23:52:58.000Z");
 let dateDisplay = new Intl.DateTimeFormat (
     'hi-u-ca-indian',
-    { timeZone : 'UTC', era: 'long', year : 'numeric', month :'long',
+    { timeZone : 'UTC', year : 'numeric', month :'long',
       day : 'numeric', weekday : 'long' });
 assertEquals("Mon, 31 Dec 0001 23:52:58 GMT",
     dateOK.toUTCString(), "dateOK.toUTCString()");
 assertEquals("Sat, 30 Dec 0000 23:52:58 GMT",
     dateKO.toUTCString(), "dateKO.toUTCString()");
-assertEquals("सोमवार, 10 पौष -77 शक",
+assertEquals("शक -77 पौष 10, सोमवार",
     dateDisplay.format(dateOK), "dateDisplay.format(dateOK)");
-assertEquals("शनिवार, 9 पौष -78 शक",
+assertEquals("शक -78 पौष 9, शनिवार",
     dateDisplay.format(dateKO), "dateDisplay.format(dateKO)");

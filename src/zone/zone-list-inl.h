@@ -7,6 +7,7 @@
 
 #include "src/base/macros.h"
 #include "src/base/platform/platform.h"
+#include "src/base/platform/wrappers.h"
 #include "src/utils/memcopy.h"
 #include "src/zone/zone-list.h"
 
@@ -28,14 +29,14 @@ void ZoneList<T>::AddAll(const ZoneList<T>& other, Zone* zone) {
 }
 
 template <typename T>
-void ZoneList<T>::AddAll(base::Vector<const T> other, Zone* zone) {
+void ZoneList<T>::AddAll(const Vector<const T>& other, Zone* zone) {
   int length = other.length();
   if (length == 0) return;
 
   int result_length = length_ + length;
   if (capacity_ < result_length) Resize(result_length, zone);
   if (std::is_trivially_copyable<T>::value) {
-    memcpy(&data_[length_], other.begin(), sizeof(T) * length);
+    base::Memcpy(&data_[length_], other.begin(), sizeof(T) * length);
   } else {
     std::copy(other.begin(), other.end(), &data_[length_]);
   }
@@ -79,10 +80,10 @@ void ZoneList<T>::Resize(int new_capacity, Zone* zone) {
 }
 
 template <typename T>
-base::Vector<T> ZoneList<T>::AddBlock(T value, int count, Zone* zone) {
+Vector<T> ZoneList<T>::AddBlock(T value, int count, Zone* zone) {
   int start = length_;
   for (int i = 0; i < count; i++) Add(value, zone);
-  return base::Vector<T>(&data_[start], count);
+  return Vector<T>(&data_[start], count);
 }
 
 template <typename T>

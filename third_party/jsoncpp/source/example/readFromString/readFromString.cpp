@@ -1,6 +1,5 @@
 #include "json/json.h"
 #include <iostream>
-#include <memory>
 /**
  * \brief Parse a raw string into Value object using the CharReaderBuilder
  * class, or the legacy Reader class.

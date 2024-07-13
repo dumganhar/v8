@@ -37,7 +37,6 @@ function instantiate(bytes, imports) {
 
 InspectorTest.runAsyncTestSuite([
   async function testPauseAndStep() {
-    await Protocol.Runtime.enable();
     await Protocol.Debugger.enable();
     InspectorTest.log('Instantiate');
     const instantiate_code = `var instance = (${instantiate})(${JSON.stringify(module_bytes)}, {'imports': {'pause': () => { %ScheduleBreak() } }});`;

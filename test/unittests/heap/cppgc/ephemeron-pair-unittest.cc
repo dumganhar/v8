@@ -49,8 +49,11 @@ class EphemeronHolderTraceEphemeron
 };
 
 class EphemeronPairTest : public testing::TestWithHeap {
-  static constexpr MarkingConfig IncrementalPreciseMarkingConfig = {
-      CollectionType::kMajor, StackState::kNoHeapPointers,
+  using MarkingConfig = Marker::MarkingConfig;
+
+  static constexpr Marker::MarkingConfig IncrementalPreciseMarkingConfig = {
+      MarkingConfig::CollectionType::kMajor,
+      MarkingConfig::StackState::kNoHeapPointers,
       MarkingConfig::MarkingType::kIncremental};
 
  public:
@@ -60,17 +63,15 @@ class EphemeronPairTest : public testing::TestWithHeap {
   }
 
   void FinishMarking() {
-    marker_->FinishMarking(StackState::kNoHeapPointers);
+    marker_->FinishMarking(MarkingConfig::StackState::kNoHeapPointers);
     // Pretend do finish sweeping as StatsCollector verifies that Notify*
     // methods are called in the right order.
-    Heap::From(GetHeap())->stats_collector()->NotifySweepingCompleted(
-        GCConfig::SweepingType::kIncremental);
+    Heap::From(GetHeap())->stats_collector()->NotifySweepingCompleted();
   }
 
   void InitializeMarker(HeapBase& heap, cppgc::Platform* platform) {
-    marker_ = std::make_unique<Marker>(heap, platform,
-                                       IncrementalPreciseMarkingConfig);
-    marker_->StartMarking();
+    marker_ = MarkerFactory::CreateAndStartMarking<Marker>(
+        heap, platform, IncrementalPreciseMarkingConfig);
   }
 
   Marker* marker() const { return marker_.get(); }
@@ -78,14 +79,15 @@ class EphemeronPairTest : public testing::TestWithHeap {
  private:
   bool SingleStep() {
     return marker_->IncrementalMarkingStepForTesting(
-        StackState::kNoHeapPointers);
+        MarkingConfig::StackState::kNoHeapPointers);
   }
 
   std::unique_ptr<Marker> marker_;
 };
 
 // static
-constexpr MarkingConfig EphemeronPairTest::IncrementalPreciseMarkingConfig;
+constexpr Marker::MarkingConfig
+    EphemeronPairTest::IncrementalPreciseMarkingConfig;
 
 }  // namespace
 
@@ -94,10 +96,10 @@ TEST_F(EphemeronPairTest, ValueMarkedWhenKeyIsMarked) {
   GCed* value = MakeGarbageCollected<GCed>(GetAllocationHandle());
   Persistent<EphemeronHolder> holder =
       MakeGarbageCollected<EphemeronHolder>(GetAllocationHandle(), key, value);
-  HeapObjectHeader::FromObject(key).TryMarkAtomic();
+  HeapObjectHeader::FromPayload(key).TryMarkAtomic();
   InitializeMarker(*Heap::From(GetHeap()), GetPlatformHandle().get());
   FinishMarking();
-  EXPECT_TRUE(HeapObjectHeader::FromObject(value).IsMarked());
+  EXPECT_TRUE(HeapObjectHeader::FromPayload(value).IsMarked());
 }
 
 TEST_F(EphemeronPairTest, ValueNotMarkedWhenKeyIsNotMarked) {
@@ -107,8 +109,8 @@ TEST_F(EphemeronPairTest, ValueNotMarkedWhenKeyIsNotMarked) {
       MakeGarbageCollected<EphemeronHolder>(GetAllocationHandle(), key, value);
   InitializeMarker(*Heap::From(GetHeap()), GetPlatformHandle().get());
   FinishMarking();
-  EXPECT_FALSE(HeapObjectHeader::FromObject(key).IsMarked());
-  EXPECT_FALSE(HeapObjectHeader::FromObject(value).IsMarked());
+  EXPECT_FALSE(HeapObjectHeader::FromPayload(key).IsMarked());
+  EXPECT_FALSE(HeapObjectHeader::FromPayload(value).IsMarked());
 }
 
 TEST_F(EphemeronPairTest, ValueNotMarkedBeforeKey) {
@@ -118,10 +120,10 @@ TEST_F(EphemeronPairTest, ValueNotMarkedBeforeKey) {
       MakeGarbageCollected<EphemeronHolder>(GetAllocationHandle(), key, value);
   InitializeMarker(*Heap::From(GetHeap()), GetPlatformHandle().get());
   FinishSteps();
-  EXPECT_FALSE(HeapObjectHeader::FromObject(value).IsMarked());
-  HeapObjectHeader::FromObject(key).TryMarkAtomic();
+  EXPECT_FALSE(HeapObjectHeader::FromPayload(value).IsMarked());
+  HeapObjectHeader::FromPayload(key).TryMarkAtomic();
   FinishMarking();
-  EXPECT_TRUE(HeapObjectHeader::FromObject(value).IsMarked());
+  EXPECT_TRUE(HeapObjectHeader::FromPayload(value).IsMarked());
 }
 
 TEST_F(EphemeronPairTest, TraceEphemeronDispatch) {
@@ -130,10 +132,10 @@ TEST_F(EphemeronPairTest, TraceEphemeronDispatch) {
   Persistent<EphemeronHolderTraceEphemeron> holder =
       MakeGarbageCollected<EphemeronHolderTraceEphemeron>(GetAllocationHandle(),
                                                           key, value);
-  HeapObjectHeader::FromObject(key).TryMarkAtomic();
+  HeapObjectHeader::FromPayload(key).TryMarkAtomic();
   InitializeMarker(*Heap::From(GetHeap()), GetPlatformHandle().get());
   FinishMarking();
-  EXPECT_TRUE(HeapObjectHeader::FromObject(value).IsMarked());
+  EXPECT_TRUE(HeapObjectHeader::FromPayload(value).IsMarked());
 }
 
 TEST_F(EphemeronPairTest, EmptyValue) {
@@ -141,7 +143,7 @@ TEST_F(EphemeronPairTest, EmptyValue) {
   Persistent<EphemeronHolderTraceEphemeron> holder =
       MakeGarbageCollected<EphemeronHolderTraceEphemeron>(GetAllocationHandle(),
                                                           key, nullptr);
-  HeapObjectHeader::FromObject(key).TryMarkAtomic();
+  HeapObjectHeader::FromPayload(key).TryMarkAtomic();
   InitializeMarker(*Heap::From(GetHeap()), GetPlatformHandle().get());
   FinishMarking();
 }
@@ -154,18 +156,15 @@ TEST_F(EphemeronPairTest, EmptyKey) {
   InitializeMarker(*Heap::From(GetHeap()), GetPlatformHandle().get());
   FinishMarking();
   // Key is not alive and value should thus not be held alive.
-  EXPECT_FALSE(HeapObjectHeader::FromObject(value).IsMarked());
+  EXPECT_FALSE(HeapObjectHeader::FromPayload(value).IsMarked());
 }
 
 using EphemeronPairGCTest = testing::TestWithHeap;
 
 TEST_F(EphemeronPairGCTest, EphemeronPairValueIsCleared) {
-  GCed* key = MakeGarbageCollected<GCed>(GetAllocationHandle());
   GCed* value = MakeGarbageCollected<GCed>(GetAllocationHandle());
-  Persistent<EphemeronHolder> holder =
-      MakeGarbageCollected<EphemeronHolder>(GetAllocationHandle(), key, value);
-  // The precise GC will not find the `key` anywhere and thus clear the
-  // ephemeron.
+  Persistent<EphemeronHolder> holder = MakeGarbageCollected<EphemeronHolder>(
+      GetAllocationHandle(), nullptr, value);
   PreciseGC();
   EXPECT_EQ(nullptr, holder->ephemeron_pair().value.Get());
 }
@@ -221,10 +220,10 @@ TEST_F(EphemeronPairTest, EphemeronPairWithMixinKey) {
   EXPECT_NE(static_cast<void*>(value), holder->ephemeron_pair().value.Get());
   InitializeMarker(*Heap::From(GetHeap()), GetPlatformHandle().get());
   FinishSteps();
-  EXPECT_FALSE(HeapObjectHeader::FromObject(value).IsMarked());
-  EXPECT_TRUE(HeapObjectHeader::FromObject(key).TryMarkAtomic());
+  EXPECT_FALSE(HeapObjectHeader::FromPayload(value).IsMarked());
+  EXPECT_TRUE(HeapObjectHeader::FromPayload(key).TryMarkAtomic());
   FinishMarking();
-  EXPECT_TRUE(HeapObjectHeader::FromObject(value).IsMarked());
+  EXPECT_TRUE(HeapObjectHeader::FromPayload(value).IsMarked());
 }
 
 TEST_F(EphemeronPairTest, EphemeronPairWithEmptyMixinValue) {
@@ -234,55 +233,10 @@ TEST_F(EphemeronPairTest, EphemeronPairWithEmptyMixinValue) {
       MakeGarbageCollected<EphemeronHolderWithMixins>(GetAllocationHandle(),
                                                       key, nullptr);
   EXPECT_NE(static_cast<void*>(key), holder->ephemeron_pair().key.Get());
-  EXPECT_TRUE(HeapObjectHeader::FromObject(key).TryMarkAtomic());
+  EXPECT_TRUE(HeapObjectHeader::FromPayload(key).TryMarkAtomic());
   InitializeMarker(*Heap::From(GetHeap()), GetPlatformHandle().get());
   FinishSteps();
   FinishMarking();
-}
-
-namespace {
-
-class KeyWithCallback final : public GarbageCollected<KeyWithCallback> {
- public:
-  template <typename Callback>
-  explicit KeyWithCallback(Callback callback) {
-    callback(this);
-  }
-  void Trace(Visitor*) const {}
-};
-
-class EphemeronHolderForKeyWithCallback final
-    : public GarbageCollected<EphemeronHolderForKeyWithCallback> {
- public:
-  EphemeronHolderForKeyWithCallback(KeyWithCallback* key, GCed* value)
-      : ephemeron_pair_(key, value) {}
-  void Trace(cppgc::Visitor* visitor) const { visitor->Trace(ephemeron_pair_); }
-
- private:
-  const EphemeronPair<KeyWithCallback, GCed> ephemeron_pair_;
-};
-
-}  // namespace
-
-TEST_F(EphemeronPairTest, EphemeronPairWithKeyInConstruction) {
-  GCed* value = MakeGarbageCollected<GCed>(GetAllocationHandle());
-  Persistent<EphemeronHolderForKeyWithCallback> holder;
-  InitializeMarker(*Heap::From(GetHeap()), GetPlatformHandle().get());
-  FinishSteps();
-  MakeGarbageCollected<KeyWithCallback>(
-      GetAllocationHandle(), [this, &holder, value](KeyWithCallback* thiz) {
-        // The test doesn't use conservative stack scanning to retain key to
-        // avoid retaining value as a side effect.
-        EXPECT_TRUE(HeapObjectHeader::FromObject(thiz).TryMarkAtomic());
-        holder = MakeGarbageCollected<EphemeronHolderForKeyWithCallback>(
-            GetAllocationHandle(), thiz, value);
-        // Finishing marking at this point will leave an ephemeron pair
-        // reachable where the key is still in construction. The GC needs to
-        // mark the value for such pairs as live in the atomic pause as they key
-        // is considered live.
-        FinishMarking();
-      });
-  EXPECT_TRUE(HeapObjectHeader::FromObject(value).IsMarked());
 }
 
 }  // namespace internal

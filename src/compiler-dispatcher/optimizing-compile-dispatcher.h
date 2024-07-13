@@ -10,30 +10,39 @@
 
 #include "src/base/platform/condition-variable.h"
 #include "src/base/platform/mutex.h"
+#include "src/base/platform/platform.h"
 #include "src/common/globals.h"
 #include "src/flags/flags.h"
-#include "src/heap/parked-scope.h"
 #include "src/utils/allocation.h"
 
 namespace v8 {
 namespace internal {
 
 class LocalHeap;
-class TurbofanCompilationJob;
+class OptimizedCompilationJob;
 class RuntimeCallStats;
 class SharedFunctionInfo;
 
 class V8_EXPORT_PRIVATE OptimizingCompileDispatcher {
  public:
-  explicit OptimizingCompileDispatcher(Isolate* isolate);
+  explicit OptimizingCompileDispatcher(Isolate* isolate)
+      : isolate_(isolate),
+        input_queue_capacity_(FLAG_concurrent_recompilation_queue_length),
+        input_queue_length_(0),
+        input_queue_shift_(0),
+        blocked_jobs_(0),
+        ref_count_(0),
+        recompilation_delay_(FLAG_concurrent_recompilation_delay) {
+    input_queue_ = NewArray<OptimizedCompilationJob*>(input_queue_capacity_);
+  }
 
   ~OptimizingCompileDispatcher();
 
   void Stop();
   void Flush(BlockingBehavior blocking_behavior);
   // Takes ownership of |job|.
-  void QueueForOptimization(TurbofanCompilationJob* job);
-  void AwaitCompileTasks();
+  void QueueForOptimization(OptimizedCompilationJob* job);
+  void Unblock();
   void InstallOptimizedFunctions();
 
   inline bool IsQueueAvailable() {
@@ -41,37 +50,23 @@ class V8_EXPORT_PRIVATE OptimizingCompileDispatcher {
     return input_queue_length_ < input_queue_capacity_;
   }
 
-  inline int InputQueueLength() {
-    base::MutexGuard access_input_queue(&input_queue_mutex_);
-    return input_queue_length_;
-  }
-
-  static bool Enabled() { return v8_flags.concurrent_recompilation; }
+  static bool Enabled() { return FLAG_concurrent_recompilation; }
 
   // This method must be called on the main thread.
   bool HasJobs();
-
-  // Whether to finalize and thus install the optimized code.  Defaults to true.
-  // Only set to false for testing (where finalization is then manually
-  // requested using %FinalizeOptimization).
-  bool finalize() const { return finalize_; }
-  void set_finalize(bool finalize) {
-    CHECK(!HasJobs());
-    finalize_ = finalize;
-  }
 
  private:
   class CompileTask;
 
   enum ModeFlag { COMPILE, FLUSH };
-  static constexpr TaskPriority kTaskPriority = TaskPriority::kUserVisible;
 
   void FlushQueues(BlockingBehavior blocking_behavior,
                    bool restore_function_code);
   void FlushInputQueue();
   void FlushOutputQueue(bool restore_function_code);
-  void CompileNext(TurbofanCompilationJob* job, LocalIsolate* local_isolate);
-  TurbofanCompilationJob* NextInput(LocalIsolate* local_isolate);
+  void CompileNext(OptimizedCompilationJob* job, RuntimeCallStats* stats,
+                   LocalIsolate* local_isolate);
+  OptimizedCompilationJob* NextInput(LocalIsolate* local_isolate);
 
   inline int InputQueueIndex(int i) {
     int result = (i + input_queue_shift_) % input_queue_capacity_;
@@ -83,28 +78,30 @@ class V8_EXPORT_PRIVATE OptimizingCompileDispatcher {
   Isolate* isolate_;
 
   // Circular queue of incoming recompilation tasks (including OSR).
-  TurbofanCompilationJob** input_queue_;
+  OptimizedCompilationJob** input_queue_;
   int input_queue_capacity_;
   int input_queue_length_;
   int input_queue_shift_;
   base::Mutex input_queue_mutex_;
 
   // Queue of recompilation tasks ready to be installed (excluding OSR).
-  std::queue<TurbofanCompilationJob*> output_queue_;
+  std::queue<OptimizedCompilationJob*> output_queue_;
   // Used for job based recompilation which has multiple producers on
   // different threads.
   base::Mutex output_queue_mutex_;
 
-  std::unique_ptr<JobHandle> job_handle_;
+  int blocked_jobs_;
 
-  // Copy of v8_flags.concurrent_recompilation_delay that will be used from the
+  std::atomic<int> ref_count_;
+  base::Mutex ref_count_mutex_;
+  base::ConditionVariable ref_count_zero_;
+
+  // Copy of FLAG_concurrent_recompilation_delay that will be used from the
   // background thread.
   //
   // Since flags might get modified while the background thread is running, it
   // is not safe to access them directly.
   int recompilation_delay_;
-
-  bool finalize_ = true;
 };
 }  // namespace internal
 }  // namespace v8

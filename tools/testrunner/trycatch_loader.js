@@ -19,7 +19,7 @@ var tests = arguments.slice(separator + 1)
 
 var preambleString = ""
 for (let jstest of preamble) {
-  preambleString += "d8.file.execute(\"" + jstest + "\");"
+  preambleString += "load(\"" + jstest + "\");"
 }
 
 for (let jstest of tests) {
@@ -30,7 +30,7 @@ for (let jstest of tests) {
   (function () {
     let realm = Realm.create();
     try {
-      Realm.eval(realm, preambleString + "d8.file.execute(\"" + jstest + "\");");
+      Realm.eval(realm, preambleString + "load(\"" + jstest + "\");");
     } catch (err) {
       // ignore all errors
     }

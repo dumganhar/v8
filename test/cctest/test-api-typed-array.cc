@@ -3,10 +3,7 @@
 // found in the LICENSE file.
 
 #include "src/api/api-inl.h"
-#include "src/base/strings.h"
 #include "src/objects/js-array-buffer-inl.h"
-#include "src/objects/js-array-buffer.h"
-#include "test/cctest/heap/heap-utils.h"
 #include "test/cctest/test-api.h"
 
 using ::v8::Array;
@@ -106,7 +103,7 @@ void ObjectWithExternalArrayTestHelper(Local<Context> context,
       "sum;");
   CHECK_EQ(28, result->Int32Value(context).FromJust());
 
-  v8::base::ScopedVector<char> test_buf(1024);
+  i::ScopedVector<char> test_buf(1024);
 
   // Check legal boundary conditions.
   // The repeated loads and stores ensure the ICs are exercised.
@@ -119,11 +116,11 @@ void ObjectWithExternalArrayTestHelper(Local<Context> context,
       "  }"
       "}"
       "res;";
-  v8::base::SNPrintF(test_buf, boundary_program, low);
+  i::SNPrintF(test_buf, boundary_program, low);
   result = CompileRun(test_buf.begin());
   CHECK_EQ(low, result->IntegerValue(context).FromJust());
 
-  v8::base::SNPrintF(test_buf, boundary_program, high);
+  i::SNPrintF(test_buf, boundary_program, high);
   result = CompileRun(test_buf.begin());
   CHECK_EQ(high, result->IntegerValue(context).FromJust());
 
@@ -140,32 +137,32 @@ void ObjectWithExternalArrayTestHelper(Local<Context> context,
       "}"
       "sum;");
   // Force GC to trigger verification.
-  i::heap::InvokeMajorGC(CcTest::heap());
+  CcTest::CollectAllGarbage();
   CHECK_EQ(28, result->Int32Value(context).FromJust());
 
   // Make sure out-of-range loads do not throw.
-  v8::base::SNPrintF(test_buf,
-                     "var caught_exception = false;"
-                     "try {"
-                     "  ext_array[%d];"
-                     "} catch (e) {"
-                     "  caught_exception = true;"
-                     "}"
-                     "caught_exception;",
-                     element_count);
+  i::SNPrintF(test_buf,
+              "var caught_exception = false;"
+              "try {"
+              "  ext_array[%d];"
+              "} catch (e) {"
+              "  caught_exception = true;"
+              "}"
+              "caught_exception;",
+              element_count);
   result = CompileRun(test_buf.begin());
   CHECK(!result->BooleanValue(v8_isolate));
 
   // Make sure out-of-range stores do not throw.
-  v8::base::SNPrintF(test_buf,
-                     "var caught_exception = false;"
-                     "try {"
-                     "  ext_array[%d] = 1;"
-                     "} catch (e) {"
-                     "  caught_exception = true;"
-                     "}"
-                     "caught_exception;",
-                     element_count);
+  i::SNPrintF(test_buf,
+              "var caught_exception = false;"
+              "try {"
+              "  ext_array[%d] = 1;"
+              "} catch (e) {"
+              "  caught_exception = true;"
+              "}"
+              "caught_exception;",
+              element_count);
   result = CompileRun(test_buf.begin());
   CHECK(!result->BooleanValue(v8_isolate));
 
@@ -248,20 +245,19 @@ void ObjectWithExternalArrayTestHelper(Local<Context> context,
                         array_type == i::kExternalUint32Array);
     bool is_pixel_data = array_type == i::kExternalUint8ClampedArray;
 
-    v8::base::SNPrintF(
-        test_buf,
-        "%s"
-        "var all_passed = true;"
-        "for (var i = 0; i < source_data.length; i++) {"
-        "  for (var j = 0; j < 8; j++) {"
-        "    ext_array[j] = source_data[i];"
-        "  }"
-        "  all_passed = all_passed &&"
-        "               (ext_array[5] == expected_results[i]);"
-        "}"
-        "all_passed;",
-        (is_unsigned ? unsigned_data
-                     : (is_pixel_data ? pixel_data : signed_data)));
+    i::SNPrintF(test_buf,
+                "%s"
+                "var all_passed = true;"
+                "for (var i = 0; i < source_data.length; i++) {"
+                "  for (var j = 0; j < 8; j++) {"
+                "    ext_array[j] = source_data[i];"
+                "  }"
+                "  all_passed = all_passed &&"
+                "               (ext_array[5] == expected_results[i]);"
+                "}"
+                "all_passed;",
+                (is_unsigned ? unsigned_data
+                             : (is_pixel_data ? pixel_data : signed_data)));
     result = CompileRun(test_buf.begin());
     CHECK(result->BooleanValue(v8_isolate));
   }
@@ -273,8 +269,8 @@ void ObjectWithExternalArrayTestHelper(Local<Context> context,
     }
   }
 
-  bool old_natives_flag_sentry = i::v8_flags.allow_natives_syntax;
-  i::v8_flags.allow_natives_syntax = true;
+  bool old_natives_flag_sentry = i::FLAG_allow_natives_syntax;
+  i::FLAG_allow_natives_syntax = true;
 
   // Test complex assignments
   result = CompileRun(
@@ -312,7 +308,7 @@ void ObjectWithExternalArrayTestHelper(Local<Context> context,
       "sum;");
   CHECK_EQ(4800, result->Int32Value(context).FromJust());
 
-  i::v8_flags.allow_natives_syntax = old_natives_flag_sentry;
+  i::FLAG_allow_natives_syntax = old_natives_flag_sentry;
 
   result = CompileRun(
       "ext_array[3] = 33;"
@@ -385,12 +381,6 @@ void TypedArrayTestHelper(i::ExternalArrayType array_type, int64_t low,
 
   ObjectWithExternalArrayTestHelper<ElementType>(env.local(), ta, kElementCount,
                                                  array_type, low, high);
-
-  // TODO(v8:11111): Use API functions for testing these, once they're exposed
-  // via the API.
-  i::Handle<i::JSTypedArray> i_ta = v8::Utils::OpenHandle(*ta);
-  CHECK(!i_ta->is_length_tracking());
-  CHECK(!i_ta->is_backed_by_rab());
 }
 
 }  // namespace
@@ -453,60 +443,64 @@ THREADED_TEST(DataView) {
   CHECK_EQ(2u, dv->ByteOffset());
   CHECK_EQ(kSize, static_cast<int>(dv->ByteLength()));
   CHECK(ab->Equals(env.local(), dv->Buffer()).FromJust());
-
-  // TODO(v8:11111): Use API functions for testing these, once they're exposed
-  // via the API.
-  i::Handle<i::JSDataViewOrRabGsabDataView> i_dv = v8::Utils::OpenHandle(*dv);
-  CHECK(!i_dv->is_length_tracking());
-  CHECK(!i_dv->is_backed_by_rab());
 }
 
 THREADED_TEST(SharedUint8Array) {
+  i::FLAG_harmony_sharedarraybuffer = true;
   TypedArrayTestHelper<uint8_t, v8::Uint8Array, v8::SharedArrayBuffer>(
       i::kExternalUint8Array, 0, 0xFF);
 }
 
 THREADED_TEST(SharedInt8Array) {
+  i::FLAG_harmony_sharedarraybuffer = true;
   TypedArrayTestHelper<int8_t, v8::Int8Array, v8::SharedArrayBuffer>(
       i::kExternalInt8Array, -0x80, 0x7F);
 }
 
 THREADED_TEST(SharedUint16Array) {
+  i::FLAG_harmony_sharedarraybuffer = true;
   TypedArrayTestHelper<uint16_t, v8::Uint16Array, v8::SharedArrayBuffer>(
       i::kExternalUint16Array, 0, 0xFFFF);
 }
 
 THREADED_TEST(SharedInt16Array) {
+  i::FLAG_harmony_sharedarraybuffer = true;
   TypedArrayTestHelper<int16_t, v8::Int16Array, v8::SharedArrayBuffer>(
       i::kExternalInt16Array, -0x8000, 0x7FFF);
 }
 
 THREADED_TEST(SharedUint32Array) {
+  i::FLAG_harmony_sharedarraybuffer = true;
   TypedArrayTestHelper<uint32_t, v8::Uint32Array, v8::SharedArrayBuffer>(
       i::kExternalUint32Array, 0, UINT_MAX);
 }
 
 THREADED_TEST(SharedInt32Array) {
+  i::FLAG_harmony_sharedarraybuffer = true;
   TypedArrayTestHelper<int32_t, v8::Int32Array, v8::SharedArrayBuffer>(
       i::kExternalInt32Array, INT_MIN, INT_MAX);
 }
 
 THREADED_TEST(SharedFloat32Array) {
+  i::FLAG_harmony_sharedarraybuffer = true;
   TypedArrayTestHelper<float, v8::Float32Array, v8::SharedArrayBuffer>(
       i::kExternalFloat32Array, -500, 500);
 }
 
 THREADED_TEST(SharedFloat64Array) {
+  i::FLAG_harmony_sharedarraybuffer = true;
   TypedArrayTestHelper<double, v8::Float64Array, v8::SharedArrayBuffer>(
       i::kExternalFloat64Array, -500, 500);
 }
 
 THREADED_TEST(SharedUint8ClampedArray) {
+  i::FLAG_harmony_sharedarraybuffer = true;
   TypedArrayTestHelper<uint8_t, v8::Uint8ClampedArray, v8::SharedArrayBuffer>(
       i::kExternalUint8ClampedArray, 0, 0xFF);
 }
 
 THREADED_TEST(SharedDataView) {
+  i::FLAG_harmony_sharedarraybuffer = true;
   const int kSize = 50;
 
   LocalContext env;
@@ -520,12 +514,6 @@ THREADED_TEST(SharedDataView) {
   CHECK_EQ(2u, dv->ByteOffset());
   CHECK_EQ(kSize, static_cast<int>(dv->ByteLength()));
   CHECK(ab->Equals(env.local(), dv->Buffer()).FromJust());
-
-  // TODO(v8:11111): Use API functions for testing these, once they're exposed
-  // via the API.
-  i::Handle<i::JSDataViewOrRabGsabDataView> i_dv = v8::Utils::OpenHandle(*dv);
-  CHECK(!i_dv->is_length_tracking());
-  CHECK(!i_dv->is_backed_by_rab());
 }
 
 #define IS_ARRAY_BUFFER_VIEW_TEST(View)                                     \
@@ -589,12 +577,12 @@ void TestOnHeapHasBuffer(const char* array_name, size_t elem_size) {
   v8::Isolate* isolate = env->GetIsolate();
   v8::HandleScope handle_scope(isolate);
 
-  v8::base::ScopedVector<char> source(128);
+  i::ScopedVector<char> source(128);
   // Test on-heap sizes.
   for (size_t size = 0; size <= i::JSTypedArray::kMaxSizeInHeap;
        size += elem_size) {
     size_t length = size / elem_size;
-    v8::base::SNPrintF(source, "new %sArray(%zu)", array_name, length);
+    i::SNPrintF(source, "new %sArray(%zu)", array_name, length);
     auto typed_array =
         v8::Local<v8::TypedArray>::Cast(CompileRun(source.begin()));
 
@@ -621,12 +609,12 @@ void TestOffHeapHasBuffer(const char* array_name, size_t elem_size) {
   v8::Isolate* isolate = env->GetIsolate();
   v8::HandleScope handle_scope(isolate);
 
-  v8::base::ScopedVector<char> source(128);
+  i::ScopedVector<char> source(128);
   // Test off-heap sizes.
   size_t size = i::JSTypedArray::kMaxSizeInHeap;
   for (int i = 0; i < 3; i++) {
     size_t length = 1 + (size / elem_size);
-    v8::base::SNPrintF(source, "new %sArray(%zu)", array_name, length);
+    i::SNPrintF(source, "new %sArray(%zu)", array_name, length);
     auto typed_array =
         v8::Local<v8::TypedArray>::Cast(CompileRun(source.begin()));
     CHECK_EQ(length, typed_array->Length());

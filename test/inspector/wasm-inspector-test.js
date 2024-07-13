@@ -7,12 +7,9 @@ utils.load('test/mjsunit/wasm/wasm-module-builder.js');
 WasmInspectorTest = {}
 InspectorTest.getWasmOpcodeName = getOpcodeName;
 
-WasmInspectorTest.evalWithUrl = async function(expression, url) {
-  const sourceURL = `v8://test/${url}`;
-  const {result: {scriptId}} = await Protocol.Runtime.compileScript({
-    expression, sourceURL, persistScript: true}).then(printIfFailure);
+WasmInspectorTest.evalWithUrl = async function(code, url) {
   return await Protocol.Runtime
-      .runScript({scriptId})
+      .evaluate({'expression': code + '\n//# sourceURL=v8://test/' + url})
       .then(printIfFailure);
 };
 
@@ -66,7 +63,7 @@ WasmInspectorTest.getWasmValue = async function(value) {
 };
 
 function printIfFailure(message) {
-  if (!message.result || message.result.exceptionDetails) {
+  if (!message.result) {
     InspectorTest.logMessage(message);
   }
   return message;
@@ -87,7 +84,6 @@ async function getScopeValues(name, value) {
       return value.description;
     if (name === 'instance') return dumpInstanceProperties(value);
     if (name === 'module') return value.description;
-    if (name === 'tables') return dumpTables(value);
 
     let msg = await Protocol.Runtime.getProperties({objectId: value.objectId});
     printIfFailure(msg);
@@ -137,40 +133,4 @@ async function dumpInstanceProperties(instanceObj) {
   }
   const formattedExports = exports.result.result.map(printExports).join(', ');
   return `${exportsName}: ${formattedExports}`
-}
-
-async function dumpTables(tablesObj) {
-  let msg =
-      await Protocol.Runtime.getProperties({objectId: tablesObj.objectId});
-  let tables_str = [];
-  for (let table of msg.result.result) {
-    let table_content =
-        await Protocol.Runtime.getProperties({objectId: table.value.objectId});
-
-    let entries_object = table_content.result.internalProperties.filter(
-        p => p.name === '[[Entries]]')[0];
-    entries = await Protocol.Runtime.getProperties(
-        {objectId: entries_object.value.objectId});
-    let functions = [];
-    for (let entry of entries.result.result) {
-      if (entry.name === 'length') continue;
-      let description = entry.value.description;
-      // For tables containing references, explore one level into the ref.
-      if (entry.value.objectId != null) {
-        let referencedObj = await Protocol.Runtime.getProperties(
-          {objectId: entry.value.objectId});
-        let value = referencedObj.result.result
-            .filter(prop => prop.name == "value")[0].value;
-        // If the value doesn't have a description, fall back to its value
-        // property. (For null this makes sure to print "null", as the null
-        // value doesn't have a description.)
-        value = value.description ?? value.value;
-        description = `${value} (${description})`;
-      }
-      functions.push(`${entry.name}: ${description}`);
-    }
-    const functions_str = functions.join(', ');
-    tables_str.push(`      ${table.name}: ${functions_str}`);
-  }
-  return '\n' + tables_str.join('\n');
 }

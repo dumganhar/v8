@@ -4,22 +4,20 @@
 
 let {session, contextGroup, Protocol} = InspectorTest.start('Debugger breaks in next script after stepOut from previous one.');
 
-contextGroup.addInlineScript(
-    `
+contextGroup.addScript(`
 function test() {
   setTimeout('var a = 1;//# sourceURL=timeout1.js', 0);
   setTimeout(foo, 0);
   setTimeout('var a = 3;//# sourceURL=timeout3.js', 0);
   debugger;
-}`,
-    'foo.js');
+}
+//# sourceURL=foo.js`, 7, 26);
 
-contextGroup.addInlineScript(
-    `
+contextGroup.addScript(`
 function foo() {
   return 42;
-}`,
-    'timeout2.js');
+}
+//# sourceURL=timeout2.js`)
 
 session.setupScriptMap();
 var stepAction;

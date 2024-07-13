@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors
+// Copyright 2020 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 
 #include <memory>
 #include <string>
-#include <tuple>
 #include <vector>
 
 #include "cbor.h"
@@ -268,11 +267,11 @@ class DeserializableProtocolObject {
     std::unique_ptr<T> value(new T());
     auto deserializer = DeferredMessage::FromSpan(span<uint8_t>(bytes, size))
                             ->MakeDeserializer();
-    std::ignore = Deserialize(&deserializer, value.get());
+    Deserialize(&deserializer, value.get());
     return value;
   }
 
-  [[nodiscard]] static bool Deserialize(DeserializerState* state, T* value) {
+  static bool Deserialize(DeserializerState* state, T* value) {
     return T::deserializer_descriptor().Deserialize(state, value);
   }
 
@@ -307,6 +306,8 @@ class ProtocolObject : public Serializable,
     AppendSerialized(&serialized);
     return T::ReadFrom(std::move(serialized)).value();
   }
+  // TODO(caseq): compatibility only, remove.
+  std::unique_ptr<T> clone() const { return Clone(); }
 
  protected:
   using ProtocolType = T;
@@ -346,16 +347,6 @@ struct ProtocolTypeTraits<
     ProtocolTypeTraits<T>::Serialize(*value, bytes);
   }
 };
-
-template <typename T, typename F>
-bool ConvertProtocolValue(const F& from, T* to) {
-  std::vector<uint8_t> bytes;
-  ProtocolTypeTraits<F>::Serialize(from, &bytes);
-  auto deserializer =
-      DeferredMessage::FromSpan(span<uint8_t>(bytes.data(), bytes.size()))
-          ->MakeDeserializer();
-  return ProtocolTypeTraits<T>::Deserialize(&deserializer, to);
-}
 
 #define DECLARE_DESERIALIZATION_SUPPORT()  \
   friend DeserializableBase<ProtocolType>; \

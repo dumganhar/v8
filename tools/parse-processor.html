@@ -1,12 +1,11 @@
 <!DOCTYPE html>
+<html>
 <!--
 Copyright 2016 the V8 project authors. All rights reserved.  Use of this source
 code is governed by a BSD-style license that can be found in the LICENSE file.
 -->
-<html lang="en">
+
 <head>
-<!-- This will be overwritten by the v8.dev/tools exporter -->
-<!-- ANALYTICS_PLACEHOLDER -->
 <meta charset="utf-8">
 <title>V8 Parse Processor</title>
 <style>
@@ -131,11 +130,11 @@ document.loadFile = function() {
   let file = files[0];
   let reader = new FileReader();
 
-  reader.onload = async function(evt) {
+  reader.onload = function(evt) {
     const kTimerName = 'parse log file';
     console.time(kTimerName);
     let parseProcessor = new ParseProcessor();
-    await parseProcessor.processString(this.result);
+    parseProcessor.processString(this.result);
     console.timeEnd(kTimerName);
     renderParseResults(parseProcessor);
     document.parseProcessor = parseProcessor;

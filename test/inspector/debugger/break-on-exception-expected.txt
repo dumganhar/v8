@@ -20,23 +20,6 @@ evaluate 'uncaughtFinally()'..
 
 evaluate 'caughtFinally()'..
 
-Running test: testBreakOnCaughtException
-
-evaluate 'caught()'..
-paused on exception:
-{
-    description : 1
-    type : number
-    uncaught : false
-    value : 1
-}
-
-evaluate 'uncaught()'..
-
-evaluate 'uncaughtFinally()'..
-
-evaluate 'caughtFinally()'..
-
 Running test: testBreakOnUncaughtException
 
 evaluate 'caught()'..
@@ -148,7 +131,7 @@ evaluate 'f()'..
 paused on exception:
 {
     className : Error
-    description : Error     at f (<anonymous>:115:153)     at <anonymous>:146:163
+    description : Error     at f (<anonymous>:106:144)     at <anonymous>:137:154
     objectId : <objectId>
     subtype : error
     type : object
@@ -161,7 +144,7 @@ evaluate 'f()'..
 paused on exception:
 {
     className : Error
-    description : Error     at f (<anonymous>:115:153)     at <anonymous>:146:163
+    description : Error     at f (<anonymous>:106:144)     at <anonymous>:137:154
     objectId : <objectId>
     subtype : error
     type : object

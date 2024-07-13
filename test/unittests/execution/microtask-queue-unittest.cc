@@ -9,7 +9,6 @@
 #include <memory>
 #include <vector>
 
-#include "include/v8-function.h"
 #include "src/heap/factory.h"
 #include "src/objects/foreign.h"
 #include "src/objects/js-array-inl.h"
@@ -39,16 +38,17 @@ class WithFinalizationRegistryMixin : public TMixin {
   WithFinalizationRegistryMixin& operator=(
       const WithFinalizationRegistryMixin&) = delete;
 
-  static void SetUpTestSuite() {
+  static void SetUpTestCase() {
     CHECK_NULL(save_flags_);
     save_flags_ = new SaveFlags();
-    v8_flags.expose_gc = true;
-    v8_flags.allow_natives_syntax = true;
-    TMixin::SetUpTestSuite();
+    FLAG_harmony_weak_refs = true;
+    FLAG_expose_gc = true;
+    FLAG_allow_natives_syntax = true;
+    TMixin::SetUpTestCase();
   }
 
-  static void TearDownTestSuite() {
-    TMixin::TearDownTestSuite();
+  static void TearDownTestCase() {
+    TMixin::TearDownTestCase();
     CHECK_NOT_NULL(save_flags_);
     delete save_flags_;
     save_flags_ = nullptr;
@@ -67,8 +67,7 @@ using TestWithNativeContextAndFinalizationRegistry =  //
             WithFinalizationRegistryMixin<            //
                 WithIsolateScopeMixin<                //
                     WithIsolateMixin<                 //
-                        WithDefaultPlatformMixin<     //
-                            ::testing::Test>>>>>>;
+                        ::testing::Test>>>>>;
 
 namespace {
 
@@ -146,10 +145,9 @@ TEST_P(MicrotaskQueueTest, EnqueueAndRun) {
   bool ran = false;
   EXPECT_EQ(0, microtask_queue()->capacity());
   EXPECT_EQ(0, microtask_queue()->size());
-  microtask_queue()->EnqueueMicrotask(*NewMicrotask([this, &ran] {
+  microtask_queue()->EnqueueMicrotask(*NewMicrotask([&ran] {
     EXPECT_FALSE(ran);
     ran = true;
-    EXPECT_TRUE(microtask_queue()->HasMicrotasksSuppressions());
   }));
   EXPECT_EQ(MicrotaskQueue::kMinimumCapacity, microtask_queue()->capacity());
   EXPECT_EQ(1, microtask_queue()->size());
@@ -251,7 +249,6 @@ TEST_P(MicrotaskQueueTest, VisitRoot) {
 }
 
 TEST_P(MicrotaskQueueTest, PromiseHandlerContext) {
-  microtask_queue()->set_microtasks_policy(MicrotasksPolicy::kExplicit);
   Local<v8::Context> v8_context2 = v8::Context::New(v8_isolate());
   Local<v8::Context> v8_context3 = v8::Context::New(v8_isolate());
   Local<v8::Context> v8_context4 = v8::Context::New(v8_isolate());
@@ -358,7 +355,6 @@ TEST_P(MicrotaskQueueTest, DetachGlobal_Enqueue) {
 }
 
 TEST_P(MicrotaskQueueTest, DetachGlobal_Run) {
-  microtask_queue()->set_microtasks_policy(MicrotasksPolicy::kExplicit);
   EXPECT_EQ(0, microtask_queue()->size());
 
   // Enqueue microtasks to the current context.
@@ -397,7 +393,6 @@ TEST_P(MicrotaskQueueTest, DetachGlobal_Run) {
 }
 
 TEST_P(MicrotaskQueueTest, DetachGlobal_PromiseResolveThenableJobTask) {
-  microtask_queue()->set_microtasks_policy(MicrotasksPolicy::kExplicit);
   RunJS(
       "var resolve;"
       "var promise = new Promise(r => { resolve = r; });"
@@ -420,7 +415,6 @@ TEST_P(MicrotaskQueueTest, DetachGlobal_PromiseResolveThenableJobTask) {
 }
 
 TEST_P(MicrotaskQueueTest, DetachGlobal_ResolveThenableForeignThen) {
-  microtask_queue()->set_microtasks_policy(MicrotasksPolicy::kExplicit);
   Handle<JSArray> result = RunJS<JSArray>(
       "let result = [false];"
       "result");
@@ -432,7 +426,6 @@ TEST_P(MicrotaskQueueTest, DetachGlobal_ResolveThenableForeignThen) {
     // Create a context with its own microtask queue.
     std::unique_ptr<MicrotaskQueue> sub_microtask_queue =
         MicrotaskQueue::New(isolate());
-    sub_microtask_queue->set_microtasks_policy(MicrotasksPolicy::kExplicit);
     Local<v8::Context> sub_context = v8::Context::New(
         v8_isolate(),
         /* extensions= */ nullptr,
@@ -541,12 +534,12 @@ TEST_P(MicrotaskQueueTest, DetachGlobal_HandlerContext) {
       "  results['stale_rejected_promise'] = true;"
       "})");
   microtask_queue()->RunMicrotasks(isolate());
-  EXPECT_TRUE(JSReceiver::HasProperty(isolate(), results,
-                                      NameFromChars("stale_resolved_promise"))
-                  .FromJust());
-  EXPECT_TRUE(JSReceiver::HasProperty(isolate(), results,
-                                      NameFromChars("stale_rejected_promise"))
-                  .FromJust());
+  EXPECT_TRUE(
+      JSReceiver::HasProperty(results, NameFromChars("stale_resolved_promise"))
+          .FromJust());
+  EXPECT_TRUE(
+      JSReceiver::HasProperty(results, NameFromChars("stale_rejected_promise"))
+          .FromJust());
 
   // Set stale handlers to valid promises.
   RunJS(
@@ -556,12 +549,12 @@ TEST_P(MicrotaskQueueTest, DetachGlobal_HandlerContext) {
       "Promise.reject("
       "    stale_handler.bind(null, results, 'stale_handler_reject'))");
   microtask_queue()->RunMicrotasks(isolate());
-  EXPECT_FALSE(JSReceiver::HasProperty(isolate(), results,
-                                       NameFromChars("stale_handler_resolve"))
-                   .FromJust());
-  EXPECT_FALSE(JSReceiver::HasProperty(isolate(), results,
-                                       NameFromChars("stale_handler_reject"))
-                   .FromJust());
+  EXPECT_FALSE(
+      JSReceiver::HasProperty(results, NameFromChars("stale_handler_resolve"))
+          .FromJust());
+  EXPECT_FALSE(
+      JSReceiver::HasProperty(results, NameFromChars("stale_handler_reject"))
+          .FromJust());
 }
 
 TEST_P(MicrotaskQueueTest, DetachGlobal_Chain) {

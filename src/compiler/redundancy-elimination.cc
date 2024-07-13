@@ -4,7 +4,6 @@
 
 #include "src/compiler/redundancy-elimination.h"
 
-#include "src/compiler/js-graph.h"
 #include "src/compiler/node-properties.h"
 #include "src/compiler/simplified-operator.h"
 
@@ -12,12 +11,8 @@ namespace v8 {
 namespace internal {
 namespace compiler {
 
-RedundancyElimination::RedundancyElimination(Editor* editor, JSGraph* jsgraph,
-                                             Zone* zone)
-    : AdvancedReducer(editor),
-      node_checks_(zone),
-      jsgraph_(jsgraph),
-      zone_(zone) {}
+RedundancyElimination::RedundancyElimination(Editor* editor, Zone* zone)
+    : AdvancedReducer(editor), node_checks_(zone), zone_(zone) {}
 
 RedundancyElimination::~RedundancyElimination() = default;
 
@@ -25,7 +20,6 @@ Reduction RedundancyElimination::Reduce(Node* node) {
   if (node_checks_.Get(node)) return NoChange();
   switch (node->opcode()) {
     case IrOpcode::kCheckBigInt:
-    case IrOpcode::kCheckedBigIntToBigInt64:
     case IrOpcode::kCheckBounds:
     case IrOpcode::kCheckClosure:
     case IrOpcode::kCheckEqualsInternalizedString:
@@ -41,16 +35,9 @@ Reduction RedundancyElimination::Reduce(Node* node) {
     case IrOpcode::kCheckSmi:
     case IrOpcode::kCheckString:
     case IrOpcode::kCheckSymbol:
-    // These are not really check nodes, but behave the same in that they can be
-    // folded together if repeated with identical inputs.
-    case IrOpcode::kStringCharCodeAt:
-    case IrOpcode::kStringCodePointAt:
-    case IrOpcode::kStringFromCodePointAt:
-    case IrOpcode::kStringSubstring:
-#define SIMPLIFIED_OP(Opcode) case IrOpcode::k##Opcode:
-      SIMPLIFIED_CHECKED_OP_LIST(SIMPLIFIED_OP)
-      SIMPLIFIED_BIGINT_BINOP_LIST(SIMPLIFIED_OP)
-#undef SIMPLIFIED_OP
+#define SIMPLIFIED_CHECKED_OP(Opcode) case IrOpcode::k##Opcode:
+      SIMPLIFIED_CHECKED_OP_LIST(SIMPLIFIED_CHECKED_OP)
+#undef SIMPLIFIED_CHECKED_OP
       return ReduceCheckNode(node);
     case IrOpcode::kSpeculativeNumberEqual:
     case IrOpcode::kSpeculativeNumberLessThan:
@@ -138,43 +125,8 @@ RedundancyElimination::EffectPathChecks::AddCheck(Zone* zone,
 
 namespace {
 
-struct Subsumption {
-  enum class Kind {
-    kNone,
-    kImplicit,
-    kWithConversion,
-  };
-
-  static Subsumption None() { return Subsumption(Kind::kNone, nullptr); }
-  static Subsumption Implicit() {
-    return Subsumption(Kind::kImplicit, nullptr);
-  }
-  static Subsumption WithConversion(const Operator* conversion_op) {
-    return Subsumption(Kind::kWithConversion, conversion_op);
-  }
-
-  bool IsNone() const { return kind_ == Kind::kNone; }
-  bool IsImplicit() const { return kind_ == Kind::kImplicit; }
-  bool IsWithConversion() const { return kind_ == Kind::kWithConversion; }
-  const Operator* conversion_operator() const {
-    DCHECK(IsWithConversion());
-    return conversion_op_;
-  }
-
- private:
-  Subsumption(Kind kind, const Operator* conversion_op)
-      : kind_(kind), conversion_op_(conversion_op) {
-    DCHECK_EQ(kind_ == Kind::kWithConversion, conversion_op_ != nullptr);
-  }
-
-  Kind kind_;
-  const Operator* conversion_op_;
-};
-
 // Does check {a} subsume check {b}?
-Subsumption CheckSubsumes(Node const* a, Node const* b,
-                          MachineOperatorBuilder* machine) {
-  Subsumption subsumption = Subsumption::Implicit();
+bool CheckSubsumes(Node const* a, Node const* b) {
   if (a->op() != b->op()) {
     if (a->opcode() == IrOpcode::kCheckInternalizedString &&
         b->opcode() == IrOpcode::kCheckString) {
@@ -189,24 +141,14 @@ Subsumption CheckSubsumes(Node const* a, Node const* b,
                b->opcode() == IrOpcode::kCheckedTaggedToArrayIndex) {
       // CheckedTaggedSignedToInt32(node) implies
       // CheckedTaggedToArrayIndex(node)
-      if (machine->Is64()) {
-        // On 64 bit architectures, ArrayIndex is 64 bit.
-        subsumption =
-            Subsumption::WithConversion(machine->ChangeInt32ToInt64());
-      }
     } else if (a->opcode() == IrOpcode::kCheckedTaggedToInt32 &&
                b->opcode() == IrOpcode::kCheckedTaggedToArrayIndex) {
       // CheckedTaggedToInt32(node) implies CheckedTaggedToArrayIndex(node)
-      if (machine->Is64()) {
-        // On 64 bit architectures, ArrayIndex is 64 bit.
-        subsumption =
-            Subsumption::WithConversion(machine->ChangeInt32ToInt64());
-      }
     } else if (a->opcode() == IrOpcode::kCheckReceiver &&
                b->opcode() == IrOpcode::kCheckReceiverOrNullOrUndefined) {
       // CheckReceiver(node) implies CheckReceiverOrNullOrUndefined(node)
     } else if (a->opcode() != b->opcode()) {
-      return Subsumption::None();
+      return false;
     } else {
       switch (a->opcode()) {
         case IrOpcode::kCheckBounds:
@@ -214,7 +156,6 @@ Subsumption CheckSubsumes(Node const* a, Node const* b,
         case IrOpcode::kCheckString:
         case IrOpcode::kCheckNumber:
         case IrOpcode::kCheckBigInt:
-        case IrOpcode::kCheckedBigIntToBigInt64:
           break;
         case IrOpcode::kCheckedInt32ToTaggedSigned:
         case IrOpcode::kCheckedInt64ToInt32:
@@ -239,7 +180,7 @@ Subsumption CheckSubsumes(Node const* a, Node const* b,
           const CheckMinusZeroParameters& bp =
               CheckMinusZeroParametersOf(b->op());
           if (ap.mode() != bp.mode()) {
-            return Subsumption::None();
+            return false;
           }
           break;
         }
@@ -253,20 +194,20 @@ Subsumption CheckSubsumes(Node const* a, Node const* b,
           // for Number, in which case {b} will be subsumed no matter what.
           if (ap.mode() != bp.mode() &&
               ap.mode() != CheckTaggedInputMode::kNumber) {
-            return Subsumption::None();
+            return false;
           }
           break;
         }
         default:
           DCHECK(!IsCheckedWithFeedback(a->op()));
-          return Subsumption::None();
+          return false;
       }
     }
   }
   for (int i = a->op()->ValueInputCount(); --i >= 0;) {
-    if (a->InputAt(i) != b->InputAt(i)) return Subsumption::None();
+    if (a->InputAt(i) != b->InputAt(i)) return false;
   }
-  return subsumption;
+  return true;
 }
 
 bool TypeSubsumes(Node* node, Node* replacement) {
@@ -282,19 +223,11 @@ bool TypeSubsumes(Node* node, Node* replacement) {
 
 }  // namespace
 
-Node* RedundancyElimination::EffectPathChecks::LookupCheck(
-    Node* node, JSGraph* jsgraph) const {
+Node* RedundancyElimination::EffectPathChecks::LookupCheck(Node* node) const {
   for (Check const* check = head_; check != nullptr; check = check->next) {
-    Subsumption subsumption =
-        CheckSubsumes(check->node, node, jsgraph->machine());
-    if (!subsumption.IsNone() && TypeSubsumes(node, check->node)) {
+    if (CheckSubsumes(check->node, node) && TypeSubsumes(node, check->node)) {
       DCHECK(!check->node->IsDead());
-      Node* result = check->node;
-      if (subsumption.IsWithConversion()) {
-        result = jsgraph->graph()->NewNode(subsumption.conversion_operator(),
-                                           result);
-      }
-      return result;
+      return check->node;
     }
   }
   return nullptr;
@@ -334,7 +267,7 @@ Reduction RedundancyElimination::ReduceCheckNode(Node* node) {
   // because we will have to recompute anyway once we compute the predecessor.
   if (checks == nullptr) return NoChange();
   // See if we have another check that dominates us.
-  if (Node* check = checks->LookupCheck(node, jsgraph_)) {
+  if (Node* check = checks->LookupCheck(node)) {
     ReplaceWithValue(node, check);
     return Replace(check);
   }

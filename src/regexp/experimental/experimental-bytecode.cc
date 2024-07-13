@@ -4,7 +4,6 @@
 
 #include "src/regexp/experimental/experimental-bytecode.h"
 
-#include <cctype>
 #include <iomanip>
 
 namespace v8 {
@@ -12,7 +11,7 @@ namespace internal {
 
 namespace {
 
-std::ostream& PrintAsciiOrHex(std::ostream& os, base::uc16 c) {
+std::ostream& PrintAsciiOrHex(std::ostream& os, uc16 c) {
   if (c < 128 && std::isprint(c)) {
     os << static_cast<char>(c);
   } else {
@@ -36,22 +35,22 @@ std::ostream& operator<<(std::ostream& os, const RegExpInstruction& inst) {
     case RegExpInstruction::ASSERTION:
       os << "ASSERTION ";
       switch (inst.payload.assertion_type) {
-        case RegExpAssertion::Type::START_OF_INPUT:
+        case RegExpAssertion::START_OF_INPUT:
           os << "START_OF_INPUT";
           break;
-        case RegExpAssertion::Type::END_OF_INPUT:
+        case RegExpAssertion::END_OF_INPUT:
           os << "END_OF_INPUT";
           break;
-        case RegExpAssertion::Type::START_OF_LINE:
+        case RegExpAssertion::START_OF_LINE:
           os << "START_OF_LINE";
           break;
-        case RegExpAssertion::Type::END_OF_LINE:
+        case RegExpAssertion::END_OF_LINE:
           os << "END_OF_LINE";
           break;
-        case RegExpAssertion::Type::BOUNDARY:
+        case RegExpAssertion::BOUNDARY:
           os << "BOUNDARY";
           break;
-        case RegExpAssertion::Type::NON_BOUNDARY:
+        case RegExpAssertion::NON_BOUNDARY:
           os << "NON_BOUNDARY";
           break;
       }
@@ -92,7 +91,7 @@ int DigitsRequiredBelow(int n) {
 }  // namespace
 
 std::ostream& operator<<(std::ostream& os,
-                         base::Vector<const RegExpInstruction> insts) {
+                         Vector<const RegExpInstruction> insts) {
   int inst_num = insts.length();
   int line_digit_num = DigitsRequiredBelow(inst_num);
 

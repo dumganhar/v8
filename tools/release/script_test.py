@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # Copyright 2014 the V8 project authors. All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
@@ -28,6 +28,9 @@
 
 # Wraps test execution with a coverage analysis. To get the best speed, the
 # native python coverage version >= 3.7.1 should be installed.
+
+# for py2/py3 compatibility
+from __future__ import print_function
 
 import coverage
 import os

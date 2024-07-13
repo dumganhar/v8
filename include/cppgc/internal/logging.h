@@ -20,18 +20,18 @@ FatalImpl(const char*, const SourceLocation& = SourceLocation::Current());
 template <typename>
 struct EatParams {};
 
-#if defined(DEBUG)
+#if DEBUG
 #define CPPGC_DCHECK_MSG(condition, message)  \
   do {                                        \
     if (V8_UNLIKELY(!(condition))) {          \
       ::cppgc::internal::DCheckImpl(message); \
     }                                         \
   } while (false)
-#else  // !defined(DEBUG)
+#else
 #define CPPGC_DCHECK_MSG(condition, message)                \
   (static_cast<void>(::cppgc::internal::EatParams<decltype( \
                          static_cast<void>(condition), message)>{}))
-#endif  // !defined(DEBUG)
+#endif
 
 #define CPPGC_DCHECK(condition) CPPGC_DCHECK_MSG(condition, #condition)
 

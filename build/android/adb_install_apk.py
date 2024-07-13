@@ -1,6 +1,6 @@
-#!/usr/bin/env vpython3
+#!/usr/bin/env vpython
 #
-# Copyright 2012 The Chromium Authors
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -59,11 +59,8 @@ def main():
   parser.add_argument('--adb-path', type=os.path.abspath,
                       help='Absolute path to the adb binary to use.')
   parser.add_argument('--denylist-file', help='Device denylist JSON file.')
-  parser.add_argument('-v',
-                      '--verbose',
-                      action='count',
-                      help='Enable verbose logging.',
-                      default=0)
+  parser.add_argument('-v', '--verbose', action='count',
+                      help='Enable verbose logging.')
   parser.add_argument('--downgrade', action='store_true',
                       help='If set, allows downgrading of apk.')
   parser.add_argument('--timeout', type=int,

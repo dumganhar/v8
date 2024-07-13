@@ -4,7 +4,5 @@ include_rules = [
   "+src/flags/flags.h",
   "+src/heap/read-only-heap.h",
   "+src/inspector/test-interface.h",
-  "+src/init/v8.h",
-  "+src/libplatform/default-platform.h",
   "+src/utils",
 ]

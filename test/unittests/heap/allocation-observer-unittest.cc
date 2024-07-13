@@ -23,7 +23,7 @@ class UnusedObserver : public AllocationObserver {
 
 TEST(AllocationObserverTest, AddAndRemoveUnusedObservers) {
   AllocationCounter counter;
-  CHECK_EQ(SIZE_MAX, counter.NextBytes());
+  CHECK(!counter.IsActive());
 
   UnusedObserver observer100(100);
   UnusedObserver observer200(200);
@@ -41,7 +41,7 @@ TEST(AllocationObserverTest, AddAndRemoveUnusedObservers) {
   CHECK_EQ(counter.NextBytes(), 110);
 
   counter.RemoveAllocationObserver(&observer200);
-  CHECK_EQ(SIZE_MAX, counter.NextBytes());
+  CHECK(!counter.IsActive());
 }
 
 namespace {
@@ -77,7 +77,7 @@ class VerifyStepObserver : public AllocationObserver {
 
 TEST(AllocationObserverTest, Step) {
   AllocationCounter counter;
-  CHECK_EQ(SIZE_MAX, counter.NextBytes());
+  CHECK(!counter.IsActive());
   const Address kSomeObjectAddress = 8;
 
   VerifyStepObserver observer100(100);

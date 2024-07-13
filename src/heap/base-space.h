@@ -9,7 +9,7 @@
 
 #include "src/base/macros.h"
 #include "src/common/globals.h"
-#include "src/heap/heap-verifier.h"
+#include "src/logging/log.h"
 #include "src/utils/allocation.h"
 
 namespace v8 {
@@ -29,33 +29,12 @@ class V8_EXPORT_PRIVATE BaseSpace : public Malloced {
     return heap_;
   }
 
-  AllocationSpace identity() const { return id_; }
+  AllocationSpace identity() { return id_; }
 
+  // Returns name of the space.
   static const char* GetSpaceName(AllocationSpace space);
 
-  const char* name() const { return GetSpaceName(id_); }
-
-  // Return the total amount committed memory for this space, i.e., allocatable
-  // memory and page headers.
-  virtual size_t CommittedMemory() const { return committed_; }
-
-  virtual size_t MaximumCommittedMemory() const { return max_committed_; }
-
-  // Approximate amount of physical memory committed for this space.
-  virtual size_t CommittedPhysicalMemory() const = 0;
-
-  // Returns allocated size.
-  virtual size_t Size() const = 0;
-
-#ifdef VERIFY_HEAP
-  virtual void Verify(Isolate* isolate,
-                      SpaceVerificationVisitor* visitor) const = 0;
-#endif  // VERIFY_HEAP
-
- protected:
-  BaseSpace(Heap* heap, AllocationSpace id) : heap_(heap), id_(id) {}
-
-  virtual ~BaseSpace() = default;
+  const char* name() { return GetSpaceName(id_); }
 
   void AccountCommitted(size_t bytes) {
     DCHECK_GE(committed_ + bytes, committed_);
@@ -70,13 +49,31 @@ class V8_EXPORT_PRIVATE BaseSpace : public Malloced {
     committed_ -= bytes;
   }
 
+  // Return the total amount committed memory for this space, i.e., allocatable
+  // memory and page headers.
+  virtual size_t CommittedMemory() { return committed_; }
+
+  virtual size_t MaximumCommittedMemory() { return max_committed_; }
+
+  // Approximate amount of physical memory committed for this space.
+  virtual size_t CommittedPhysicalMemory() = 0;
+
+  // Returns allocated size.
+  virtual size_t Size() = 0;
+
+ protected:
+  BaseSpace(Heap* heap, AllocationSpace id)
+      : heap_(heap), id_(id), committed_(0), max_committed_(0) {}
+
+  virtual ~BaseSpace() = default;
+
  protected:
   Heap* heap_;
   AllocationSpace id_;
 
   // Keeps track of committed memory in a space.
-  std::atomic<size_t> committed_{0};
-  size_t max_committed_ = 0;
+  std::atomic<size_t> committed_;
+  size_t max_committed_;
 };
 
 }  // namespace internal

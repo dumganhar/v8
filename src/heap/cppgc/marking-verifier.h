@@ -7,7 +7,6 @@
 
 #include <unordered_set>
 
-#include "src/base/optional.h"
 #include "src/heap/base/stack.h"
 #include "src/heap/cppgc/heap-object-header.h"
 #include "src/heap/cppgc/heap-visitor.h"
@@ -21,9 +20,6 @@ class VerificationState {
  public:
   void VerifyMarked(const void*) const;
   void SetCurrentParent(const HeapObjectHeader* header) { parent_ = header; }
-
-  // No parent means parent was on stack.
-  bool IsParentOnStack() const { return !parent_; }
 
  private:
   const HeapObjectHeader* parent_ = nullptr;
@@ -41,35 +37,34 @@ class V8_EXPORT_PRIVATE MarkingVerifierBase
   MarkingVerifierBase(const MarkingVerifierBase&) = delete;
   MarkingVerifierBase& operator=(const MarkingVerifierBase&) = delete;
 
-  void Run(StackState, v8::base::Optional<size_t>);
+  void Run(Heap::Config::StackState);
 
  protected:
-  MarkingVerifierBase(HeapBase&, CollectionType, VerificationState&,
-                      std::unique_ptr<cppgc::Visitor>);
+  MarkingVerifierBase(HeapBase&, std::unique_ptr<cppgc::Visitor>);
+
+  virtual void SetCurrentParent(const HeapObjectHeader*) = 0;
 
  private:
   void VisitInConstructionConservatively(HeapObjectHeader&,
                                          TraceConservativelyCallback) final;
   void VisitPointer(const void*) final;
 
-  bool VisitHeapObjectHeader(HeapObjectHeader&);
+  bool VisitHeapObjectHeader(HeapObjectHeader*);
 
-  VerificationState& verification_state_;
   std::unique_ptr<cppgc::Visitor> visitor_;
 
   std::unordered_set<const HeapObjectHeader*> in_construction_objects_heap_;
   std::unordered_set<const HeapObjectHeader*> in_construction_objects_stack_;
   std::unordered_set<const HeapObjectHeader*>* in_construction_objects_ =
       &in_construction_objects_heap_;
-  size_t verifier_found_marked_bytes_ = 0;
-  bool verifier_found_marked_bytes_are_exact_ = true;
-  CollectionType collection_type_;
 };
 
 class V8_EXPORT_PRIVATE MarkingVerifier final : public MarkingVerifierBase {
  public:
-  MarkingVerifier(HeapBase&, CollectionType);
+  explicit MarkingVerifier(HeapBase&);
   ~MarkingVerifier() final = default;
+
+  void SetCurrentParent(const HeapObjectHeader*) final;
 
  private:
   VerificationState state_;

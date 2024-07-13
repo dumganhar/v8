@@ -11,7 +11,6 @@ namespace v8 {
 namespace internal {
 
 class Builtins;
-enum class Builtin : int32_t;
 class Code;
 class Heap;
 class Isolate;
@@ -31,19 +30,23 @@ class Isolate;
 // linked in by the latter two Delegate implementations.
 class V8_EXPORT_PRIVATE SetupIsolateDelegate {
  public:
-  SetupIsolateDelegate() = default;
+  explicit SetupIsolateDelegate(bool create_heap_objects)
+      : create_heap_objects_(create_heap_objects) {}
   virtual ~SetupIsolateDelegate() = default;
 
-  virtual bool SetupHeap(Isolate* isolate, bool create_heap_objects);
-  virtual void SetupBuiltins(Isolate* isolate, bool compile_builtins);
+  virtual void SetupBuiltins(Isolate* isolate);
+
+  virtual bool SetupHeap(Heap* heap);
 
  protected:
   static void SetupBuiltinsInternal(Isolate* isolate);
-  static void AddBuiltin(Builtins* builtins, Builtin builtin, Code code);
+  static void AddBuiltin(Builtins* builtins, int index, Code code);
   static void PopulateWithPlaceholders(Isolate* isolate);
   static void ReplacePlaceholders(Isolate* isolate);
 
-  static bool SetupHeapInternal(Isolate* isolate);
+  static bool SetupHeapInternal(Heap* heap);
+
+  const bool create_heap_objects_;
 };
 
 }  // namespace internal

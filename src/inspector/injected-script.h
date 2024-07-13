@@ -35,9 +35,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "include/v8-exception.h"
-#include "include/v8-local-handle.h"
-#include "include/v8-persistent-handle.h"
 #include "src/base/macros.h"
 #include "src/inspector/inspected-context.h"
 #include "src/inspector/protocol/Forward.h"
@@ -45,34 +42,27 @@
 #include "src/inspector/v8-console.h"
 #include "src/inspector/v8-debugger.h"
 
+#include "include/v8.h"
+
 namespace v8_inspector {
 
 class RemoteObjectId;
 class V8InspectorImpl;
 class V8InspectorSessionImpl;
 class ValueMirror;
+enum class WrapMode;
 
 using protocol::Maybe;
 using protocol::Response;
 
 class EvaluateCallback {
  public:
-  static void sendSuccess(
-      std::weak_ptr<EvaluateCallback> callback, InjectedScript* injectedScript,
-      std::unique_ptr<protocol::Runtime::RemoteObject> result,
-      protocol::Maybe<protocol::Runtime::ExceptionDetails> exceptionDetails);
-  static void sendFailure(std::weak_ptr<EvaluateCallback> callback,
-                          InjectedScript* injectedScript,
-                          const protocol::DispatchResponse& response);
-
-  virtual ~EvaluateCallback() = default;
-
- private:
   virtual void sendSuccess(
       std::unique_ptr<protocol::Runtime::RemoteObject> result,
       protocol::Maybe<protocol::Runtime::ExceptionDetails>
           exceptionDetails) = 0;
   virtual void sendFailure(const protocol::DispatchResponse& response) = 0;
+  virtual ~EvaluateCallback() = default;
 };
 
 class InjectedScript final {
@@ -86,15 +76,13 @@ class InjectedScript final {
 
   Response getProperties(
       v8::Local<v8::Object>, const String16& groupName, bool ownProperties,
-      bool accessorPropertiesOnly, bool nonIndexedPropertiesOnly,
-      const WrapOptions& wrapOptions,
+      bool accessorPropertiesOnly, WrapMode wrapMode,
       std::unique_ptr<protocol::Array<protocol::Runtime::PropertyDescriptor>>*
           result,
       Maybe<protocol::Runtime::ExceptionDetails>*);
 
   Response getInternalAndPrivateProperties(
       v8::Local<v8::Value>, const String16& groupName,
-      bool accessorPropertiesOnly,
       std::unique_ptr<
           protocol::Array<protocol::Runtime::InternalPropertyDescriptor>>*
           internalProperties,
@@ -105,16 +93,15 @@ class InjectedScript final {
   void releaseObject(const String16& objectId);
 
   Response wrapObject(v8::Local<v8::Value>, const String16& groupName,
-                      const WrapOptions& wrapOptions,
+                      WrapMode wrapMode,
                       std::unique_ptr<protocol::Runtime::RemoteObject>* result);
   Response wrapObject(v8::Local<v8::Value>, const String16& groupName,
-                      const WrapOptions& wrapOptions,
+                      WrapMode wrapMode,
                       v8::MaybeLocal<v8::Value> customPreviewConfig,
                       int maxCustomPreviewDepth,
                       std::unique_ptr<protocol::Runtime::RemoteObject>* result);
   Response wrapObjectMirror(
-      const ValueMirror& mirror, const String16& groupName,
-      const WrapOptions& wrapOptions,
+      const ValueMirror& mirror, const String16& groupName, WrapMode wrapMode,
       v8::MaybeLocal<v8::Value> customPreviewConfig, int maxCustomPreviewDepth,
       std::unique_ptr<protocol::Runtime::RemoteObject>* result);
   std::unique_ptr<protocol::Runtime::RemoteObject> wrapTable(
@@ -122,10 +109,9 @@ class InjectedScript final {
 
   void addPromiseCallback(V8InspectorSessionImpl* session,
                           v8::MaybeLocal<v8::Value> value,
-                          const String16& objectGroup,
-                          std::unique_ptr<WrapOptions> wrapOptions,
-                          bool replMode, bool throwOnSideEffect,
-                          std::shared_ptr<EvaluateCallback> callback);
+                          const String16& objectGroup, WrapMode wrapMode,
+                          bool replMode,
+                          std::unique_ptr<EvaluateCallback> callback);
 
   Response findObject(const RemoteObjectId&, v8::Local<v8::Value>*) const;
   String16 objectGroupName(const RemoteObjectId&) const;
@@ -144,8 +130,7 @@ class InjectedScript final {
 
   Response wrapEvaluateResult(
       v8::MaybeLocal<v8::Value> maybeResultValue, const v8::TryCatch&,
-      const String16& objectGroup, const WrapOptions& wrapOptions,
-      bool throwOnSideEffect,
+      const String16& objectGroup, WrapMode wrapMode,
       std::unique_ptr<protocol::Runtime::RemoteObject>* result,
       Maybe<protocol::Runtime::ExceptionDetails>*);
   v8::Local<v8::Value> lastEvaluationResult() const;
@@ -188,8 +173,7 @@ class InjectedScript final {
     int m_sessionId;
   };
 
-  class ContextScope : public Scope,
-                       public V8InspectorSession::CommandLineAPIScope {
+  class ContextScope : public Scope {
    public:
     ContextScope(V8InspectorSessionImpl*, int executionContextId);
     ~ContextScope() override;
@@ -233,8 +217,6 @@ class InjectedScript final {
   String16 bindObject(v8::Local<v8::Value>, const String16& groupName);
 
  private:
-  friend class EvaluateCallback;
-
   v8::Local<v8::Object> commandLineAPI();
   void unbindObject(int id);
 
@@ -244,7 +226,8 @@ class InjectedScript final {
 
   class ProtocolPromiseHandler;
   void discardEvaluateCallbacks();
-  void deleteEvaluateCallback(std::shared_ptr<EvaluateCallback> callback);
+  std::unique_ptr<EvaluateCallback> takeEvaluateCallback(
+      EvaluateCallback* callback);
   Response addExceptionToDetails(
       v8::Local<v8::Value> exception,
       protocol::Runtime::ExceptionDetails* exceptionDetails,
@@ -258,7 +241,7 @@ class InjectedScript final {
   std::unordered_map<int, v8::Global<v8::Value>> m_idToWrappedObject;
   std::unordered_map<int, String16> m_idToObjectGroupName;
   std::unordered_map<String16, std::vector<int>> m_nameToObjectGroup;
-  std::unordered_set<std::shared_ptr<EvaluateCallback>> m_evaluateCallbacks;
+  std::unordered_set<EvaluateCallback*> m_evaluateCallbacks;
   bool m_customPreviewEnabled = false;
 };
 

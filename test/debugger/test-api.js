@@ -37,8 +37,8 @@ class DebugWrapper {
 
     // The different types of steps.
     this.StepAction = { StepOut: 0,
-                        StepOver: 1,
-                        StepInto: 2,
+                        StepNext: 1,
+                        StepIn: 2,
                       };
 
     // A copy of the scope types from runtime-debug.cc.
@@ -307,8 +307,8 @@ class DebugWrapper {
   execStatePrepareStep(action) {
     switch(action) {
       case this.StepAction.StepOut: this.stepOut(); break;
-      case this.StepAction.StepOver: this.stepOver(); break;
-      case this.StepAction.StepInto: this.stepInto(); break;
+      case this.StepAction.StepNext: this.stepOver(); break;
+      case this.StepAction.StepIn: this.stepInto(); break;
       default: %AbortJS("Unsupported StepAction"); break;
     }
   }
@@ -463,12 +463,7 @@ class DebugWrapper {
         "Runtime.getProperties", { objectId : objectId, ownProperties: true });
     this.sendMessage(msg);
     const reply = this.takeReplyChecked(msgid);
-    for (const internalProperty of reply.result.internalProperties) {
-      if (internalProperty.name === '[[PrimitiveValue]]') {
-        return Object(internalProperty.value.value);
-      }
-    }
-    throw new Error('Remote object is not a value wrapper');
+    return Object(reply.result.internalProperties[0].value.value);
   }
 
   reconstructRemoteObject(obj) {
@@ -712,10 +707,9 @@ class DebugWrapper {
         debugEvent = this.DebugEvent.OOM;
         break;
       case "other":
-      case "step":
-      case "ambiguous":
         debugEvent = this.DebugEvent.Break;
         break;
+      case "ambiguous":
       case "XHR":
       case "DOM":
       case "EventListener":

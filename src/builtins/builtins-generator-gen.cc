@@ -74,7 +74,7 @@ void GeneratorBuiltinsAssembler::InnerResume(
 
   // The generator function should not close the generator by itself, let's
   // check it is indeed not closed yet.
-  CSA_DCHECK(this, SmiNotEqual(result_continuation, closed));
+  CSA_ASSERT(this, SmiNotEqual(result_continuation, closed));
 
   TNode<Smi> executing = SmiConstant(JSGeneratorObject::kGeneratorExecuting);
   GotoIf(SmiEqual(result_continuation, executing), &if_final_return);
@@ -87,28 +87,28 @@ void GeneratorBuiltinsAssembler::InnerResume(
     StoreObjectFieldNoWriteBarrier(
         receiver, JSGeneratorObject::kContinuationOffset, closed);
     // Return the wrapped result.
-    args->PopAndReturn(CallBuiltin(Builtin::kCreateIterResultObject, context,
+    args->PopAndReturn(CallBuiltin(Builtins::kCreateIterResultObject, context,
                                    result, TrueConstant()));
   }
 
   BIND(&if_receiverisclosed);
   {
     // The {receiver} is closed already.
-    TNode<Object> builtin_result;
+    TNode<Object> result;
     switch (resume_mode) {
       case JSGeneratorObject::kNext:
-        builtin_result = CallBuiltin(Builtin::kCreateIterResultObject, context,
-                                     UndefinedConstant(), TrueConstant());
+        result = CallBuiltin(Builtins::kCreateIterResultObject, context,
+                             UndefinedConstant(), TrueConstant());
         break;
       case JSGeneratorObject::kReturn:
-        builtin_result = CallBuiltin(Builtin::kCreateIterResultObject, context,
-                                     value, TrueConstant());
+        result = CallBuiltin(Builtins::kCreateIterResultObject, context, value,
+                             TrueConstant());
         break;
       case JSGeneratorObject::kThrow:
-        builtin_result = CallRuntime(Runtime::kThrow, context, value);
+        result = CallRuntime(Runtime::kThrow, context, value);
         break;
     }
-    args->PopAndReturn(builtin_result);
+    args->PopAndReturn(result);
   }
 
   BIND(&if_receiverisrunning);
@@ -205,7 +205,7 @@ TF_BUILTIN(GeneratorPrototypeThrow, GeneratorBuiltinsAssembler) {
 // TODO(cbruni): Merge with corresponding bytecode handler.
 TF_BUILTIN(SuspendGeneratorBaseline, GeneratorBuiltinsAssembler) {
   auto generator = Parameter<JSGeneratorObject>(Descriptor::kGeneratorObject);
-  auto context = LoadContextFromBaseline();
+  auto context = Parameter<Context>(Descriptor::kContext);
   StoreJSGeneratorObjectContext(generator, context);
   auto suspend_id = SmiTag(UncheckedParameter<IntPtrT>(Descriptor::kSuspendId));
   StoreJSGeneratorObjectContinuation(generator, suspend_id);
@@ -219,19 +219,20 @@ TF_BUILTIN(SuspendGeneratorBaseline, GeneratorBuiltinsAssembler) {
 
   TNode<JSFunction> closure = LoadJSGeneratorObjectFunction(generator);
   auto sfi = LoadJSFunctionSharedFunctionInfo(closure);
-  CSA_DCHECK(this,
-             Word32BinaryNot(IsSharedFunctionInfoDontAdaptArguments(sfi)));
-  TNode<IntPtrT> formal_parameter_count = Signed(ChangeUint32ToWord(
-      LoadSharedFunctionInfoFormalParameterCountWithoutReceiver(sfi)));
+  TNode<IntPtrT> formal_parameter_count = Signed(
+      ChangeUint32ToWord(LoadSharedFunctionInfoFormalParameterCount(sfi)));
+  CSA_ASSERT(this, Word32BinaryNot(IntPtrEqual(
+                       formal_parameter_count,
+                       IntPtrConstant(kDontAdaptArgumentsSentinel))));
 
   TNode<FixedArray> parameters_and_registers =
       LoadJSGeneratorObjectParametersAndRegisters(generator);
   auto parameters_and_registers_length =
-      LoadAndUntagFixedArrayBaseLength(parameters_and_registers);
+      SmiUntag(LoadFixedArrayBaseLength(parameters_and_registers));
 
   // Copy over the function parameters
   auto parameter_base_index = IntPtrConstant(
-      interpreter::Register::FromParameterIndex(0).ToOperand() + 1);
+      interpreter::Register::FromParameterIndex(0, 1).ToOperand() + 1);
   CSA_CHECK(this, UintPtrLessThan(formal_parameter_count,
                                   parameters_and_registers_length));
   auto parent_frame_pointer = LoadParentFramePointer();
@@ -243,7 +244,7 @@ TF_BUILTIN(SuspendGeneratorBaseline, GeneratorBuiltinsAssembler) {
                                              TimesSystemPointerSize(reg_index));
         UnsafeStoreFixedArrayElement(parameters_and_registers, index, value);
       },
-      1, LoopUnrollingMode::kNo, IndexAdvanceMode::kPost);
+      1, IndexAdvanceMode::kPost);
 
   // Iterate over register file and write values into array.
   // The mapping of register to array index must match that used in
@@ -262,7 +263,7 @@ TF_BUILTIN(SuspendGeneratorBaseline, GeneratorBuiltinsAssembler) {
                                              TimesSystemPointerSize(reg_index));
         UnsafeStoreFixedArrayElement(parameters_and_registers, index, value);
       },
-      1, LoopUnrollingMode::kNo, IndexAdvanceMode::kPost);
+      1, IndexAdvanceMode::kPost);
 
   // The return value is unused, defaulting to undefined.
   Return(UndefinedConstant());
@@ -273,10 +274,11 @@ TF_BUILTIN(ResumeGeneratorBaseline, GeneratorBuiltinsAssembler) {
   auto generator = Parameter<JSGeneratorObject>(Descriptor::kGeneratorObject);
   TNode<JSFunction> closure = LoadJSGeneratorObjectFunction(generator);
   auto sfi = LoadJSFunctionSharedFunctionInfo(closure);
-  CSA_DCHECK(this,
-             Word32BinaryNot(IsSharedFunctionInfoDontAdaptArguments(sfi)));
-  TNode<IntPtrT> formal_parameter_count = Signed(ChangeUint32ToWord(
-      LoadSharedFunctionInfoFormalParameterCountWithoutReceiver(sfi)));
+  TNode<IntPtrT> formal_parameter_count = Signed(
+      ChangeUint32ToWord(LoadSharedFunctionInfoFormalParameterCount(sfi)));
+  CSA_ASSERT(this, Word32BinaryNot(IntPtrEqual(
+                       formal_parameter_count,
+                       IntPtrConstant(kDontAdaptArgumentsSentinel))));
 
   TNode<FixedArray> parameters_and_registers =
       LoadJSGeneratorObjectParametersAndRegisters(generator);
@@ -289,7 +291,7 @@ TF_BUILTIN(ResumeGeneratorBaseline, GeneratorBuiltinsAssembler) {
   auto register_count = UncheckedParameter<IntPtrT>(Descriptor::kRegisterCount);
   auto end_index = IntPtrAdd(formal_parameter_count, register_count);
   auto parameters_and_registers_length =
-      LoadAndUntagFixedArrayBaseLength(parameters_and_registers);
+      SmiUntag(LoadFixedArrayBaseLength(parameters_and_registers));
   CSA_CHECK(this, UintPtrLessThan(end_index, parameters_and_registers_length));
   auto parent_frame_pointer = LoadParentFramePointer();
   BuildFastLoop<IntPtrT>(
@@ -304,7 +306,7 @@ TF_BUILTIN(ResumeGeneratorBaseline, GeneratorBuiltinsAssembler) {
                                      StaleRegisterConstant(),
                                      SKIP_WRITE_BARRIER);
       },
-      1, LoopUnrollingMode::kNo, IndexAdvanceMode::kPost);
+      1, IndexAdvanceMode::kPost);
 
   Return(LoadJSGeneratorObjectInputOrDebugPos(generator));
 }

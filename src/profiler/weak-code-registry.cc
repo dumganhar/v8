@@ -4,8 +4,7 @@
 
 #include "src/profiler/weak-code-registry.h"
 
-#include "src/handles/global-handles-inl.h"
-#include "src/objects/code-inl.h"
+#include "src/handles/global-handles.h"
 #include "src/objects/instance-type-inl.h"
 
 namespace v8 {

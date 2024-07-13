@@ -9,8 +9,8 @@
 #include <memory>
 #include <vector>
 
-#include "src/base/contextual.h"
 #include "src/base/optional.h"
+#include "src/torque/contextual.h"
 #include "src/torque/source-positions.h"
 #include "src/torque/utils.h"
 
@@ -44,8 +44,6 @@ enum class ParseResultHolderBase::TypeId {
   kStdString,
   kBool,
   kInt32,
-  kDouble,
-  kIntegerLiteral,
   kStdVectorOfString,
   kExpressionPtr,
   kIdentifierPtr,
@@ -165,7 +163,10 @@ class ParseResultIterator {
   explicit ParseResultIterator(std::vector<ParseResult> results,
                                MatchedInput matched_input)
       : results_(std::move(results)), matched_input_(matched_input) {}
-
+  ~ParseResultIterator() {
+    // Check that all parse results have been used.
+    CHECK_EQ(results_.size(), i_);
+  }
   ParseResultIterator(const ParseResultIterator&) = delete;
   ParseResultIterator& operator=(const ParseResultIterator&) = delete;
 
@@ -247,7 +248,7 @@ class Rule final {
 // used in the parser.
 class Symbol {
  public:
-  Symbol() = default;
+  Symbol() : Symbol({}) {}
   Symbol(std::initializer_list<Rule> rules) { *this = rules; }
 
   // Disallow copying and moving to ensure Symbol has a stable address.

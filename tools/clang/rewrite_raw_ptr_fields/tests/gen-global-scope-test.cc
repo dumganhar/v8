@@ -1,10 +1,10 @@
-// Copyright 2020 The Chromium Authors
+// Copyright 2020 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // This file (and other gen-*-test.cc files) tests generation of output for
 // --field-filter-file and therefore the expectations file
-// (gen-global-scope-expected.txt) needs to be compared against the raw
+// (gen-global-destructor-expected.txt) needs to be compared against the raw
 // output of the rewriter (rather than against the actual edits result).  This
 // makes the test incompatible with other tests, which require passing
 // --apply-edits switch to test_tool.py and so to disable the test it is named
@@ -17,11 +17,11 @@
 // https://google.github.io/styleguide/cppguide.html#Static_and_Global_Variables
 // go/totw/110#destruction
 //
-// If raw_ptr has a non-trivial destructor (e.g. if it is implemented via
-// BackupRefPtr) then raw_ptr cannot be used as the type of fields in structs
+// If CheckedPtr has a non-trivial destructor (e.g. if it is implemented via
+// BackupRefPtr) then CheckedPtr cannot be used as the type of fields in structs
 // that are (recursively/transitively) the type of a global variable:
-//     struct MyStruct {       //    Presence of raw_ptr might mean that
-//       raw_ptr<int> ptr;  // <- MyStruct has a non-trivial destructor.
+//     struct MyStruct {       //    Presence of CheckedPtr might mean that
+//       CheckedPtr<int> ptr;  // <- MyStruct has a non-trivial destructor.
 //     };
 //     MyStruct g_struct;  // <- Error if MyStruct has a non-trivial destructor.
 //
@@ -31,35 +31,29 @@
 namespace global_variables_test {
 
 struct MyStruct {
-  MyStruct(int& r) : ref(r), ref2(r) {}
   // Expected to be emitted in automated-fields-to-ignore.txt, because
   // of |g_struct| below.
   int* ptr;
-  int& ref;
 
   // Verification that *all* fields of a struct are covered (e.g. that the
   // |forEach| matcher is used instead of the |has| matcher).
   int* ptr2;
-  int& ref2;
 };
-int num = 11;
-MyStruct g_struct(num);
+
+MyStruct g_struct;
 
 }  // namespace global_variables_test
 
 namespace static_variables_test {
 
 struct MyStruct {
-  MyStruct(int& r) : ref(r) {}
   // Expected to be emitted in automated-fields-to-ignore.txt, because
   // of |s_struct| below.
   int* ptr;
-  int& ref;
 };
 
 void foo() {
-  static int n = 11;
-  static MyStruct s_struct(n);
+  static MyStruct s_struct;
 }
 
 }  // namespace static_variables_test
@@ -67,34 +61,28 @@ void foo() {
 namespace nested_struct_test {
 
 struct MyStruct {
-  MyStruct(int& r) : ref(r) {}
   // Expected to be emitted in automated-fields-to-ignore.txt, because
   // of |g_outer_struct| below.
   int* ptr;
-  int& ref;
 };
 
 struct MyOuterStruct {
-  MyOuterStruct(int& r) : inner_struct(r) {}
   MyStruct inner_struct;
 };
-static int n = 42;
-static MyOuterStruct g_outer_struct(n);
+
+static MyOuterStruct g_outer_struct;
 
 }  // namespace nested_struct_test
 
 namespace nested_in_array_test {
 
 struct MyStruct {
-  MyStruct(int& r) : ref(r) {}
   // Expected to be emitted in automated-fields-to-ignore.txt, because
   // of |g_outer_array| below.
   int* ptr;
-
-  int& ref;
 };
-static int num = 42;
-static MyStruct g_outer_struct[] = {num, num, num};
+
+static MyStruct g_outer_struct[] = {nullptr, nullptr, nullptr};
 
 }  // namespace nested_in_array_test
 
@@ -102,25 +90,16 @@ namespace nested_template_test {
 
 template <typename T>
 struct MyStruct {
-  MyStruct(T& r) : ref(r), ref2(r) {}
   // Expected to be emitted in automated-fields-to-ignore.txt, because
   // of |g_outer_struct| below.
   T* ptr;
-
-  T* ptr2;
-
-  T& ref;
-
-  T& ref2;
 };
 
 struct MyOuterStruct {
-  MyOuterStruct(int& r) : inner_struct(r) {}
   MyStruct<int> inner_struct;
 };
 
-static int num = 42;
-static MyOuterStruct g_outer_struct(num);
+static MyOuterStruct g_outer_struct;
 
 }  // namespace nested_template_test
 

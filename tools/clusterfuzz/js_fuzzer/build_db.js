@@ -34,6 +34,7 @@ function main() {
   }
 
   const mutateDb = new db.MutateDbWriter(program.output_dir);
+  const expressions = new Set();
 
   const inputDir = path.resolve(program.input_dir);
   for (const corpusName of program.args) {
@@ -52,7 +53,7 @@ function main() {
       }
 
       try{
-        mutateDb.process(source);
+        mutateDb.process(source, expressions);
       } catch (e) {
         console.log(e);
       }

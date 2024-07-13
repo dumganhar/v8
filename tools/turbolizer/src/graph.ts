@@ -1,90 +1,107 @@
-// Copyright 2022 the V8 project authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+import { GNode } from "./node";
+import { Edge, MINIMUM_EDGE_SEPARATION } from "./edge";
 
-import * as C from "./common/constants";
-import { GraphPhase, GraphStateType } from "./phases/graph-phase/graph-phase";
-import { GraphEdge } from "./phases/graph-phase/graph-edge";
-import { GraphNode } from "./phases/graph-phase/graph-node";
-import { MovableContainer } from "./movable-container";
+export class Graph {
+  nodeMap: Array<GNode>;
+  minGraphX: number;
+  maxGraphX: number;
+  minGraphY: number;
+  maxGraphY: number;
+  maxGraphNodeX: number;
+  maxBackEdgeNumber: number;
+  width: number;
+  height: number;
 
-export class Graph extends MovableContainer<GraphPhase> {
-  nodeMap: Array<GraphNode>;
-  originNodesMap: Map<string, Array<GraphNode>>;
+  constructor(data: any) {
+    this.nodeMap = [];
 
-  constructor(graphPhase: GraphPhase) {
-    super(graphPhase);
-    this.nodeMap = graphPhase.nodeIdToNodeMap;
-    this.originNodesMap = graphPhase.originIdToNodesMap;
+    this.minGraphX = 0;
+    this.maxGraphX = 1;
+    this.minGraphY = 0;
+    this.maxGraphY = 1;
+    this.width = 1;
+    this.height = 1;
+
+    data.nodes.forEach((jsonNode: any) => {
+      this.nodeMap[jsonNode.id] = new GNode(jsonNode.nodeLabel);
+    });
+
+    data.edges.forEach((e: any) => {
+      const t = this.nodeMap[e.target];
+      const s = this.nodeMap[e.source];
+      const newEdge = new Edge(t, e.index, s, e.type);
+      t.inputs.push(newEdge);
+      s.outputs.push(newEdge);
+      if (e.type == 'control') {
+        // Every source of a control edge is a CFG node.
+        s.cfg = true;
+      }
+    });
+
   }
 
-  public *nodes(func = (n: GraphNode) => true) {
+  *nodes(p = (n: GNode) => true) {
     for (const node of this.nodeMap) {
-      if (!node || !func(node)) continue;
+      if (!node || !p(node)) continue;
       yield node;
     }
   }
 
-  public *filteredEdges(func: (e: GraphEdge) => boolean) {
+  *filteredEdges(p: (e: Edge) => boolean) {
     for (const node of this.nodes()) {
       for (const edge of node.inputs) {
-        if (func(edge)) yield edge;
+        if (p(edge)) yield edge;
       }
     }
   }
 
-  public forEachEdge(func: (e: GraphEdge) => void) {
+  forEachEdge(p: (e: Edge) => void) {
     for (const node of this.nodeMap) {
       if (!node) continue;
       for (const edge of node.inputs) {
-        func(edge);
+        p(edge);
       }
     }
   }
 
-  public redetermineGraphBoundingBox(showTypes: boolean): [[number, number], [number, number]] {
+  redetermineGraphBoundingBox(showTypes: boolean): [[number, number], [number, number]] {
     this.minGraphX = 0;
     this.maxGraphNodeX = 1;
+    this.maxGraphX = undefined;  // see below
     this.minGraphY = 0;
     this.maxGraphY = 1;
 
     for (const node of this.nodes()) {
-      if (!node.visible) continue;
+      if (!node.visible) {
+        continue;
+      }
 
-      this.minGraphX = Math.min(this.minGraphX, node.x);
-      this.maxGraphNodeX = Math.max(this.maxGraphNodeX, node.x + node.getWidth());
-
-      this.minGraphY = Math.min(this.minGraphY, node.y - C.NODE_INPUT_WIDTH);
-      this.maxGraphY = Math.max(this.maxGraphY, node.y + node.getHeight(showTypes)
-        + C.NODE_INPUT_WIDTH);
+      if (node.x < this.minGraphX) {
+        this.minGraphX = node.x;
+      }
+      if ((node.x + node.getTotalNodeWidth()) > this.maxGraphNodeX) {
+        this.maxGraphNodeX = node.x + node.getTotalNodeWidth();
+      }
+      if ((node.y - 50) < this.minGraphY) {
+        this.minGraphY = node.y - 50;
+      }
+      if ((node.y + node.getNodeHeight(showTypes) + 50) > this.maxGraphY) {
+        this.maxGraphY = node.y + node.getNodeHeight(showTypes) + 50;
+      }
     }
 
-    this.maxGraphX = this.maxGraphNodeX + this.maxBackEdgeNumber
-      * C.MINIMUM_EDGE_SEPARATION;
+    this.maxGraphX = this.maxGraphNodeX +
+      this.maxBackEdgeNumber * MINIMUM_EDGE_SEPARATION;
 
     this.width = this.maxGraphX - this.minGraphX;
     this.height = this.maxGraphY - this.minGraphY;
 
-    return [
+    const extent: [[number, number], [number, number]] = [
       [this.minGraphX - this.width / 2, this.minGraphY - this.height / 2],
       [this.maxGraphX + this.width / 2, this.maxGraphY + this.height / 2]
     ];
+
+    return extent;
   }
 
-  public makeNodeVisible(identifier: string): void {
-    if (this.nodeMap[identifier]) this.nodeMap[identifier].visible = true;
-  }
-
-  public makeEdgesVisible(): void {
-    if (this.graphPhase.stateType == GraphStateType.NeedToFullRebuild) {
-      this.forEachEdge(edge =>
-        edge.visible = edge.source.visible && edge.target.visible
-      );
-    } else {
-      this.forEachEdge(edge =>
-        edge.visible = edge.visible || (this.isRendered() &&
-          edge.type === "control" && edge.source.visible && edge.target.visible)
-      );
-    }
-  }
 }

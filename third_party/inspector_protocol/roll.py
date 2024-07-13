@@ -1,8 +1,9 @@
-#!/usr/bin/env python3
-# Copyright 2019 The Chromium Authors
+#!/usr/bin/env python
+# Copcright 2019 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
 import argparse
 import sys
 import os
@@ -66,7 +67,7 @@ def RunCmd(cmd):
   (stdoutdata, stderrdata) = p.communicate()
   if p.returncode != 0:
     raise Exception('%s: exit status %d', str(cmd), p.returncode)
-  return stdoutdata.decode('utf-8')
+  return stdoutdata
 
 
 def CheckRepoIsClean(path, suffix):

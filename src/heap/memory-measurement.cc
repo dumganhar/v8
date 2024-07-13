@@ -4,17 +4,15 @@
 
 #include "src/heap/memory-measurement.h"
 
-#include "include/v8-local-handle.h"
+#include "include/v8.h"
 #include "src/api/api-inl.h"
 #include "src/execution/isolate-inl.h"
-#include "src/handles/global-handles-inl.h"
 #include "src/heap/factory-inl.h"
 #include "src/heap/incremental-marking.h"
 #include "src/heap/marking-worklist.h"
 #include "src/logging/counters.h"
 #include "src/objects/js-array-buffer-inl.h"
 #include "src/objects/js-promise-inl.h"
-#include "src/objects/smi.h"
 #include "src/tasks/task-utils.h"
 
 namespace v8 {
@@ -166,8 +164,8 @@ void MeasureMemoryDelegate::MeasurementComplete(
 
 MemoryMeasurement::MemoryMeasurement(Isolate* isolate)
     : isolate_(isolate), random_number_generator_() {
-  if (v8_flags.random_seed) {
-    random_number_generator_.SetSeed(v8_flags.random_seed);
+  if (FLAG_random_seed) {
+    random_number_generator_.SetSeed(FLAG_random_seed);
   }
 }
 
@@ -279,9 +277,9 @@ void MemoryMeasurement::ScheduleGCTask(v8::MeasureMemoryExecution execution) {
     SetGCTaskDone(execution);
     if (received_.empty()) return;
     Heap* heap = isolate_->heap();
-    if (v8_flags.incremental_marking) {
+    if (FLAG_incremental_marking) {
       if (heap->incremental_marking()->IsStopped()) {
-        heap->StartIncrementalMarking(GCFlag::kNoFlags,
+        heap->StartIncrementalMarking(Heap::kNoGCFlags,
                                       GarbageCollectionReason::kMeasureMemory);
       } else {
         if (execution == v8::MeasureMemoryExecution::kEager) {
@@ -338,12 +336,11 @@ std::unique_ptr<v8::MeasureMemoryDelegate> MemoryMeasurement::DefaultDelegate(
 
 bool NativeContextInferrer::InferForContext(Isolate* isolate, Context context,
                                             Address* native_context) {
-  PtrComprCageBase cage_base(isolate);
-  Map context_map = context.map(cage_base, kAcquireLoad);
+  Map context_map = context.synchronized_map();
   Object maybe_native_context =
       TaggedField<Object, Map::kConstructorOrBackPointerOrNativeContextOffset>::
-          Acquire_Load(cage_base, context_map);
-  if (maybe_native_context.IsNativeContext(cage_base)) {
+          Acquire_Load(isolate, context_map);
+  if (maybe_native_context.IsNativeContext()) {
     *native_context = maybe_native_context.ptr();
     return true;
   }
@@ -358,7 +355,7 @@ bool NativeContextInferrer::InferForJSFunction(Isolate* isolate,
                                                                     function);
   // The context may be a smi during deserialization.
   if (maybe_context.IsSmi()) {
-    DCHECK_EQ(maybe_context, Smi::uninitialized_deserialization_value());
+    DCHECK_EQ(maybe_context, Deserializer::uninitialized_field_value());
     return false;
   }
   if (!maybe_context.IsContext()) {
@@ -402,7 +399,7 @@ void NativeContextStats::IncrementExternalSize(Address context, Map map,
   InstanceType instance_type = map.instance_type();
   size_t external_size = 0;
   if (instance_type == JS_ARRAY_BUFFER_TYPE) {
-    external_size = JSArrayBuffer::cast(object).GetByteLength();
+    external_size = JSArrayBuffer::cast(object).allocation_length();
   } else {
     DCHECK(InstanceTypeChecker::IsExternalString(instance_type));
     external_size = ExternalString::cast(object).ExternalPayloadSize();

@@ -5,7 +5,7 @@
 #include "src/regexp/regexp-bytecode-generator.h"
 
 #include "src/ast/ast.h"
-#include "src/objects/fixed-array-inl.h"
+#include "src/objects/objects-inl.h"
 #include "src/regexp/regexp-bytecode-generator-inl.h"
 #include "src/regexp/regexp-bytecode-peephole.h"
 #include "src/regexp/regexp-bytecodes.h"
@@ -16,7 +16,7 @@ namespace internal {
 
 RegExpBytecodeGenerator::RegExpBytecodeGenerator(Isolate* isolate, Zone* zone)
     : RegExpMacroAssembler(isolate, zone),
-      buffer_(kInitialBufferSize, zone),
+      buffer_(Vector<byte>::New(1024)),
       pc_(0),
       advance_current_end_(kInvalidPC),
       jump_edges_(zone),
@@ -24,6 +24,7 @@ RegExpBytecodeGenerator::RegExpBytecodeGenerator(Isolate* isolate, Zone* zone)
 
 RegExpBytecodeGenerator::~RegExpBytecodeGenerator() {
   if (backtrack_.is_linked()) backtrack_.Unuse();
+  buffer_.Dispose();
 }
 
 RegExpBytecodeGenerator::IrregexpImplementation
@@ -38,8 +39,8 @@ void RegExpBytecodeGenerator::Bind(Label* l) {
     int pos = l->pos();
     while (pos != 0) {
       int fixup = pos;
-      pos = *reinterpret_cast<int32_t*>(buffer_.data() + fixup);
-      *reinterpret_cast<uint32_t*>(buffer_.data() + fixup) = pc_;
+      pos = *reinterpret_cast<int32_t*>(buffer_.begin() + fixup);
+      *reinterpret_cast<uint32_t*>(buffer_.begin() + fixup) = pc_;
       jump_edges_.emplace(fixup, pc_);
     }
   }
@@ -219,14 +220,12 @@ void RegExpBytecodeGenerator::LoadCurrentCharacterImpl(int cp_offset,
   if (check_bounds) EmitOrLink(on_failure);
 }
 
-void RegExpBytecodeGenerator::CheckCharacterLT(base::uc16 limit,
-                                               Label* on_less) {
+void RegExpBytecodeGenerator::CheckCharacterLT(uc16 limit, Label* on_less) {
   Emit(BC_CHECK_LT, limit);
   EmitOrLink(on_less);
 }
 
-void RegExpBytecodeGenerator::CheckCharacterGT(base::uc16 limit,
-                                               Label* on_greater) {
+void RegExpBytecodeGenerator::CheckCharacterGT(uc16 limit, Label* on_greater) {
   Emit(BC_CHECK_GT, limit);
   EmitOrLink(on_greater);
 }
@@ -289,15 +288,14 @@ void RegExpBytecodeGenerator::CheckNotCharacterAfterAnd(uint32_t c,
 }
 
 void RegExpBytecodeGenerator::CheckNotCharacterAfterMinusAnd(
-    base::uc16 c, base::uc16 minus, base::uc16 mask, Label* on_not_equal) {
+    uc16 c, uc16 minus, uc16 mask, Label* on_not_equal) {
   Emit(BC_MINUS_AND_CHECK_NOT_CHAR, c);
   Emit16(minus);
   Emit16(mask);
   EmitOrLink(on_not_equal);
 }
 
-void RegExpBytecodeGenerator::CheckCharacterInRange(base::uc16 from,
-                                                    base::uc16 to,
+void RegExpBytecodeGenerator::CheckCharacterInRange(uc16 from, uc16 to,
                                                     Label* on_in_range) {
   Emit(BC_CHECK_CHAR_IN_RANGE, 0);
   Emit16(from);
@@ -305,8 +303,7 @@ void RegExpBytecodeGenerator::CheckCharacterInRange(base::uc16 from,
   EmitOrLink(on_in_range);
 }
 
-void RegExpBytecodeGenerator::CheckCharacterNotInRange(base::uc16 from,
-                                                       base::uc16 to,
+void RegExpBytecodeGenerator::CheckCharacterNotInRange(uc16 from, uc16 to,
                                                        Label* on_not_in_range) {
   Emit(BC_CHECK_CHAR_NOT_IN_RANGE, 0);
   Emit16(from);
@@ -380,9 +377,9 @@ Handle<HeapObject> RegExpBytecodeGenerator::GetCode(Handle<String> source) {
   Backtrack();
 
   Handle<ByteArray> array;
-  if (v8_flags.regexp_peephole_optimization) {
+  if (FLAG_regexp_peephole_optimization) {
     array = RegExpBytecodePeepholeOptimization::OptimizeBytecode(
-        isolate_, zone(), source, buffer_.data(), length(), jump_edges_);
+        isolate_, zone(), source, buffer_.begin(), length(), jump_edges_);
   } else {
     array = isolate_->factory()->NewByteArray(length());
     Copy(array->GetDataStartAddress());
@@ -393,14 +390,15 @@ Handle<HeapObject> RegExpBytecodeGenerator::GetCode(Handle<String> source) {
 
 int RegExpBytecodeGenerator::length() { return pc_; }
 
-void RegExpBytecodeGenerator::Copy(uint8_t* a) {
-  MemCopy(a, buffer_.data(), length());
+void RegExpBytecodeGenerator::Copy(byte* a) {
+  MemCopy(a, buffer_.begin(), length());
 }
 
-void RegExpBytecodeGenerator::ExpandBuffer() {
-  // TODO(jgruber): The growth strategy could be smarter for large sizes.
-  // TODO(jgruber): It's not necessary to default-initialize new elements.
-  buffer_.resize(buffer_.size() * 2);
+void RegExpBytecodeGenerator::Expand() {
+  Vector<byte> old_buffer = buffer_;
+  buffer_ = Vector<byte>::New(old_buffer.length() * 2);
+  MemCopy(buffer_.begin(), old_buffer.begin(), old_buffer.length());
+  old_buffer.Dispose();
 }
 
 }  // namespace internal

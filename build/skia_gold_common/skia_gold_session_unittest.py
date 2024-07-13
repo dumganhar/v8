@@ -1,5 +1,5 @@
-#!/usr/bin/env vpython3
-# Copyright 2020 The Chromium Authors
+#!/usr/bin/env vpython
+# Copyright 2020 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -7,15 +7,10 @@
 
 import json
 import os
-import sys
 import tempfile
-from typing import Any
 import unittest
 
-if sys.version_info[0] == 2:
-  import mock
-else:
-  import unittest.mock as mock
+import mock
 
 from pyfakefs import fake_filesystem_unittest
 
@@ -26,8 +21,7 @@ from skia_gold_common import unittest_utils
 createSkiaGoldArgs = unittest_utils.createSkiaGoldArgs
 
 
-def assertArgWith(test: unittest.TestCase, arg_list: list, arg: Any,
-                  value: Any) -> None:
+def assertArgWith(test, arg_list, arg, value):
   i = arg_list.index(arg)
   test.assertEqual(arg_list[i + 1], value)
 
@@ -35,348 +29,329 @@ def assertArgWith(test: unittest.TestCase, arg_list: list, arg: Any,
 class SkiaGoldSessionRunComparisonTest(fake_filesystem_unittest.TestCase):
   """Tests the functionality of SkiaGoldSession.RunComparison."""
 
-  def setUp(self) -> None:
+  def setUp(self):
     self.setUpPyfakefs()
     self._working_dir = tempfile.mkdtemp()
     self._json_keys = tempfile.NamedTemporaryFile(delete=False).name
     with open(self._json_keys, 'w') as f:
       json.dump({}, f)
 
-    self.auth_patcher = mock.patch.object(skia_gold_session.SkiaGoldSession,
-                                          'Authenticate')
-    self.init_patcher = mock.patch.object(skia_gold_session.SkiaGoldSession,
-                                          'Initialize')
-    self.compare_patcher = mock.patch.object(skia_gold_session.SkiaGoldSession,
-                                             'Compare')
-    self.diff_patcher = mock.patch.object(skia_gold_session.SkiaGoldSession,
-                                          'Diff')
-
-    self.auth_mock = self.auth_patcher.start()
-    self.init_mock = self.init_patcher.start()
-    self.compare_mock = self.compare_patcher.start()
-    self.diff_mock = self.diff_patcher.start()
-
-    self.addCleanup(self.auth_patcher.stop)
-    self.addCleanup(self.init_patcher.stop)
-    self.addCleanup(self.compare_patcher.stop)
-    self.addCleanup(self.diff_patcher.stop)
-
-  def test_comparisonSuccess(self) -> None:
-    self.auth_mock.return_value = (0, None)
-    self.init_mock.return_value = (0, None)
-    self.compare_mock.return_value = (0, None)
-    sgp = skia_gold_properties.SkiaGoldProperties(createSkiaGoldArgs())
-    session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    status, _ = session.RunComparison('', '', None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Diff')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Compare')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Initialize')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Authenticate')
+  def test_comparisonSuccess(self, auth_mock, init_mock, compare_mock,
+                             diff_mock):
+    auth_mock.return_value = (0, None)
+    init_mock.return_value = (0, None)
+    compare_mock.return_value = (0, None)
+    session = skia_gold_session.SkiaGoldSession(self._working_dir, None,
+                                                self._json_keys, None, None)
+    status, _ = session.RunComparison(None, None, None)
     self.assertEqual(status,
                      skia_gold_session.SkiaGoldSession.StatusCodes.SUCCESS)
-    self.assertEqual(self.auth_mock.call_count, 1)
-    self.assertEqual(self.init_mock.call_count, 1)
-    self.assertEqual(self.compare_mock.call_count, 1)
-    self.assertEqual(self.diff_mock.call_count, 0)
+    self.assertEqual(auth_mock.call_count, 1)
+    self.assertEqual(init_mock.call_count, 1)
+    self.assertEqual(compare_mock.call_count, 1)
+    self.assertEqual(diff_mock.call_count, 0)
 
-  def test_authFailure(self) -> None:
-    self.auth_mock.return_value = (1, 'Auth failed')
-    sgp = skia_gold_properties.SkiaGoldProperties(createSkiaGoldArgs())
-    session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    status, error = session.RunComparison('', '', None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Diff')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Compare')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Initialize')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Authenticate')
+  def test_authFailure(self, auth_mock, init_mock, compare_mock, diff_mock):
+    auth_mock.return_value = (1, 'Auth failed')
+    session = skia_gold_session.SkiaGoldSession(self._working_dir, None,
+                                                self._json_keys, None, None)
+    status, error = session.RunComparison(None, None, None)
     self.assertEqual(status,
                      skia_gold_session.SkiaGoldSession.StatusCodes.AUTH_FAILURE)
     self.assertEqual(error, 'Auth failed')
-    self.assertEqual(self.auth_mock.call_count, 1)
-    self.assertEqual(self.init_mock.call_count, 0)
-    self.assertEqual(self.compare_mock.call_count, 0)
-    self.assertEqual(self.diff_mock.call_count, 0)
+    self.assertEqual(auth_mock.call_count, 1)
+    self.assertEqual(init_mock.call_count, 0)
+    self.assertEqual(compare_mock.call_count, 0)
+    self.assertEqual(diff_mock.call_count, 0)
 
-  def test_initFailure(self) -> None:
-    self.auth_mock.return_value = (0, None)
-    self.init_mock.return_value = (1, 'Init failed')
-    sgp = skia_gold_properties.SkiaGoldProperties(createSkiaGoldArgs())
-    session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    status, error = session.RunComparison('', '', None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Diff')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Compare')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Initialize')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Authenticate')
+  def test_initFailure(self, auth_mock, init_mock, compare_mock, diff_mock):
+    auth_mock.return_value = (0, None)
+    init_mock.return_value = (1, 'Init failed')
+    session = skia_gold_session.SkiaGoldSession(self._working_dir, None,
+                                                self._json_keys, None, None)
+    status, error = session.RunComparison(None, None, None)
     self.assertEqual(status,
                      skia_gold_session.SkiaGoldSession.StatusCodes.INIT_FAILURE)
     self.assertEqual(error, 'Init failed')
-    self.assertEqual(self.auth_mock.call_count, 1)
-    self.assertEqual(self.init_mock.call_count, 1)
-    self.assertEqual(self.compare_mock.call_count, 0)
-    self.assertEqual(self.diff_mock.call_count, 0)
+    self.assertEqual(auth_mock.call_count, 1)
+    self.assertEqual(init_mock.call_count, 1)
+    self.assertEqual(compare_mock.call_count, 0)
+    self.assertEqual(diff_mock.call_count, 0)
 
-  def test_compareFailureRemote(self) -> None:
-    self.auth_mock.return_value = (0, None)
-    self.init_mock.return_value = (0, None)
-    self.compare_mock.return_value = (1, 'Compare failed')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Diff')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Compare')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Initialize')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Authenticate')
+  def test_compareFailureRemote(self, auth_mock, init_mock, compare_mock,
+                                diff_mock):
+    auth_mock.return_value = (0, None)
+    init_mock.return_value = (0, None)
+    compare_mock.return_value = (1, 'Compare failed')
     args = createSkiaGoldArgs(local_pixel_tests=False)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    status, error = session.RunComparison('', '', None)
+                                                self._json_keys, None, None)
+    status, error = session.RunComparison(None, None, None)
     self.assertEqual(
         status,
         skia_gold_session.SkiaGoldSession.StatusCodes.COMPARISON_FAILURE_REMOTE)
     self.assertEqual(error, 'Compare failed')
-    self.assertEqual(self.auth_mock.call_count, 1)
-    self.assertEqual(self.init_mock.call_count, 1)
-    self.assertEqual(self.compare_mock.call_count, 1)
-    self.assertEqual(self.diff_mock.call_count, 0)
+    self.assertEqual(auth_mock.call_count, 1)
+    self.assertEqual(init_mock.call_count, 1)
+    self.assertEqual(compare_mock.call_count, 1)
+    self.assertEqual(diff_mock.call_count, 0)
 
-  def test_compareFailureLocal(self) -> None:
-    self.auth_mock.return_value = (0, None)
-    self.init_mock.return_value = (0, None)
-    self.compare_mock.return_value = (1, 'Compare failed')
-    self.diff_mock.return_value = (0, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Diff')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Compare')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Initialize')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Authenticate')
+  def test_compareFailureLocal(self, auth_mock, init_mock, compare_mock,
+                               diff_mock):
+    auth_mock.return_value = (0, None)
+    init_mock.return_value = (0, None)
+    compare_mock.return_value = (1, 'Compare failed')
+    diff_mock.return_value = (0, None)
     args = createSkiaGoldArgs(local_pixel_tests=True)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    status, error = session.RunComparison('', '',
+                                                self._json_keys, None, None)
+    status, error = session.RunComparison(None, None,
                                           'Definitely an output manager')
     self.assertEqual(
         status,
         skia_gold_session.SkiaGoldSession.StatusCodes.COMPARISON_FAILURE_LOCAL)
     self.assertEqual(error, 'Compare failed')
-    self.assertEqual(self.auth_mock.call_count, 1)
-    self.assertEqual(self.init_mock.call_count, 1)
-    self.assertEqual(self.compare_mock.call_count, 1)
-    self.assertEqual(self.diff_mock.call_count, 1)
+    self.assertEqual(auth_mock.call_count, 1)
+    self.assertEqual(init_mock.call_count, 1)
+    self.assertEqual(compare_mock.call_count, 1)
+    self.assertEqual(diff_mock.call_count, 1)
 
-  def test_compareInexactMatching(self) -> None:
-    self.auth_mock.return_value = (0, None)
-    self.init_mock.return_value = (0, None)
-    self.compare_mock.return_value = (0, None)
-    self.diff_mock.return_value = (0, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Diff')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Compare')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Initialize')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Authenticate')
+  def test_compareInexactMatching(self, auth_mock, init_mock, compare_mock,
+                                  diff_mock):
+    auth_mock.return_value = (0, None)
+    init_mock.return_value = (0, None)
+    compare_mock.return_value = (0, None)
+    diff_mock.return_value = (0, None)
     args = createSkiaGoldArgs(local_pixel_tests=False)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    status, _ = session.RunComparison('',
-                                      '',
+                                                self._json_keys, None, None)
+    status, _ = session.RunComparison(None,
+                                      None,
                                       None,
                                       inexact_matching_args=['--inexact'])
     self.assertEqual(status,
                      skia_gold_session.SkiaGoldSession.StatusCodes.SUCCESS)
-    self.assertEqual(self.auth_mock.call_count, 1)
-    self.assertEqual(self.init_mock.call_count, 1)
-    self.assertEqual(self.compare_mock.call_count, 1)
-    self.assertEqual(self.diff_mock.call_count, 0)
-    self.compare_mock.assert_called_with(name='',
-                                         png_file=mock.ANY,
-                                         inexact_matching_args=['--inexact'],
-                                         optional_keys=None,
-                                         force_dryrun=False)
+    self.assertEqual(auth_mock.call_count, 1)
+    self.assertEqual(init_mock.call_count, 1)
+    self.assertEqual(compare_mock.call_count, 1)
+    self.assertEqual(diff_mock.call_count, 0)
+    compare_mock.assert_called_with(name=None,
+                                    png_file=mock.ANY,
+                                    inexact_matching_args=['--inexact'],
+                                    optional_keys=None)
 
-  def test_compareOptionalKeys(self) -> None:
-    self.auth_mock.return_value = (0, None)
-    self.init_mock.return_value = (0, None)
-    self.compare_mock.return_value = (0, None)
-    self.diff_mock.return_value = (0, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Diff')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Compare')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Initialize')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Authenticate')
+  def test_compareOptionalKeys(self, auth_mock, init_mock, compare_mock,
+                               diff_mock):
+    auth_mock.return_value = (0, None)
+    init_mock.return_value = (0, None)
+    compare_mock.return_value = (0, None)
+    diff_mock.return_value = (0, None)
     args = createSkiaGoldArgs(local_pixel_tests=False)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    status, _ = session.RunComparison('',
-                                      '',
+                                                self._json_keys, None, None)
+    status, _ = session.RunComparison(None,
+                                      None,
                                       None,
                                       optional_keys={'foo': 'bar'})
     self.assertEqual(status,
                      skia_gold_session.SkiaGoldSession.StatusCodes.SUCCESS)
-    self.assertEqual(self.auth_mock.call_count, 1)
-    self.assertEqual(self.init_mock.call_count, 1)
-    self.assertEqual(self.compare_mock.call_count, 1)
-    self.assertEqual(self.diff_mock.call_count, 0)
-    self.compare_mock.assert_called_with(name='',
-                                         png_file=mock.ANY,
-                                         inexact_matching_args=None,
-                                         optional_keys={'foo': 'bar'},
-                                         force_dryrun=False)
+    self.assertEqual(auth_mock.call_count, 1)
+    self.assertEqual(init_mock.call_count, 1)
+    self.assertEqual(compare_mock.call_count, 1)
+    self.assertEqual(diff_mock.call_count, 0)
+    compare_mock.assert_called_with(name=None,
+                                    png_file=mock.ANY,
+                                    inexact_matching_args=None,
+                                    optional_keys={'foo': 'bar'})
 
-  def test_compareForceDryrun(self) -> None:
-    self.auth_mock.return_value = (0, None)
-    self.init_mock.return_value = (0, None)
-    self.compare_mock.return_value = (0, None)
-    self.diff_mock.return_value = (0, None)
-    args = createSkiaGoldArgs(local_pixel_tests=False)
-    sgp = skia_gold_properties.SkiaGoldProperties(args)
-    session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    status, _ = session.RunComparison('', '', None, force_dryrun=True)
-    self.assertEqual(status,
-                     skia_gold_session.SkiaGoldSession.StatusCodes.SUCCESS)
-    self.assertEqual(self.auth_mock.call_count, 1)
-    self.assertEqual(self.init_mock.call_count, 1)
-    self.assertEqual(self.compare_mock.call_count, 1)
-    self.assertEqual(self.diff_mock.call_count, 0)
-    self.compare_mock.assert_called_with(name='',
-                                         png_file=mock.ANY,
-                                         inexact_matching_args=None,
-                                         optional_keys=None,
-                                         force_dryrun=True)
-
-  def test_diffFailure(self) -> None:
-    self.auth_mock.return_value = (0, None)
-    self.init_mock.return_value = (0, None)
-    self.compare_mock.return_value = (1, 'Compare failed')
-    self.diff_mock.return_value = (1, 'Diff failed')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Diff')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Compare')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Initialize')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Authenticate')
+  def test_diffFailure(self, auth_mock, init_mock, compare_mock, diff_mock):
+    auth_mock.return_value = (0, None)
+    init_mock.return_value = (0, None)
+    compare_mock.return_value = (1, 'Compare failed')
+    diff_mock.return_value = (1, 'Diff failed')
     args = createSkiaGoldArgs(local_pixel_tests=True)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    status, error = session.RunComparison('', '',
+                                                self._json_keys, None, None)
+    status, error = session.RunComparison(None, None,
                                           'Definitely an output manager')
     self.assertEqual(
         status,
         skia_gold_session.SkiaGoldSession.StatusCodes.LOCAL_DIFF_FAILURE)
     self.assertEqual(error, 'Diff failed')
-    self.assertEqual(self.auth_mock.call_count, 1)
-    self.assertEqual(self.init_mock.call_count, 1)
-    self.assertEqual(self.compare_mock.call_count, 1)
-    self.assertEqual(self.diff_mock.call_count, 1)
+    self.assertEqual(auth_mock.call_count, 1)
+    self.assertEqual(init_mock.call_count, 1)
+    self.assertEqual(compare_mock.call_count, 1)
+    self.assertEqual(diff_mock.call_count, 1)
 
-  def test_noOutputManagerLocal(self) -> None:
-    self.auth_mock.return_value = (0, None)
-    self.init_mock.return_value = (0, None)
-    self.compare_mock.return_value = (1, 'Compare failed')
-    self.diff_mock.return_value = (0, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Diff')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Compare')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Initialize')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, 'Authenticate')
+  def test_noOutputManagerLocal(self, auth_mock, init_mock, compare_mock,
+                                diff_mock):
+    auth_mock.return_value = (0, None)
+    init_mock.return_value = (0, None)
+    compare_mock.return_value = (1, 'Compare failed')
+    diff_mock.return_value = (0, None)
     args = createSkiaGoldArgs(local_pixel_tests=True)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    status, error = session.RunComparison('', '', None)
+                                                self._json_keys, None, None)
+    status, error = session.RunComparison(None, None, None)
     self.assertEqual(
         status, skia_gold_session.SkiaGoldSession.StatusCodes.NO_OUTPUT_MANAGER)
     self.assertEqual(error, 'No output manager for local diff images')
-    self.assertEqual(self.auth_mock.call_count, 1)
-    self.assertEqual(self.compare_mock.call_count, 1)
-    self.assertEqual(self.diff_mock.call_count, 0)
+    self.assertEqual(auth_mock.call_count, 1)
+    self.assertEqual(compare_mock.call_count, 1)
+    self.assertEqual(diff_mock.call_count, 0)
 
 
 class SkiaGoldSessionAuthenticateTest(fake_filesystem_unittest.TestCase):
   """Tests the functionality of SkiaGoldSession.Authenticate."""
 
-  def setUp(self) -> None:
+  def setUp(self):
     self.setUpPyfakefs()
     self._working_dir = tempfile.mkdtemp()
     self._json_keys = tempfile.NamedTemporaryFile(delete=False).name
 
-    self.cmd_patcher = mock.patch.object(skia_gold_session.SkiaGoldSession,
-                                         '_RunCmdForRcAndOutput')
-    self.cmd_mock = self.cmd_patcher.start()
-    self.addCleanup(self.cmd_patcher.stop)
-
-  def test_commandOutputReturned(self) -> None:
-    self.cmd_mock.return_value = (1, 'Something bad :(')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandOutputReturned(self, cmd_mock):
+    cmd_mock.return_value = (1, 'Something bad :(')
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     rc, stdout = session.Authenticate()
-    self.assertEqual(self.cmd_mock.call_count, 1)
+    self.assertEqual(cmd_mock.call_count, 1)
     self.assertEqual(rc, 1)
     self.assertEqual(stdout, 'Something bad :(')
 
-  def test_bypassSkiaGoldFunctionality(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_bypassSkiaGoldFunctionality(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a',
                               bypass_skia_gold_functionality=True)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     rc, _ = session.Authenticate()
     self.assertEqual(rc, 0)
-    self.cmd_mock.assert_not_called()
+    cmd_mock.assert_not_called()
 
-  def test_shortCircuitAlreadyAuthenticated(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_shortCircuitAlreadyAuthenticated(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     session._authenticated = True
     rc, _ = session.Authenticate()
     self.assertEqual(rc, 0)
-    self.cmd_mock.assert_not_called()
+    cmd_mock.assert_not_called()
 
-  def test_successSetsShortCircuit(self) -> None:
-    self.cmd_mock.return_value = (0, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_successSetsShortCircuit(self, cmd_mock):
+    cmd_mock.return_value = (0, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     self.assertFalse(session._authenticated)
     rc, _ = session.Authenticate()
     self.assertEqual(rc, 0)
     self.assertTrue(session._authenticated)
-    self.cmd_mock.assert_called_once()
+    cmd_mock.assert_called_once()
 
-  def test_failureDoesNotSetShortCircuit(self) -> None:
-    self.cmd_mock.return_value = (1, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_failureDoesNotSetShortCircuit(self, cmd_mock):
+    cmd_mock.return_value = (1, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     self.assertFalse(session._authenticated)
     rc, _ = session.Authenticate()
     self.assertEqual(rc, 1)
     self.assertFalse(session._authenticated)
-    self.cmd_mock.assert_called_once()
+    cmd_mock.assert_called_once()
 
-  def test_commandWithUseLuciTrue(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandWithUseLuciTrue(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     session.Authenticate(use_luci=True)
-    self.assertIn('--luci', self.cmd_mock.call_args[0][0])
+    self.assertIn('--luci', cmd_mock.call_args[0][0])
 
-  def test_commandWithUseLuciFalse(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandWithUseLuciFalse(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a', local_pixel_tests=True)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     session.Authenticate(use_luci=False)
-    self.assertNotIn('--luci', self.cmd_mock.call_args[0][0])
+    self.assertNotIn('--luci', cmd_mock.call_args[0][0])
 
-  def test_commandWithUseLuciFalseNotLocal(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandWithUseLuciFalseNotLocal(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a', local_pixel_tests=False)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     with self.assertRaises(RuntimeError):
       session.Authenticate(use_luci=False)
 
-  def test_commandWithUseLuciAndServiceAccount(self) -> None:
-    args = createSkiaGoldArgs(git_revision='a', local_pixel_tests=False)
-    sgp = skia_gold_properties.SkiaGoldProperties(args)
-    session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    with self.assertRaises(AssertionError):
-      session.Authenticate(use_luci=True, service_account='a')
-
-  def test_commandWithServiceAccount(self) -> None:
-    self.cmd_mock.return_value = (None, None)
-    args = createSkiaGoldArgs(git_revision='a', local_pixel_tests=False)
-    sgp = skia_gold_properties.SkiaGoldProperties(args)
-    session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    session.Authenticate(use_luci=False, service_account='service_account')
-    call_args = self.cmd_mock.call_args[0][0]
-    self.assertNotIn('--luci', call_args)
-    assertArgWith(self, call_args, '--service-account', 'service_account')
-
-  def test_commandCommonArgs(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandCommonArgs(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     session.Authenticate()
-    call_args = self.cmd_mock.call_args[0][0]
+    call_args = cmd_mock.call_args[0][0]
     self.assertIn('auth', call_args)
     assertArgWith(self, call_args, '--work-dir', self._working_dir)
 
@@ -384,64 +359,64 @@ class SkiaGoldSessionAuthenticateTest(fake_filesystem_unittest.TestCase):
 class SkiaGoldSessionInitializeTest(fake_filesystem_unittest.TestCase):
   """Tests the functionality of SkiaGoldSession.Initialize."""
 
-  def setUp(self) -> None:
+  def setUp(self):
     self.setUpPyfakefs()
     self._working_dir = tempfile.mkdtemp()
     self._json_keys = tempfile.NamedTemporaryFile(delete=False).name
 
-    self.cmd_patcher = mock.patch.object(skia_gold_session.SkiaGoldSession,
-                                         '_RunCmdForRcAndOutput')
-    self.cmd_mock = self.cmd_patcher.start()
-    self.addCleanup(self.cmd_patcher.stop)
-
-  def test_bypassSkiaGoldFunctionality(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_bypassSkiaGoldFunctionality(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a',
                               bypass_skia_gold_functionality=True)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     rc, _ = session.Initialize()
     self.assertEqual(rc, 0)
-    self.cmd_mock.assert_not_called()
+    cmd_mock.assert_not_called()
 
-  def test_shortCircuitAlreadyInitialized(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_shortCircuitAlreadyInitialized(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     session._initialized = True
     rc, _ = session.Initialize()
     self.assertEqual(rc, 0)
-    self.cmd_mock.assert_not_called()
+    cmd_mock.assert_not_called()
 
-  def test_successSetsShortCircuit(self) -> None:
-    self.cmd_mock.return_value = (0, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_successSetsShortCircuit(self, cmd_mock):
+    cmd_mock.return_value = (0, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     self.assertFalse(session._initialized)
     rc, _ = session.Initialize()
     self.assertEqual(rc, 0)
     self.assertTrue(session._initialized)
-    self.cmd_mock.assert_called_once()
+    cmd_mock.assert_called_once()
 
-  def test_failureDoesNotSetShortCircuit(self) -> None:
-    self.cmd_mock.return_value = (1, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_failureDoesNotSetShortCircuit(self, cmd_mock):
+    cmd_mock.return_value = (1, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     self.assertFalse(session._initialized)
     rc, _ = session.Initialize()
     self.assertEqual(rc, 1)
     self.assertFalse(session._initialized)
-    self.cmd_mock.assert_called_once()
+    cmd_mock.assert_called_once()
 
-  def test_commandCommonArgs(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandCommonArgs(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir,
@@ -451,7 +426,7 @@ class SkiaGoldSessionInitializeTest(fake_filesystem_unittest.TestCase):
                                                 instance='instance',
                                                 bucket='bucket')
     session.Initialize()
-    call_args = self.cmd_mock.call_args[0][0]
+    call_args = cmd_mock.call_args[0][0]
     self.assertIn('imgtest', call_args)
     self.assertIn('init', call_args)
     self.assertIn('--passfail', call_args)
@@ -465,25 +440,27 @@ class SkiaGoldSessionInitializeTest(fake_filesystem_unittest.TestCase):
     assertArgWith(self, call_args, '--failure-file', session._triage_link_file)
     assertArgWith(self, call_args, '--commit', 'a')
 
-  def test_commandTryjobArgs(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandTryjobArgs(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a',
                               gerrit_issue=1,
                               gerrit_patchset=2,
                               buildbucket_id=3)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     session.Initialize()
-    call_args = self.cmd_mock.call_args[0][0]
+    call_args = cmd_mock.call_args[0][0]
     assertArgWith(self, call_args, '--issue', '1')
     assertArgWith(self, call_args, '--patchset', '2')
     assertArgWith(self, call_args, '--jobid', '3')
     assertArgWith(self, call_args, '--crs', 'gerrit')
     assertArgWith(self, call_args, '--cis', 'buildbucket')
 
-  def test_commandTryjobArgsNonDefaultCrs(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandTryjobArgsNonDefaultCrs(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(code_review_system='foo',
                               git_revision='a',
                               gerrit_issue=1,
@@ -491,23 +468,24 @@ class SkiaGoldSessionInitializeTest(fake_filesystem_unittest.TestCase):
                               buildbucket_id=3)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     session.Initialize()
-    call_args = self.cmd_mock.call_args[0][0]
+    call_args = cmd_mock.call_args[0][0]
     assertArgWith(self, call_args, '--issue', '1')
     assertArgWith(self, call_args, '--patchset', '2')
     assertArgWith(self, call_args, '--jobid', '3')
     assertArgWith(self, call_args, '--crs', 'foo')
     assertArgWith(self, call_args, '--cis', 'buildbucket')
 
-  def test_commandTryjobArgsMissing(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandTryjobArgsMissing(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     session.Initialize()
-    call_args = self.cmd_mock.call_args[0][0]
+    call_args = cmd_mock.call_args[0][0]
     self.assertNotIn('--issue', call_args)
     self.assertNotIn('--patchset', call_args)
     self.assertNotIn('--jobid', call_args)
@@ -518,77 +496,69 @@ class SkiaGoldSessionInitializeTest(fake_filesystem_unittest.TestCase):
 class SkiaGoldSessionCompareTest(fake_filesystem_unittest.TestCase):
   """Tests the functionality of SkiaGoldSession.Compare."""
 
-  def setUp(self) -> None:
+  def setUp(self):
     self.setUpPyfakefs()
     self._working_dir = tempfile.mkdtemp()
     self._json_keys = tempfile.NamedTemporaryFile(delete=False).name
 
-    self.cmd_patcher = mock.patch.object(skia_gold_session.SkiaGoldSession,
-                                         '_RunCmdForRcAndOutput')
-    self.cmd_mock = self.cmd_patcher.start()
-    self.addCleanup(self.cmd_patcher.stop)
-
-  def test_commandOutputReturned(self) -> None:
-    self.cmd_mock.return_value = (1, 'Something bad :(')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandOutputReturned(self, cmd_mock):
+    cmd_mock.return_value = (1, 'Something bad :(')
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    rc, stdout = session.Compare('', '')
-    self.assertEqual(self.cmd_mock.call_count, 1)
+                                                self._json_keys, None, None)
+    rc, stdout = session.Compare(None, None)
+    self.assertEqual(cmd_mock.call_count, 1)
     self.assertEqual(rc, 1)
     self.assertEqual(stdout, 'Something bad :(')
 
-  def test_bypassSkiaGoldFunctionality(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_bypassSkiaGoldFunctionality(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a',
                               bypass_skia_gold_functionality=True)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    rc, _ = session.Compare('', '')
+                                                self._json_keys, None, None)
+    rc, _ = session.Compare(None, None)
     self.assertEqual(rc, 0)
-    self.cmd_mock.assert_not_called()
+    cmd_mock.assert_not_called()
 
-  def test_commandWithLocalPixelTestsTrue(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandWithLocalPixelTestsTrue(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a', local_pixel_tests=True)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    session.Compare('', '')
-    self.assertIn('--dryrun', self.cmd_mock.call_args[0][0])
+                                                self._json_keys, None, None)
+    session.Compare(None, None)
+    self.assertIn('--dryrun', cmd_mock.call_args[0][0])
 
-  def test_commandWithForceDryrunTrue(self) -> None:
-    self.cmd_mock.return_value = (None, None)
-    args = createSkiaGoldArgs(git_revision='a')
-    sgp = skia_gold_properties.SkiaGoldProperties(args)
-    session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    session.Compare('', '', force_dryrun=True)
-    self.assertIn('--dryrun', self.cmd_mock.call_args[0][0])
-
-  def test_commandWithLocalPixelTestsFalse(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandWithLocalPixelTestsFalse(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a', local_pixel_tests=False)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    session.Compare('', '')
-    self.assertNotIn('--dryrun', self.cmd_mock.call_args[0][0])
+                                                self._json_keys, None, None)
+    session.Compare(None, None)
+    self.assertNotIn('--dryrun', cmd_mock.call_args[0][0])
 
-  def test_commandWithInexactArgs(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandWithInexactArgs(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    session.Compare('', '', inexact_matching_args=['--inexact', 'foobar'])
-    self.assertIn('--inexact', self.cmd_mock.call_args[0][0])
-    self.assertIn('foobar', self.cmd_mock.call_args[0][0])
+                                                self._json_keys, None, None)
+    session.Compare(None, None, inexact_matching_args=['--inexact', 'foobar'])
+    self.assertIn('--inexact', cmd_mock.call_args[0][0])
+    self.assertIn('foobar', cmd_mock.call_args[0][0])
 
-  def test_commandCommonArgs(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandCommonArgs(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir,
@@ -597,19 +567,20 @@ class SkiaGoldSessionCompareTest(fake_filesystem_unittest.TestCase):
                                                 'corpus',
                                                 instance='instance')
     session.Compare('name', 'png_file')
-    call_args = self.cmd_mock.call_args[0][0]
+    call_args = cmd_mock.call_args[0][0]
     self.assertIn('imgtest', call_args)
     self.assertIn('add', call_args)
     assertArgWith(self, call_args, '--test-name', 'name')
     assertArgWith(self, call_args, '--png-file', 'png_file')
     assertArgWith(self, call_args, '--work-dir', self._working_dir)
 
-  def test_noLinkOnSuccess(self) -> None:
-    self.cmd_mock.return_value = (0, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_noLinkOnSuccess(self, cmd_mock):
+    cmd_mock.return_value = (0, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     rc, _ = session.Compare('name', 'png_file')
     self.assertEqual(rc, 0)
     comparison_result = session._comparison_results['name']
@@ -617,8 +588,9 @@ class SkiaGoldSessionCompareTest(fake_filesystem_unittest.TestCase):
     self.assertEqual(comparison_result.internal_triage_link, None)
     self.assertNotEqual(comparison_result.triage_link_omission_reason, None)
 
-  def test_clLinkOnTrybot(self) -> None:
-    self.cmd_mock.return_value = (1, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_clLinkOnTrybot(self, cmd_mock):
+    cmd_mock.return_value = (1, None)
     args = createSkiaGoldArgs(git_revision='a',
                               gerrit_issue=1,
                               gerrit_patchset=2,
@@ -627,7 +599,7 @@ class SkiaGoldSessionCompareTest(fake_filesystem_unittest.TestCase):
     session = skia_gold_session.SkiaGoldSession(self._working_dir,
                                                 sgp,
                                                 self._json_keys,
-                                                '',
+                                                None,
                                                 instance='instance')
     rc, _ = session.Compare('name', 'png_file')
     self.assertEqual(rc, 1)
@@ -642,13 +614,14 @@ class SkiaGoldSessionCompareTest(fake_filesystem_unittest.TestCase):
     self.assertEqual(session.GetTriageLinks('name'),
                      (public_link, internal_link))
 
-  def test_individualLinkOnCi(self) -> None:
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_individualLinkOnCi(self, cmd_mock):
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir,
                                                 sgp,
                                                 self._json_keys,
-                                                '',
+                                                None,
                                                 instance='foobar')
 
     internal_link = 'foobar-gold.skia.org'
@@ -659,7 +632,7 @@ class SkiaGoldSessionCompareTest(fake_filesystem_unittest.TestCase):
         f.write(internal_link)
       return (1, None)
 
-    self.cmd_mock.side_effect = WriteTriageLinkFile
+    cmd_mock.side_effect = WriteTriageLinkFile
     rc, _ = session.Compare('name', 'png_file')
     self.assertEqual(rc, 1)
     comparison_result = session._comparison_results['name']
@@ -671,18 +644,19 @@ class SkiaGoldSessionCompareTest(fake_filesystem_unittest.TestCase):
     self.assertEqual(session.GetTriageLinks('name'),
                      (public_link, internal_link))
 
-  def test_validOmissionOnMissingLink(self) -> None:
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_validOmissionOnMissingLink(self, cmd_mock):
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
 
     def WriteTriageLinkFile(_):
       with open(session._triage_link_file, 'w'):
         pass
       return (1, None)
 
-    self.cmd_mock.side_effect = WriteTriageLinkFile
+    cmd_mock.side_effect = WriteTriageLinkFile
     rc, _ = session.Compare('name', 'png_file')
     self.assertEqual(rc, 1)
     comparison_result = session._comparison_results['name']
@@ -691,18 +665,19 @@ class SkiaGoldSessionCompareTest(fake_filesystem_unittest.TestCase):
     self.assertIn('Gold did not provide a triage link',
                   comparison_result.triage_link_omission_reason)
 
-  def test_validOmissionOnIoError(self) -> None:
-    self.cmd_mock.return_value = (1, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_validOmissionOnIoError(self, cmd_mock):
+    cmd_mock.return_value = (1, None)
     args = createSkiaGoldArgs(git_revision='a')
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
 
     def DeleteTriageLinkFile(_):
       os.remove(session._triage_link_file)
       return (1, None)
 
-    self.cmd_mock.side_effect = DeleteTriageLinkFile
+    cmd_mock.side_effect = DeleteTriageLinkFile
     rc, _ = session.Compare('name', 'png_file')
     self.assertEqual(rc, 1)
     comparison_result = session._comparison_results['name']
@@ -712,89 +687,86 @@ class SkiaGoldSessionCompareTest(fake_filesystem_unittest.TestCase):
     self.assertIn('Failed to read',
                   comparison_result.triage_link_omission_reason)
 
-  def test_optionalKeysPassedToGoldctl(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_optionalKeysPassedToGoldctl(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a', local_pixel_tests=True)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    session.Compare('', '', optional_keys={'foo': 'bar'})
-    assertArgWith(self, self.cmd_mock.call_args[0][0],
-                  '--add-test-optional-key', 'foo:bar')
+                                                self._json_keys, None, None)
+    session.Compare(None, None, optional_keys={'foo': 'bar'})
+    assertArgWith(self, cmd_mock.call_args[0][0], '--add-test-optional-key',
+                  'foo:bar')
 
 
 class SkiaGoldSessionDiffTest(fake_filesystem_unittest.TestCase):
   """Tests the functionality of SkiaGoldSession.Diff."""
 
-  def setUp(self) -> None:
+  def setUp(self):
     self.setUpPyfakefs()
     self._working_dir = tempfile.mkdtemp()
     self._json_keys = tempfile.NamedTemporaryFile(delete=False).name
 
-    self.cmd_patcher = mock.patch.object(skia_gold_session.SkiaGoldSession,
-                                         '_RunCmdForRcAndOutput')
-    self.cmd_mock = self.cmd_patcher.start()
-    self.addCleanup(self.cmd_patcher.stop)
-
   @mock.patch.object(skia_gold_session.SkiaGoldSession, '_StoreDiffLinks')
-  def test_commandOutputReturned(self, _) -> None:
-    self.cmd_mock.return_value = (1, 'Something bad :(')
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_commandOutputReturned(self, cmd_mock, _):
+    cmd_mock.return_value = (1, 'Something bad :(')
     args = createSkiaGoldArgs(git_revision='a', local_pixel_tests=False)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
-    rc, stdout = session.Diff('', '', None)
-    self.assertEqual(self.cmd_mock.call_count, 1)
+                                                self._json_keys, None, None)
+    rc, stdout = session.Diff(None, None, None)
+    self.assertEqual(cmd_mock.call_count, 1)
     self.assertEqual(rc, 1)
     self.assertEqual(stdout, 'Something bad :(')
 
-  def test_bypassSkiaGoldFunctionality(self) -> None:
-    self.cmd_mock.return_value = (None, None)
+  @mock.patch.object(skia_gold_session.SkiaGoldSession, '_RunCmdForRcAndOutput')
+  def test_bypassSkiaGoldFunctionality(self, cmd_mock):
+    cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a',
                               bypass_skia_gold_functionality=True)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                self._json_keys, '', '')
+                                                self._json_keys, None, None)
     with self.assertRaises(RuntimeError):
-      session.Diff('', '', None)
+      session.Diff(None, None, None)
 
 
 class SkiaGoldSessionTriageLinkOmissionTest(fake_filesystem_unittest.TestCase):
   """Tests the functionality of SkiaGoldSession.GetTriageLinkOmissionReason."""
 
-  def setUp(self) -> None:
+  def setUp(self):
     self.setUpPyfakefs()
     self._working_dir = tempfile.mkdtemp()
 
-  def _CreateSession(self) -> skia_gold_session.SkiaGoldSession:
-    sgp = skia_gold_properties.SkiaGoldProperties(createSkiaGoldArgs())
+  def _CreateSession(self):
     json_keys = tempfile.NamedTemporaryFile(delete=False).name
-    session = skia_gold_session.SkiaGoldSession(self._working_dir, sgp,
-                                                json_keys, '', '')
+    session = skia_gold_session.SkiaGoldSession(self._working_dir, None,
+                                                json_keys, None, None)
     session._comparison_results = {
         'foo': skia_gold_session.SkiaGoldSession.ComparisonResults(),
     }
     return session
 
-  def test_noComparison(self) -> None:
+  def test_noComparison(self):
     session = self._CreateSession()
     session._comparison_results = {}
     reason = session.GetTriageLinkOmissionReason('foo')
     self.assertEqual(reason, 'No image comparison performed for foo')
 
-  def test_validReason(self) -> None:
+  def test_validReason(self):
     session = self._CreateSession()
     session._comparison_results['foo'].triage_link_omission_reason = 'bar'
     reason = session.GetTriageLinkOmissionReason('foo')
     self.assertEqual(reason, 'bar')
 
-  def test_onlyLocal(self) -> None:
+  def test_onlyLocal(self):
     session = self._CreateSession()
     session._comparison_results['foo'].local_diff_given_image = 'bar'
     reason = session.GetTriageLinkOmissionReason('foo')
     self.assertEqual(reason, 'Gold only used to do a local image diff')
 
-  def test_onlyWithoutTriageLink(self) -> None:
+  def test_onlyWithoutTriageLink(self):
     session = self._CreateSession()
     comparison_result = session._comparison_results['foo']
     comparison_result.public_triage_link = 'bar'
@@ -805,7 +777,7 @@ class SkiaGoldSessionTriageLinkOmissionTest(fake_filesystem_unittest.TestCase):
     with self.assertRaises(AssertionError):
       session.GetTriageLinkOmissionReason('foo')
 
-  def test_resultsShouldNotExist(self) -> None:
+  def test_resultsShouldNotExist(self):
     session = self._CreateSession()
     with self.assertRaises(RuntimeError):
       session.GetTriageLinkOmissionReason('foo')

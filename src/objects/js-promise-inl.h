@@ -22,7 +22,6 @@ TQ_OBJECT_CONSTRUCTORS_IMPL(JSPromise)
 
 BOOL_ACCESSORS(JSPromise, flags, has_handler, HasHandlerBit::kShift)
 BOOL_ACCESSORS(JSPromise, flags, handled_hint, HandledHintBit::kShift)
-BOOL_ACCESSORS(JSPromise, flags, is_silent, IsSilentBit::kShift)
 
 Object JSPromise::result() const {
   DCHECK_NE(Promise::kPending, status());

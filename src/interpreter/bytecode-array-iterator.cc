@@ -6,6 +6,7 @@
 
 #include "src/interpreter/bytecode-decoder.h"
 #include "src/interpreter/interpreter-intrinsics.h"
+#include "src/objects/code-inl.h"
 #include "src/objects/feedback-vector.h"
 #include "src/objects/objects-inl.h"
 
@@ -29,25 +30,8 @@ BytecodeArrayIterator::BytecodeArrayIterator(
   UpdateOperandScale();
 }
 
-BytecodeArrayIterator::BytecodeArrayIterator(
-    Handle<BytecodeArray> bytecode_array, int initial_offset,
-    DisallowGarbageCollection& no_gc)
-    : bytecode_array_(bytecode_array),
-      start_(reinterpret_cast<uint8_t*>(
-          bytecode_array_->GetFirstBytecodeAddress())),
-      end_(start_ + bytecode_array_->length()),
-      cursor_(start_ + initial_offset),
-      operand_scale_(OperandScale::kSingle),
-      prefix_size_(0),
-      local_heap_(nullptr) {
-  // Don't add a GC callback, since we're in a no_gc scope.
-  UpdateOperandScale();
-}
-
 BytecodeArrayIterator::~BytecodeArrayIterator() {
-  if (local_heap_) {
-    local_heap_->RemoveGCEpilogueCallback(UpdatePointersCallback, this);
-  }
+  local_heap_->RemoveGCEpilogueCallback(UpdatePointersCallback, this);
 }
 
 void BytecodeArrayIterator::SetOffset(int offset) {
@@ -55,16 +39,6 @@ void BytecodeArrayIterator::SetOffset(int offset) {
   cursor_ = reinterpret_cast<uint8_t*>(
       bytecode_array()->GetFirstBytecodeAddress() + offset);
   UpdateOperandScale();
-}
-
-// static
-bool BytecodeArrayIterator::IsValidOffset(Handle<BytecodeArray> bytecode_array,
-                                          int offset) {
-  for (BytecodeArrayIterator it(bytecode_array); !it.done(); it.Advance()) {
-    if (it.current_offset() == offset) return true;
-    if (it.current_offset() > offset) break;
-  }
-  return false;
 }
 
 void BytecodeArrayIterator::ApplyDebugBreak() {
@@ -77,6 +51,14 @@ void BytecodeArrayIterator::ApplyDebugBreak() {
   interpreter::Bytecode debugbreak =
       interpreter::Bytecodes::GetDebugBreak(bytecode);
   *cursor = interpreter::Bytecodes::ToByte(debugbreak);
+}
+
+int BytecodeArrayIterator::current_bytecode_size() const {
+  return prefix_size_ + current_bytecode_size_without_prefix();
+}
+
+int BytecodeArrayIterator::current_bytecode_size_without_prefix() const {
+  return Bytecodes::Size(current_bytecode(), current_operand_scale());
 }
 
 uint32_t BytecodeArrayIterator::GetUnsignedOperand(
@@ -109,16 +91,10 @@ int32_t BytecodeArrayIterator::GetSignedOperand(
                                               current_operand_scale());
 }
 
-uint32_t BytecodeArrayIterator::GetFlag8Operand(int operand_index) const {
+uint32_t BytecodeArrayIterator::GetFlagOperand(int operand_index) const {
   DCHECK_EQ(Bytecodes::GetOperandType(current_bytecode(), operand_index),
             OperandType::kFlag8);
   return GetUnsignedOperand(operand_index, OperandType::kFlag8);
-}
-
-uint32_t BytecodeArrayIterator::GetFlag16Operand(int operand_index) const {
-  DCHECK_EQ(Bytecodes::GetOperandType(current_bytecode(), operand_index),
-            OperandType::kFlag16);
-  return GetUnsignedOperand(operand_index, OperandType::kFlag16);
 }
 
 uint32_t BytecodeArrayIterator::GetUnsignedImmediateOperand(
@@ -154,14 +130,15 @@ FeedbackSlot BytecodeArrayIterator::GetSlotOperand(int operand_index) const {
 }
 
 Register BytecodeArrayIterator::GetReceiver() const {
-  return Register::FromParameterIndex(0);
+  return Register::FromParameterIndex(0, bytecode_array()->parameter_count());
 }
 
 Register BytecodeArrayIterator::GetParameter(int parameter_index) const {
   DCHECK_GE(parameter_index, 0);
   // The parameter indices are shifted by 1 (receiver is the
   // first entry).
-  return Register::FromParameterIndex(parameter_index + 1);
+  return Register::FromParameterIndex(parameter_index + 1,
+                                      bytecode_array()->parameter_count());
 }
 
 Register BytecodeArrayIterator::GetRegisterOperand(int operand_index) const {
@@ -230,9 +207,9 @@ Runtime::FunctionId BytecodeArrayIterator::GetIntrinsicIdOperand(
       static_cast<IntrinsicsHelper::IntrinsicId>(raw_id));
 }
 
-template <typename IsolateT>
+template <typename LocalIsolate>
 Handle<Object> BytecodeArrayIterator::GetConstantAtIndex(
-    int index, IsolateT* isolate) const {
+    int index, LocalIsolate* isolate) const {
   return handle(bytecode_array()->constant_pool().get(index), isolate);
 }
 
@@ -244,9 +221,9 @@ Smi BytecodeArrayIterator::GetConstantAtIndexAsSmi(int index) const {
   return Smi::cast(bytecode_array()->constant_pool().get(index));
 }
 
-template <typename IsolateT>
+template <typename LocalIsolate>
 Handle<Object> BytecodeArrayIterator::GetConstantForIndexOperand(
-    int operand_index, IsolateT* isolate) const {
+    int operand_index, LocalIsolate* isolate) const {
   return GetConstantAtIndex(GetIndexOperand(operand_index), isolate);
 }
 
@@ -298,7 +275,8 @@ int BytecodeArrayIterator::GetAbsoluteOffset(int relative_offset) const {
 }
 
 std::ostream& BytecodeArrayIterator::PrintTo(std::ostream& os) const {
-  return BytecodeDecoder::Decode(os, cursor_ - prefix_size_);
+  return BytecodeDecoder::Decode(os, cursor_ - prefix_size_,
+                                 bytecode_array()->parameter_count());
 }
 
 void BytecodeArrayIterator::UpdatePointers() {
@@ -333,7 +311,7 @@ JumpTableTargetOffsets::iterator JumpTableTargetOffsets::end() const {
 int JumpTableTargetOffsets::size() const {
   int ret = 0;
   // TODO(leszeks): Is there a more efficient way of doing this than iterating?
-  for (JumpTableTargetOffset entry : *this) {
+  for (const auto& entry : *this) {
     USE(entry);
     ret++;
   }

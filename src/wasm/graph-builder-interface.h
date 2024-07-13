@@ -10,15 +10,13 @@
 #define V8_WASM_GRAPH_BUILDER_INTERFACE_H_
 
 #include "src/wasm/decoder.h"
+#include "src/wasm/wasm-opcodes.h"
 #include "src/wasm/wasm-result.h"
 
 namespace v8 {
 namespace internal {
 
-class AccountingAllocator;
-
 namespace compiler {  // external declarations from compiler.
-class Node;
 class NodeOriginTable;
 class WasmGraphBuilder;
 struct WasmLoopInfo;
@@ -26,44 +24,16 @@ struct WasmLoopInfo;
 
 namespace wasm {
 
-class AssumptionsJournal;
 struct FunctionBody;
 class WasmFeatures;
 struct WasmModule;
 
-enum InlinedStatus {
-  // Inlined function whose call node has IfSuccess/IfException outputs.
-  kInlinedHandledCall,
-  // Inlined function whose call node does not have IfSuccess/IfException
-  // outputs.
-  kInlinedNonHandledCall,
-  // Not an inlined call.
-  kRegularFunction
-};
-
-struct DanglingExceptions {
-  std::vector<compiler::Node*> exception_values;
-  std::vector<compiler::Node*> effects;
-  std::vector<compiler::Node*> controls;
-
-  void Add(compiler::Node* exception_value, compiler::Node* effect,
-           compiler::Node* control) {
-    exception_values.emplace_back(exception_value);
-    effects.emplace_back(effect);
-    controls.emplace_back(control);
-  }
-
-  size_t Size() const { return exception_values.size(); }
-};
-
-V8_EXPORT_PRIVATE void BuildTFGraph(
-    AccountingAllocator* allocator, const WasmFeatures& enabled,
-    const WasmModule* module, compiler::WasmGraphBuilder* builder,
-    WasmFeatures* detected, const FunctionBody& body,
-    std::vector<compiler::WasmLoopInfo>* loop_infos,
-    DanglingExceptions* dangling_exceptions,
-    compiler::NodeOriginTable* node_origins, int func_index,
-    AssumptionsJournal* assumptions, InlinedStatus inlined_status);
+V8_EXPORT_PRIVATE DecodeResult
+BuildTFGraph(AccountingAllocator* allocator, const WasmFeatures& enabled,
+             const WasmModule* module, compiler::WasmGraphBuilder* builder,
+             WasmFeatures* detected, const FunctionBody& body,
+             std::vector<compiler::WasmLoopInfo>* loop_infos,
+             compiler::NodeOriginTable* node_origins);
 
 }  // namespace wasm
 }  // namespace internal

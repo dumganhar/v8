@@ -29,12 +29,10 @@ class FieldIndex final {
       Map map, int index,
       Representation representation = Representation::Tagged());
   static inline FieldIndex ForInObjectOffset(int offset, Encoding encoding);
-  static inline FieldIndex ForSmiLoadHandler(Map map, int32_t handler);
   static inline FieldIndex ForDescriptor(Map map,
                                          InternalIndex descriptor_index);
   static inline FieldIndex ForDescriptor(PtrComprCageBase cage_base, Map map,
                                          InternalIndex descriptor_index);
-  static inline FieldIndex ForDetails(Map map, PropertyDetails details);
 
   inline int GetLoadByFieldIndex() const;
 
@@ -43,8 +41,6 @@ class FieldIndex final {
   bool is_double() const { return EncodingBits::decode(bit_field_) == kDouble; }
 
   int offset() const { return OffsetBits::decode(bit_field_); }
-
-  uint64_t bit_field() const { return bit_field_; }
 
   // Zero-indexed from beginning of the object.
   int index() const {
@@ -123,7 +119,7 @@ class FieldIndex final {
   // Offset of first inobject property from beginning of object.
   using FirstInobjectPropertyOffsetBits =
       InObjectPropertyBits::Next<int, kFirstInobjectPropertyOffsetBitCount>;
-  static_assert(FirstInobjectPropertyOffsetBits::kLastUsedBit < 64);
+  STATIC_ASSERT(FirstInobjectPropertyOffsetBits::kLastUsedBit < 64);
 
   uint64_t bit_field_;
 };

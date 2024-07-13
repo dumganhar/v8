@@ -28,13 +28,9 @@
 #ifndef V8_TEST_CCTEST_PRINT_EXTENSION_H_
 #define V8_TEST_CCTEST_PRINT_EXTENSION_H_
 
-#include "include/v8-extension.h"
+#include "include/v8.h"
 
 namespace v8 {
-
-template <typename T>
-class FunctionCallbackInfo;
-
 namespace internal {
 
 class PrintExtension : public v8::Extension {
@@ -42,7 +38,7 @@ class PrintExtension : public v8::Extension {
   PrintExtension() : v8::Extension("v8/print", "native function print();") { }
   v8::Local<v8::FunctionTemplate> GetNativeFunctionTemplate(
       v8::Isolate* isolate, v8::Local<v8::String> name) override;
-  static void Print(const v8::FunctionCallbackInfo<v8::Value>& info);
+  static void Print(const v8::FunctionCallbackInfo<v8::Value>& args);
 };
 
 }  // namespace internal

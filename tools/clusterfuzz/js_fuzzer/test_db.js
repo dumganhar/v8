@@ -29,6 +29,7 @@ function main() {
     return;
   }
 
+  const loader = new sourceHelpers.V8SourceLoader();
   const mutateDb = new db.MutateDb(program.input_dir);
   const mutator = new crossOverMutator.CrossOverMutator(
       { MUTATE_CROSSOVER_INSERT: 1.0, testing: true }, mutateDb);
@@ -46,9 +47,9 @@ function main() {
         () => { return expression; });
     // Use a source that will try to insert one statement, allowing
     // super.
-    const source = sourceHelpers.loadSource(
+    const source = loader.load(
         __dirname,
-        'test_data/cross_over_mutator_class_input.js');
+        'test_data/regress/build_db/cross_over_mutator_class_input.js');
     try {
       mutator.mutate(source);
       nPass++;

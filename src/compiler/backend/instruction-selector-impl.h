@@ -40,8 +40,8 @@ class SwitchInfo {
       DCHECK_LE(min_value, max_value);
       // Note that {value_range} can be 0 if {min_value} is -2^31 and
       // {max_value} is 2^31-1, so don't assume that it's non-zero below.
-      value_range_ = 1u + base::bit_cast<uint32_t>(max_value) -
-                     base::bit_cast<uint32_t>(min_value);
+      value_range_ =
+          1u + bit_cast<uint32_t>(max_value) - bit_cast<uint32_t>(min_value);
     } else {
       value_range_ = 0;
     }
@@ -68,26 +68,11 @@ class SwitchInfo {
   BasicBlock* default_branch_;
 };
 
-#define OPERAND_GENERATOR_T_BOILERPLATE(adapter)           \
-  using super = OperandGeneratorT<adapter>;                \
-  using RegisterMode = typename super::RegisterMode;       \
-  using RegisterUseKind = typename super::RegisterUseKind; \
-  using super::selector;                                   \
-  using super::DefineAsRegister;                           \
-  using super::TempImmediate;                              \
-  using super::UseFixed;                                   \
-  using super::UseImmediate;                               \
-  using super::UseNegatedImmediate;                        \
-  using super::UseRegister;                                \
-  using super::UseRegisterWithMode;                        \
-  using super::UseUniqueRegister;
-
 // A helper class for the instruction selector that simplifies construction of
 // Operands. This class implements a base for architecture-specific helpers.
-template <typename Adapter>
-class OperandGeneratorT {
+class OperandGenerator {
  public:
-  explicit OperandGeneratorT(InstructionSelectorT<Adapter>* selector)
+  explicit OperandGenerator(InstructionSelector* selector)
       : selector_(selector) {}
 
   InstructionOperand NoOutput() {
@@ -100,12 +85,10 @@ class OperandGeneratorT {
                                      GetVReg(node)));
   }
 
-  InstructionOperand DefineSameAsInput(Node* node, int input_index) {
-    return Define(node, UnallocatedOperand(GetVReg(node), input_index));
-  }
-
   InstructionOperand DefineSameAsFirst(Node* node) {
-    return DefineSameAsInput(node, 0);
+    return Define(node,
+                  UnallocatedOperand(UnallocatedOperand::SAME_AS_FIRST_INPUT,
+                                     GetVReg(node)));
   }
 
   InstructionOperand DefineAsFixed(Node* node, Register reg) {
@@ -194,16 +177,6 @@ class OperandGeneratorT {
                                         GetVReg(node)));
   }
 
-  enum class RegisterUseKind { kUseRegister, kUseUniqueRegister };
-  InstructionOperand UseRegister(Node* node, RegisterUseKind unique_reg) {
-    if (V8_LIKELY(unique_reg == RegisterUseKind::kUseRegister)) {
-      return UseRegister(node);
-    } else {
-      DCHECK_EQ(unique_reg, RegisterUseKind::kUseUniqueRegister);
-      return UseUniqueRegister(node);
-    }
-  }
-
   InstructionOperand UseFixed(Node* node, Register reg) {
     return Use(node, UnallocatedOperand(UnallocatedOperand::FIXED_REGISTER,
                                         reg.code(), GetVReg(node)));
@@ -216,10 +189,6 @@ class OperandGeneratorT {
   }
 
   InstructionOperand UseImmediate(int immediate) {
-    return sequence()->AddImmediate(Constant(immediate));
-  }
-
-  InstructionOperand UseImmediate64(int64_t immediate) {
     return sequence()->AddImmediate(Constant(immediate));
   }
 
@@ -255,7 +224,7 @@ class OperandGeneratorT {
   int AllocateVirtualRegister() { return sequence()->NextVirtualRegister(); }
 
   InstructionOperand DefineSameAsFirstForVreg(int vreg) {
-    return UnallocatedOperand(UnallocatedOperand::SAME_AS_INPUT, vreg);
+    return UnallocatedOperand(UnallocatedOperand::SAME_AS_FIRST_INPUT, vreg);
   }
 
   InstructionOperand DefineAsRegistertForVreg(int vreg) {
@@ -298,23 +267,9 @@ class OperandGeneratorT {
     return op;
   }
 
-  InstructionOperand TempSimd256Register() {
-    UnallocatedOperand op = UnallocatedOperand(
-        UnallocatedOperand::MUST_HAVE_REGISTER,
-        UnallocatedOperand::USED_AT_START, sequence()->NextVirtualRegister());
-    sequence()->MarkAsRepresentation(MachineRepresentation::kSimd256,
-                                     op.virtual_register());
-    return op;
-  }
-
   InstructionOperand TempRegister(Register reg) {
     return UnallocatedOperand(UnallocatedOperand::FIXED_REGISTER, reg.code(),
                               InstructionOperand::kInvalidVirtualRegister);
-  }
-
-  InstructionOperand TempRegister(int code) {
-    return UnallocatedOperand(UnallocatedOperand::FIXED_REGISTER, code,
-                              sequence()->NextVirtualRegister());
   }
 
   template <typename FPRegType>
@@ -341,7 +296,7 @@ class OperandGeneratorT {
   }
 
  protected:
-  InstructionSelectorT<Adapter>* selector() const { return selector_; }
+  InstructionSelector* selector() const { return selector_; }
   InstructionSequence* sequence() const { return selector()->sequence(); }
   Zone* zone() const { return selector()->instruction_zone(); }
 
@@ -389,6 +344,8 @@ class OperandGeneratorT {
         return Constant(HeapConstantOf(node->op()));
       case IrOpcode::kCompressedHeapConstant:
         return Constant(HeapConstantOf(node->op()), true);
+      case IrOpcode::kDelayedStringConstant:
+        return Constant(StringConstantBaseOf(node->op()));
       case IrOpcode::kDeadValue: {
         switch (DeadValueRepresentationOf(node->op())) {
           case MachineRepresentation::kBit:
@@ -456,7 +413,7 @@ class OperandGeneratorT {
 
   UnallocatedOperand ToUnallocatedOperand(LinkageLocation location,
                                           int virtual_register) {
-    if (location.IsAnyRegister() || location.IsNullRegister()) {
+    if (location.IsAnyRegister()) {
       // any machine register.
       return UnallocatedOperand(UnallocatedOperand::MUST_HAVE_REGISTER,
                                 virtual_register);
@@ -480,7 +437,7 @@ class OperandGeneratorT {
                               location.AsRegister(), virtual_register);
   }
 
-  InstructionSelectorT<Adapter>* selector_;
+  InstructionSelector* selector_;
 };
 
 }  // namespace compiler

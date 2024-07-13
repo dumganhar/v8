@@ -22,13 +22,6 @@ bool HeapState::IsSweeping(const HeapHandle& heap_handle) {
 }
 
 // static
-bool HeapState::IsSweepingOnOwningThread(const HeapHandle& heap_handle) {
-  return internal::HeapBase::From(heap_handle)
-      .sweeper()
-      .IsSweepingOnMutatorThread();
-}
-
-// static
 bool HeapState::IsInAtomicPause(const HeapHandle& heap_handle) {
   return internal::HeapBase::From(heap_handle).in_atomic_pause();
 }

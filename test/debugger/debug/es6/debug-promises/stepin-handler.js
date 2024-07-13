@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --noalways-turbofan
+// Flags: --noalways-opt
 // Tests stepping into through Promises.
 
 Debug = debug.Debug
@@ -21,7 +21,7 @@ function listener(event, exec_state, event_data, data) {
                  "Expected: // Break " + break_count + ".");
       ++break_count;
       if (break_count !== expected_breaks) {
-        exec_state.prepareStep(Debug.StepAction.StepInto);
+        exec_state.prepareStep(Debug.StepAction.StepIn);
       }
     }
   } catch(e) {

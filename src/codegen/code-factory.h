@@ -29,17 +29,30 @@ class V8_EXPORT_PRIVATE CodeFactory final {
   static Handle<Code> RuntimeCEntry(Isolate* isolate, int result_size = 1);
 
   static Handle<Code> CEntry(Isolate* isolate, int result_size = 1,
-                             ArgvMode argv_mode = ArgvMode::kStack,
+                             SaveFPRegsMode save_doubles = kDontSaveFPRegs,
+                             ArgvMode argv_mode = kArgvOnStack,
                              bool builtin_exit_frame = false);
 
   // Initial states for ICs.
   static Callable LoadGlobalIC(Isolate* isolate, TypeofMode typeof_mode);
   static Callable LoadGlobalICInOptimizedCode(Isolate* isolate,
                                               TypeofMode typeof_mode);
-  static Callable DefineNamedOwnIC(Isolate* isolate);
-  static Callable DefineNamedOwnICInOptimizedCode(Isolate* isolate);
+  static Callable StoreOwnIC(Isolate* isolate);
+  static Callable StoreOwnICInOptimizedCode(Isolate* isolate);
+
+  static Callable KeyedStoreIC_SloppyArguments(Isolate* isolate,
+                                               KeyedAccessStoreMode mode);
+  static Callable ElementsTransitionAndStore(Isolate* isolate,
+                                             KeyedAccessStoreMode mode);
+  static Callable StoreFastElementIC(Isolate* isolate,
+                                     KeyedAccessStoreMode mode);
 
   static Callable ResumeGenerator(Isolate* isolate);
+
+  static Callable FrameDropperTrampoline(Isolate* isolate);
+  static Callable HandleDebuggerStatement(Isolate* isolate);
+
+  static Callable BinaryOperation(Isolate* isolate, Operation op);
 
   static Callable ApiGetter(Isolate* isolate);
   static Callable CallApiCallback(Isolate* isolate);
@@ -87,12 +100,6 @@ class V8_EXPORT_PRIVATE CodeFactory final {
   static Callable ArraySingleArgumentConstructor(
       Isolate* isolate, ElementsKind kind,
       AllocationSiteOverrideMode override_mode);
-
-#ifdef V8_IS_TSAN
-  static Builtin GetTSANStoreStub(SaveFPRegsMode fp_mode, int size,
-                                  std::memory_order order);
-  static Builtin GetTSANRelaxedLoadStub(SaveFPRegsMode fp_mode, int size);
-#endif  // V8_IS_TSAN
 };
 
 }  // namespace internal

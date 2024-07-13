@@ -3,52 +3,20 @@
 // found in the LICENSE file.
 
 #include "include/cppgc/internal/gc-info.h"
-
-#include "include/cppgc/internal/name-trait.h"
 #include "include/v8config.h"
 #include "src/heap/cppgc/gc-info-table.h"
 
-namespace cppgc::internal {
+namespace cppgc {
+namespace internal {
 
-namespace {
-
-HeapObjectName GetHiddenName(const void*, HeapObjectNameForUnnamedObject) {
-  return {NameProvider::kHiddenName, true};
-}
-
-}  // namespace
-
-// static
-GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndex(
-    std::atomic<GCInfoIndex>& registered_index, TraceCallback trace_callback,
-    FinalizationCallback finalization_callback, NameCallback name_callback) {
+GCInfoIndex EnsureGCInfoIndex(std::atomic<GCInfoIndex>& registered_index,
+                              FinalizationCallback finalization_callback,
+                              TraceCallback trace_callback,
+                              NameCallback name_callback, bool has_v_table) {
   return GlobalGCInfoTable::GetMutable().RegisterNewGCInfo(
       registered_index,
-      GCInfo(finalization_callback, trace_callback, name_callback));
+      {finalization_callback, trace_callback, name_callback, has_v_table});
 }
 
-// static
-GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndex(
-    std::atomic<GCInfoIndex>& registered_index, TraceCallback trace_callback,
-    FinalizationCallback finalization_callback) {
-  return GlobalGCInfoTable::GetMutable().RegisterNewGCInfo(
-      registered_index,
-      GCInfo(finalization_callback, trace_callback, GetHiddenName));
-}
-
-// static
-GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndex(
-    std::atomic<GCInfoIndex>& registered_index, TraceCallback trace_callback,
-    NameCallback name_callback) {
-  return GlobalGCInfoTable::GetMutable().RegisterNewGCInfo(
-      registered_index, GCInfo(nullptr, trace_callback, name_callback));
-}
-
-// static
-GCInfoIndex EnsureGCInfoIndexTrait::EnsureGCInfoIndex(
-    std::atomic<GCInfoIndex>& registered_index, TraceCallback trace_callback) {
-  return GlobalGCInfoTable::GetMutable().RegisterNewGCInfo(
-      registered_index, GCInfo(nullptr, trace_callback, GetHiddenName));
-}
-
-}  // namespace cppgc::internal
+}  // namespace internal
+}  // namespace cppgc

@@ -23,6 +23,8 @@ class JSProxy : public TorqueGeneratedJSProxy<JSProxy, JSReceiver> {
                                                         Handle<Object>,
                                                         Handle<Object>);
 
+  static MaybeHandle<NativeContext> GetFunctionRealm(Handle<JSProxy> proxy);
+
   V8_INLINE bool IsRevoked() const;
   static void Revoke(Handle<JSProxy> proxy);
 
@@ -31,8 +33,8 @@ class JSProxy : public TorqueGeneratedJSProxy<JSProxy, JSReceiver> {
 
   // ES6 9.5.2
   V8_WARN_UNUSED_RESULT static Maybe<bool> SetPrototype(
-      Isolate* isolate, Handle<JSProxy> proxy, Handle<Object> value,
-      bool from_javascript, ShouldThrow should_throw);
+      Handle<JSProxy> proxy, Handle<Object> value, bool from_javascript,
+      ShouldThrow should_throw);
   // ES6 9.5.3
   V8_WARN_UNUSED_RESULT static Maybe<bool> IsExtensible(Handle<JSProxy> proxy);
 
@@ -98,6 +100,7 @@ class JSProxy : public TorqueGeneratedJSProxy<JSProxy, JSReceiver> {
       LookupIterator* it);
 
   // Dispatched behavior.
+  DECL_PRINTER(JSProxy)
   DECL_VERIFIER(JSProxy)
 
   static const int kMaxIterationLimit = 100 * 1024;
@@ -106,7 +109,7 @@ class JSProxy : public TorqueGeneratedJSProxy<JSProxy, JSReceiver> {
   // JSProxy::target is a Javascript value which cannot be confused with an
   // elements backing store is exploited by loading from this offset from an
   // unknown JSReceiver.
-  static_assert(static_cast<int>(JSObject::kElementsOffset) ==
+  STATIC_ASSERT(static_cast<int>(JSObject::kElementsOffset) ==
                 static_cast<int>(JSProxy::kTargetOffset));
 
   using BodyDescriptor =
@@ -123,10 +126,12 @@ class JSProxy : public TorqueGeneratedJSProxy<JSProxy, JSReceiver> {
 // JSProxyRevocableResult is just a JSObject with a specific initial map.
 // This initial map adds in-object properties for "proxy" and "revoke".
 // See https://tc39.github.io/ecma262/#sec-proxy.revocable
-class JSProxyRevocableResult
-    : public TorqueGeneratedJSProxyRevocableResult<JSProxyRevocableResult,
-                                                   JSObject> {
+class JSProxyRevocableResult : public JSObject {
  public:
+  // Layout description.
+  DEFINE_FIELD_OFFSET_CONSTANTS(
+      JSObject::kHeaderSize, TORQUE_GENERATED_JS_PROXY_REVOCABLE_RESULT_FIELDS)
+
   // Indices of in-object properties.
   static const int kProxyIndex = 0;
   static const int kRevokeIndex = 1;

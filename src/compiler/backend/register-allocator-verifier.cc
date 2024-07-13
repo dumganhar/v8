@@ -72,7 +72,7 @@ RegisterAllocatorVerifier::RegisterAllocatorVerifier(
   constraints_.reserve(sequence->instructions().size());
   // TODO(dcarney): model unique constraints.
   // Construct OperandConstraints for all InstructionOperands, eliminating
-  // kSameAsInput along the way.
+  // kSameAsFirst along the way.
   for (const Instruction* instr : sequence->instructions()) {
     // All gaps should be totally unallocated at this point.
     VerifyEmptyGaps(instr);
@@ -90,11 +90,10 @@ RegisterAllocatorVerifier::RegisterAllocatorVerifier(
     }
     for (size_t i = 0; i < instr->OutputCount(); ++i, ++count) {
       BuildConstraint(instr->OutputAt(i), &op_constraints[count]);
-      if (op_constraints[count].type_ == kSameAsInput) {
-        int input_index = op_constraints[count].value_;
-        CHECK_LT(input_index, instr->InputCount());
-        op_constraints[count].type_ = op_constraints[input_index].type_;
-        op_constraints[count].value_ = op_constraints[input_index].value_;
+      if (op_constraints[count].type_ == kSameAsFirst) {
+        CHECK_LT(0, instr->InputCount());
+        op_constraints[count].type_ = op_constraints[0].type_;
+        op_constraints[count].value_ = op_constraints[0].value_;
       }
       VerifyOutput(op_constraints[count]);
     }
@@ -106,7 +105,7 @@ RegisterAllocatorVerifier::RegisterAllocatorVerifier(
 
 void RegisterAllocatorVerifier::VerifyInput(
     const OperandConstraint& constraint) {
-  CHECK_NE(kSameAsInput, constraint.type_);
+  CHECK_NE(kSameAsFirst, constraint.type_);
   if (constraint.type_ != kImmediate) {
     CHECK_NE(InstructionOperand::kInvalidVirtualRegister,
              constraint.virtual_register_);
@@ -115,7 +114,7 @@ void RegisterAllocatorVerifier::VerifyInput(
 
 void RegisterAllocatorVerifier::VerifyTemp(
     const OperandConstraint& constraint) {
-  CHECK_NE(kSameAsInput, constraint.type_);
+  CHECK_NE(kSameAsFirst, constraint.type_);
   CHECK_NE(kImmediate, constraint.type_);
   CHECK_NE(kConstant, constraint.type_);
 }
@@ -213,9 +212,8 @@ void RegisterAllocatorVerifier::BuildConstraint(const InstructionOperand* op,
           constraint->value_ =
               ElementSizeLog2Of(sequence()->GetRepresentation(vreg));
           break;
-        case UnallocatedOperand::SAME_AS_INPUT:
-          constraint->type_ = kSameAsInput;
-          constraint->value_ = unallocated->input_index();
+        case UnallocatedOperand::SAME_AS_FIRST_INPUT:
+          constraint->type_ = kSameAsFirst;
           break;
       }
     }
@@ -271,7 +269,7 @@ void RegisterAllocatorVerifier::CheckConstraint(
       CHECK_WITH_MSG(op->IsRegister() || op->IsStackSlot() || op->IsConstant(),
                      caller_info_);
       return;
-    case kSameAsInput:
+    case kSameAsFirst:
       CHECK_WITH_MSG(false, caller_info_);
       return;
   }
@@ -362,7 +360,7 @@ bool BlockAssessments::IsStaleReferenceStackSlot(InstructionOperand op) {
 
 void BlockAssessments::Print() const {
   StdoutStream os;
-  for (const auto& pair : map()) {
+  for (const auto pair : map()) {
     const InstructionOperand op = pair.first;
     const Assessment* assessment = pair.second;
     // Use operator<< so we can write the assessment on the same

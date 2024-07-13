@@ -7,11 +7,11 @@
 #include "debug-helper-internal.h"
 #include "heap-constants.h"
 #include "include/v8-internal.h"
+#include "src/common/external-pointer.h"
 #include "src/execution/frame-constants.h"
 #include "src/execution/frames.h"
 #include "src/execution/isolate-utils.h"
 #include "src/objects/string-inl.h"
-#include "src/sandbox/external-pointer.h"
 #include "src/strings/unicode-inl.h"
 #include "torque-generated/class-debug-readers.h"
 #include "torque-generated/debug-macros.h"
@@ -219,16 +219,12 @@ TypedObject GetTypedHeapObject(uintptr_t address, d::MemoryAccessor accessor,
 // An object visitor that accumulates the first few characters of a string.
 class ReadStringVisitor : public TqObjectVisitor {
  public:
-  struct Result {
-    v8::base::Optional<std::string> maybe_truncated_string;
-    std::unique_ptr<ObjectProperty> maybe_raw_characters_property;
-  };
-  static Result Visit(d::MemoryAccessor accessor,
-                      const d::HeapAddresses& heap_addresses,
-                      const TqString* object) {
+  static v8::base::Optional<std::string> Visit(
+      d::MemoryAccessor accessor, const d::HeapAddresses& heap_addresses,
+      const TqString* object) {
     ReadStringVisitor visitor(accessor, heap_addresses);
     object->Visit(&visitor);
-    return {visitor.GetString(), visitor.GetRawCharactersProperty()};
+    return visitor.GetString();
   }
 
   // Returns the result as UTF-8 once visiting is complete.
@@ -248,23 +244,11 @@ class ReadStringVisitor : public TqObjectVisitor {
     return std::string(result.data(), write_index);
   }
 
-  // Returns a property referring to the address of the flattened character
-  // array, if possible, once visiting is complete.
-  std::unique_ptr<ObjectProperty> GetRawCharactersProperty() {
-    if (failed_ || raw_characters_address_ == 0) return {};
-    DCHECK(size_per_character_ == 1 || size_per_character_ == 2);
-    const char* type = size_per_character_ == 1 ? "char" : "char16_t";
-    return std::make_unique<ObjectProperty>(
-        "raw_characters", type, type, raw_characters_address_, num_characters_,
-        size_per_character_, std::vector<std::unique_ptr<StructProperty>>(),
-        d::PropertyKind::kArrayOfKnownSize);
-  }
-
-  template <typename T>
-  Value<T> ReadValue(uintptr_t data_address, int32_t index = 0) {
-    T value{};
+  template <typename TChar>
+  Value<TChar> ReadCharacter(uintptr_t data_address, int32_t index) {
+    TChar value{};
     d::MemoryAccessResult validity =
-        accessor_(data_address + index * sizeof(T),
+        accessor_(data_address + index * sizeof(TChar),
                   reinterpret_cast<uint8_t*>(&value), sizeof(value));
     return {validity, value};
   }
@@ -272,15 +256,10 @@ class ReadStringVisitor : public TqObjectVisitor {
   template <typename TChar>
   void ReadStringCharacters(const TqString* object, uintptr_t data_address) {
     int32_t length = GetOrFinish(object->GetLengthValue(accessor_));
-    if (string_.size() == 0) {
-      raw_characters_address_ = data_address + index_ * sizeof(TChar);
-      size_per_character_ = sizeof(TChar);
-      num_characters_ = std::min(length, limit_) - index_;
-    }
     for (; index_ < length && index_ < limit_ && !done_; ++index_) {
-      static_assert(sizeof(TChar) <= sizeof(char16_t));
+      STATIC_ASSERT(sizeof(TChar) <= sizeof(char16_t));
       char16_t c = static_cast<char16_t>(
-          GetOrFinish(ReadValue<TChar>(data_address, index_)));
+          GetOrFinish(ReadCharacter<TChar>(data_address, index_)));
       if (!done_) AddCharacter(c);
     }
   }
@@ -305,10 +284,6 @@ class ReadStringVisitor : public TqObjectVisitor {
         GetTypedHeapObject(first_address, accessor_, nullptr, heap_addresses_)
             .object;
     first->Visit(this);
-    // Cons strings don't have all of their characters in a contiguous memory
-    // region, so it would be confusing to show the user a raw pointer to the
-    // character storage for only part of the cons string.
-    raw_characters_address_ = 0;
     if (done_) return;
     int32_t first_length = GetOrFinish(
         static_cast<TqString*>(first.get())->GetLengthValue(accessor_));
@@ -341,10 +316,7 @@ class ReadStringVisitor : public TqObjectVisitor {
   bool IsExternalStringCached(const TqExternalString* object) {
     // The safest way to get the instance type is to use known map pointers, in
     // case the map data is not available.
-    Value<uintptr_t> map_ptr = object->GetMapValue(accessor_);
-    DCHECK_IMPLIES(map_ptr.validity == d::MemoryAccessResult::kOk,
-                   !v8::internal::MapWord::IsPacked(map_ptr.value));
-    uintptr_t map = GetOrFinish(map_ptr);
+    uintptr_t map = GetOrFinish(object->GetMapValue(accessor_));
     if (done_) return false;
     auto instance_types = FindKnownMapInstanceTypes(map, heap_addresses_);
     // Exactly one of the matched instance types should be a string type,
@@ -374,26 +346,14 @@ class ReadStringVisitor : public TqObjectVisitor {
     if (IsExternalStringCached(object)) {
       ExternalPointer_t resource_data =
           GetOrFinish(object->GetResourceDataValue(accessor_));
-#ifdef V8_ENABLE_SANDBOX
-      Address memory_chunk =
-          BasicMemoryChunk::BaseAddress(object->GetMapAddress());
-      Address heap = GetOrFinish(
-          ReadValue<Address>(memory_chunk + BasicMemoryChunk::kHeapOffset));
-      Isolate* isolate = Isolate::FromHeap(reinterpret_cast<Heap*>(heap));
-      Address external_pointer_table_address_address =
-          isolate->shared_external_pointer_table_address_address();
-      Address external_pointer_table_address = GetOrFinish(
-          ReadValue<Address>(external_pointer_table_address_address));
-      Address external_pointer_table =
-          GetOrFinish(ReadValue<Address>(external_pointer_table_address));
-      int32_t index =
-          static_cast<int32_t>(resource_data >> kExternalPointerIndexShift);
-      Address tagged_data =
-          GetOrFinish(ReadValue<Address>(external_pointer_table, index));
-      Address data_address = tagged_data & ~kExternalStringResourceDataTag;
+#ifdef V8_COMPRESS_POINTERS
+      uintptr_t data_address = static_cast<uintptr_t>(
+          DecodeExternalPointer(GetPtrComprCageBaseFromOnHeapAddress(
+                                    heap_addresses_.any_heap_pointer),
+                                resource_data, kExternalStringResourceDataTag));
 #else
       uintptr_t data_address = static_cast<uintptr_t>(resource_data);
-#endif  // V8_ENABLE_SANDBOX
+#endif  // V8_COMPRESS_POINTERS
       if (done_) return;
       ReadStringCharacters<TChar>(object, data_address);
     } else {
@@ -493,16 +453,6 @@ class ReadStringVisitor : public TqObjectVisitor {
   int32_t limit_;  // Don't read past this index (set by SlicedString).
   bool done_;      // Whether to stop further work.
   bool failed_;    // Whether an error was encountered before any valid data.
-
-  // If the string's characters are in a contiguous block of memory (including
-  // sequential strings, external strings where we could determine the raw data
-  // location, and thin or sliced strings pointing to either of those), then
-  // after this visitor has run, the character data's address, size per
-  // character, and number of characters will be present in the following
-  // fields.
-  Address raw_characters_address_ = 0;
-  int32_t size_per_character_ = 0;
-  int32_t num_characters_ = 0;
 };
 
 // An object visitor that supplies extra information for some types.
@@ -519,28 +469,27 @@ class AddInfoVisitor : public TqObjectVisitor {
     return {std::move(visitor.brief_), std::move(visitor.properties_)};
   }
 
-  void VisitStringImpl(const TqString* object, bool is_sequential) {
-    auto visit_result =
-        ReadStringVisitor::Visit(accessor_, heap_addresses_, object);
-    auto str = visit_result.maybe_truncated_string;
+  void VisitString(const TqString* object) override {
+    auto str = ReadStringVisitor::Visit(accessor_, heap_addresses_, object);
     if (str.has_value()) {
       brief_ = "\"" + *str + "\"";
     }
-    // Sequential strings already have a "chars" property based on the Torque
-    // type definition, so there's no need to duplicate it. Otherwise, it is
-    // useful to display a pointer to the flattened character data if possible.
-    if (!is_sequential && visit_result.maybe_raw_characters_property) {
-      properties_.push_back(
-          std::move(visit_result.maybe_raw_characters_property));
-    }
   }
 
-  void VisitString(const TqString* object) override {
-    VisitStringImpl(object, /*is_sequential=*/false);
-  }
-
-  void VisitSeqString(const TqSeqString* object) override {
-    VisitStringImpl(object, /*is_sequential=*/true);
+  void VisitExternalString(const TqExternalString* object) override {
+    VisitString(object);
+    // Cast resource field to v8::String::ExternalStringResourceBase* would add
+    // more info.
+    properties_.push_back(std::make_unique<ObjectProperty>(
+        "resource",
+        CheckTypeName<v8::String::ExternalStringResourceBase*>(
+            "v8::String::ExternalStringResourceBase*"),
+        CheckTypeName<v8::String::ExternalStringResourceBase*>(
+            "v8::String::ExternalStringResourceBase*"),
+        object->GetResourceAddress(), 1,
+        sizeof(v8::String::ExternalStringResourceBase*),
+        std::vector<std::unique_ptr<StructProperty>>(),
+        d::PropertyKind::kSingle));
   }
 
   void VisitJSObject(const TqJSObject* object) override {
@@ -551,13 +500,12 @@ class AddInfoVisitor : public TqObjectVisitor {
     if (map_ptr.validity != d::MemoryAccessResult::kOk) {
       return;  // Can't read the JSObject. Nothing useful to do.
     }
-    DCHECK(!v8::internal::MapWord::IsPacked(map_ptr.value));
     TqMap map(map_ptr.value);
 
     // On JSObject instances, this value is the start of in-object properties.
     // The constructor function index option is only for primitives.
     auto start_offset =
-        map.GetInobjectPropertiesStartOrConstructorFunctionIndexValue(
+        map.GetInObjectPropertiesStartOrConstructorFunctionIndexValue(
             accessor_);
 
     // The total size of the object in memory. This may include over-allocated
@@ -659,13 +607,6 @@ std::unique_ptr<ObjectPropertiesResult> GetHeapObjectPropertiesMaybeCompressed(
     any_uncompressed_ptr = heap_addresses.old_space_first_page;
   if (any_uncompressed_ptr == 0)
     any_uncompressed_ptr = heap_addresses.read_only_space_first_page;
-#ifdef V8_COMPRESS_POINTERS_IN_SHARED_CAGE
-  Address base =
-      V8HeapCompressionScheme::GetPtrComprCageBaseAddress(any_uncompressed_ptr);
-  if (base != V8HeapCompressionScheme::base()) {
-    V8HeapCompressionScheme::InitBase(base);
-  }
-#endif
   FillInUnknownHeapAddresses(&heap_addresses, any_uncompressed_ptr);
   if (any_uncompressed_ptr == 0) {
     // We can't figure out the heap range. Just check for known objects.

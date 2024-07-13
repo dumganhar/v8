@@ -18,11 +18,10 @@ namespace {
 
 class MockGarbageCollector : public GarbageCollector {
  public:
-  MOCK_METHOD(void, CollectGarbage, (GCConfig), (override));
-  MOCK_METHOD(void, StartIncrementalGarbageCollection, (GCConfig), (override));
+  MOCK_METHOD(void, CollectGarbage, (GarbageCollector::Config), (override));
+  MOCK_METHOD(void, StartIncrementalGarbageCollection,
+              (GarbageCollector::Config), (override));
   MOCK_METHOD(size_t, epoch, (), (const, override));
-  MOCK_METHOD(const EmbedderStackState*, override_stack_state, (),
-              (const, override));
 };
 
 class MockTaskRunner : public cppgc::TaskRunner {
@@ -37,9 +36,11 @@ class MockTaskRunner : public cppgc::TaskRunner {
   MOCK_METHOD(void, PostIdleTask, (std::unique_ptr<cppgc::IdleTask>),
               (override));
 
-  bool IdleTasksEnabled() override { return true; }
-  bool NonNestableTasksEnabled() const override { return true; }
-  bool NonNestableDelayedTasksEnabled() const override { return true; }
+  virtual bool IdleTasksEnabled() override { return true; }       // NOLINT
+  bool NonNestableTasksEnabled() const override { return true; }  // NOLINT
+  virtual bool NonNestableDelayedTasksEnabled() const override {  // NOLINT
+    return true;
+  }
 };
 
 class MockPlatform : public cppgc::Platform {
@@ -72,8 +73,9 @@ TEST(GCInvokerTest, PrecideGCIsInvokedSynchronously) {
   GCInvoker invoker(&gc, &platform,
                     cppgc::Heap::StackSupport::kNoConservativeStackScan);
   EXPECT_CALL(gc, CollectGarbage(::testing::Field(
-                      &GCConfig::stack_state, StackState::kNoHeapPointers)));
-  invoker.CollectGarbage(GCConfig::PreciseAtomicConfig());
+                      &GarbageCollector::Config::stack_state,
+                      GarbageCollector::Config::StackState::kNoHeapPointers)));
+  invoker.CollectGarbage(GarbageCollector::Config::PreciseAtomicConfig());
 }
 
 TEST(GCInvokerTest, ConservativeGCIsInvokedSynchronouslyWhenSupported) {
@@ -83,8 +85,9 @@ TEST(GCInvokerTest, ConservativeGCIsInvokedSynchronouslyWhenSupported) {
                     cppgc::Heap::StackSupport::kSupportsConservativeStackScan);
   EXPECT_CALL(
       gc, CollectGarbage(::testing::Field(
-              &GCConfig::stack_state, StackState::kMayContainHeapPointers)));
-  invoker.CollectGarbage(GCConfig::ConservativeAtomicConfig());
+              &GarbageCollector::Config::stack_state,
+              GarbageCollector::Config::StackState::kMayContainHeapPointers)));
+  invoker.CollectGarbage(GarbageCollector::Config::ConservativeAtomicConfig());
 }
 
 TEST(GCInvokerTest, ConservativeGCIsScheduledAsPreciseGCViaPlatform) {
@@ -97,7 +100,7 @@ TEST(GCInvokerTest, ConservativeGCIsScheduledAsPreciseGCViaPlatform) {
   EXPECT_CALL(gc, epoch).WillOnce(::testing::Return(0));
   EXPECT_CALL(*static_cast<MockTaskRunner*>(runner.get()),
               PostNonNestableTask(::testing::_));
-  invoker.CollectGarbage(GCConfig::ConservativeAtomicConfig());
+  invoker.CollectGarbage(GarbageCollector::Config::ConservativeAtomicConfig());
 }
 
 TEST(GCInvokerTest, ConservativeGCIsInvokedAsPreciseGCViaPlatform) {
@@ -107,7 +110,7 @@ TEST(GCInvokerTest, ConservativeGCIsInvokedAsPreciseGCViaPlatform) {
                     cppgc::Heap::StackSupport::kNoConservativeStackScan);
   EXPECT_CALL(gc, epoch).WillRepeatedly(::testing::Return(0));
   EXPECT_CALL(gc, CollectGarbage);
-  invoker.CollectGarbage(GCConfig::ConservativeAtomicConfig());
+  invoker.CollectGarbage(GarbageCollector::Config::ConservativeAtomicConfig());
   platform.RunAllForegroundTasks();
 }
 
@@ -122,18 +125,20 @@ TEST(GCInvokerTest, IncrementalGCIsStarted) {
       cppgc::Heap::StackSupport::kSupportsConservativeStackScan);
   EXPECT_CALL(
       gc, StartIncrementalGarbageCollection(::testing::Field(
-              &GCConfig::stack_state, StackState::kMayContainHeapPointers)));
+              &GarbageCollector::Config::stack_state,
+              GarbageCollector::Config::StackState::kMayContainHeapPointers)));
   invoker_with_support.StartIncrementalGarbageCollection(
-      GCConfig::ConservativeIncrementalConfig());
+      GarbageCollector::Config::ConservativeIncrementalConfig());
   // Conservative stack scanning *not* supported.
   GCInvoker invoker_without_support(
       &gc, &platform, cppgc::Heap::StackSupport::kNoConservativeStackScan);
-  EXPECT_CALL(gc,
-              StartIncrementalGarbageCollection(::testing::Field(
-                  &GCConfig::stack_state, StackState::kMayContainHeapPointers)))
+  EXPECT_CALL(
+      gc, StartIncrementalGarbageCollection(::testing::Field(
+              &GarbageCollector::Config::stack_state,
+              GarbageCollector::Config::StackState::kMayContainHeapPointers)))
       .Times(0);
   invoker_without_support.StartIncrementalGarbageCollection(
-      GCConfig::ConservativeIncrementalConfig());
+      GarbageCollector::Config::ConservativeIncrementalConfig());
 }
 
 }  // namespace internal

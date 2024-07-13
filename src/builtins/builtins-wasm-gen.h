@@ -17,20 +17,16 @@ class WasmBuiltinsAssembler : public CodeStubAssembler {
 
   TNode<WasmInstanceObject> LoadInstanceFromFrame();
 
-  TNode<NativeContext> LoadContextFromWasmOrJsFrame();
-
   TNode<NativeContext> LoadContextFromInstance(
       TNode<WasmInstanceObject> instance);
 
   TNode<FixedArray> LoadTablesFromInstance(TNode<WasmInstanceObject> instance);
 
-  TNode<FixedArray> LoadInternalFunctionsFromInstance(
+  TNode<FixedArray> LoadExternalFunctionsFromInstance(
       TNode<WasmInstanceObject> instance);
 
   TNode<FixedArray> LoadManagedObjectMapsFromInstance(
       TNode<WasmInstanceObject> instance);
-
-  TNode<Float64T> StringToFloat64(TNode<String> input);
 };
 
 }  // namespace internal

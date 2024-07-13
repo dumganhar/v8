@@ -6,12 +6,12 @@
 
 #include <memory>
 
-#include "src/base/vector.h"
 #include "src/handles/handles-inl.h"
 #include "src/logging/log.h"
 #include "src/objects/js-array-inl.h"
 #include "src/objects/objects-inl.h"
 #include "src/objects/prototype.h"
+#include "src/utils/vector.h"
 
 namespace v8 {
 namespace internal {
@@ -85,8 +85,7 @@ static bool IsControlChar(char c) {
   }
 }
 
-void StringStream::Add(base::Vector<const char> format,
-                       base::Vector<FmtElm> elms) {
+void StringStream::Add(Vector<const char> format, Vector<FmtElm> elms) {
   // If we already ran out of space then return immediately.
   if (full()) return;
   int offset = 0;
@@ -98,7 +97,7 @@ void StringStream::Add(base::Vector<const char> format,
       continue;
     }
     // Read this formatting directive into a temporary buffer
-    base::EmbeddedVector<char, 24> temp;
+    EmbeddedVector<char, 24> temp;
     int format_length = 0;
     // Skip over the whole control character sequence until the
     // format element type
@@ -120,7 +119,7 @@ void StringStream::Add(base::Vector<const char> format,
       }
       case 'w': {
         DCHECK_EQ(FmtElm::LC_STR, current.type_);
-        base::Vector<const base::uc16> value = *current.data_.u_lc_str_;
+        Vector<const uc16> value = *current.data_.u_lc_str_;
         for (int i = 0; i < value.length(); i++)
           Put(static_cast<char>(value[i]));
         break;
@@ -150,9 +149,9 @@ void StringStream::Add(base::Vector<const char> format,
       case 'c':
       case 'X': {
         int value = current.data_.u_int_;
-        base::EmbeddedVector<char, 24> formatted;
+        EmbeddedVector<char, 24> formatted;
         int length = SNPrintF(formatted, temp.begin(), value);
-        Add(base::Vector<const char>(formatted.begin(), length));
+        Add(Vector<const char>(formatted.begin(), length));
         break;
       }
       case 'f':
@@ -169,7 +168,7 @@ void StringStream::Add(base::Vector<const char> format,
         } else if (std::isnan(value)) {
           Add("nan");
         } else {
-          base::EmbeddedVector<char, 28> formatted;
+          EmbeddedVector<char, 28> formatted;
           SNPrintF(formatted, temp.begin(), value);
           Add(formatted.begin());
         }
@@ -177,7 +176,7 @@ void StringStream::Add(base::Vector<const char> format,
       }
       case 'p': {
         void* value = current.data_.u_pointer_;
-        base::EmbeddedVector<char, 20> formatted;
+        EmbeddedVector<char, 20> formatted;
         SNPrintF(formatted, temp.begin(), value);
         Add(formatted.begin());
         break;
@@ -249,7 +248,7 @@ void StringStream::OutputToFile(FILE* out) {
 
 Handle<String> StringStream::ToString(Isolate* isolate) {
   return isolate->factory()
-      ->NewStringFromUtf8(base::Vector<const char>(buffer_, length_))
+      ->NewStringFromUtf8(Vector<const char>(buffer_, length_))
       .ToHandleChecked();
 }
 
@@ -302,8 +301,8 @@ void StringStream::PrintUsingMap(JSObject js_object) {
   DescriptorArray descs = map.instance_descriptors(js_object.GetIsolate());
   for (InternalIndex i : map.IterateOwnDescriptors()) {
     PropertyDetails details = descs.GetDetails(i);
-    if (details.location() == PropertyLocation::kField) {
-      DCHECK_EQ(PropertyKind::kData, details.kind());
+    if (details.location() == kField) {
+      DCHECK_EQ(kData, details.kind());
       Object key = descs.GetKey(i);
       if (key.IsString() || key.IsNumber()) {
         int len = 3;
@@ -343,7 +342,7 @@ void StringStream::PrintFixedArray(FixedArray array, unsigned int limit) {
 void StringStream::PrintByteArray(ByteArray byte_array) {
   unsigned int limit = byte_array.length();
   for (unsigned int i = 0; i < 10 && i < limit; i++) {
-    uint8_t b = byte_array.get(i);
+    byte b = byte_array.get(i);
     Add("             %d: %3d 0x%02x", i, b, b);
     if (b >= ' ' && b <= '~') {
       Add(" '%c'", b);
@@ -365,7 +364,7 @@ void StringStream::PrintMentionedObjectCache(Isolate* isolate) {
   if (object_print_mode_ == kPrintObjectConcise) return;
   DebugObjectCache* debug_object_cache =
       isolate->string_stream_debug_object_cache();
-  Add("-- ObjectCacheKey --\n\n");
+  Add("==== Key         ============================================\n\n");
   for (size_t i = 0; i < debug_object_cache->size(); i++) {
     HeapObject printee = *(*debug_object_cache)[i];
     Add(" #%d# %p: ", static_cast<int>(i),
@@ -400,15 +399,15 @@ void StringStream::PrintMentionedObjectCache(Isolate* isolate) {
 void StringStream::PrintSecurityTokenIfChanged(JSFunction fun) {
   Object token = fun.native_context().security_token();
   Isolate* isolate = fun.GetIsolate();
-  // Use SafeEquals because the cached token might be a stale pointer.
-  if (token.SafeEquals(isolate->string_stream_current_security_token())) {
+  if (token != isolate->string_stream_current_security_token()) {
     Add("Security context: %o\n", token);
     isolate->set_string_stream_current_security_token(token);
   }
 }
 
-void StringStream::PrintFunction(JSFunction fun, Object receiver) {
+void StringStream::PrintFunction(JSFunction fun, Object receiver, Code* code) {
   PrintPrototype(fun, receiver);
+  *code = fun.code();
 }
 
 void StringStream::PrintPrototype(JSFunction fun, Object receiver) {

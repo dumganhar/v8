@@ -5,14 +5,11 @@
 #ifndef V8_JSON_JSON_PARSER_H_
 #define V8_JSON_JSON_PARSER_H_
 
-#include "include/v8-callbacks.h"
 #include "src/base/small-vector.h"
-#include "src/base/strings.h"
-#include "src/common/high-allocation-throughput-scope.h"
 #include "src/execution/isolate.h"
 #include "src/heap/factory.h"
 #include "src/objects/objects.h"
-#include "src/roots/roots.h"
+#include "src/zone/zone-containers.h"
 
 namespace v8 {
 namespace internal {
@@ -104,31 +101,20 @@ struct JsonProperty {
 class JsonParseInternalizer {
  public:
   static MaybeHandle<Object> Internalize(Isolate* isolate,
-                                         Handle<Object> result,
-                                         Handle<Object> reviver,
-                                         Handle<String> source,
-                                         MaybeHandle<Object> val_node);
+                                         Handle<Object> object,
+                                         Handle<Object> reviver);
 
  private:
-  JsonParseInternalizer(Isolate* isolate, Handle<JSReceiver> reviver,
-                        Handle<String> source)
-      : isolate_(isolate), reviver_(reviver), source_(source) {}
+  JsonParseInternalizer(Isolate* isolate, Handle<JSReceiver> reviver)
+      : isolate_(isolate), reviver_(reviver) {}
 
-  enum WithOrWithoutSource { kWithoutSource, kWithSource };
-
-  template <WithOrWithoutSource with_source>
   MaybeHandle<Object> InternalizeJsonProperty(Handle<JSReceiver> holder,
-                                              Handle<String> key,
-                                              Handle<Object> val_node,
-                                              Handle<Object> snapshot);
+                                              Handle<String> key);
 
-  template <WithOrWithoutSource with_source>
-  bool RecurseAndApply(Handle<JSReceiver> holder, Handle<String> name,
-                       Handle<Object> val_node, Handle<Object> snapshot);
+  bool RecurseAndApply(Handle<JSReceiver> holder, Handle<String> name);
 
   Isolate* isolate_;
   Handle<JSReceiver> reviver_;
-  Handle<String> source_;
 };
 
 enum class JsonToken : uint8_t {
@@ -155,33 +141,19 @@ class JsonParser final {
   using SeqString = typename CharTraits<Char>::String;
   using SeqExternalString = typename CharTraits<Char>::ExternalString;
 
-  V8_WARN_UNUSED_RESULT static bool CheckRawJson(Isolate* isolate,
-                                                 Handle<String> source) {
-    return JsonParser(isolate, source).ParseRawJson();
-  }
-
   V8_WARN_UNUSED_RESULT static MaybeHandle<Object> Parse(
       Isolate* isolate, Handle<String> source, Handle<Object> reviver) {
-    HighAllocationThroughputScope high_throughput_scope(
-        V8::GetCurrentPlatform());
     Handle<Object> result;
-    MaybeHandle<Object> val_node;
-    {
-      JsonParser parser(isolate, source);
-      ASSIGN_RETURN_ON_EXCEPTION(isolate, result, parser.ParseJson(reviver),
-                                 Object);
-      val_node = parser.parsed_val_node_;
-    }
+    ASSIGN_RETURN_ON_EXCEPTION(isolate, result,
+                               JsonParser(isolate, source).ParseJson(), Object);
     if (reviver->IsCallable()) {
-      return JsonParseInternalizer::Internalize(isolate, result, reviver,
-                                                source, val_node);
+      return JsonParseInternalizer::Internalize(isolate, result, reviver);
     }
     return result;
   }
 
-  static constexpr base::uc32 kEndOfString = static_cast<base::uc32>(-1);
-  static constexpr base::uc32 kInvalidUnicodeCharacter =
-      static_cast<base::uc32>(-1);
+  static constexpr uc32 kEndOfString = static_cast<uc32>(-1);
+  static constexpr uc32 kInvalidUnicodeCharacter = static_cast<uc32>(-1);
 
  private:
   template <typename T>
@@ -210,18 +182,16 @@ class JsonParser final {
   ~JsonParser();
 
   // Parse a string containing a single JSON value.
-  MaybeHandle<Object> ParseJson(Handle<Object> reviver);
-
-  bool ParseRawJson();
+  MaybeHandle<Object> ParseJson();
 
   void advance() { ++cursor_; }
 
-  base::uc32 CurrentCharacter() {
+  uc32 CurrentCharacter() {
     if (V8_UNLIKELY(is_at_end())) return kEndOfString;
     return *cursor_;
   }
 
-  base::uc32 NextCharacter() {
+  uc32 NextCharacter() {
     advance();
     return CurrentCharacter();
   }
@@ -235,21 +205,17 @@ class JsonParser final {
     advance();
   }
 
-  void Expect(JsonToken token,
-              base::Optional<MessageTemplate> errorMessage = base::nullopt) {
+  void Expect(JsonToken token) {
     if (V8_LIKELY(peek() == token)) {
       advance();
     } else {
-      errorMessage ? ReportUnexpectedToken(peek(), errorMessage.value())
-                   : ReportUnexpectedToken(peek());
+      ReportUnexpectedToken(peek());
     }
   }
 
-  void ExpectNext(
-      JsonToken token,
-      base::Optional<MessageTemplate> errorMessage = base::nullopt) {
+  void ExpectNext(JsonToken token) {
     SkipWhitespace();
-    errorMessage ? Expect(token, errorMessage.value()) : Expect(token);
+    Expect(token);
   }
 
   bool Check(JsonToken token) {
@@ -265,7 +231,7 @@ class JsonParser final {
     // There's at least 1 character, we always consume a character and compare
     // the next character. The first character was compared before we jumped
     // to ScanLiteral.
-    static_assert(N > 2);
+    STATIC_ASSERT(N > 2);
     size_t remaining = static_cast<size_t>(end_ - cursor_);
     if (V8_LIKELY(remaining >= N - 1 &&
                   CompareCharsEqual(s + 1, cursor_ + 1, N - 2))) {
@@ -297,7 +263,7 @@ class JsonParser final {
   // four-digit hex escapes (uXXXX). Any other use of backslashes is invalid.
   JsonString ScanJsonString(bool needs_internalization);
   JsonString ScanJsonPropertyKey(JsonContinuation* cont);
-  base::uc32 ScanUnicodeCharacter();
+  uc32 ScanUnicodeCharacter();
   Handle<String> MakeString(const JsonString& string,
                             Handle<String> hint = Handle<String>());
 
@@ -320,8 +286,7 @@ class JsonParser final {
   // Parse a single JSON value from input (grammar production JSONValue).
   // A JSON value is either a (double-quoted) string literal, a number literal,
   // one of "true", "false", or "null", or an object or array literal.
-  template <bool should_track_json_source>
-  MaybeHandle<Object> ParseJsonValue(Handle<Object> reviver);
+  MaybeHandle<Object> ParseJsonValue();
 
   Handle<Object> BuildJsonObject(
       const JsonContinuation& cont,
@@ -330,32 +295,19 @@ class JsonParser final {
       const JsonContinuation& cont,
       const SmallVector<Handle<Object>>& element_stack);
 
-  static const int kMaxContextCharacters = 10;
-  static const int kMinOriginalSourceLengthForContext =
-      (kMaxContextCharacters * 2) + 1;
-
   // Mark that a parsing error has happened at the current character.
-  void ReportUnexpectedCharacter(base::uc32 c);
-  bool IsSpecialString();
-  MessageTemplate GetErrorMessageWithEllipses(Handle<Object>& arg,
-                                              Handle<Object>& arg2, int pos);
-  MessageTemplate LookUpErrorMessageForJsonToken(JsonToken token,
-                                                 Handle<Object>& arg,
-                                                 Handle<Object>& arg2, int pos);
+  void ReportUnexpectedCharacter(uc32 c);
   // Mark that a parsing error has happened at the current token.
-  void ReportUnexpectedToken(
-      JsonToken token,
-      base::Optional<MessageTemplate> errorMessage = base::nullopt);
+  void ReportUnexpectedToken(JsonToken token);
 
   inline Isolate* isolate() { return isolate_; }
   inline Factory* factory() { return isolate_->factory(); }
-  inline ReadOnlyRoots roots() { return ReadOnlyRoots(isolate_); }
   inline Handle<JSFunction> object_constructor() { return object_constructor_; }
 
   static const int kInitialSpecialStringLength = 32;
 
-  static void UpdatePointersCallback(LocalIsolate*, GCType, GCCallbackFlags,
-                                     void* parser) {
+  static void UpdatePointersCallback(v8::Isolate* v8_isolate, v8::GCType type,
+                                     v8::GCCallbackFlags flags, void* parser) {
     reinterpret_cast<JsonParser<Char>*>(parser)->UpdatePointers();
   }
 
@@ -389,9 +341,6 @@ class JsonParser final {
   Handle<JSFunction> object_constructor_;
   const Handle<String> original_source_;
   Handle<String> source_;
-  // The parsed value's source to be passed to the reviver, if the reviver is
-  // callable.
-  MaybeHandle<Object> parsed_val_node_;
 
   // Cached pointer to the raw chars in source. In case source is on-heap, we
   // register an UpdatePointers callback. For this reason, chars_, cursor_ and

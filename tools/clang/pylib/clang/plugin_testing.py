@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2015 The Chromium Authors
+# Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -50,23 +50,12 @@ class ClangPluginTest(object):
     os.chdir(self._test_base)
 
     clang_cmd = [self._clang_path, '-c', '-std=c++14']
-
-    # If the -fno-diagnostics-show-line-numbers flag exists, we need it to get
-    # the traditional diagnostics format. (crbug.com/1450229).
-    clang_exe = self._clang_path + ('.exe' if sys.platform == 'win32' else '')
-    with open(clang_exe, 'rb') as f:
-      if 'diagnostics-show-line-numbers'.encode('ascii') in f.read():
-        clang_cmd.extend([
-            '-fno-diagnostics-show-line-numbers',
-            '-fcaret-diagnostics-max-lines=1'
-        ])
-
     clang_cmd.extend(['-Xclang', '-add-plugin', '-Xclang', self._plugin_name])
     self.AdjustClangArguments(clang_cmd)
 
     passing = []
     failing = []
-    tests = glob.glob('*.cpp') + glob.glob('*.mm')
+    tests = glob.glob('*.cpp')
     for test in tests:
       sys.stdout.write('Testing %s... ' % test)
       test_name, _ = os.path.splitext(test)
@@ -121,10 +110,6 @@ class ClangPluginTest(object):
     except IOError:
       open(result_file, 'w').write(actual)
       return 'no expected file found'
-
-    # Normalize backslashes to forward-slashes to avoid failure on Windows
-    actual = actual.replace('\\', '/')
-    expected = expected.replace('\\', '/')
 
     if expected != actual:
       open(result_file, 'w').write(actual)

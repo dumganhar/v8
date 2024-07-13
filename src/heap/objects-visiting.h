@@ -5,60 +5,44 @@
 #ifndef V8_HEAP_OBJECTS_VISITING_H_
 #define V8_HEAP_OBJECTS_VISITING_H_
 
-#include "src/base/logging.h"
-#include "src/objects/bytecode-array.h"
-#include "src/objects/contexts.h"
 #include "src/objects/fixed-array.h"
-#include "src/objects/js-weak-refs.h"
 #include "src/objects/map.h"
-#include "src/objects/object-list-macros.h"
 #include "src/objects/objects.h"
-#include "src/objects/shared-function-info.h"
-#include "src/objects/string.h"
 #include "src/objects/visitors.h"
+#include "torque-generated/field-offsets.h"
 
 namespace v8 {
 namespace internal {
 
 #define TYPED_VISITOR_ID_LIST(V)        \
-  V(AccessorInfo)                       \
   V(AllocationSite)                     \
   V(BigInt)                             \
   V(ByteArray)                          \
   V(BytecodeArray)                      \
-  V(CallHandlerInfo)                    \
   V(Cell)                               \
-  V(InstructionStream)                  \
   V(Code)                               \
+  V(CodeDataContainer)                  \
   V(CoverageInfo)                       \
   V(DataHandler)                        \
   V(EmbedderDataArray)                  \
   V(EphemeronHashTable)                 \
-  V(ExternalString)                     \
   V(FeedbackCell)                       \
   V(FeedbackMetadata)                   \
   V(FixedDoubleArray)                   \
   V(JSArrayBuffer)                      \
-  V(JSDataViewOrRabGsabDataView)        \
-  V(JSExternalObject)                   \
-  V(JSFinalizationRegistry)             \
+  V(JSDataView)                         \
   V(JSFunction)                         \
   V(JSObject)                           \
-  V(JSSynchronizationPrimitive)         \
   V(JSTypedArray)                       \
   V(WeakCell)                           \
   V(JSWeakCollection)                   \
   V(JSWeakRef)                          \
   V(Map)                                \
   V(NativeContext)                      \
-  V(Oddball)                            \
-  V(Hole)                               \
   V(PreparseData)                       \
-  V(PromiseOnStack)                     \
   V(PropertyArray)                      \
   V(PropertyCell)                       \
   V(PrototypeInfo)                      \
-  V(SharedFunctionInfo)                 \
   V(SmallOrderedHashMap)                \
   V(SmallOrderedHashSet)                \
   V(SmallOrderedNameDictionary)         \
@@ -67,21 +51,11 @@ namespace internal {
   V(Symbol)                             \
   V(SyntheticModule)                    \
   V(TransitionArray)                    \
-  IF_WASM(V, WasmApiFunctionRef)        \
   IF_WASM(V, WasmArray)                 \
-  IF_WASM(V, WasmCapiFunctionData)      \
-  IF_WASM(V, WasmExportedFunctionData)  \
-  IF_WASM(V, WasmFunctionData)          \
   IF_WASM(V, WasmIndirectFunctionTable) \
   IF_WASM(V, WasmInstanceObject)        \
-  IF_WASM(V, WasmInternalFunction)      \
-  IF_WASM(V, WasmJSFunctionData)        \
   IF_WASM(V, WasmStruct)                \
-  IF_WASM(V, WasmSuspenderObject)       \
-  IF_WASM(V, WasmResumeData)            \
-  IF_WASM(V, WasmTypeInfo)              \
-  IF_WASM(V, WasmContinuationObject)    \
-  IF_WASM(V, WasmNull)
+  IF_WASM(V, WasmTypeInfo)
 
 #define FORWARD_DECLARE(TypeName) class TypeName;
 TYPED_VISITOR_ID_LIST(FORWARD_DECLARE)
@@ -100,37 +74,23 @@ TORQUE_VISITOR_ID_LIST(FORWARD_DECLARE)
 //     ...
 //   }
 template <typename ResultType, typename ConcreteVisitor>
-class HeapVisitor : public ObjectVisitorWithCageBases {
+class HeapVisitor : public ObjectVisitor {
  public:
-  inline HeapVisitor(PtrComprCageBase cage_base,
-                     PtrComprCageBase code_cage_base);
-  inline explicit HeapVisitor(Isolate* isolate);
-  inline explicit HeapVisitor(Heap* heap);
-
   V8_INLINE ResultType Visit(HeapObject object);
   V8_INLINE ResultType Visit(Map map, HeapObject object);
 
  protected:
-  // If this predicate returns false the default implementations of Visit*
-  // functions bail out from visiting the map pointer.
-  V8_INLINE static constexpr bool ShouldVisitMapPointer() { return true; }
-  // If this predicate returns false the default implementations of Visit*
-  // functions bail out from visiting known read-only maps.
-  V8_INLINE static constexpr bool ShouldVisitReadOnlyMapPointer() {
-    return true;
-  }
-
-  // Only visits the Map pointer if `ShouldVisitMapPointer()` returns true.
-  template <VisitorId visitor_id>
-  V8_INLINE void VisitMapPointerIfNeeded(HeapObject host);
-
-  ConcreteVisitor* concrete_visitor() {
-    return static_cast<ConcreteVisitor*>(this);
-  }
-
-  const ConcreteVisitor* concrete_visitor() const {
-    return static_cast<const ConcreteVisitor*>(this);
-  }
+  // A guard predicate for visiting the object.
+  // If it returns false then the default implementations of the Visit*
+  // functions bailout from iterating the object pointers.
+  V8_INLINE bool ShouldVisit(HeapObject object) { return true; }
+  // Guard predicate for visiting the objects map pointer separately.
+  V8_INLINE bool ShouldVisitMapPointer() { return true; }
+  // A callback for visiting the map pointer in the object header.
+  V8_INLINE void VisitMapPointer(HeapObject host);
+  // If this predicate returns false, then the heap visitor will fail
+  // in default Visit implemention for subclasses of JSObject.
+  V8_INLINE bool AllowDefaultJSObjectVisit() { return true; }
 
 #define VISIT(TypeName) \
   V8_INLINE ResultType Visit##TypeName(Map map, TypeName object);
@@ -144,92 +104,27 @@ class HeapVisitor : public ObjectVisitorWithCageBases {
   V8_INLINE ResultType VisitStruct(Map map, HeapObject object);
   V8_INLINE ResultType VisitFreeSpace(Map map, FreeSpace object);
 
-  template <typename T, typename TBodyDescriptor = typename T::BodyDescriptor>
-  V8_INLINE ResultType VisitJSObjectSubclass(Map map, T object);
-
   template <typename T>
   static V8_INLINE T Cast(HeapObject object);
-};
-
-// These strings can be sources of safe string transitions. Transitions are safe
-// if they don't result in invalidated slots. It's safe to read the length field
-// on such strings as that's common for all.
-//
-// No special visitors are generated for such strings.
-// V(VisitorId, TypeName)
-#define SAFE_STRING_TRANSITION_SOURCES(V) \
-  V(SeqOneByteString, SeqOneByteString)   \
-  V(SeqTwoByteString, SeqTwoByteString)
-
-// These strings can be sources of unsafe string transitions.
-// V(VisitorId, TypeName)
-#define UNSAFE_STRING_TRANSITION_SOURCES(V) \
-  V(ExternalString, ExternalString)         \
-  V(ConsString, ConsString)                 \
-  V(SlicedString, SlicedString)
-
-// V(VisitorId, TypeName)
-#define UNSAFE_STRING_TRANSITION_TARGETS(V) \
-  UNSAFE_STRING_TRANSITION_SOURCES(V)       \
-  V(ShortcutCandidate, ConsString)          \
-  V(ThinString, ThinString)
-
-// A HeapVisitor that allows for concurrently tracing through objects. Tracing
-// through objects with unsafe shape changes is guarded by
-// `EnableConcurrentVisitation()` which defaults to off.
-template <typename ResultType, typename ConcreteVisitor>
-class ConcurrentHeapVisitor : public HeapVisitor<ResultType, ConcreteVisitor> {
- public:
-  V8_INLINE explicit ConcurrentHeapVisitor(Isolate* isolate);
-
- protected:
-  V8_INLINE static constexpr bool EnableConcurrentVisitation() { return false; }
-
-#define VISIT_AS_LOCKED_STRING(VisitorId, TypeName) \
-  V8_INLINE ResultType Visit##TypeName(Map map, TypeName object);
-
-  UNSAFE_STRING_TRANSITION_SOURCES(VISIT_AS_LOCKED_STRING)
-#undef VISIT_AS_LOCKED_STRING
-
-  template <typename T>
-  static V8_INLINE T Cast(HeapObject object);
-
- private:
-  template <typename T>
-  V8_INLINE ResultType VisitStringLocked(T object);
-
-  friend class HeapVisitor<ResultType, ConcreteVisitor>;
 };
 
 template <typename ConcreteVisitor>
-class NewSpaceVisitor : public ConcurrentHeapVisitor<int, ConcreteVisitor> {
+class NewSpaceVisitor : public HeapVisitor<int, ConcreteVisitor> {
  public:
-  V8_INLINE explicit NewSpaceVisitor(Isolate* isolate);
+  V8_INLINE bool ShouldVisitMapPointer() { return false; }
 
-  // Special cases: Unreachable visitors for objects that are never found in the
-  // young generation.
-  void VisitInstructionStreamPointer(Code, InstructionStreamSlot) final {
+  // Special cases for young generation.
+
+  V8_INLINE int VisitNativeContext(Map map, NativeContext object);
+  V8_INLINE int VisitJSApiObject(Map map, JSObject object);
+
+  int VisitBytecodeArray(Map map, BytecodeArray object) {
     UNREACHABLE();
+    return 0;
   }
-  void VisitCodeTarget(InstructionStream host, RelocInfo*) final {
-    UNREACHABLE();
-  }
-  void VisitEmbeddedPointer(InstructionStream host, RelocInfo*) final {
-    UNREACHABLE();
-  }
-  void VisitMapPointer(HeapObject) override { UNREACHABLE(); }
 
- protected:
-  V8_INLINE static constexpr bool ShouldVisitMapPointer() { return false; }
-
-  // Special cases: Unreachable visitors for objects that are never found in the
-  // young generation.
-  int VisitNativeContext(Map, NativeContext) { UNREACHABLE(); }
-  int VisitBytecodeArray(Map, BytecodeArray) { UNREACHABLE(); }
-  int VisitSharedFunctionInfo(Map map, SharedFunctionInfo) { UNREACHABLE(); }
-  int VisitWeakCell(Map, WeakCell) { UNREACHABLE(); }
-
-  friend class HeapVisitor<int, ConcreteVisitor>;
+  int VisitSharedFunctionInfo(Map map, SharedFunctionInfo object);
+  int VisitWeakCell(Map map, WeakCell weak_cell);
 };
 
 class WeakObjectRetainer;

@@ -6,7 +6,6 @@
 
 #include "src/zone/accounting-allocator.h"
 #include "src/zone/zone.h"
-#include "test/unittests/test-utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace v8 {
@@ -14,9 +13,7 @@ namespace internal {
 
 const size_t kItemCount = size_t(1) << 10;
 
-class ZoneChunkListTest : public TestWithPlatform {};
-
-TEST_F(ZoneChunkListTest, ForwardIterationTest) {
+TEST(ZoneChunkList, ForwardIterationTest) {
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
@@ -36,7 +33,7 @@ TEST_F(ZoneChunkListTest, ForwardIterationTest) {
   EXPECT_EQ(count, kItemCount);
 }
 
-TEST_F(ZoneChunkListTest, ReverseIterationTest) {
+TEST(ZoneChunkList, ReverseIterationTest) {
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
@@ -56,7 +53,7 @@ TEST_F(ZoneChunkListTest, ReverseIterationTest) {
   EXPECT_EQ(count, kItemCount);
 }
 
-TEST_F(ZoneChunkListTest, PushFrontTest) {
+TEST(ZoneChunkList, PushFrontTest) {
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
@@ -76,7 +73,7 @@ TEST_F(ZoneChunkListTest, PushFrontTest) {
   EXPECT_EQ(count, kItemCount);
 }
 
-TEST_F(ZoneChunkListTest, RewindTest) {
+TEST(ZoneChunkList, RewindTest) {
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
@@ -123,7 +120,7 @@ TEST_F(ZoneChunkListTest, RewindTest) {
   EXPECT_EQ(count, zone_chunk_list.size());
 }
 
-TEST_F(ZoneChunkListTest, FindTest) {
+TEST(ZoneChunkList, FindTest) {
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
@@ -142,7 +139,7 @@ TEST_F(ZoneChunkListTest, FindTest) {
   EXPECT_EQ(*zone_chunk_list.Find(index), 42u);
 }
 
-TEST_F(ZoneChunkListTest, CopyToTest) {
+TEST(ZoneChunkList, CopyToTest) {
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
@@ -161,7 +158,7 @@ TEST_F(ZoneChunkListTest, CopyToTest) {
   }
 }
 
-TEST_F(ZoneChunkListTest, SmallCopyToTest) {
+TEST(ZoneChunkList, SmallCopyToTest) {
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
@@ -185,7 +182,7 @@ struct Fubar {
   size_t b_;
 };
 
-TEST_F(ZoneChunkListTest, BigCopyToTest) {
+TEST(ZoneChunkList, BigCopyToTest) {
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
@@ -217,7 +214,7 @@ void TestForwardIterationOfConstList(
   EXPECT_EQ(count, kItemCount);
 }
 
-TEST_F(ZoneChunkListTest, ConstForwardIterationTest) {
+TEST(ZoneChunkList, ConstForwardIterationTest) {
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
@@ -230,7 +227,7 @@ TEST_F(ZoneChunkListTest, ConstForwardIterationTest) {
   TestForwardIterationOfConstList(zone_chunk_list);
 }
 
-TEST_F(ZoneChunkListTest, RewindAndIterate) {
+TEST(ZoneChunkList, RewindAndIterate) {
   // Regression test for https://bugs.chromium.org/p/v8/issues/detail?id=7478
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
@@ -238,7 +235,7 @@ TEST_F(ZoneChunkListTest, RewindAndIterate) {
   ZoneChunkList<int> zone_chunk_list(&zone);
 
   // Fill the list enough so that it will contain 2 chunks.
-  int chunk_size = static_cast<int>(ZoneChunkList<int>::kInitialChunkCapacity);
+  int chunk_size = static_cast<int>(ZoneChunkList<int>::StartMode::kSmall);
   for (int i = 0; i < chunk_size + 1; ++i) {
     zone_chunk_list.push_back(i);
   }
@@ -270,7 +267,20 @@ TEST_F(ZoneChunkListTest, RewindAndIterate) {
   }
 }
 
-TEST_F(ZoneChunkListTest, AdvanceZeroTest) {
+TEST(ZoneChunkList, PushBackPopBackSize) {
+  // Regression test for https://bugs.chromium.org/p/v8/issues/detail?id=7489
+  AccountingAllocator allocator;
+  Zone zone(&allocator, ZONE_NAME);
+
+  ZoneChunkList<int> zone_chunk_list(&zone);
+  CHECK_EQ(size_t(0), zone_chunk_list.size());
+  zone_chunk_list.push_back(1);
+  CHECK_EQ(size_t(1), zone_chunk_list.size());
+  zone_chunk_list.pop_back();
+  CHECK_EQ(size_t(0), zone_chunk_list.size());
+}
+
+TEST(ZoneChunkList, AdvanceZeroTest) {
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
@@ -287,7 +297,7 @@ TEST_F(ZoneChunkListTest, AdvanceZeroTest) {
   CHECK_EQ(iterator_advance, zone_chunk_list.begin());
 }
 
-TEST_F(ZoneChunkListTest, AdvancePartwayTest) {
+TEST(ZoneChunkList, AdvancePartwayTest) {
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
@@ -308,7 +318,7 @@ TEST_F(ZoneChunkListTest, AdvancePartwayTest) {
   CHECK_EQ(iterator_advance, iterator_one_by_one);
 }
 
-TEST_F(ZoneChunkListTest, AdvanceEndTest) {
+TEST(ZoneChunkList, AdvanceEndTest) {
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
@@ -325,14 +335,14 @@ TEST_F(ZoneChunkListTest, AdvanceEndTest) {
   CHECK_EQ(iterator_advance, zone_chunk_list.end());
 }
 
-TEST_F(ZoneChunkListTest, FindOverChunkBoundary) {
+TEST(ZoneChunkList, FindOverChunkBoundary) {
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
   ZoneChunkList<int> zone_chunk_list(&zone);
 
   // Make sure we get two chunks.
-  int chunk_size = static_cast<int>(ZoneChunkList<int>::kInitialChunkCapacity);
+  int chunk_size = static_cast<int>(ZoneChunkList<int>::StartMode::kSmall);
   for (int i = 0; i < chunk_size + 1; ++i) {
     zone_chunk_list.push_back(i);
   }

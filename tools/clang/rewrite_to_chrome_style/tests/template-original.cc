@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors
+// Copyright 2016 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -326,7 +326,7 @@ class Class {
 
 }  // namespace cxx_dependent_scope_member_expr_testing
 
-namespace blocklisting_of_renaming_of_begin_method {
+namespace blacklisting_of_renaming_of_begin_method {
 
 template <typename T>
 class IntrusiveHeap {
@@ -335,7 +335,7 @@ class IntrusiveHeap {
   const T* begin() const { return nullptr; }
 };
 
-}  // namespace blocklisting_of_renaming_of_begin_method
+}  // namespace blacklisting_of_renaming_of_begin_method
 
 namespace specializations {
 

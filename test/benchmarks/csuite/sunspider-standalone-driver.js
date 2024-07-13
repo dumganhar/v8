@@ -53,7 +53,7 @@ for (var j = 0; j < tests.length; j++) {
     if (testName.indexOf('parse-only') >= 0)
         checkSyntax(testName);
     else
-        d8.file.execute(testName);
+        load(testName);
     times[j] = new Date() - startTime;
     gc();
 }

@@ -432,10 +432,8 @@ StructType::Classification StructType::ClassifyContents() const {
   Classification result = ClassificationFlag::kEmpty;
   for (const Field& struct_field : fields()) {
     const Type* field_type = struct_field.name_and_type.type;
-    if (field_type->IsSubtypeOf(TypeOracle::GetStrongTaggedType())) {
-      result |= ClassificationFlag::kStrongTagged;
-    } else if (field_type->IsSubtypeOf(TypeOracle::GetTaggedType())) {
-      result |= ClassificationFlag::kWeakTagged;
+    if (field_type->IsSubtypeOf(TypeOracle::GetTaggedType())) {
+      result |= ClassificationFlag::kTagged;
     } else if (auto field_as_struct = field_type->StructSupertype()) {
       result |= (*field_as_struct)->ClassifyContents();
     } else {
@@ -562,9 +560,7 @@ std::vector<Field> ClassType::ComputeHeaderFields() const {
   std::vector<Field> result;
   for (Field& field : ComputeAllFields()) {
     if (field.index) break;
-    // The header is allowed to end with an optional padding field of size 0.
-    DCHECK(std::get<0>(field.GetFieldSizeInformation()) == 0 ||
-           *field.offset < header_size());
+    DCHECK(*field.offset < header_size());
     result.push_back(std::move(field));
   }
   return result;
@@ -574,9 +570,7 @@ std::vector<Field> ClassType::ComputeArrayFields() const {
   std::vector<Field> result;
   for (Field& field : ComputeAllFields()) {
     if (!field.index) {
-      // The header is allowed to end with an optional padding field of size 0.
-      DCHECK(std::get<0>(field.GetFieldSizeInformation()) == 0 ||
-             *field.offset < header_size());
+      DCHECK(*field.offset < header_size());
       continue;
     }
     result.push_back(std::move(field));
@@ -609,8 +603,6 @@ void ComputeSlotKindsHelper(std::vector<ObjectSlotKind>* slots,
   size_t offset = start_offset;
   for (const Field& field : fields) {
     size_t field_size = std::get<0>(field.GetFieldSizeInformation());
-    // Support optional padding fields.
-    if (field_size == 0) continue;
     size_t slot_index = offset / TargetArchitecture::TaggedSize();
     // Rounding-up division to find the number of slots occupied by all the
     // fields up to and including the current one.
@@ -626,13 +618,13 @@ void ComputeSlotKindsHelper(std::vector<ObjectSlotKind>* slots,
     } else {
       ObjectSlotKind kind;
       if (type->IsSubtypeOf(TypeOracle::GetObjectType())) {
-        if (field.custom_weak_marking) {
+        if (field.is_weak) {
           kind = ObjectSlotKind::kCustomWeakPointer;
         } else {
           kind = ObjectSlotKind::kStrongPointer;
         }
       } else if (type->IsSubtypeOf(TypeOracle::GetTaggedType())) {
-        DCHECK(!field.custom_weak_marking);
+        DCHECK(!field.is_weak);
         kind = ObjectSlotKind::kMaybeObjectPointer;
       } else {
         kind = ObjectSlotKind::kNoPointer;
@@ -670,13 +662,9 @@ base::Optional<ObjectSlotKind> ClassType::ComputeArraySlotKind() const {
       .Throw();
 }
 
-bool ClassType::HasNoPointerSlotsExceptMap() const {
-  const auto header_slot_kinds = ComputeHeaderSlotKinds();
-  DCHECK_GE(header_slot_kinds.size(), 1);
-  DCHECK_EQ(ComputeHeaderFields()[0].name_and_type.type,
-            TypeOracle::GetMapType());
-  for (size_t i = 1; i < header_slot_kinds.size(); ++i) {
-    if (header_slot_kinds[i] != ObjectSlotKind::kNoPointer) return false;
+bool ClassType::HasNoPointerSlots() const {
+  for (ObjectSlotKind slot : ComputeHeaderSlotKinds()) {
+    if (slot != ObjectSlotKind::kNoPointer) return false;
   }
   if (auto slot = ComputeArraySlotKind()) {
     if (*slot != ObjectSlotKind::kNoPointer) return false;
@@ -830,10 +818,10 @@ void ClassType::GenerateSliceAccessor(size_t field_index) {
   //   );
   // }
   //
-  // If the field has an unknown offset, and the previous field is named p, is
-  // not const, and is of type PType with size 4:
+  // If the field has an unknown offset, and the previous field is named p, and
+  // an item in the previous field has size 4:
   // FieldSliceClassNameFieldName(o: ClassName) {
-  //   const previous = %FieldSlice<ClassName, MutableSlice<PType>>(o, "p");
+  //   const previous = %FieldSlice<ClassName>(o, "p");
   //   return torque_internal::unsafe::New{Const,Mutable}Slice<FieldType>(
   //     /*object:*/ o,
   //     /*offset:*/ previous.offset + 4 * previous.length,
@@ -860,26 +848,19 @@ void ClassType::GenerateSliceAccessor(size_t field_index) {
 
   if (field.offset.has_value()) {
     offset_expression =
-        MakeNode<IntegerLiteralExpression>(IntegerLiteral(*field.offset));
+        MakeNode<NumberLiteralExpression>(static_cast<double>(*field.offset));
   } else {
     const Field* previous = GetFieldPreceding(field_index);
     DCHECK_NOT_NULL(previous);
 
-    const Type* previous_slice_type =
-        previous->const_qualified
-            ? TypeOracle::GetConstSliceType(previous->name_and_type.type)
-            : TypeOracle::GetMutableSliceType(previous->name_and_type.type);
-
-    // %FieldSlice<ClassName, MutableSlice<PType>>(o, "p")
+    // %FieldSlice<ClassName>(o, "p")
     Expression* previous_expression = MakeCallExpression(
-        MakeIdentifierExpression(
-            {"torque_internal"}, "%FieldSlice",
-            {MakeNode<PrecomputedTypeExpression>(this),
-             MakeNode<PrecomputedTypeExpression>(previous_slice_type)}),
+        MakeIdentifierExpression({"torque_internal"}, "%FieldSlice",
+                                 {MakeNode<PrecomputedTypeExpression>(this)}),
         {parameter, MakeNode<StringLiteralExpression>(
                         StringLiteralQuote(previous->name_and_type.name))});
 
-    // const previous = %FieldSlice<ClassName, MutableSlice<PType>>(o, "p");
+    // const previous = %FieldSlice<ClassName>(o, "p");
     Statement* define_previous =
         MakeConstDeclarationStatement("previous", previous_expression);
     statements.push_back(define_previous);
@@ -889,8 +870,8 @@ void ClassType::GenerateSliceAccessor(size_t field_index) {
     std::tie(previous_element_size, std::ignore) =
         *SizeOf(previous->name_and_type.type);
     Expression* previous_element_size_expression =
-        MakeNode<IntegerLiteralExpression>(
-            IntegerLiteral(previous_element_size));
+        MakeNode<NumberLiteralExpression>(
+            static_cast<double>(previous_element_size));
 
     // previous.length
     Expression* previous_length_expression = MakeFieldAccessExpression(
@@ -997,8 +978,8 @@ std::ostream& operator<<(std::ostream& os, const NameAndType& name_and_type) {
 
 std::ostream& operator<<(std::ostream& os, const Field& field) {
   os << field.name_and_type;
-  if (field.custom_weak_marking) {
-    os << " (custom weak)";
+  if (field.is_weak) {
+    os << " (weak)";
   }
   return os;
 }
@@ -1050,8 +1031,7 @@ bool Signature::HasSameTypesAs(const Signature& other,
 namespace {
 bool FirstTypeIsContext(const std::vector<const Type*> parameter_types) {
   return !parameter_types.empty() &&
-         (parameter_types[0] == TypeOracle::GetContextType() ||
-          parameter_types[0] == TypeOracle::GetNoContextType());
+         parameter_types[0] == TypeOracle::GetContextType();
 }
 }  // namespace
 
@@ -1092,8 +1072,9 @@ VisitResult ProjectStructField(VisitResult structure,
 
 namespace {
 void AppendLoweredTypes(const Type* type, std::vector<const Type*>* result) {
+  DCHECK_NE(type, TypeOracle::GetNeverType());
   if (type->IsConstexpr()) return;
-  if (type->IsVoidOrNever()) return;
+  if (type == TypeOracle::GetVoidType()) return;
   if (base::Optional<const StructType*> s = type->StructSupertype()) {
     for (const Field& field : (*s)->fields()) {
       AppendLoweredTypes(field.name_and_type.type, result);
@@ -1149,8 +1130,8 @@ std::tuple<size_t, std::string> Field::GetFieldSizeInformation() const {
     return *optional;
   }
   Error("fields of type ", *name_and_type.type, " are not (yet) supported")
-      .Position(pos)
-      .Throw();
+      .Position(pos);
+  return std::make_tuple(0, "#no size");
 }
 
 size_t Type::AlignmentLog2() const {
@@ -1235,7 +1216,7 @@ base::Optional<std::tuple<size_t, std::string>> SizeOf(const Type* type) {
     size_string = "kSystemPointerSize";
   } else if (type->IsSubtypeOf(TypeOracle::GetExternalPointerType())) {
     size = TargetArchitecture::ExternalPointerSize();
-    size_string = "kExternalPointerSlotSize";
+    size_string = "kExternalPointerSize";
   } else if (type->IsSubtypeOf(TypeOracle::GetVoidType())) {
     size = 0;
     size_string = "0";

@@ -13,7 +13,6 @@ const path = require('path');
 
 const common = require('./mutators/common.js');
 const db = require('./db.js');
-const random = require('./random.js');
 const sourceHelpers = require('./source_helpers.js');
 
 const { AddTryCatchMutator } = require('./mutators/try_catch.js');
@@ -27,8 +26,6 @@ const { ObjectMutator } = require('./mutators/object_mutator.js');
 const { VariableMutator } = require('./mutators/variable_mutator.js');
 const { VariableOrObjectMutator } = require('./mutators/variable_or_object_mutation.js');
 
-const MAX_EXTRA_MUTATIONS = 5;
-
 function defaultSettings() {
   return {
     ADD_VAR_OR_OBJ_MUTATIONS: 0.1,
@@ -41,8 +38,6 @@ function defaultSettings() {
     MUTATE_NUMBERS: 0.05,
     MUTATE_OBJECTS: 0.1,
     MUTATE_VARIABLES: 0.075,
-    SCRIPT_MUTATOR_EXTRA_MUTATIONS: 0.2,
-    SCRIPT_MUTATOR_SHUFFLE: 0.2,
   };
 }
 
@@ -66,9 +61,8 @@ class ScriptMutator {
       new ExpressionMutator(settings),
       new FunctionCallMutator(settings),
       new VariableOrObjectMutator(settings),
+      new AddTryCatchMutator(settings),
     ];
-    this.trycatch = new AddTryCatchMutator(settings);
-    this.settings = settings;
   }
 
   _addMjsunitIfNeeded(dependencies, input) {
@@ -135,30 +129,8 @@ class ScriptMutator {
   }
 
   mutate(source) {
-    let mutators = this.mutators.slice();
-    let annotations = [];
-    if (random.choose(this.settings.SCRIPT_MUTATOR_SHUFFLE)){
-      annotations.push(' Script mutator: using shuffled mutators');
-      random.shuffle(mutators);
-    }
-
-    if (random.choose(this.settings.SCRIPT_MUTATOR_EXTRA_MUTATIONS)){
-      for (let i = random.randInt(1, MAX_EXTRA_MUTATIONS); i > 0; i--) {
-        let mutator = random.single(this.mutators);
-        mutators.push(mutator);
-        annotations.push(` Script mutator: extra ${mutator.constructor.name}`);
-      }
-    }
-
-    // Try-catch wrapping should always be the last mutation.
-    mutators.push(this.trycatch);
-
-    for (const mutator of mutators) {
+    for (const mutator of this.mutators) {
       mutator.mutate(source);
-    }
-
-    for (const annotation of annotations.reverse()) {
-      sourceHelpers.annotateWithComment(source.ast, annotation);
     }
   }
 

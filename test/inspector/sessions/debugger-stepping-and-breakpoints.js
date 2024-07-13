@@ -6,8 +6,7 @@ InspectorTest.log('Tests how multiple sessions interact while pausing, stepping,
 
 var contextGroup = new InspectorTest.ContextGroup();
 
-contextGroup.addInlineScript(
-    `
+contextGroup.addScript(`
 function foo() {
   return 1;
 }
@@ -18,15 +17,14 @@ function stepping() {
   debugger;
   var a = 1;
   var b = 1;
-}`,
-    'test.js');
+}
+//# sourceURL=test.js`, 9, 25);
 
-contextGroup.addInlineScript(
-    `
+contextGroup.addScript(`
 function bar() {
   debugger;
-}`,
-    'test2.js');
+}
+//# sourceURL=test2.js`, 23, 25);
 
 (async function test() {
   InspectorTest.log('Connecting session 1');

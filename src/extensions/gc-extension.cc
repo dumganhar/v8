@@ -4,14 +4,7 @@
 
 #include "src/extensions/gc-extension.h"
 
-#include "include/v8-isolate.h"
-#include "include/v8-microtask-queue.h"
-#include "include/v8-object.h"
-#include "include/v8-persistent-handle.h"
-#include "include/v8-primitive.h"
-#include "include/v8-template.h"
-#include "src/api/api.h"
-#include "src/base/optional.h"
+#include "include/v8.h"
 #include "src/base/platform/platform.h"
 #include "src/execution/isolate.h"
 #include "src/heap/heap.h"
@@ -42,18 +35,17 @@ Maybe<bool> IsProperty(v8::Isolate* isolate, v8::Local<v8::Context> ctx,
 }
 
 Maybe<GCOptions> Parse(v8::Isolate* isolate,
-                       const v8::FunctionCallbackInfo<v8::Value>& info) {
-  DCHECK(ValidateCallbackInfo(info));
+                       const v8::FunctionCallbackInfo<v8::Value>& args) {
   // Default values.
   auto options =
       GCOptions{v8::Isolate::GarbageCollectionType::kFullGarbageCollection,
                 ExecutionType::kSync};
   bool found_options_object = false;
 
-  if (info.Length() > 0 && info[0]->IsObject()) {
+  if (args.Length() > 0 && args[0]->IsObject()) {
     v8::HandleScope scope(isolate);
     auto ctx = isolate->GetCurrentContext();
-    auto param = v8::Local<v8::Object>::Cast(info[0]);
+    auto param = v8::Local<v8::Object>::Cast(args[0]);
     auto maybe_type = IsProperty(isolate, ctx, param, "type", "minor");
     if (maybe_type.IsNothing()) return Nothing<GCOptions>();
     if (maybe_type.ToChecked()) {
@@ -73,7 +65,7 @@ Maybe<GCOptions> Parse(v8::Isolate* isolate,
   // If no options object is present default to legacy behavior.
   if (!found_options_object) {
     options.type =
-        info[0]->BooleanValue(isolate)
+        args[0]->BooleanValue(isolate)
             ? v8::Isolate::GarbageCollectionType::kMinorGarbageCollection
             : v8::Isolate::GarbageCollectionType::kFullGarbageCollection;
   }
@@ -81,8 +73,8 @@ Maybe<GCOptions> Parse(v8::Isolate* isolate,
   return Just<GCOptions>(options);
 }
 
-void InvokeGC(v8::Isolate* isolate, ExecutionType execution_type,
-              v8::Isolate::GarbageCollectionType type) {
+void InvokeGC(v8::Isolate* isolate, v8::Isolate::GarbageCollectionType type,
+              v8::EmbedderHeapTracer::EmbedderStackState embedder_stack_state) {
   Heap* heap = reinterpret_cast<Isolate*>(isolate)->heap();
   switch (type) {
     case v8::Isolate::GarbageCollectionType::kMinorGarbageCollection:
@@ -90,15 +82,8 @@ void InvokeGC(v8::Isolate* isolate, ExecutionType execution_type,
                            kGCCallbackFlagForced);
       break;
     case v8::Isolate::GarbageCollectionType::kFullGarbageCollection:
-      EmbedderStackStateScope stack_scope(
-          heap,
-          execution_type == ExecutionType::kAsync
-              ? EmbedderStackStateScope::kImplicitThroughTask
-              : EmbedderStackStateScope::kExplicitInvocation,
-          execution_type == ExecutionType::kAsync
-              ? StackState::kNoHeapPointers
-              : StackState::kMayContainHeapPointers);
-      heap->PreciseCollectAllGarbage(i::GCFlag::kNoFlags,
+      heap->SetEmbedderStackStateForNextFinalization(embedder_stack_state);
+      heap->PreciseCollectAllGarbage(i::Heap::kNoGCFlags,
                                      i::GarbageCollectionReason::kTesting,
                                      kGCCallbackFlagForced);
       break;
@@ -121,11 +106,10 @@ class AsyncGC final : public CancelableTask {
 
   void RunInternal() final {
     v8::HandleScope scope(isolate_);
-    InvokeGC(isolate_, ExecutionType::kAsync, type_);
+    InvokeGC(isolate_, type_,
+             v8::EmbedderHeapTracer::EmbedderStackState::kNoHeapPointers);
     auto resolver = v8::Local<v8::Promise::Resolver>::New(isolate_, resolver_);
     auto ctx = Local<v8::Context>::New(isolate_, ctx_);
-    v8::MicrotasksScope microtasks_scope(
-        ctx, v8::MicrotasksScope::kDoNotRunMicrotasks);
     resolver->Resolve(ctx, v8::Undefined(isolate_)).ToChecked();
   }
 
@@ -143,29 +127,31 @@ v8::Local<v8::FunctionTemplate> GCExtension::GetNativeFunctionTemplate(
   return v8::FunctionTemplate::New(isolate, GCExtension::GC);
 }
 
-void GCExtension::GC(const v8::FunctionCallbackInfo<v8::Value>& info) {
-  DCHECK(ValidateCallbackInfo(info));
-  v8::Isolate* isolate = info.GetIsolate();
+void GCExtension::GC(const v8::FunctionCallbackInfo<v8::Value>& args) {
+  v8::Isolate* isolate = args.GetIsolate();
 
   // Immediate bailout if no arguments are provided.
-  if (info.Length() == 0) {
-    InvokeGC(isolate, ExecutionType::kSync,
-             v8::Isolate::GarbageCollectionType::kFullGarbageCollection);
+  if (args.Length() == 0) {
+    InvokeGC(
+        isolate, v8::Isolate::GarbageCollectionType::kFullGarbageCollection,
+        v8::EmbedderHeapTracer::EmbedderStackState::kMayContainHeapPointers);
     return;
   }
 
-  auto maybe_options = Parse(isolate, info);
+  auto maybe_options = Parse(isolate, args);
   if (maybe_options.IsNothing()) return;
   GCOptions options = maybe_options.ToChecked();
   switch (options.execution) {
     case ExecutionType::kSync:
-      InvokeGC(isolate, ExecutionType::kSync, options.type);
+      InvokeGC(
+          isolate, options.type,
+          v8::EmbedderHeapTracer::EmbedderStackState::kMayContainHeapPointers);
       break;
     case ExecutionType::kAsync: {
       v8::HandleScope scope(isolate);
       auto resolver = v8::Promise::Resolver::New(isolate->GetCurrentContext())
                           .ToLocalChecked();
-      info.GetReturnValue().Set(resolver->GetPromise());
+      args.GetReturnValue().Set(resolver->GetPromise());
       auto task_runner =
           V8::GetCurrentPlatform()->GetForegroundTaskRunner(isolate);
       CHECK(task_runner->NonNestableTasksEnabled());

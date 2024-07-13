@@ -7,12 +7,13 @@
 
 #include "src/snapshot/deserializer.h"
 #include "src/snapshot/snapshot-data.h"
+#include "src/snapshot/snapshot.h"
 
 namespace v8 {
 namespace internal {
 
 // Initializes an isolate with context-independent data from a given snapshot.
-class StartupDeserializer final : public Deserializer<Isolate> {
+class StartupDeserializer final : public Deserializer {
  public:
   explicit StartupDeserializer(Isolate* isolate,
                                const SnapshotData* startup_data,
@@ -24,6 +25,7 @@ class StartupDeserializer final : public Deserializer<Isolate> {
   void DeserializeIntoIsolate();
 
  private:
+  void DeserializeStringTable();
   void FlushICache();
   void LogNewMapEvents();
 };

@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "include/v8-callbacks.h"
+#include "src/base/optional.h"
 #include "src/common/globals.h"
 #include "src/handles/handles.h"
 #include "src/interpreter/bytecode-register.h"
@@ -69,24 +69,19 @@ class V8_EXPORT_PRIVATE JumpTableTargetOffsets final {
 
 class V8_EXPORT_PRIVATE BytecodeArrayIterator {
  public:
-  explicit BytecodeArrayIterator(Handle<BytecodeArray> bytecode_array,
-                                 int initial_offset = 0);
   BytecodeArrayIterator(Handle<BytecodeArray> bytecode_array,
-                        int initial_offset, DisallowGarbageCollection& no_gc);
+                        int initial_offset = 0);
   ~BytecodeArrayIterator();
 
   BytecodeArrayIterator(const BytecodeArrayIterator&) = delete;
   BytecodeArrayIterator& operator=(const BytecodeArrayIterator&) = delete;
 
   inline void Advance() {
-    cursor_ += current_bytecode_size_without_prefix();
+    cursor_ += Bytecodes::Size(current_bytecode(), current_operand_scale());
     UpdateOperandScale();
   }
   void SetOffset(int offset);
   void Reset() { SetOffset(0); }
-
-  // Whether the given offset is reachable in this bytecode array.
-  static bool IsValidOffset(Handle<BytecodeArray> bytecode_array, int offset);
 
   void ApplyDebugBreak();
 
@@ -97,31 +92,15 @@ class V8_EXPORT_PRIVATE BytecodeArrayIterator {
     DCHECK(!Bytecodes::IsPrefixScalingBytecode(current_bytecode));
     return current_bytecode;
   }
-  int current_bytecode_size() const {
-    return prefix_size_ + current_bytecode_size_without_prefix();
-  }
-  int current_bytecode_size_without_prefix() const {
-    return Bytecodes::Size(current_bytecode(), current_operand_scale());
-  }
+  int current_bytecode_size() const;
+  int current_bytecode_size_without_prefix() const;
   int current_offset() const {
     return static_cast<int>(cursor_ - start_ - prefix_size_);
-  }
-  uint8_t* current_address() const { return cursor_ - prefix_size_; }
-  int next_offset() const { return current_offset() + current_bytecode_size(); }
-  Bytecode next_bytecode() const {
-    uint8_t* next_cursor = cursor_ + current_bytecode_size_without_prefix();
-    if (next_cursor == end_) return Bytecode::kIllegal;
-    Bytecode next_bytecode = Bytecodes::FromByte(*next_cursor);
-    if (Bytecodes::IsPrefixScalingBytecode(next_bytecode)) {
-      next_bytecode = Bytecodes::FromByte(*(next_cursor + 1));
-    }
-    return next_bytecode;
   }
   OperandScale current_operand_scale() const { return operand_scale_; }
   Handle<BytecodeArray> bytecode_array() const { return bytecode_array_; }
 
-  uint32_t GetFlag8Operand(int operand_index) const;
-  uint32_t GetFlag16Operand(int operand_index) const;
+  uint32_t GetFlagOperand(int operand_index) const;
   uint32_t GetUnsignedImmediateOperand(int operand_index) const;
   int32_t GetImmediateOperand(int operand_index) const;
   uint32_t GetIndexOperand(int operand_index) const;
@@ -136,13 +115,13 @@ class V8_EXPORT_PRIVATE BytecodeArrayIterator {
   Runtime::FunctionId GetRuntimeIdOperand(int operand_index) const;
   Runtime::FunctionId GetIntrinsicIdOperand(int operand_index) const;
   uint32_t GetNativeContextIndexOperand(int operand_index) const;
-  template <typename IsolateT>
-  Handle<Object> GetConstantAtIndex(int offset, IsolateT* isolate) const;
+  template <typename LocalIsolate>
+  Handle<Object> GetConstantAtIndex(int offset, LocalIsolate* isolate) const;
   bool IsConstantAtIndexSmi(int offset) const;
   Smi GetConstantAtIndexAsSmi(int offset) const;
-  template <typename IsolateT>
+  template <typename LocalIsolate>
   Handle<Object> GetConstantForIndexOperand(int operand_index,
-                                            IsolateT* isolate) const;
+                                            LocalIsolate* isolate) const;
 
   // Returns the relative offset of the branch target at the current bytecode.
   // It is an error to call this method if the bytecode is not for a jump or
@@ -163,21 +142,13 @@ class V8_EXPORT_PRIVATE BytecodeArrayIterator {
 
   std::ostream& PrintTo(std::ostream& os) const;
 
-  static void UpdatePointersCallback(LocalIsolate*, GCType, GCCallbackFlags,
-                                     void* iterator) {
+  static void UpdatePointersCallback(void* iterator) {
     reinterpret_cast<BytecodeArrayIterator*>(iterator)->UpdatePointers();
   }
 
   void UpdatePointers();
 
   inline bool done() const { return cursor_ >= end_; }
-
-  bool operator==(const BytecodeArrayIterator& other) const {
-    return cursor_ == other.cursor_;
-  }
-  bool operator!=(const BytecodeArrayIterator& other) const {
-    return cursor_ != other.cursor_;
-  }
 
  private:
   uint32_t GetUnsignedOperand(int operand_index,

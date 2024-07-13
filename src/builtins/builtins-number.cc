@@ -111,7 +111,7 @@ BUILTIN(NumberPrototypeToFixed) {
 // ES6 section 20.1.3.4 Number.prototype.toLocaleString ( [ r1 [ , r2 ] ] )
 BUILTIN(NumberPrototypeToLocaleString) {
   HandleScope scope(isolate);
-  const char* method_name = "Number.prototype.toLocaleString";
+  const char* method = "Number.prototype.toLocaleString";
 
   isolate->CountUsage(v8::Isolate::UseCounterFeature::kNumberToLocaleString);
 
@@ -126,7 +126,7 @@ BUILTIN(NumberPrototypeToLocaleString) {
     THROW_NEW_ERROR_RETURN_FAILURE(
         isolate,
         NewTypeError(MessageTemplate::kNotGeneric,
-                     isolate->factory()->NewStringFromAsciiChecked(method_name),
+                     isolate->factory()->NewStringFromAsciiChecked(method),
                      isolate->factory()->Number_string()));
   }
 
@@ -134,7 +134,7 @@ BUILTIN(NumberPrototypeToLocaleString) {
   RETURN_RESULT_OR_FAILURE(
       isolate,
       Intl::NumberToLocaleString(isolate, value, args.atOrUndefined(isolate, 1),
-                                 args.atOrUndefined(isolate, 2), method_name));
+                                 args.atOrUndefined(isolate, 2), method));
 #else
   // Turn the {value} into a String.
   return *isolate->factory()->NumberToString(value);

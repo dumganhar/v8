@@ -5,6 +5,8 @@
 #ifndef V8_CODEGEN_EXTERNAL_REFERENCE_TABLE_H_
 #define V8_CODEGEN_EXTERNAL_REFERENCE_TABLE_H_
 
+#include <vector>
+
 #include "src/builtins/accessors.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/external-reference.h"
@@ -22,10 +24,8 @@ class ExternalReferenceTable {
  public:
   // For the nullptr ref, see the constructor.
   static constexpr int kSpecialReferenceCount = 1;
-  static constexpr int kExternalReferenceCountIsolateIndependent =
-      ExternalReference::kExternalReferenceCountIsolateIndependent;
-  static constexpr int kExternalReferenceCountIsolateDependent =
-      ExternalReference::kExternalReferenceCountIsolateDependent;
+  static constexpr int kExternalReferenceCount =
+      ExternalReference::kExternalReferenceCount;
   static constexpr int kBuiltinsReferenceCount =
 #define COUNT_C_BUILTIN(...) +1
       BUILTIN_LIST_C(COUNT_C_BUILTIN);
@@ -35,22 +35,18 @@ class ExternalReferenceTable {
       Runtime::kNumInlineFunctions;  // Don't count dupe kInline... functions.
   static constexpr int kIsolateAddressReferenceCount = kIsolateAddressCount;
   static constexpr int kAccessorReferenceCount =
-      Accessors::kAccessorInfoCount + Accessors::kAccessorGetterCount +
-      Accessors::kAccessorSetterCount + Accessors::kAccessorCallbackCount;
+      Accessors::kAccessorInfoCount + Accessors::kAccessorSetterCount;
   // The number of stub cache external references, see AddStubCache.
   static constexpr int kStubCacheReferenceCount = 12;
   static constexpr int kStatsCountersReferenceCount =
 #define SC(...) +1
       STATS_COUNTER_NATIVE_CODE_LIST(SC);
 #undef SC
-  static constexpr int kSizeIsolateIndependent =
-      kSpecialReferenceCount + kExternalReferenceCountIsolateIndependent +
-      kBuiltinsReferenceCount + kRuntimeReferenceCount +
-      kAccessorReferenceCount;
   static constexpr int kSize =
-      kSizeIsolateIndependent + kExternalReferenceCountIsolateDependent +
-      kIsolateAddressReferenceCount + kStubCacheReferenceCount +
-      kStatsCountersReferenceCount;
+      kSpecialReferenceCount + kExternalReferenceCount +
+      kBuiltinsReferenceCount + kRuntimeReferenceCount +
+      kIsolateAddressReferenceCount + kAccessorReferenceCount +
+      kStubCacheReferenceCount + kStatsCountersReferenceCount;
   static constexpr uint32_t kEntrySize =
       static_cast<uint32_t>(kSystemPointerSize);
   static constexpr uint32_t kSizeInBytes = kSize * kEntrySize + 2 * kUInt32Size;
@@ -67,9 +63,6 @@ class ExternalReferenceTable {
     return i * kEntrySize;
   }
 
-  static void InitializeOncePerProcess();
-  static const char* NameOfIsolateIndependentAddress(Address address);
-
   const char* NameFromOffset(uint32_t offset) {
     DCHECK_EQ(offset % kEntrySize, 0);
     DCHECK_LT(offset, kSizeInBytes);
@@ -83,24 +76,19 @@ class ExternalReferenceTable {
   void Init(Isolate* isolate);
 
  private:
-  static void AddIsolateIndependent(Address address, int* index);
-
-  static void AddIsolateIndependentReferences(int* index);
-  static void AddBuiltins(int* index);
-  static void AddRuntimeFunctions(int* index);
-  static void AddAccessors(int* index);
-
   void Add(Address address, int* index);
 
-  void CopyIsolateIndependentReferences(int* index);
-  void AddIsolateDependentReferences(Isolate* isolate, int* index);
+  void AddReferences(Isolate* isolate, int* index);
+  void AddBuiltins(int* index);
+  void AddRuntimeFunctions(int* index);
   void AddIsolateAddresses(Isolate* isolate, int* index);
+  void AddAccessors(int* index);
   void AddStubCache(Isolate* isolate, int* index);
 
   Address GetStatsCounterAddress(StatsCounter* counter);
   void AddNativeCodeStatsCounters(Isolate* isolate, int* index);
 
-  static_assert(sizeof(Address) == kEntrySize);
+  STATIC_ASSERT(sizeof(Address) == kEntrySize);
   Address ref_addr_[kSize];
   static const char* const ref_name_[kSize];
 
@@ -115,7 +103,7 @@ class ExternalReferenceTable {
   uint32_t dummy_stats_counter_ = 0;
 };
 
-static_assert(ExternalReferenceTable::kSizeInBytes ==
+STATIC_ASSERT(ExternalReferenceTable::kSizeInBytes ==
               sizeof(ExternalReferenceTable));
 
 }  // namespace internal

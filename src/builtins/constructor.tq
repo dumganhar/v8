@@ -15,8 +15,6 @@ extern runtime CreateObjectLiteral(
 
 namespace constructor {
 
-extern builtin FastNewClosure(
-    Context, SharedFunctionInfo, FeedbackCell): JSFunction;
 extern builtin FastNewObject(Context, JSFunction, JSReceiver): JSObject;
 
 extern enum AllocationSiteMode {
@@ -43,15 +41,6 @@ extern macro ConstructorBuiltinsAssembler::CreateShallowObjectLiteral(
     FeedbackVector, TaggedIndex): HeapObject labels CallRuntime;
 extern macro ConstructorBuiltinsAssembler::CreateEmptyObjectLiteral(Context):
     JSObject;
-
-extern macro LoadContextFromBaseline(): Context;
-
-builtin FastNewClosureBaseline(
-    sharedFunctionInfo: SharedFunctionInfo,
-    feedbackCell: FeedbackCell): JSFunction {
-  const context = LoadContextFromBaseline();
-  tail FastNewClosure(context, sharedFunctionInfo, feedbackCell);
-}
 
 builtin FastNewFunctionContextEval(implicit context: Context)(
     scopeInfo: ScopeInfo, slots: uint32): Context {

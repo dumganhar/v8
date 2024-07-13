@@ -8,10 +8,8 @@
 # for py2/py3 compatibility
 from __future__ import print_function
 
-import os
-import re
-
 import lldb
+import re
 
 #####################
 # Helper functions. #
@@ -22,114 +20,52 @@ def current_thread(debugger):
 def current_frame(debugger):
   return current_thread(debugger).GetSelectedFrame()
 
-
-def no_arg_cmd(debugger, cmd, print_error=True):
-  cast_to_void_expr = '(void) {}'.format(cmd)
-  evaluate_result = current_frame(debugger).EvaluateExpression(cast_to_void_expr)
+def no_arg_cmd(debugger, cmd):
+  evaluate_result = current_frame(debugger).EvaluateExpression(cmd)
   # When a void function is called the return value type is 0x1001 which
   # is specified in http://tiny.cc/bigskz. This does not indicate
   # an error so we check for that value below.
   kNoResult = 0x1001
-  result = evaluate_result.GetError()
-  is_success = not result.fail or result.value == kNoResult
-  if not is_success:
-    if print_error:
+  error = evaluate_result.GetError()
+  if error.fail and error.value != kNoResult:
       print("Failed to evaluate command {} :".format(cmd))
-      print(result.description)
+      print(error.description)
   else:
     print("")
-  return (is_success, result, cmd)
 
-
-def ptr_arg_cmd(debugger, name, param, cmd, print_error=True):
+def ptr_arg_cmd(debugger, name, param, cmd):
   if not param:
     print("'{}' requires an argument".format(name))
-    return (False, None, "")
+    return
   param = '(void*)({})'.format(param)
-  return no_arg_cmd(debugger, cmd.format(param), print_error)
-
-
-V8_LLDB_COMMANDS = []
-
-
-def lldbCommand(fn):
-  V8_LLDB_COMMANDS.append(fn.__name__)
-  return fn
+  no_arg_cmd(debugger, cmd.format(param))
 
 #####################
 # lldb commands.    #
 #####################
-
-
-@lldbCommand
 def job(debugger, param, *args):
   """Print a v8 heap object"""
   ptr_arg_cmd(debugger, 'job', param, "_v8_internal_Print_Object({})")
 
-
-@lldbCommand
-def jh(debugger, param, *args):
-  """Print v8::internal::Handle value"""
-  V8_PRINT_CMD = "_v8_internal_Print_Object(*(v8::internal::Object**)({}.%s))"
-  ptr_arg_cmd(debugger, 'jh', param, V8_PRINT_CMD % "location_")
-
-
-def get_address_from_local(value):
-  # After https://crrev.com/c/4335544, v8::MaybeLocal contains a local_.
-  field = value.GetValueForExpressionPath(".local_")
-  if field.IsValid():
-    value = field
-  # After https://crrev.com/c/4335544, v8::Local contains a location_.
-  field = value.GetValueForExpressionPath(".location_")
-  if field.IsValid():
-    return field.value
-  # Before https://crrev.com/c/4335544, v8::Local contained a val_.
-  field = value.GetValueForExpressionPath(".val_")
-  if field.IsValid():
-    return field.value
-  # We don't know how to print this...
-  return None
-
-
-@lldbCommand
 def jlh(debugger, param, *args):
   """Print v8::Local handle value"""
-  V8_PRINT_CMD = "_v8_internal_Print_Object(*(v8::internal::Address**)({0}))"
-  value = current_frame(debugger).EvaluateExpression(param)
-  indirect_pointer = get_address_from_local(value)
-  if indirect_pointer is not None:
-    ptr_arg_cmd(debugger, 'jlh', param, V8_PRINT_CMD.format(indirect_pointer))
-  else:
-    print("Failed to print value of type {}".format(value.type.name))
+  ptr_arg_cmd(debugger, 'jlh', param,
+              "_v8_internal_Print_Object(*(v8::internal::Object**)({}.val_))")
 
-
-@lldbCommand
-def jl(debugger, param, *args):
-  """Print v8::Local handle value"""
-  return jlh(debugger, param, *args)
-
-
-@lldbCommand
 def jco(debugger, param, *args):
   """Print the code object at the given pc (default: current pc)"""
   if not param:
     param = str(current_frame(debugger).FindRegister("pc").value)
   ptr_arg_cmd(debugger, 'jco', param, "_v8_internal_Print_Code({})")
 
-
-@lldbCommand
 def jtt(debugger, param, *args):
   """Print the transition tree of a v8 Map"""
   ptr_arg_cmd(debugger, 'jtt', param, "_v8_internal_Print_TransitionTree({})")
 
-
-@lldbCommand
 def jst(debugger, *args):
   """Print the current JavaScript stack trace"""
   no_arg_cmd(debugger, "_v8_internal_Print_StackTrace()")
 
-
-@lldbCommand
 def jss(debugger, *args):
   """Skip the jitted stack on x64 to where we entered JS last"""
   frame = current_frame(debugger)
@@ -144,8 +80,6 @@ def jss(debugger, *args):
   rsp = js_entry_sp + 2 *sizeof_void
   pc.value = js_entry_sp + sizeof_void
 
-
-@lldbCommand
 def bta(debugger, *args):
   """Print stack trace with assertion scopes"""
   func_name_re = re.compile("([^(<]+)(?:\(.+\))?")
@@ -178,20 +112,8 @@ def bta(debugger, *args):
       print("%s -> %s %s (%s)\033[0m" % (
           color, prefix, match.group(2), match.group(1)))
 
-def setup_source_map_for_relative_paths(debugger):
-  # Copied from Chromium's tools/lldb/lldbinit.py.
-  # When relative paths are used for debug symbols, lldb cannot find source
-  # files. Set up a source map to point to V8's root.
-  this_dir = os.path.dirname(os.path.abspath(__file__))
-  source_dir = os.path.join(this_dir, os.pardir)
-
-  debugger.HandleCommand(
-    'settings set target.source-map ../.. ' + source_dir)
-
-
 def __lldb_init_module(debugger, dict):
-  setup_source_map_for_relative_paths(debugger)
   debugger.HandleCommand('settings set target.x86-disassembly-flavor intel')
-  for cmd in V8_LLDB_COMMANDS:
+  for cmd in ('job', 'jlh', 'jco', 'jld', 'jtt', 'jst', 'jss', 'bta'):
     debugger.HandleCommand(
       'command script add -f lldb_commands.{} {}'.format(cmd, cmd))

@@ -28,7 +28,6 @@ class V8_EXPORT_PRIVATE BaseSpace {
 
   BaseSpace(const BaseSpace&) = delete;
   BaseSpace& operator=(const BaseSpace&) = delete;
-  virtual ~BaseSpace();
 
   iterator begin() { return pages_.begin(); }
   const_iterator begin() const { return pages_.begin(); }
@@ -47,7 +46,6 @@ class V8_EXPORT_PRIVATE BaseSpace {
   void AddPage(BasePage*);
   void RemovePage(BasePage*);
   Pages RemoveAllPages();
-  v8::base::Mutex& pages_mutex() const { return pages_mutex_; }
 
   bool is_compactable() const { return is_compactable_; }
 
@@ -59,7 +57,7 @@ class V8_EXPORT_PRIVATE BaseSpace {
  private:
   RawHeap* heap_;
   Pages pages_;
-  mutable v8::base::Mutex pages_mutex_;
+  v8::base::Mutex pages_mutex_;
   const size_t index_;
   const PageType type_;
   const bool is_compactable_;
@@ -90,12 +88,12 @@ class V8_EXPORT_PRIVATE NormalPageSpace final : public BaseSpace {
     size_t size_ = 0;
   };
 
-  static NormalPageSpace& From(BaseSpace& space) {
-    DCHECK(!space.is_large());
-    return static_cast<NormalPageSpace&>(space);
+  static NormalPageSpace* From(BaseSpace* space) {
+    DCHECK(!space->is_large());
+    return static_cast<NormalPageSpace*>(space);
   }
-  static const NormalPageSpace& From(const BaseSpace& space) {
-    return From(const_cast<BaseSpace&>(space));
+  static const NormalPageSpace* From(const BaseSpace* space) {
+    return From(const_cast<BaseSpace*>(space));
   }
 
   NormalPageSpace(RawHeap* heap, size_t index, bool is_compactable);
@@ -115,12 +113,12 @@ class V8_EXPORT_PRIVATE NormalPageSpace final : public BaseSpace {
 
 class V8_EXPORT_PRIVATE LargePageSpace final : public BaseSpace {
  public:
-  static LargePageSpace& From(BaseSpace& space) {
-    DCHECK(space.is_large());
-    return static_cast<LargePageSpace&>(space);
+  static LargePageSpace* From(BaseSpace* space) {
+    DCHECK(space->is_large());
+    return static_cast<LargePageSpace*>(space);
   }
-  static const LargePageSpace& From(const BaseSpace& space) {
-    return From(const_cast<BaseSpace&>(space));
+  static const LargePageSpace* From(const BaseSpace* space) {
+    return From(const_cast<BaseSpace*>(space));
   }
 
   LargePageSpace(RawHeap* heap, size_t index);

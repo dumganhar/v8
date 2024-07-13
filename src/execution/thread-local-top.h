@@ -5,13 +5,14 @@
 #ifndef V8_EXECUTION_THREAD_LOCAL_TOP_H_
 #define V8_EXECUTION_THREAD_LOCAL_TOP_H_
 
-#include "include/v8-callbacks.h"
-#include "include/v8-exception.h"
-#include "include/v8-unwinder.h"
 #include "src/common/globals.h"
 #include "src/execution/thread-id.h"
 #include "src/objects/contexts.h"
 #include "src/utils/utils.h"
+
+#ifdef V8_ENABLE_CONSERVATIVE_STACK_SCANNING
+#include "src/heap/base/stack.h"
+#endif
 
 namespace v8 {
 
@@ -19,9 +20,9 @@ class TryCatch;
 
 namespace internal {
 
-class EmbedderState;
 class ExternalCallbackScope;
 class Isolate;
+class PromiseOnStack;
 class Simulator;
 
 class ThreadLocalTop {
@@ -29,7 +30,11 @@ class ThreadLocalTop {
   // TODO(all): This is not particularly beautiful. We should probably
   // refactor this to really consist of just Addresses and 32-bit
   // integer fields.
+#ifdef V8_ENABLE_CONSERVATIVE_STACK_SCANNING
   static constexpr uint32_t kSizeInBytes = 25 * kSystemPointerSize;
+#else
+  static constexpr uint32_t kSizeInBytes = 24 * kSystemPointerSize;
+#endif
 
   // Does early low-level initialization that does not depend on the
   // isolate being present.
@@ -58,10 +63,8 @@ class ThreadLocalTop {
   // corresponds to the place on the JS stack where the C++ handler
   // would have been if the stack were not separate.
   Address try_catch_handler_address() {
-    if (try_catch_handler_) {
-      return try_catch_handler_->JSStackComparableAddressPrivate();
-    }
-    return kNullAddress;
+    return reinterpret_cast<Address>(
+        v8::TryCatch::JSStackComparableAddress(try_catch_handler_));
   }
 
   // Call depth represents nested v8 api calls. Instead of storing the nesting
@@ -98,7 +101,7 @@ class ThreadLocalTop {
   // be cleaner to make it an "Address raw_context_", and construct a Context
   // object in the getter. Same for {pending_handler_context_} below. In the
   // meantime, assert that the memory layout is the same.
-  static_assert(sizeof(Context) == kSystemPointerSize);
+  STATIC_ASSERT(sizeof(Context) == kSystemPointerSize);
   Context context_;
   std::atomic<ThreadId> thread_id_;
   Object pending_exception_;
@@ -109,12 +112,11 @@ class ThreadLocalTop {
   Address pending_handler_constant_pool_;
   Address pending_handler_fp_;
   Address pending_handler_sp_;
-  uintptr_t num_frames_above_pending_handler_;
 
   Address last_api_entry_;
 
   // Communication channel between Isolate::Throw and message consumers.
-  Object pending_message_;
+  Object pending_message_obj_;
   bool rethrowing_message_;
 
   // Use a separate value for scheduled exceptions to preserve the
@@ -131,6 +133,11 @@ class ThreadLocalTop {
   // C function that was called at c entry.
   Address c_function_;
 
+  // Throwing an exception may cause a Promise rejection.  For this purpose
+  // we keep track of a stack of nested promises and the corresponding
+  // try-catch handlers.
+  PromiseOnStack* promise_on_stack_;
+
   // Simulator field is always present to get predictable layout.
   Simulator* simulator_;
 
@@ -139,16 +146,17 @@ class ThreadLocalTop {
   // The external callback we're currently in.
   ExternalCallbackScope* external_callback_scope_;
   StateTag current_vm_state_;
-  EmbedderState* current_embedder_state_;
 
   // Call back function to report unsafe JS accesses.
   v8::FailedAccessCheckCallback failed_access_check_callback_;
 
   // Address of the thread-local "thread in wasm" flag.
   Address thread_in_wasm_flag_address_;
-};
 
-static_assert(ThreadLocalTop::kSizeInBytes == sizeof(ThreadLocalTop));
+#ifdef V8_ENABLE_CONSERVATIVE_STACK_SCANNING
+  ::heap::base::Stack stack_;
+#endif
+};
 
 }  // namespace internal
 }  // namespace v8

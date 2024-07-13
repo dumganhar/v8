@@ -9,15 +9,12 @@
 
 #include "include/libplatform/v8-tracing.h"
 
-#if V8_OS_DARWIN
-#include <os/signpost.h>
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunguarded-availability"
+#if V8_OS_WIN
+#ifndef V8_ETW_GUID
+#define V8_ETW_GUID \
+  0x57277741, 0x3638, 0x4A4B, 0xBD, 0xBA, 0x0A, 0xC6, 0xE4, 0x5D, 0xA5, 0x6C
 #endif
-
-#if !defined(V8_ENABLE_SYSTEM_INSTRUMENTATION)
-#error "only include this file if V8_ENABLE_SYSTEM_INSTRUMENTATION"
-#endif  // V8_ENABLE_SYSTEM_INSTRUMENTATION
+#endif
 
 namespace v8 {
 namespace platform {
@@ -34,23 +31,14 @@ class V8_PLATFORM_EXPORT Recorder {
   Recorder();
   ~Recorder();
 
-  bool IsEnabled();
-  bool IsEnabled(const uint8_t level);
+  static bool IsEnabled();
+  static bool IsEnabled(const uint8_t level);
 
   void AddEvent(TraceObject* trace_event);
-
- private:
-#if V8_OS_DARWIN
-  os_log_t v8Provider;
-#endif
 };
 
 }  // namespace tracing
 }  // namespace platform
 }  // namespace v8
-
-#if V8_OS_DARWIN
-#pragma clang diagnostic pop
-#endif
 
 #endif  // V8_LIBPLATFORM_TRACING_RECORDER_H_

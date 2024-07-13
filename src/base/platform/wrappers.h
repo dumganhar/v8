@@ -10,36 +10,64 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef V8_OS_STARBOARD
-#include "starboard/string.h"
+#include "src/base/base-export.h"
+
+#if defined(V8_OS_STARBOARD)
+#include "starboard/memory.h"
 #endif
 
-namespace v8::base {
+namespace v8 {
+namespace base {
 
-inline char* Strdup(const char* source) {
-#if V8_OS_STARBOARD
-  return SbStringDuplicate(source);
-#else
-  return strdup(source);
-#endif
+#if !defined(V8_OS_STARBOARD)
+
+// Common libstd implementations.
+// inline implementations are preferred here due to performance concerns.
+inline void* Malloc(size_t size) { return malloc(size); }
+
+inline void* Realloc(void* memory, size_t size) {
+  return realloc(memory, size);
+}
+
+inline void Free(void* memory) { return free(memory); }
+
+inline void* Calloc(size_t count, size_t size) { return calloc(count, size); }
+
+inline void* Memcpy(void* dest, const void* source, size_t count) {
+  return memcpy(dest, source, count);
 }
 
 inline FILE* Fopen(const char* filename, const char* mode) {
-#if V8_OS_STARBOARD
-  return NULL;
-#else
   return fopen(filename, mode);
-#endif
 }
 
-inline int Fclose(FILE* stream) {
-#if V8_OS_STARBOARD
-  return -1;
-#else
-  return fclose(stream);
-#endif
+inline int Fclose(FILE* stream) { return fclose(stream); }
+
+#else  // V8_OS_STARBOARD
+
+inline void* Malloc(size_t size) { return SbMemoryAlloc(size); }
+
+inline void* Realloc(void* memory, size_t size) {
+  return SbMemoryReallocate(memory, size);
 }
 
-}  // namespace v8::base
+inline void Free(void* memory) { return SbMemoryDeallocate(memory); }
+
+inline void* Calloc(size_t count, size_t size) {
+  return SbMemoryCalloc(count, size);
+}
+
+inline void* Memcpy(void* dest, const void* source, size_t count) {
+  return SbMemoryCopy(dest, source, count);
+}
+
+inline FILE* Fopen(const char* filename, const char* mode) { return NULL; }
+
+inline int Fclose(FILE* stream) { return -1; }
+
+#endif  // V8_OS_STARBOARD
+
+}  // namespace base
+}  // namespace v8
 
 #endif  // V8_BASE_PLATFORM_WRAPPERS_H_

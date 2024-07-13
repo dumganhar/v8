@@ -28,10 +28,8 @@
 .clangd
 .cpplint-cache
 .cproject
-.DS_Store
 .gclient_entries
 .gdb_history
-.idea
 .jslint-cache
 .landmines
 .project
@@ -40,9 +38,9 @@
 .torquelint-cache
 .vscode
 /_*
-#/base
-#/build
-#/buildtools
+/base
+/build
+/buildtools
 /check-header-includes
 /Default/
 /out
@@ -54,9 +52,9 @@
 /test/benchmarks/data
 /test/fuzzer/wasm_corpus
 /test/fuzzer/wasm_corpus.tar.gz
-!/test/mjsunit/tools/*.log
 /test/mozilla/data
 /test/test262/data
+/test/test262/harness
 /test/wasm-js/data
 /test/wasm-js/tests
 /test/wasm-js/tests.tar.gz
@@ -64,20 +62,15 @@
 /test/wasm-spec-tests/tests.tar.gz
 /third_party/*
 !/third_party/antlr4
-!/third_party/cpu_features
-#/third_party/cpu_features/src
 !/third_party/inspector_protocol
 !/third_party/jsoncpp
 /third_party/jsoncpp/source
 !/third_party/colorama
 /third_party/colorama/src
-!/third_party/glibc
 !/third_party/googletest
 /third_party/googletest/src
-!/third_party/test262-harness
 !/third_party/v8
 !/third_party/wasm-api
-/tools/builtins-pgo/profiles/*.profile
 /tools/clang
 /tools/gcmole/bootstrap
 /tools/gcmole/gcmole-tools
@@ -87,6 +80,7 @@
 /tools/luci-go
 /tools/oom_dump/oom_dump
 /tools/oom_dump/oom_dump.o
+/tools/swarming_client
 /tools/turbolizer/build
 /tools/turbolizer/.rpt2_cache
 /tools/turbolizer/deploy
@@ -111,9 +105,4 @@ turbo*.cfg
 turbo*.dot
 turbo*.json
 v8.ignition_dispatches_table.json
-bazel-bin
-bazel-out
-bazel-testlogs
-bazel-v8
 
-.cipdpkg

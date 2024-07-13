@@ -1,10 +1,9 @@
-# Copyright 2017 The Chromium Authors
+# Copyright 2017 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/nacl/config.gni")
+import("//build/config/chromeos/ui_mode.gni")
 import("//build/config/sanitizers/sanitizers.gni")
-import("//build_overrides/build.gni")
 
 declare_args() {
   # Use in-tree libc++ (buildtools/third_party/libc++ and
@@ -12,8 +11,11 @@ declare_args() {
   # standard library support.
   # Don't check in changes that set this to false for more platforms; doing so
   # is not supported.
-  use_custom_libcxx = is_fuchsia || is_android || is_apple || is_linux ||
-                      is_chromeos || (is_win && is_clang)
+  use_custom_libcxx = is_fuchsia || is_android || is_mac ||
+                      (is_ios && !use_xcode_clang) || (is_win && is_clang) ||
+                      ((is_linux || is_chromeos) &&
+                       (!is_chromeos_ash ||
+                        default_toolchain != "//build/toolchain/cros:target"))
 
   # Use libc++ instead of stdlibc++ when using the host_cpu toolchain, even if
   # use_custom_libcxx is false. This is useful for cross-compiles where a custom
@@ -54,15 +56,10 @@ declare_args() {
   libcxx_is_shared = use_custom_libcxx && is_component_build
 }
 
-# The saigo libc++ is distinct from the custom hermetic libc++. However, since
-# the Chrome team controls the saigo toolchain, it is safe to unconditionally
-# enable libc++ hardening there as well.
-use_safe_libcxx = (use_custom_libcxx && enable_safe_libcxx) || is_nacl_saigo
-
 # libc++abi needs to be exported from executables to be picked up by shared
 # libraries on certain instrumented builds.
 export_libcxxabi_from_executables =
-    use_custom_libcxx && !is_apple && !is_win && !is_component_build &&
+    use_custom_libcxx && !is_ios && !is_win && !is_component_build &&
     (is_asan || is_ubsan_vptr)
 
 # On Android, many shared libraries get loaded from the context of a JRE.  In
@@ -83,6 +80,3 @@ if (is_android && export_libcxxabi_from_executables) {
 
 libcxx_prefix = "//buildtools/third_party/libc++/trunk"
 libcxxabi_prefix = "//buildtools/third_party/libc++abi/trunk"
-
-assert(!(is_ios && libcxx_is_shared),
-       "Can't build libc++ as a shared library on iOS.")

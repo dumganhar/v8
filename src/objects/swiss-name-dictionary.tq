@@ -4,7 +4,7 @@
 
 #include 'src/objects/swiss-name-dictionary.h'
 
-@doNotGenerateCppClass
+@noVerifier
 extern class SwissNameDictionary extends HeapObject {
   hash: uint32;
   const capacity: int32;
@@ -31,13 +31,13 @@ const kNotFoundSentinel:
 extern macro LoadSwissNameDictionaryKey(SwissNameDictionary, intptr): Name;
 
 extern macro StoreSwissNameDictionaryKeyAndValue(
-    SwissNameDictionary, intptr, Object, Object): void;
+    SwissNameDictionary, intptr, Object, Object);
 
 extern macro SwissNameDictionarySetCtrl(
-    SwissNameDictionary, intptr, intptr, uint8): void;
+    SwissNameDictionary, intptr, intptr, uint8);
 
 extern macro StoreSwissNameDictionaryPropertyDetails(
-    SwissNameDictionary, intptr, intptr, uint8): void;
+    SwissNameDictionary, intptr, intptr, uint8);
 
 extern macro
 SwissNameDictionaryIncreaseElementCountOrBailout(
@@ -45,7 +45,7 @@ SwissNameDictionaryIncreaseElementCountOrBailout(
 
 extern macro
 StoreSwissNameDictionaryEnumToEntryMapping(
-    SwissNameDictionary, intptr, intptr, int32): void;
+    SwissNameDictionary, intptr, intptr, int32);
 
 extern macro
 SwissNameDictionaryUpdateCountsForDeletion(ByteArray, intptr): uint32;
@@ -69,10 +69,10 @@ macro SwissNameDictionaryCapacityFor(atLeastSpaceFor: intptr): intptr {
     } else if (atLeastSpaceFor < kSwissNameDictionaryInitialCapacity) {
       return 4;
     } else if (FromConstexpr<bool>(kGroupWidth == 16)) {
-      dcheck(atLeastSpaceFor == 4);
+      assert(atLeastSpaceFor == 4);
       return 4;
     } else if (FromConstexpr<bool>(kGroupWidth == 8)) {
-      dcheck(atLeastSpaceFor == 4);
+      assert(atLeastSpaceFor == 4);
       return 8;
     }
   }
@@ -84,7 +84,7 @@ macro SwissNameDictionaryCapacityFor(atLeastSpaceFor: intptr): intptr {
 // Counterpart for SwissNameDictionary::MaxUsableCapacity in C++.
 @export
 macro SwissNameDictionaryMaxUsableCapacity(capacity: intptr): intptr {
-  dcheck(capacity == 0 || capacity >= kSwissNameDictionaryInitialCapacity);
+  assert(capacity == 0 || capacity >= kSwissNameDictionaryInitialCapacity);
   if (FromConstexpr<bool>(kGroupWidth == 8) && capacity == 4) {
     // If the group size is 16 we can fully utilize capacity 4: There will be
     // enough kEmpty entries in the ctrl table.
@@ -146,7 +146,7 @@ macro SwissNameDictionaryCtrlTableStartOffsetMT(capacity: intptr): intptr {
 
 macro Probe(hash: uint32, mask: uint32): ProbeSequence {
   // Mask must be a power of 2 minus 1.
-  dcheck(((mask + 1) & mask) == 0);
+  assert(((mask + 1) & mask) == 0);
 
   return ProbeSequence{mask: mask, offset: H1(hash) & mask, index: 0};
 }
@@ -214,7 +214,8 @@ macro FindFirstEmpty<GroupLoader: type>(
 
 macro Add<GroupLoader: type>(
     table: SwissNameDictionary, key: Name, value: Object,
-    propertyDetails: uint8): void labels Bailout {
+    propertyDetails: uint8)
+    labels Bailout {
   const capacity: intptr = Convert<intptr>(table.capacity);
   const maxUsable: uint32 =
       Unsigned(Convert<int32>(SwissNameDictionaryMaxUsableCapacity(capacity)));
@@ -248,8 +249,9 @@ macro Add<GroupLoader: type>(
 }
 
 @export
-macro SwissNameDictionaryDelete(table: SwissNameDictionary, entry: intptr):
-    void labels Shrunk(SwissNameDictionary) {
+macro SwissNameDictionaryDelete(table: SwissNameDictionary, entry: intptr)
+    labels
+    Shrunk(SwissNameDictionary) {
   const capacity = Convert<intptr>(table.capacity);
 
   // Update present and deleted element counts at once, without needing to do
@@ -285,7 +287,8 @@ macro SwissNameDictionaryFindEntrySIMD(table: SwissNameDictionary, key: Name):
 
 @export
 macro SwissNameDictionaryFindEntryPortable(
-    table: SwissNameDictionary, key: Name): never labels Found(intptr),
+    table: SwissNameDictionary, key: Name): never labels
+Found(intptr),
     NotFound {
   FindEntry<GroupPortableLoader>(table, key)
       otherwise Found, NotFound;
@@ -301,7 +304,7 @@ macro SwissNameDictionaryFindEntryPortable(
 @export
 macro SwissNameDictionaryAddSIMD(
     table: SwissNameDictionary, key: Name, value: Object,
-    propertyDetails: uint8): void labels Bailout {
+    propertyDetails: uint8) labels Bailout {
   Add<GroupSse2Loader>(table, key, value, propertyDetails)
       otherwise Bailout;
 }
@@ -309,7 +312,7 @@ macro SwissNameDictionaryAddSIMD(
 @export
 macro SwissNameDictionaryAddPortable(
     table: SwissNameDictionary, key: Name, value: Object,
-    propertyDetails: uint8): void labels Bailout {
+    propertyDetails: uint8) labels Bailout {
   Add<GroupPortableLoader>(table, key, value, propertyDetails)
       otherwise Bailout;
 }

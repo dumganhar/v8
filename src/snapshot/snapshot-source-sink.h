@@ -6,11 +6,12 @@
 #define V8_SNAPSHOT_SNAPSHOT_SOURCE_SINK_H_
 
 #include <utility>
-#include <vector>
 
 #include "src/base/atomicops.h"
 #include "src/base/logging.h"
+#include "src/base/platform/wrappers.h"
 #include "src/common/globals.h"
+#include "src/snapshot/snapshot-utils.h"
 #include "src/utils/utils.h"
 
 namespace v8 {
@@ -25,11 +26,11 @@ namespace internal {
 class SnapshotByteSource final {
  public:
   SnapshotByteSource(const char* data, int length)
-      : data_(reinterpret_cast<const uint8_t*>(data)),
+      : data_(reinterpret_cast<const byte*>(data)),
         length_(length),
         position_(0) {}
 
-  explicit SnapshotByteSource(base::Vector<const uint8_t> payload)
+  explicit SnapshotByteSource(Vector<const byte> payload)
       : data_(payload.begin()), length_(payload.length()), position_(0) {}
 
   ~SnapshotByteSource() = default;
@@ -38,12 +39,12 @@ class SnapshotByteSource final {
 
   bool HasMore() { return position_ < length_; }
 
-  uint8_t Get() {
+  byte Get() {
     DCHECK(position_ < length_);
     return data_[position_++];
   }
 
-  uint8_t Peek() const {
+  byte Peek() const {
     DCHECK(position_ < length_);
     return data_[position_];
   }
@@ -51,7 +52,7 @@ class SnapshotByteSource final {
   void Advance(int by) { position_ += by; }
 
   void CopyRaw(void* to, int number_of_bytes) {
-    memcpy(to, data_ + position_, number_of_bytes);
+    base::Memcpy(to, data_ + position_, number_of_bytes);
     position_ += number_of_bytes;
   }
 
@@ -61,7 +62,7 @@ class SnapshotByteSource final {
     for (base::AtomicWord* p = start; p < end;
          ++p, position_ += sizeof(base::AtomicWord)) {
       base::AtomicWord val;
-      memcpy(&val, data_ + position_, sizeof(base::AtomicWord));
+      base::Memcpy(&val, data_ + position_, sizeof(base::AtomicWord));
       base::Relaxed_Store(p, val);
     }
   }
@@ -73,7 +74,7 @@ class SnapshotByteSource final {
     for (AtomicTagged_t* p = start; p < end;
          ++p, position_ += sizeof(AtomicTagged_t)) {
       AtomicTagged_t val;
-      memcpy(&val, data_ + position_, sizeof(AtomicTagged_t));
+      base::Memcpy(&val, data_ + position_, sizeof(AtomicTagged_t));
       base::Relaxed_Store(p, val);
     }
   }
@@ -97,15 +98,17 @@ class SnapshotByteSource final {
   }
 
   // Returns length.
-  int GetBlob(const uint8_t** data);
+  int GetBlob(const byte** data);
 
-  int position() const { return position_; }
+  int position() { return position_; }
   void set_position(int position) { position_ = position; }
 
-  const uint8_t* data() const { return data_; }
+  uint32_t GetChecksum() const {
+    return Checksum(Vector<const byte>(data_, length_));
+  }
 
  private:
-  const uint8_t* data_;
+  const byte* data_;
   int length_;
   int position_;
 };
@@ -122,20 +125,18 @@ class SnapshotByteSink {
 
   ~SnapshotByteSink() = default;
 
-  void Put(uint8_t b, const char* description) { data_.push_back(b); }
+  void Put(byte b, const char* description) { data_.push_back(b); }
 
-  void PutN(int number_of_bytes, const uint8_t v, const char* description);
   void PutInt(uintptr_t integer, const char* description);
-  void PutRaw(const uint8_t* data, int number_of_bytes,
-              const char* description);
+  void PutRaw(const byte* data, int number_of_bytes, const char* description);
 
   void Append(const SnapshotByteSink& other);
   int Position() const { return static_cast<int>(data_.size()); }
 
-  const std::vector<uint8_t>* data() const { return &data_; }
+  const std::vector<byte>* data() const { return &data_; }
 
  private:
-  std::vector<uint8_t> data_;
+  std::vector<byte> data_;
 };
 
 }  // namespace internal

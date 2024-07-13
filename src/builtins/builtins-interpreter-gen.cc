@@ -9,17 +9,6 @@
 namespace v8 {
 namespace internal {
 
-void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
-  Generate_InterpreterEntryTrampoline(masm,
-                                      InterpreterEntryTrampolineMode::kDefault);
-}
-
-void Builtins::Generate_InterpreterEntryTrampolineForProfiling(
-    MacroAssembler* masm) {
-  Generate_InterpreterEntryTrampoline(
-      masm, InterpreterEntryTrampolineMode::kForProfiling);
-}
-
 void Builtins::Generate_InterpreterPushArgsThenCall(MacroAssembler* masm) {
   return Generate_InterpreterPushArgsThenCallImpl(
       masm, ConvertReceiverMode::kAny, InterpreterPushArgsMode::kOther);

@@ -37,10 +37,10 @@
 #ifndef V8_CODEGEN_IA32_ASSEMBLER_IA32_INL_H_
 #define V8_CODEGEN_IA32_ASSEMBLER_IA32_INL_H_
 
+#include "src/codegen/ia32/assembler-ia32.h"
+
 #include "src/base/memory.h"
 #include "src/codegen/assembler.h"
-#include "src/codegen/flush-instruction-cache.h"
-#include "src/codegen/ia32/assembler-ia32.h"
 #include "src/debug/debug.h"
 #include "src/objects/objects-inl.h"
 
@@ -54,9 +54,9 @@ void RelocInfo::apply(intptr_t delta) {
   DCHECK_EQ(kApplyMask, (RelocInfo::ModeMask(RelocInfo::CODE_TARGET) |
                          RelocInfo::ModeMask(RelocInfo::INTERNAL_REFERENCE) |
                          RelocInfo::ModeMask(RelocInfo::OFF_HEAP_TARGET) |
-                         RelocInfo::ModeMask(RelocInfo::WASM_STUB_CALL)));
-  if (IsCodeTarget(rmode_) || IsOffHeapTarget(rmode_) ||
-      IsWasmStubCall(rmode_)) {
+                         RelocInfo::ModeMask(RelocInfo::RUNTIME_ENTRY)));
+  if (IsRuntimeEntry(rmode_) || IsCodeTarget(rmode_) ||
+      IsOffHeapTarget(rmode_)) {
     base::WriteUnalignedValue(pc_,
                               base::ReadUnalignedValue<int32_t>(pc_) - delta);
   } else if (IsInternalReference(rmode_)) {
@@ -67,7 +67,7 @@ void RelocInfo::apply(intptr_t delta) {
 }
 
 Address RelocInfo::target_address() {
-  DCHECK(IsCodeTarget(rmode_) || IsWasmCall(rmode_) || IsWasmStubCall(rmode_));
+  DCHECK(IsCodeTarget(rmode_) || IsRuntimeEntry(rmode_) || IsWasmCall(rmode_));
   return Assembler::target_address_at(pc_, constant_pool_);
 }
 
@@ -80,22 +80,34 @@ Address RelocInfo::constant_pool_entry_address() { UNREACHABLE(); }
 
 int RelocInfo::target_address_size() { return Assembler::kSpecialTargetSize; }
 
-HeapObject RelocInfo::target_object(PtrComprCageBase cage_base) {
-  DCHECK(IsCodeTarget(rmode_) || IsFullEmbeddedObject(rmode_));
+HeapObject RelocInfo::target_object() {
+  DCHECK(IsCodeTarget(rmode_) || IsFullEmbeddedObject(rmode_) ||
+         IsDataEmbeddedObject(rmode_));
   return HeapObject::cast(Object(ReadUnalignedValue<Address>(pc_)));
 }
 
+HeapObject RelocInfo::target_object_no_host(Isolate* isolate) {
+  return target_object();
+}
+
 Handle<HeapObject> RelocInfo::target_object_handle(Assembler* origin) {
-  DCHECK(IsCodeTarget(rmode_) || IsFullEmbeddedObject(rmode_));
+  DCHECK(IsCodeTarget(rmode_) || IsFullEmbeddedObject(rmode_) ||
+         IsDataEmbeddedObject(rmode_));
   return Handle<HeapObject>::cast(ReadUnalignedValue<Handle<Object>>(pc_));
 }
 
-void RelocInfo::set_target_object(HeapObject target,
+void RelocInfo::set_target_object(Heap* heap, HeapObject target,
+                                  WriteBarrierMode write_barrier_mode,
                                   ICacheFlushMode icache_flush_mode) {
-  DCHECK(IsCodeTarget(rmode_) || IsFullEmbeddedObject(rmode_));
+  DCHECK(IsCodeTarget(rmode_) || IsFullEmbeddedObject(rmode_) ||
+         IsDataEmbeddedObject(rmode_));
   WriteUnalignedValue(pc_, target.ptr());
   if (icache_flush_mode != SKIP_ICACHE_FLUSH) {
     FlushInstructionCache(pc_, sizeof(Address));
+  }
+  if (write_barrier_mode == UPDATE_WRITE_BARRIER && !host().is_null() &&
+      !FLAG_disable_write_barriers) {
+    WriteBarrierForCode(host(), this, target);
   }
 }
 
@@ -123,7 +135,19 @@ Address RelocInfo::target_internal_reference_address() {
   return pc_;
 }
 
-Builtin RelocInfo::target_builtin_at(Assembler* origin) { UNREACHABLE(); }
+Address RelocInfo::target_runtime_entry(Assembler* origin) {
+  DCHECK(IsRuntimeEntry(rmode_));
+  return ReadUnalignedValue<Address>(pc_);
+}
+
+void RelocInfo::set_target_runtime_entry(Address target,
+                                         WriteBarrierMode write_barrier_mode,
+                                         ICacheFlushMode icache_flush_mode) {
+  DCHECK(IsRuntimeEntry(rmode_));
+  if (target_address() != target) {
+    set_target_address(target, write_barrier_mode, icache_flush_mode);
+  }
+}
 
 Address RelocInfo::target_off_heap_target() {
   DCHECK(IsOffHeapTarget(rmode_));
@@ -134,7 +158,8 @@ void RelocInfo::WipeOut() {
   if (IsFullEmbeddedObject(rmode_) || IsExternalReference(rmode_) ||
       IsInternalReference(rmode_)) {
     WriteUnalignedValue(pc_, kNullAddress);
-  } else if (IsCodeTarget(rmode_) || IsOffHeapTarget(rmode_)) {
+  } else if (IsCodeTarget(rmode_) || IsRuntimeEntry(rmode_) ||
+             IsOffHeapTarget(rmode_)) {
     // Effectively write zero into the relocation.
     Assembler::set_target_address_at(pc_, constant_pool_,
                                      pc_ + sizeof(int32_t));
@@ -158,7 +183,7 @@ void Assembler::emit(Handle<HeapObject> handle) {
 }
 
 void Assembler::emit(uint32_t x, RelocInfo::Mode rmode) {
-  if (!RelocInfo::IsNoInfo(rmode)) {
+  if (!RelocInfo::IsNone(rmode)) {
     RecordRelocInfo(rmode);
   }
   emit(x);
@@ -174,19 +199,19 @@ void Assembler::emit(const Immediate& x) {
     emit_code_relative_offset(label);
     return;
   }
-  if (!RelocInfo::IsNoInfo(x.rmode_)) RecordRelocInfo(x.rmode_);
-  if (x.is_heap_number_request()) {
-    RequestHeapNumber(x.heap_number_request());
+  if (!RelocInfo::IsNone(x.rmode_)) RecordRelocInfo(x.rmode_);
+  if (x.is_heap_object_request()) {
+    RequestHeapObject(x.heap_object_request());
     emit(0);
-    return;
+  } else {
+    emit(x.immediate());
   }
-  emit(x.immediate());
 }
 
 void Assembler::emit_code_relative_offset(Label* label) {
   if (label->is_bound()) {
     int32_t pos;
-    pos = label->pos() + InstructionStream::kHeaderSize - kHeapObjectTag;
+    pos = label->pos() + Code::kHeaderSize - kHeapObjectTag;
     emit(pos);
   } else {
     emit_disp(label, Displacement::CODE_RELATIVE);
@@ -200,7 +225,7 @@ void Assembler::emit_b(Immediate x) {
 }
 
 void Assembler::emit_w(const Immediate& x) {
-  DCHECK(RelocInfo::IsNoInfo(x.rmode_));
+  DCHECK(RelocInfo::IsNone(x.rmode_));
   uint16_t value = static_cast<uint16_t>(x.immediate());
   WriteUnalignedValue(reinterpret_cast<Address>(pc_), value);
   pc_ += sizeof(uint16_t);
@@ -246,11 +271,11 @@ void Assembler::emit_disp(Label* L, Displacement::Type type) {
 }
 
 void Assembler::emit_near_disp(Label* L) {
-  uint8_t disp = 0x00;
+  byte disp = 0x00;
   if (L->is_near_linked()) {
     int offset = L->near_link_pos() - pc_offset();
     DCHECK(is_int8(offset));
-    disp = static_cast<uint8_t>(offset & 0xFF);
+    disp = static_cast<byte>(offset & 0xFF);
   }
   L->link_to(pc_offset(), Label::kNear);
   *pc_++ = disp;

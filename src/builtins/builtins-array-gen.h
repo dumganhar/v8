@@ -10,8 +10,6 @@
 namespace v8 {
 namespace internal {
 
-enum AllocationSiteOverrideMode;
-
 class ArrayBuiltinsAssembler : public CodeStubAssembler {
  public:
   explicit ArrayBuiltinsAssembler(compiler::CodeAssemblerState* state);
@@ -106,9 +104,8 @@ class ArrayBuiltinsAssembler : public CodeStubAssembler {
  private:
   void VisitAllTypedArrayElements(TNode<JSArrayBuffer> array_buffer,
                                   const CallResultProcessor& processor,
-                                  ForEachDirection direction,
-                                  TNode<JSTypedArray> typed_array,
-                                  bool can_shrink);
+                                  Label* detached, ForEachDirection direction,
+                                  TNode<JSTypedArray> typed_array);
 
   TNode<Object> callbackfn_;
   TNode<JSReceiver> o_;

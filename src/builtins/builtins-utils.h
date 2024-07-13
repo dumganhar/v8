@@ -8,10 +8,8 @@
 #include "src/base/logging.h"
 #include "src/builtins/builtins.h"
 #include "src/execution/arguments.h"
-#include "src/execution/frame-constants.h"
 #include "src/execution/isolate.h"
 #include "src/heap/factory.h"
-#include "src/logging/runtime-call-stats-scope.h"
 
 namespace v8 {
 namespace internal {
@@ -23,7 +21,6 @@ class BuiltinArguments : public JavaScriptArguments {
       : Arguments(length, arguments) {
     // Check we have at least the receiver.
     DCHECK_LE(1, this->length());
-    DCHECK(at(0)->IsObject());
   }
 
   Object operator[](int index) const {
@@ -45,22 +42,17 @@ class BuiltinArguments : public JavaScriptArguments {
   // Note: this should return the address after the receiver,
   // even when length() == 1.
   inline Address* address_of_first_argument() const {
-    return address_of_arg_at(kFirstArgsOffset);
+    return address_of_arg_at(kArgsOffset + 1);  // Skips receiver.
   }
 
   static constexpr int kNewTargetOffset = 0;
   static constexpr int kTargetOffset = 1;
   static constexpr int kArgcOffset = 2;
   static constexpr int kPaddingOffset = 3;
-  static constexpr int kReceiverOffset = 4;
 
   static constexpr int kNumExtraArgs = 4;
   static constexpr int kNumExtraArgsWithReceiver = 5;
-
   static constexpr int kArgsOffset = 4;
-  static_assert(kArgsOffset == kReceiverOffset);
-  static constexpr int kFirstArgsOffset = kArgsOffset + 1;  // Skip receiver.
-  static constexpr int kReceiverArgsOffset = kArgsOffset - kFirstArgsOffset;
 
   inline Handle<Object> atOrUndefined(Isolate* isolate, int index) const;
   inline Handle<Object> receiver() const;
@@ -71,23 +63,6 @@ class BuiltinArguments : public JavaScriptArguments {
   // excluding extra arguments).
   int length() const { return Arguments::length() - kNumExtraArgs; }
 };
-
-#define ASSERT_OFFSET(BuiltinsOffset, FrameOffset)              \
-  static_assert(BuiltinArguments::BuiltinsOffset ==             \
-                (BuiltinExitFrameConstants::FrameOffset -       \
-                 BuiltinExitFrameConstants::kNewTargetOffset) / \
-                    kSystemPointerSize)
-ASSERT_OFFSET(kNewTargetOffset, kNewTargetOffset);
-ASSERT_OFFSET(kTargetOffset, kTargetOffset);
-ASSERT_OFFSET(kArgcOffset, kArgcOffset);
-ASSERT_OFFSET(kPaddingOffset, kPaddingOffset);
-ASSERT_OFFSET(kReceiverOffset, kFirstArgumentOffset);
-#undef ASSERT_OFFSET
-
-static_assert(BuiltinArguments::kNumExtraArgs ==
-              BuiltinExitFrameConstants::kNumExtraArgsWithoutReceiver);
-static_assert(BuiltinArguments::kNumExtraArgsWithReceiver ==
-              BuiltinExitFrameConstants::kNumExtraArgsWithReceiver);
 
 // ----------------------------------------------------------------------------
 // Support macro for defining builtins in C++.
@@ -103,17 +78,18 @@ static_assert(BuiltinArguments::kNumExtraArgsWithReceiver ==
 // through the BuiltinArguments object args.
 // TODO(cbruni): add global flag to check whether any tracing events have been
 // enabled.
-#define BUILTIN_RCS(name)                                                   \
+#define BUILTIN(name)                                                       \
   V8_WARN_UNUSED_RESULT static Object Builtin_Impl_##name(                  \
       BuiltinArguments args, Isolate* isolate);                             \
                                                                             \
   V8_NOINLINE static Address Builtin_Impl_Stats_##name(                     \
       int args_length, Address* args_object, Isolate* isolate) {            \
     BuiltinArguments args(args_length, args_object);                        \
-    RCS_SCOPE(isolate, RuntimeCallCounterId::kBuiltin_##name);              \
+    RuntimeCallTimerScope timer(isolate,                                    \
+                                RuntimeCallCounterId::kBuiltin_##name);     \
     TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.runtime"),                   \
                  "V8.Builtin_" #name);                                      \
-    return BUILTIN_CONVERT_RESULT(Builtin_Impl_##name(args, isolate));      \
+    return CONVERT_OBJECT(Builtin_Impl_##name(args, isolate));              \
   }                                                                         \
                                                                             \
   V8_WARN_UNUSED_RESULT Address Builtin_##name(                             \
@@ -123,31 +99,12 @@ static_assert(BuiltinArguments::kNumExtraArgsWithReceiver ==
       return Builtin_Impl_Stats_##name(args_length, args_object, isolate);  \
     }                                                                       \
     BuiltinArguments args(args_length, args_object);                        \
-    return BUILTIN_CONVERT_RESULT(Builtin_Impl_##name(args, isolate));      \
+    return CONVERT_OBJECT(Builtin_Impl_##name(args, isolate));              \
   }                                                                         \
                                                                             \
   V8_WARN_UNUSED_RESULT static Object Builtin_Impl_##name(                  \
       BuiltinArguments args, Isolate* isolate)
 
-#define BUILTIN_NO_RCS(name)                                                \
-  V8_WARN_UNUSED_RESULT static Object Builtin_Impl_##name(                  \
-      BuiltinArguments args, Isolate* isolate);                             \
-                                                                            \
-  V8_WARN_UNUSED_RESULT Address Builtin_##name(                             \
-      int args_length, Address* args_object, Isolate* isolate) {            \
-    DCHECK(isolate->context().is_null() || isolate->context().IsContext()); \
-    BuiltinArguments args(args_length, args_object);                        \
-    return BUILTIN_CONVERT_RESULT(Builtin_Impl_##name(args, isolate));      \
-  }                                                                         \
-                                                                            \
-  V8_WARN_UNUSED_RESULT static Object Builtin_Impl_##name(                  \
-      BuiltinArguments args, Isolate* isolate)
-
-#ifdef V8_RUNTIME_CALL_STATS
-#define BUILTIN(name) BUILTIN_RCS(name)
-#else  // V8_RUNTIME_CALL_STATS
-#define BUILTIN(name) BUILTIN_NO_RCS(name)
-#endif  // V8_RUNTIME_CALL_STATS
 // ----------------------------------------------------------------------------
 
 #define CHECK_RECEIVER(Type, name, method)                                  \

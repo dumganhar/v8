@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "include/v8-wasm.h"
 #include "src/api/api-inl.h"
 #include "src/objects/objects-inl.h"
 #include "src/snapshot/code-serializer.h"
@@ -17,14 +16,17 @@
 #include "src/wasm/wasm-objects-inl.h"
 #include "src/wasm/wasm-opcodes.h"
 #include "src/wasm/wasm-serialization.h"
+
 #include "test/cctest/cctest.h"
-#include "test/cctest/heap/heap-utils.h"
 #include "test/common/wasm/flag-utils.h"
 #include "test/common/wasm/test-signatures.h"
 #include "test/common/wasm/wasm-macro-gen.h"
 #include "test/common/wasm/wasm-module-runner.h"
 
-namespace v8::internal::wasm {
+namespace v8 {
+namespace internal {
+namespace wasm {
+namespace test_wasm_serialization {
 
 // Approximate gtest TEST_F style, in case we adopt gtest.
 class WasmSerializationTest {
@@ -34,26 +36,19 @@ class WasmSerializationTest {
     SetUp();
   }
 
-  static constexpr const char* kFunctionName = "increment";
-
   static void BuildWireBytes(Zone* zone, ZoneBuffer* buffer) {
     WasmModuleBuilder* builder = zone->New<WasmModuleBuilder>(zone);
     TestSignatures sigs;
 
-    // Generate 3 functions, and export the last one with the name "increment".
-    WasmFunctionBuilder* f;
-    for (int i = 0; i < 3; ++i) {
-      f = builder->AddFunction(sigs.i_i());
-      uint8_t code[] = {WASM_LOCAL_GET(0), kExprI32Const, 1, kExprI32Add,
-                        kExprEnd};
-      f->EmitCode(code, sizeof(code));
-    }
-    builder->AddExport(base::CStrVector(kFunctionName), f);
+    WasmFunctionBuilder* f = builder->AddFunction(sigs.i_i());
+    byte code[] = {WASM_LOCAL_GET(0), kExprI32Const, 1, kExprI32Add, kExprEnd};
+    f->EmitCode(code, sizeof(code));
+    builder->AddExport(CStrVector(kFunctionName), f);
 
     builder->WriteTo(buffer);
   }
 
-  void ClearSerializedData() { serialized_bytes_ = {}; }
+  void ClearSerializedData() { serialized_bytes_ = {nullptr, 0}; }
 
   void InvalidateVersion() {
     uint32_t* slot = reinterpret_cast<uint32_t*>(
@@ -66,16 +61,11 @@ class WasmSerializationTest {
     memset(const_cast<uint8_t*>(wire_bytes_.data()), 0, wire_bytes_.size() / 2);
   }
 
-  void PartlyDropTieringBudget() {
-    serialized_bytes_ = {serialized_bytes_.data(),
-                         serialized_bytes_.size() - 1};
-  }
-
   MaybeHandle<WasmModuleObject> Deserialize(
-      base::Vector<const char> source_url = {}) {
+      Vector<const char> source_url = {}) {
     return DeserializeNativeModule(CcTest::i_isolate(),
-                                   base::VectorOf(serialized_bytes_),
-                                   base::VectorOf(wire_bytes_), source_url);
+                                   VectorOf(serialized_bytes_),
+                                   VectorOf(wire_bytes_), source_url);
   }
 
   void DeserializeAndRun() {
@@ -84,7 +74,7 @@ class WasmSerializationTest {
     CHECK(Deserialize().ToHandle(&module_object));
     {
       DisallowGarbageCollection assume_no_gc;
-      base::Vector<const uint8_t> deserialized_module_wire_bytes =
+      Vector<const byte> deserialized_module_wire_bytes =
           module_object->native_module()->wire_bytes();
       CHECK_EQ(deserialized_module_wire_bytes.size(), wire_bytes_.size());
       CHECK_EQ(memcmp(deserialized_module_wire_bytes.begin(),
@@ -92,27 +82,29 @@ class WasmSerializationTest {
                0);
     }
     Handle<WasmInstanceObject> instance =
-        GetWasmEngine()
+        CcTest::i_isolate()
+            ->wasm_engine()
             ->SyncInstantiate(CcTest::i_isolate(), &thrower, module_object,
                               Handle<JSReceiver>::null(),
                               MaybeHandle<JSArrayBuffer>())
             .ToHandleChecked();
-    Handle<Object> params[1] = {handle(Smi::FromInt(41), CcTest::i_isolate())};
+    Handle<Object> params[1] = {
+        Handle<Object>(Smi::FromInt(41), CcTest::i_isolate())};
     int32_t result = testing::CallWasmFunctionForTesting(
-        CcTest::i_isolate(), instance, kFunctionName,
-        base::ArrayVector(params));
+        CcTest::i_isolate(), instance, kFunctionName, 1, params);
     CHECK_EQ(42, result);
   }
 
   void CollectGarbage() {
     // Try hard to collect all garbage and will therefore also invoke all weak
     // callbacks of actually unreachable persistent handles.
-    heap::InvokeMemoryReducingMajorGCs(CcTest::heap());
+    CcTest::i_isolate()->heap()->CollectAllAvailableGarbage(
+        GarbageCollectionReason::kTesting);
   }
 
-  v8::MemorySpan<const uint8_t> wire_bytes() const { return wire_bytes_; }
-
  private:
+  static const char* kFunctionName;
+
   Zone* zone() { return &zone_; }
 
   void SetUp() {
@@ -132,7 +124,6 @@ class WasmSerializationTest {
     // serialization (when the isolate is disposed).
     std::weak_ptr<NativeModule> weak_native_module;
     {
-      v8::Isolate::Scope isolate_scope(serialization_v8_isolate);
       HandleScope scope(serialization_isolate);
       v8::Local<v8::Context> serialization_context =
           v8::Context::New(serialization_v8_isolate);
@@ -140,7 +131,7 @@ class WasmSerializationTest {
 
       auto enabled_features = WasmFeatures::FromIsolate(serialization_isolate);
       MaybeHandle<WasmModuleObject> maybe_module_object =
-          GetWasmEngine()->SyncCompile(
+          serialization_isolate->wasm_engine()->SyncCompile(
               serialization_isolate, enabled_features, &thrower,
               ModuleWireBytes(buffer.begin(), buffer.end()));
       Handle<WasmModuleObject> module_object =
@@ -148,6 +139,10 @@ class WasmSerializationTest {
       weak_native_module = module_object->shared_native_module();
       // Check that the native module exists at this point.
       CHECK(weak_native_module.lock());
+
+      auto* native_module = module_object->native_module();
+      native_module->compilation_state()->WaitForTopTierFinished();
+      DCHECK(!native_module->compilation_state()->failed());
 
       v8::Local<v8::Object> v8_module_obj =
           v8::Utils::ToLocal(Handle<JSObject>::cast(module_object));
@@ -162,19 +157,8 @@ class WasmSerializationTest {
       uint8_t* bytes_copy = zone()->NewArray<uint8_t>(uncompiled_bytes.size());
       memcpy(bytes_copy, uncompiled_bytes.data(), uncompiled_bytes.size());
       wire_bytes_ = {bytes_copy, uncompiled_bytes.size()};
-
-      // Run the code until tier-up (of the single function) was observed.
-      Handle<WasmInstanceObject> instance =
-          GetWasmEngine()
-              ->SyncInstantiate(serialization_isolate, &thrower, module_object,
-                                {}, {})
-              .ToHandleChecked();
-      CHECK_EQ(0, data_.size);
-      while (data_.size == 0) {
-        testing::CallWasmFunctionForTesting(serialization_isolate, instance,
-                                            kFunctionName, {});
-        data_ = compiled_module.Serialize();
-      }
+      // keep alive data_ until the end
+      data_ = compiled_module.Serialize();
       CHECK_LT(0, data_.size);
     }
     // Dispose of serialization isolate to destroy the reference to the
@@ -201,8 +185,9 @@ class WasmSerializationTest {
   v8::OwnedBuffer data_;
   v8::MemorySpan<const uint8_t> wire_bytes_ = {nullptr, 0};
   v8::MemorySpan<const uint8_t> serialized_bytes_ = {nullptr, 0};
-  FlagScope<int> tier_up_quickly_{&v8_flags.wasm_tiering_budget, 1000};
 };
+
+const char* WasmSerializationTest::kFunctionName = "increment";
 
 TEST(DeserializeValidModule) {
   WasmSerializationTest test;
@@ -219,7 +204,7 @@ TEST(DeserializeWithSourceUrl) {
     HandleScope scope(CcTest::i_isolate());
     const std::string url = "http://example.com/example.wasm";
     Handle<WasmModuleObject> module_object;
-    CHECK(test.Deserialize(base::VectorOf(url)).ToHandle(&module_object));
+    CHECK(test.Deserialize(VectorOf(url)).ToHandle(&module_object));
     String url_str = String::cast(module_object->script().name());
     CHECK_EQ(url, url_str.ToCString().get());
   }
@@ -272,6 +257,7 @@ TEST(BlockWasmCodeGenAtDeserialization) {
 }
 
 UNINITIALIZED_TEST(CompiledWasmModulesTransfer) {
+  i::wasm::WasmEngine::InitializeOncePerProcess();
   v8::internal::AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
 
@@ -284,7 +270,6 @@ UNINITIALIZED_TEST(CompiledWasmModulesTransfer) {
   std::vector<v8::CompiledWasmModule> store;
   std::shared_ptr<NativeModule> original_native_module;
   {
-    v8::Isolate::Scope isolate_scope(from_isolate);
     v8::HandleScope scope(from_isolate);
     LocalContext env(from_isolate);
 
@@ -293,7 +278,7 @@ UNINITIALIZED_TEST(CompiledWasmModulesTransfer) {
     ErrorThrower thrower(from_i_isolate, "TestCompiledWasmModulesTransfer");
     auto enabled_features = WasmFeatures::FromIsolate(from_i_isolate);
     MaybeHandle<WasmModuleObject> maybe_module_object =
-        GetWasmEngine()->SyncCompile(
+        from_i_isolate->wasm_engine()->SyncCompile(
             from_i_isolate, enabled_features, &thrower,
             ModuleWireBytes(buffer.begin(), buffer.end()));
     Handle<WasmModuleObject> module_object =
@@ -308,7 +293,6 @@ UNINITIALIZED_TEST(CompiledWasmModulesTransfer) {
   {
     v8::Isolate* to_isolate = v8::Isolate::New(create_params);
     {
-      v8::Isolate::Scope isolate_scope(to_isolate);
       v8::HandleScope scope(to_isolate);
       LocalContext env(to_isolate);
 
@@ -336,102 +320,19 @@ TEST(TierDownAfterDeserialization) {
   CHECK(test.Deserialize().ToHandle(&module_object));
 
   auto* native_module = module_object->native_module();
-  CHECK_EQ(3, native_module->module()->functions.size());
+  CHECK_EQ(1, native_module->module()->functions.size());
   WasmCodeRefScope code_ref_scope;
-  // The deserialized code must be TurboFan (we wait for tier-up before
-  // serializing).
-  auto* turbofan_code = native_module->GetCode(2);
+  auto* turbofan_code = native_module->GetCode(0);
   CHECK_NOT_NULL(turbofan_code);
   CHECK_EQ(ExecutionTier::kTurbofan, turbofan_code->tier());
 
-  GetWasmEngine()->EnterDebuggingForIsolate(isolate);
+  isolate->wasm_engine()->TierDownAllModulesPerIsolate(isolate);
 
-  // Entering debugging should delete all code, so that debug code gets compiled
-  // lazily.
-  CHECK_NULL(native_module->GetCode(0));
+  auto* liftoff_code = native_module->GetCode(0);
+  CHECK_EQ(ExecutionTier::kLiftoff, liftoff_code->tier());
 }
 
-TEST(SerializeLiftoffModuleFails) {
-  // Make sure that no function is tiered up to TurboFan.
-  if (!v8_flags.liftoff) return;
-  FlagScope<bool> no_tier_up(&v8_flags.wasm_tier_up, false);
-  v8::internal::AccountingAllocator allocator;
-  Zone zone(&allocator, "test_zone");
-
-  CcTest::InitIsolateOnce();
-  Isolate* isolate = CcTest::i_isolate();
-  HandleScope scope(isolate);
-  ZoneBuffer wire_bytes_buffer(&zone);
-  WasmSerializationTest::BuildWireBytes(&zone, &wire_bytes_buffer);
-
-  ErrorThrower thrower(isolate, "Test");
-  MaybeHandle<WasmModuleObject> maybe_module_object =
-      GetWasmEngine()->SyncCompile(
-          isolate, WasmFeatures::All(), &thrower,
-          ModuleWireBytes(wire_bytes_buffer.begin(), wire_bytes_buffer.end()));
-  Handle<WasmModuleObject> module_object =
-      maybe_module_object.ToHandleChecked();
-
-  NativeModule* native_module = module_object->native_module();
-  WasmSerializer wasm_serializer(native_module);
-  size_t buffer_size = wasm_serializer.GetSerializedNativeModuleSize();
-  std::unique_ptr<uint8_t[]> buffer(new uint8_t[buffer_size]);
-  // Serialization is expected to fail if there is no TurboFan function to
-  // serialize.
-  CHECK(!wasm_serializer.SerializeNativeModule({buffer.get(), buffer_size}));
-}
-
-TEST(SerializeTieringBudget) {
-  WasmSerializationTest test;
-
-  Isolate* isolate = CcTest::i_isolate();
-  v8::OwnedBuffer serialized_bytes;
-  uint32_t mock_budget[3]{1, 2, 3};
-  {
-    HandleScope scope(isolate);
-    Handle<WasmModuleObject> module_object;
-    CHECK(test.Deserialize().ToHandle(&module_object));
-
-    auto* native_module = module_object->native_module();
-    memcpy(native_module->tiering_budget_array(), mock_budget,
-           arraysize(mock_budget) * sizeof(uint32_t));
-    v8::Local<v8::Object> v8_module_obj =
-        v8::Utils::ToLocal(Handle<JSObject>::cast(module_object));
-    CHECK(v8_module_obj->IsWasmModuleObject());
-
-    v8::Local<v8::WasmModuleObject> v8_module_object =
-        v8_module_obj.As<v8::WasmModuleObject>();
-    serialized_bytes = v8_module_object->GetCompiledModule().Serialize();
-
-    // Change one entry in the tiering budget after serialization to make sure
-    // the module gets deserialized and not just loaded from the module cache.
-    native_module->tiering_budget_array()[0]++;
-  }
-  // We need to invoke GC without stack, otherwise some objects may survive.
-  DisableConservativeStackScanningScopeForTesting no_stack_scanning(
-      isolate->heap());
-  test.CollectGarbage();
-  HandleScope scope(isolate);
-  Handle<WasmModuleObject> module_object;
-  CHECK(DeserializeNativeModule(isolate,
-                                base::VectorOf(serialized_bytes.buffer.get(),
-                                               serialized_bytes.size),
-                                base::VectorOf(test.wire_bytes()), {})
-            .ToHandle(&module_object));
-
-  auto* native_module = module_object->native_module();
-  for (size_t i = 0; i < arraysize(mock_budget); ++i) {
-    CHECK_EQ(mock_budget[i], native_module->tiering_budget_array()[i]);
-  }
-}
-
-TEST(DeserializeTieringBudgetPartlyMissing) {
-  WasmSerializationTest test;
-  {
-    HandleScope scope(CcTest::i_isolate());
-    test.PartlyDropTieringBudget();
-    CHECK(test.Deserialize().is_null());
-  }
-  test.CollectGarbage();
-}
-}  // namespace v8::internal::wasm
+}  // namespace test_wasm_serialization
+}  // namespace wasm
+}  // namespace internal
+}  // namespace v8

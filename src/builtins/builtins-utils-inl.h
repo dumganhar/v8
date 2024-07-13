@@ -20,10 +20,7 @@ Handle<Object> BuiltinArguments::atOrUndefined(Isolate* isolate,
   return at<Object>(index);
 }
 
-Handle<Object> BuiltinArguments::receiver() const {
-  int index = kReceiverOffset;
-  return Handle<Object>(address_of_arg_at(index));
-}
+Handle<Object> BuiltinArguments::receiver() const { return at<Object>(0); }
 
 Handle<JSFunction> BuiltinArguments::target() const {
   int index = kTargetOffset;

@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 
-d8.file.execute('../base.js');
-d8.file.execute('templates.js');
+load('../base.js');
+load('templates.js');
 
 
 var success = true;

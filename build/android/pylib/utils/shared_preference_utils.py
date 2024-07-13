@@ -1,4 +1,4 @@
-# Copyright 2017 The Chromium Authors
+# Copyright 2017 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -19,19 +19,12 @@ def UnicodeToStr(data):
     strings.
   """
   if isinstance(data, dict):
-    return {
-        UnicodeToStr(key): UnicodeToStr(value)
-        for key, value in data.items()
-    }
-  if isinstance(data, list):
+    return {UnicodeToStr(key): UnicodeToStr(value)
+            for key, value in data.iteritems()}
+  elif isinstance(data, list):
     return [UnicodeToStr(element) for element in data]
-  try:
-    # Python-2 compatibility.
-    if isinstance(data, unicode):
-      return data.encode('utf-8')
-  except NameError:
-    # Strings are already unicode in python3.
-    pass
+  elif isinstance(data, unicode):
+    return data.encode('utf-8')
   return data
 
 
@@ -87,30 +80,16 @@ def ApplySharedPreferenceSetting(shared_pref, setting):
       shared_pref.Remove(key)
     except KeyError:
       logging.warning("Attempted to remove non-existent key %s", key)
-  for key, value in setting.get('set', {}).items():
-    is_set = False
-    if not is_set and isinstance(value, bool):
+  for key, value in setting.get('set', {}).iteritems():
+    if isinstance(value, bool):
       shared_pref.SetBoolean(key, value)
-      is_set = True
-    try:
-      # Python-2 compatibility.
-      if not is_set and isinstance(value, basestring):
-        shared_pref.SetString(key, value)
-        is_set = True
-      if not is_set and isinstance(value, (long, int)):
-        shared_pref.SetLong(key, value)
-        is_set = True
-    except NameError:
-      if not is_set and isinstance(value, str):
-        shared_pref.SetString(key, value)
-        is_set = True
-      if not is_set and isinstance(value, int):
-        shared_pref.SetLong(key, value)
-        is_set = True
-    if not is_set and isinstance(value, list):
+    elif isinstance(value, basestring):
+      shared_pref.SetString(key, value)
+    elif isinstance(value, long) or isinstance(value, int):
+      shared_pref.SetLong(key, value)
+    elif isinstance(value, list):
       shared_pref.SetStringSet(key, value)
-      is_set = True
-    if not is_set:
+    else:
       raise ValueError("Given invalid value type %s for key %s" % (
           str(type(value)), key))
   shared_pref.Commit()

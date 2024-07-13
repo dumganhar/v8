@@ -5,10 +5,9 @@
 #include "include/cppgc/allocation.h"
 #include "include/cppgc/garbage-collected.h"
 #include "include/cppgc/persistent.h"
-#include "src/base/macros.h"
 #include "src/heap/cppgc/globals.h"
 #include "src/heap/cppgc/heap.h"
-#include "test/benchmarks/cpp/cppgc/benchmark_utils.h"
+#include "test/benchmarks/cpp/cppgc/utils.h"
 #include "third_party/google_benchmark/src/include/benchmark/benchmark.h"
 #include "v8config.h"
 
@@ -41,7 +40,7 @@ class GCedWithMixin final : public GCed, public OtherPayload, public Mixin {
   }
 };
 
-class Holder : public cppgc::GarbageCollected<Holder> {
+class Holder : public cppgc::GarbageCollected<GCed> {
  public:
   explicit Holder(GCedWithMixin* object)
       : base_ref(object), mixin_ref(object) {}
@@ -66,7 +65,6 @@ BENCHMARK_F(Trace, Static)(benchmark::State& st) {
                                         heap().GetAllocationHandle())));
   VisitorBase visitor;
   for (auto _ : st) {
-    USE(_);
     DispatchTrace(&visitor, holder->base_ref);
   }
 }
@@ -77,7 +75,6 @@ BENCHMARK_F(Trace, Dynamic)(benchmark::State& st) {
                                         heap().GetAllocationHandle())));
   VisitorBase visitor;
   for (auto _ : st) {
-    USE(_);
     DispatchTrace(&visitor, holder->mixin_ref);
   }
 }

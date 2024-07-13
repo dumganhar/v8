@@ -17,7 +17,7 @@
 #include "src/base/iterator.h"
 #include "src/base/logging.h"
 #include "src/base/macros.h"
-#include "src/base/vector.h"
+#include "src/utils/vector.h"
 #include "src/wasm/value-type.h"
 
 namespace v8 {
@@ -30,6 +30,7 @@ class WasmFrame;
 namespace wasm {
 
 class DebugInfoImpl;
+class IndirectNameMap;
 class NativeModule;
 class WasmCode;
 class WireBytesRef;
@@ -86,8 +87,8 @@ class DebugSideTable {
     // Stack height, including locals.
     int stack_height() const { return stack_height_; }
 
-    base::Vector<const Value> changed_values() const {
-      return base::VectorOf(changed_values_);
+    Vector<const Value> changed_values() const {
+      return VectorOf(changed_values_);
     }
 
     const Value* FindChangedValue(int stack_index) const {
@@ -182,6 +183,21 @@ class V8_EXPORT_PRIVATE DebugInfo {
   WasmValue GetStackValue(int index, Address pc, Address fp,
                           Address debug_break_fp, Isolate* isolate);
 
+  // Returns the name of the entity (with the given |index| and |kind|) derived
+  // from the exports table. If the entity is not exported, an empty reference
+  // will be returned instead.
+  WireBytesRef GetExportName(ImportExportKindCode kind, uint32_t index);
+
+  // Returns the module and field name of the entity (with the given |index|
+  // and |kind|) derived from the imports table. If the entity is not imported,
+  // a pair of empty references will be returned instead.
+  std::pair<WireBytesRef, WireBytesRef> GetImportName(ImportExportKindCode kind,
+                                                      uint32_t index);
+
+  WireBytesRef GetTypeName(int type_index);
+  WireBytesRef GetLocalName(int func_index, int local_index);
+  WireBytesRef GetFieldName(int struct_index, int field_index);
+
   void SetBreakpoint(int func_index, int offset, Isolate* current_isolate);
 
   // Returns true if we stay inside the passed frame (or a called frame) after
@@ -201,7 +217,7 @@ class V8_EXPORT_PRIVATE DebugInfo {
 
   void RemoveBreakpoint(int func_index, int offset, Isolate* current_isolate);
 
-  void RemoveDebugSideTables(base::Vector<WasmCode* const>);
+  void RemoveDebugSideTables(Vector<WasmCode* const>);
 
   // Return the debug side table for the given code object, but only if it has
   // already been created. This will never trigger generation of the table.

@@ -1,10 +1,8 @@
-# Copyright 2012 The Chromium Authors
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 """Checks C++ and Objective-C files for illegal includes."""
-
-
 
 import codecs
 import os
@@ -34,7 +32,7 @@ class CppChecker(object):
   # This regular expression will be used to extract filenames from include
   # statements.
   _EXTRACT_INCLUDE_PATH = re.compile(
-      r'[ \t]*#[ \t]*(?:include|import)[ \t]*"(.*)"')
+      '[ \t]*#[ \t]*(?:include|import)[ \t]+"(.*)"')
 
   def __init__(self, verbose, resolve_dotdot=False, root_dir=''):
     self._verbose = verbose
@@ -66,7 +64,7 @@ class CppChecker(object):
       # Don't fail when no directory is specified. We may want to be more
       # strict about this in the future.
       if self._verbose:
-        print(' WARNING: include specified with no directory: ' + include_path)
+        print ' WARNING: include specified with no directory: ' + include_path
       return True, None
 
     if self._resolve_dotdot and '../' in include_path:
@@ -82,7 +80,7 @@ class CppChecker(object):
 
   def CheckFile(self, rules, filepath):
     if self._verbose:
-      print('Checking: ' + filepath)
+      print 'Checking: ' + filepath
 
     dependee_status = results.DependeeStatus(filepath)
     ret_val = ''  # We'll collect the error messages in here

@@ -6,8 +6,8 @@
 #include "src/builtins/builtins.h"
 #include "src/heap/heap-inl.h"  // For ToBoolean.
 #include "src/logging/counters.h"
-#include "src/objects/call-site-info-inl.h"
 #include "src/objects/objects-inl.h"
+#include "src/objects/stack-frame-info-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -15,7 +15,7 @@ namespace internal {
 #define CHECK_CALLSITE(frame, method)                                         \
   CHECK_RECEIVER(JSObject, receiver, method);                                 \
   LookupIterator it(isolate, receiver,                                        \
-                    isolate->factory()->call_site_info_symbol(),              \
+                    isolate->factory()->call_site_frame_info_symbol(),        \
                     LookupIterator::OWN_SKIP_INTERCEPTOR);                    \
   if (it.state() != LookupIterator::DATA) {                                   \
     THROW_NEW_ERROR_RETURN_FAILURE(                                           \
@@ -23,8 +23,7 @@ namespace internal {
         NewTypeError(MessageTemplate::kCallSiteMethod,                        \
                      isolate->factory()->NewStringFromAsciiChecked(method))); \
   }                                                                           \
-  Handle<CallSiteInfo> frame = Handle<CallSiteInfo>::cast(it.GetDataValue())
-
+  Handle<StackFrameInfo> frame = Handle<StackFrameInfo>::cast(it.GetDataValue())
 namespace {
 
 Object PositiveNumberOrNull(int value, Isolate* isolate) {
@@ -32,36 +31,32 @@ Object PositiveNumberOrNull(int value, Isolate* isolate) {
   return ReadOnlyRoots(isolate).null_value();
 }
 
-bool NativeContextIsForShadowRealm(NativeContext native_context) {
-  return native_context.scope_info().scope_type() == SHADOW_REALM_SCOPE;
-}
-
 }  // namespace
 
 BUILTIN(CallSitePrototypeGetColumnNumber) {
   HandleScope scope(isolate);
   CHECK_CALLSITE(frame, "getColumnNumber");
-  return PositiveNumberOrNull(CallSiteInfo::GetColumnNumber(frame), isolate);
+  return PositiveNumberOrNull(StackFrameInfo::GetColumnNumber(frame), isolate);
 }
 
 BUILTIN(CallSitePrototypeGetEnclosingColumnNumber) {
   HandleScope scope(isolate);
   CHECK_CALLSITE(frame, "getEnclosingColumnNumber");
-  return PositiveNumberOrNull(CallSiteInfo::GetEnclosingColumnNumber(frame),
+  return PositiveNumberOrNull(StackFrameInfo::GetEnclosingColumnNumber(frame),
                               isolate);
 }
 
 BUILTIN(CallSitePrototypeGetEnclosingLineNumber) {
   HandleScope scope(isolate);
   CHECK_CALLSITE(frame, "getEnclosingLineNumber");
-  return PositiveNumberOrNull(CallSiteInfo::GetEnclosingLineNumber(frame),
+  return PositiveNumberOrNull(StackFrameInfo::GetEnclosingLineNumber(frame),
                               isolate);
 }
 
 BUILTIN(CallSitePrototypeGetEvalOrigin) {
   HandleScope scope(isolate);
   CHECK_CALLSITE(frame, "getEvalOrigin");
-  return *CallSiteInfo::GetEvalOrigin(frame);
+  return *StackFrameInfo::GetEvalOrigin(frame);
 }
 
 BUILTIN(CallSitePrototypeGetFileName) {
@@ -71,22 +66,8 @@ BUILTIN(CallSitePrototypeGetFileName) {
 }
 
 BUILTIN(CallSitePrototypeGetFunction) {
-  static const char method_name[] = "getFunction";
   HandleScope scope(isolate);
-  CHECK_CALLSITE(frame, method_name);
-  // ShadowRealms have a boundary: references to outside objects must not exist
-  // in the ShadowRealm, and references to ShadowRealm objects must not exist
-  // outside the ShadowRealm.
-  if (NativeContextIsForShadowRealm(isolate->raw_native_context()) ||
-      (frame->function().IsJSFunction() &&
-       NativeContextIsForShadowRealm(
-           JSFunction::cast(frame->function()).native_context()))) {
-    THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate,
-        NewTypeError(
-            MessageTemplate::kCallSiteMethodUnsupportedInShadowRealm,
-            isolate->factory()->NewStringFromAsciiChecked(method_name)));
-  }
+  CHECK_CALLSITE(frame, "getFunction");
   if (frame->IsStrict() ||
       (frame->function().IsJSFunction() &&
        JSFunction::cast(frame->function()).shared().is_toplevel())) {
@@ -99,41 +80,34 @@ BUILTIN(CallSitePrototypeGetFunction) {
 BUILTIN(CallSitePrototypeGetFunctionName) {
   HandleScope scope(isolate);
   CHECK_CALLSITE(frame, "getFunctionName");
-  return *CallSiteInfo::GetFunctionName(frame);
+  return *StackFrameInfo::GetFunctionName(frame);
 }
 
 BUILTIN(CallSitePrototypeGetLineNumber) {
   HandleScope scope(isolate);
   CHECK_CALLSITE(frame, "getLineNumber");
-  return PositiveNumberOrNull(CallSiteInfo::GetLineNumber(frame), isolate);
+  return PositiveNumberOrNull(StackFrameInfo::GetLineNumber(frame), isolate);
 }
 
 BUILTIN(CallSitePrototypeGetMethodName) {
   HandleScope scope(isolate);
   CHECK_CALLSITE(frame, "getMethodName");
-  return *CallSiteInfo::GetMethodName(frame);
+  return *StackFrameInfo::GetMethodName(frame);
 }
 
 BUILTIN(CallSitePrototypeGetPosition) {
   HandleScope scope(isolate);
   CHECK_CALLSITE(frame, "getPosition");
-  return Smi::FromInt(CallSiteInfo::GetSourcePosition(frame));
+  return Smi::FromInt(StackFrameInfo::GetSourcePosition(frame));
 }
 
 BUILTIN(CallSitePrototypeGetPromiseIndex) {
   HandleScope scope(isolate);
   CHECK_CALLSITE(frame, "getPromiseIndex");
-  if (!frame->IsPromiseAll() && !frame->IsPromiseAny() &&
-      !frame->IsPromiseAllSettled()) {
+  if (!frame->IsPromiseAll() && !frame->IsPromiseAny()) {
     return ReadOnlyRoots(isolate).null_value();
   }
-  return Smi::FromInt(CallSiteInfo::GetSourcePosition(frame));
-}
-
-BUILTIN(CallSitePrototypeGetScriptHash) {
-  HandleScope scope(isolate);
-  CHECK_CALLSITE(frame, "getScriptHash");
-  return *CallSiteInfo::GetScriptHash(frame);
+  return Smi::FromInt(StackFrameInfo::GetSourcePosition(frame));
 }
 
 BUILTIN(CallSitePrototypeGetScriptNameOrSourceURL) {
@@ -143,22 +117,8 @@ BUILTIN(CallSitePrototypeGetScriptNameOrSourceURL) {
 }
 
 BUILTIN(CallSitePrototypeGetThis) {
-  static const char method_name[] = "getThis";
   HandleScope scope(isolate);
-  CHECK_CALLSITE(frame, method_name);
-  // ShadowRealms have a boundary: references to outside objects must not exist
-  // in the ShadowRealm, and references to ShadowRealm objects must not exist
-  // outside the ShadowRealm.
-  if (NativeContextIsForShadowRealm(isolate->raw_native_context()) ||
-      (frame->function().IsJSFunction() &&
-       NativeContextIsForShadowRealm(
-           JSFunction::cast(frame->function()).native_context()))) {
-    THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate,
-        NewTypeError(
-            MessageTemplate::kCallSiteMethodUnsupportedInShadowRealm,
-            isolate->factory()->NewStringFromAsciiChecked(method_name)));
-  }
+  CHECK_CALLSITE(frame, "getThis");
   if (frame->IsStrict()) return ReadOnlyRoots(isolate).undefined_value();
   isolate->CountUsage(v8::Isolate::kCallSiteAPIGetThisSloppyCall);
 #if V8_ENABLE_WEBASSEMBLY
@@ -172,7 +132,7 @@ BUILTIN(CallSitePrototypeGetThis) {
 BUILTIN(CallSitePrototypeGetTypeName) {
   HandleScope scope(isolate);
   CHECK_CALLSITE(frame, "getTypeName");
-  return *CallSiteInfo::GetTypeName(frame);
+  return *StackFrameInfo::GetTypeName(frame);
 }
 
 BUILTIN(CallSitePrototypeIsAsync) {
@@ -214,7 +174,7 @@ BUILTIN(CallSitePrototypeIsToplevel) {
 BUILTIN(CallSitePrototypeToString) {
   HandleScope scope(isolate);
   CHECK_CALLSITE(frame, "toString");
-  RETURN_RESULT_OR_FAILURE(isolate, SerializeCallSiteInfo(isolate, frame));
+  RETURN_RESULT_OR_FAILURE(isolate, SerializeStackFrameInfo(isolate, frame));
 }
 
 #undef CHECK_CALLSITE

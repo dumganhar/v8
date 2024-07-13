@@ -27,7 +27,7 @@ PromiseRace(
   const promise = capability.promise;
 
   // NewPromiseCapability guarantees that receiver is Constructor.
-  dcheck(Is<Constructor>(receiver));
+  assert(Is<Constructor>(receiver));
   const constructor = UnsafeCast<Constructor>(receiver);
 
   // For catch prediction, don't treat the .then calls as handling it;
@@ -47,7 +47,7 @@ PromiseRace(
       // Let iterator be GetIterator(iterable).
       // IfAbruptRejectPromise(iterator, promiseCapability).
       i = iterator::GetIterator(iterable);
-    } catch (e, _message) deferred {
+    } catch (e) deferred {
       goto Reject(e);
     }
 
@@ -69,7 +69,7 @@ PromiseRace(
           // to true.
           // ReturnIfAbrupt(nextValue).
           nextValue = iterator::IteratorValue(next, fastIteratorResultMap);
-        } catch (e, _message) {
+        } catch (e) {
           goto Reject(e);
         }
         // Let nextPromise be ? Call(constructor, _promiseResolve_, «
@@ -91,12 +91,14 @@ PromiseRace(
                 context, thenResult, kPromiseHandledBySymbol, promise);
           }
       }
-    } catch (e, _message) deferred {
+    } catch (e) deferred {
       iterator::IteratorCloseOnException(i);
       goto Reject(e);
     }
-  } label Reject(exception: JSAny) deferred {
-    Call(context, UnsafeCast<JSAny>(reject), Undefined, exception);
+  } label Reject(exception: Object) deferred {
+    Call(
+        context, UnsafeCast<JSAny>(reject), Undefined,
+        UnsafeCast<JSAny>(exception));
     return promise;
   }
   unreachable;

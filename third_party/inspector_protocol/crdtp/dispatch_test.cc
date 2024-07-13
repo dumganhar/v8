@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors
+// Copyright 2020 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,13 +25,6 @@ TEST(DispatchResponseTest, ServerError) {
   EXPECT_FALSE(error.IsSuccess());
   EXPECT_EQ(DispatchCode::SERVER_ERROR, error.Code());
   EXPECT_EQ("Oops!", error.Message());
-}
-
-TEST(DispatchResponseTest, SessionNotFound) {
-  DispatchResponse error = DispatchResponse::SessionNotFound("OMG!");
-  EXPECT_FALSE(error.IsSuccess());
-  EXPECT_EQ(DispatchCode::SESSION_NOT_FOUND, error.Code());
-  EXPECT_EQ("OMG!", error.Message());
 }
 
 TEST(DispatchResponseTest, InternalError) {
@@ -267,8 +260,8 @@ TEST(DispatchableTest, FaultyCBORTrailingJunk) {
   Dispatchable dispatchable(SpanFrom(cbor));
   EXPECT_FALSE(dispatchable.ok());
   EXPECT_EQ(DispatchCode::PARSE_ERROR, dispatchable.DispatchError().Code());
-  EXPECT_EQ(57u, trailing_junk_pos);
-  EXPECT_EQ("CBOR: trailing junk at position 57",
+  EXPECT_EQ(56u, trailing_junk_pos);
+  EXPECT_EQ("CBOR: trailing junk at position 56",
             dispatchable.DispatchError().Message());
 }
 
@@ -276,8 +269,16 @@ TEST(DispatchableTest, FaultyCBORTrailingJunk) {
 // Helpers for creating protocol cresponses and notifications.
 // =============================================================================
 TEST(CreateErrorResponseTest, SmokeTest) {
+  ErrorSupport errors;
+  errors.Push();
+  errors.SetName("foo");
+  errors.Push();
+  errors.SetName("bar");
+  errors.AddError("expected a string");
+  errors.SetName("baz");
+  errors.AddError("expected a surprise");
   auto serializable = CreateErrorResponse(
-      42, DispatchResponse::InvalidParams("invalid params message"));
+      42, DispatchResponse::InvalidParams("invalid params message"), &errors);
   std::string json;
   auto status =
       json::ConvertCBORToJSON(SpanFrom(serializable->Serialize()), &json);
@@ -285,7 +286,9 @@ TEST(CreateErrorResponseTest, SmokeTest) {
   EXPECT_EQ(
       "{\"id\":42,\"error\":"
       "{\"code\":-32602,"
-      "\"message\":\"invalid params message\"}}",
+      "\"message\":\"invalid params message\","
+      "\"data\":\"foo.bar: expected a string; "
+      "foo.baz: expected a surprise\"}}",
       json);
 }
 

@@ -77,7 +77,8 @@ bool SyntheticModule::PrepareInstantiate(Isolate* isolate,
   for (int i = 0, n = export_names->length(); i < n; ++i) {
     // Spec step 7.1: Create a new mutable binding for export_name.
     // Spec step 7.2: Initialize the new mutable binding to undefined.
-    Handle<Cell> cell = isolate->factory()->NewCell();
+    Handle<Cell> cell =
+        isolate->factory()->NewCell(isolate->factory()->undefined_value());
     Handle<String> name(String::cast(export_names->get(i)), isolate);
     CHECK(exports->Lookup(name).IsTheHole(isolate));
     exports = ObjectHashTable::Put(exports, name, cell);
@@ -91,7 +92,7 @@ bool SyntheticModule::PrepareInstantiate(Isolate* isolate,
 // just update status.
 bool SyntheticModule::FinishInstantiate(Isolate* isolate,
                                         Handle<SyntheticModule> module) {
-  module->SetStatus(kLinked);
+  module->SetStatus(kInstantiated);
   return true;
 }
 
@@ -105,11 +106,12 @@ MaybeHandle<Object> SyntheticModule::Evaluate(Isolate* isolate,
       FUNCTION_CAST<v8::Module::SyntheticModuleEvaluationSteps>(
           module->evaluation_steps().foreign_address());
   v8::Local<v8::Value> result;
-  if (!evaluation_steps(Utils::ToLocal(isolate->native_context()),
-                        Utils::ToLocal(Handle<Module>::cast(module)))
+  if (!evaluation_steps(
+           Utils::ToLocal(Handle<Context>::cast(isolate->native_context())),
+           Utils::ToLocal(Handle<Module>::cast(module)))
            .ToLocal(&result)) {
     isolate->PromoteScheduledException();
-    module->RecordError(isolate, isolate->pending_exception());
+    Module::RecordErrorUsingPendingException(isolate, module);
     return MaybeHandle<Object>();
   }
 
@@ -117,20 +119,22 @@ MaybeHandle<Object> SyntheticModule::Evaluate(Isolate* isolate,
 
   Handle<Object> result_from_callback = Utils::OpenHandle(*result);
 
-  Handle<JSPromise> capability;
-  if (result_from_callback->IsJSPromise()) {
-    capability = Handle<JSPromise>::cast(result_from_callback);
-  } else {
-    // The host's evaluation steps should have returned a resolved Promise,
-    // but as an allowance to hosts that have not yet finished the migration
-    // to top-level await, create a Promise if the callback result didn't give
-    // us one.
-    capability = isolate->factory()->NewJSPromise();
-    JSPromise::Resolve(capability, isolate->factory()->undefined_value())
-        .ToHandleChecked();
-  }
+  if (FLAG_harmony_top_level_await) {
+    Handle<JSPromise> capability;
+    if (result_from_callback->IsJSPromise()) {
+      capability = Handle<JSPromise>::cast(result_from_callback);
+    } else {
+      // The host's evaluation steps should have returned a resolved Promise,
+      // but as an allowance to hosts that have not yet finished the migration
+      // to top-level await, create a Promise if the callback result didn't give
+      // us one.
+      capability = isolate->factory()->NewJSPromise();
+      JSPromise::Resolve(capability, isolate->factory()->undefined_value())
+          .ToHandleChecked();
+    }
 
-  module->set_top_level_capability(*capability);
+    module->set_top_level_capability(*capability);
+  }
 
   return result_from_callback;
 }

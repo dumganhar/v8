@@ -4,8 +4,8 @@
 
 "use strict";
 
-d8.file.execute('../base.js');
-d8.file.execute('abstract-equality.js');
+load('../base.js');
+load('abstract-equality.js');
 
 var success = true;
 

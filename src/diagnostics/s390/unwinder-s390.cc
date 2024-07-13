@@ -3,9 +3,6 @@
 // found in the LICENSE file.
 #include "src/diagnostics/unwinder.h"
 namespace v8 {
-
-struct RegisterState;
-
 void GetCalleeSavedRegistersFromEntryFrame(void* fp,
                                            RegisterState* register_state) {}
 }  // namespace v8

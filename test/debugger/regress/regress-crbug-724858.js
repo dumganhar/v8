@@ -23,9 +23,9 @@ Debug.setListener((event, execState, eventData, data) => {
 });
 
 function f(x) {
-  debugger;          // B0 StepOver
-  with ({}) {        // B1 StepOver
-    return x         // B2 StepOver
+  debugger;          // B0 StepNext
+  with ({}) {        // B1 StepNext
+    return x         // B2 StepNext
     ;                // B3 Continue
   }
 }

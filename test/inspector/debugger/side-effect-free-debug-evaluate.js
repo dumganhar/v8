@@ -5,14 +5,7 @@
 let {session, contextGroup, Protocol} = InspectorTest.start('Tests side-effect-free evaluation');
 
 contextGroup.addScript(`
-var someGlobalArray = [1, 2];
-var someGlobalArrayIterator = someGlobalArray[Symbol.iterator]();
 var someGlobalDate = new Date();
-var someGlobalMap = new Map([[1, 2], [3, 4]]);
-var someGlobalMapKeysIterator = someGlobalMap.keys();
-var someGlobalMapValuesIterator = someGlobalMap.values();
-var someGlobalSet = new Set([1, 2])
-var someGlobalSetIterator = someGlobalSet.values();
 function testFunction()
 {
   var o = 0;
@@ -21,18 +14,7 @@ function testFunction()
   f,g;
   debugger;
 }
-async function testAsyncFunction(action) {
-  switch (action) {
-    case "resolve": return 1;
-    case "reject": throw new Error();
-  }
-}
-`, 0, 0, 'foo.js');
-
-const check = async (expression) => {
-  const {result:{exceptionDetails}} = await Protocol.Runtime.evaluate({expression, throwOnSideEffect: true});
-  InspectorTest.log(expression + ' : ' + (exceptionDetails ? 'throws' : 'ok'));
-};
+//# sourceURL=foo.js`);
 
 InspectorTest.runAsyncTestSuite([
   async function basicTest() {
@@ -50,12 +32,11 @@ InspectorTest.runAsyncTestSuite([
     InspectorTest.log('g() throws ' + className);
   },
 
-  async function testAsyncFunctions() {
-    await check('testAsyncFunction("resolve")');
-    await check('testAsyncFunction("reject")');
-  },
-
   async function testDate() {
+    const check = async (expression) => {
+      const {result:{exceptionDetails}} = await Protocol.Runtime.evaluate({expression, throwOnSideEffect: true});
+      InspectorTest.log(expression + ' : ' + (exceptionDetails ? 'throws' : 'ok'));
+    };
     // setters are only ok on temporary objects
     await check('someGlobalDate.setDate(10)');
     await check('new Date().setDate(10)');
@@ -70,23 +51,5 @@ InspectorTest.runAsyncTestSuite([
     await check('new Date().getFullYear()');
     await check('someGlobalDate.getHours()');
     await check('new Date().getHours()');
-  },
-
-  async function testPromiseReject() {
-    await check('Promise.reject()');
-  },
-
-  async function testSpread() {
-    await check('[...someGlobalArray]');
-    await check('[...someGlobalArray.values()]');
-    await check('[...someGlobalArrayIterator]');
-    await check('[...someGlobalMap]');
-    await check('[...someGlobalMap.keys()]');
-    await check('[...someGlobalMap.values()]');
-    await check('[...someGlobalMapKeysIterator]');
-    await check('[...someGlobalMapValuesIterator]');
-    await check('[...someGlobalSet]');
-    await check('[...someGlobalSet.values()]');
-    await check('[...someGlobalSetIterator]');
   }
 ]);

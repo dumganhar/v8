@@ -5,7 +5,7 @@
 #ifndef V8_COMPILER_OSR_H_
 #define V8_COMPILER_OSR_H_
 
-#include <stddef.h>
+#include "src/zone/zone.h"
 
 namespace v8 {
 namespace internal {

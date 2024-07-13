@@ -6,11 +6,15 @@
 #define V8_COMPILER_BACKEND_INSTRUCTION_SCHEDULER_H_
 
 #include "src/base/optional.h"
-#include "src/base/utils/random-number-generator.h"
 #include "src/compiler/backend/instruction.h"
 #include "src/zone/zone-containers.h"
 
 namespace v8 {
+
+namespace base {
+class RandomNumberGenerator;
+}  // namespace base
+
 namespace internal {
 namespace compiler {
 
@@ -169,12 +173,6 @@ class InstructionScheduler final : public ZoneObject {
     return (GetInstructionFlags(instr) & kIsLoadOperation) != 0;
   }
 
-  bool CanTrap(const Instruction* instr) const {
-    return instr->IsTrap() ||
-           (instr->HasMemoryAccessMode() &&
-            instr->memory_access_mode() != kMemoryAccessDirect);
-  }
-
   // The scheduler will not move the following instructions before the last
   // deopt/trap check:
   //  * loads (this is conservative)
@@ -190,7 +188,7 @@ class InstructionScheduler final : public ZoneObject {
   // trap point we encountered.
   bool DependsOnDeoptOrTrap(const Instruction* instr) const {
     return MayNeedDeoptOrTrapCheck(instr) || instr->IsDeoptimizeCall() ||
-           CanTrap(instr) || HasSideEffect(instr) || IsLoadOperation(instr);
+           instr->IsTrap() || HasSideEffect(instr) || IsLoadOperation(instr);
   }
 
   // Identify nops used as a definition point for live-in registers at

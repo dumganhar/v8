@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors
+// Copyright 2014 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,36 +22,30 @@ private:
 };
 
 class StackObject {
-  STACK_ALLOCATED();
-
- private:
-  HeapObject* m_obj;                                        // OK
-  HeapVector<Member<OffHeapObject>> m_heapVectorMemberOff;  // NOT OK
-};
-
-class DerivedStackObject : public StackObject {
- private:
-  HeapObject* m_obj1;                                        // OK
-  HeapVector<Member<OffHeapObject>> m_heapVectorMemberOff1;  // NOT OK
+    STACK_ALLOCATED();
+private:
+    HeapObject* m_obj; // OK
+    HeapVector<Member<OffHeapObject>> m_heapVectorMemberOff; // NOT OK
 };
 
 class PartObject {
-  DISALLOW_NEW();
+    DISALLOW_NEW();
+public:
+ void Trace(Visitor*) const;
 
- public:
-  virtual void Trace(Visitor*) const;
-
- private:
-  Member<HeapObject> m_obj;  // OK
+private:
+    Member<HeapObject> m_obj; // OK
 };
 
-class DerivedPartObject : public PartObject {
- public:
-  void Trace(Visitor*) const override;
+class InlineObject {
+    DISALLOW_NEW_EXCEPT_PLACEMENT_NEW();
+public:
+ void Trace(Visitor*) const;
 
- private:
-  Member<HeapObject> m_obj1;  // OK
+private:
+    Member<HeapObject> m_obj; // OK
 };
+
 }
 
 #endif

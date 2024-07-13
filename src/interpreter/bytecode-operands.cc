@@ -21,12 +21,8 @@ const char* ImplicitRegisterUseToString(
       return "ReadAccumulator";
     case ImplicitRegisterUse::kWriteAccumulator:
       return "WriteAccumulator";
-    case ImplicitRegisterUse::kClobberAccumulator:
-      return "ClobberAccumulator";
     case ImplicitRegisterUse::kWriteShortStar:
       return "WriteShortStar";
-    case ImplicitRegisterUse::kReadAndClobberAccumulator:
-      return "ReadAndClobberAccumulator";
     case ImplicitRegisterUse::kReadWriteAccumulator:
       return "ReadWriteAccumulator";
     case ImplicitRegisterUse::kReadAccumulatorWriteShortStar:

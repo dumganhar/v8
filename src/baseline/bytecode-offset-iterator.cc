@@ -4,9 +4,7 @@
 
 #include "src/baseline/bytecode-offset-iterator.h"
 
-#include "src/execution/isolate.h"
-#include "src/heap/local-heap.h"
-#include "src/objects/bytecode-array-inl.h"
+#include "src/objects/code-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -38,7 +36,7 @@ BytecodeOffsetIterator::BytecodeOffsetIterator(ByteArray mapping_table,
       bytecode_iterator_(Handle<BytecodeArray>(
           reinterpret_cast<Address*>(&bytecode_handle_storage_))),
       local_heap_(nullptr) {
-  no_gc_.emplace();
+  no_gc.emplace();
   Initialize();
 }
 

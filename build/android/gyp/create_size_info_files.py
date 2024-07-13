@@ -1,13 +1,12 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
-# Copyright 2018 The Chromium Authors
+# Copyright 2018 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 """Creates size-info/*.info files used by SuperSize."""
 
 import argparse
-import collections
 import os
 import re
 import sys
@@ -15,14 +14,9 @@ import zipfile
 
 from util import build_utils
 from util import jar_info_utils
-import action_helpers  # build_utils adds //build to sys.path.
 
 
 _AAR_VERSION_PATTERN = re.compile(r'/[^/]*?(\.aar/|\.jar/)')
-
-
-def _RemoveDuplicatesFromList(source_list):
-  return collections.OrderedDict.fromkeys(source_list).keys()
 
 
 def _TransformAarPaths(path):
@@ -41,7 +35,9 @@ def _TransformAarPaths(path):
 
 def _MergeResInfoFiles(res_info_path, info_paths):
   # Concatenate them all.
-  with action_helpers.atomic_output(res_info_path, 'w+') as dst:
+  # only_if_changed=False since no build rules depend on this as an input.
+  with build_utils.AtomicOutput(res_info_path, only_if_changed=False,
+                                mode='w+') as dst:
     for p in info_paths:
       with open(p) as src:
         dst.writelines(_TransformAarPaths(l) for l in src)
@@ -57,9 +53,8 @@ def _MergePakInfoFiles(merged_path, pak_infos):
     with open(pak_info_path, 'r') as src_info_file:
       info_lines.update(_TransformAarPaths(x) for x in src_info_file)
   # only_if_changed=False since no build rules depend on this as an input.
-  with action_helpers.atomic_output(merged_path,
-                                    only_if_changed=False,
-                                    mode='w+') as f:
+  with build_utils.AtomicOutput(merged_path, only_if_changed=False,
+                                mode='w+') as f:
     f.writelines(sorted(info_lines))
 
 
@@ -121,7 +116,7 @@ def _MergeJarInfoFiles(output, inputs):
                 attributed_path, name))
 
   # only_if_changed=False since no build rules depend on this as an input.
-  with action_helpers.atomic_output(output, only_if_changed=False) as f:
+  with build_utils.AtomicOutput(output, only_if_changed=False) as f:
     jar_info_utils.WriteJarInfoFile(f, info_data)
 
 
@@ -139,7 +134,7 @@ def _FindJarInputs(jar_paths):
 def main(args):
   args = build_utils.ExpandFileArgs(args)
   parser = argparse.ArgumentParser(description=__doc__)
-  action_helpers.add_depfile_arg(parser)
+  build_utils.AddDepfileOption(parser)
   parser.add_argument(
       '--jar-info-path', required=True, help='Output .jar.info file')
   parser.add_argument(
@@ -170,12 +165,12 @@ def main(args):
 
   options = parser.parse_args(args)
 
-  options.jar_files = action_helpers.parse_gn_list(options.jar_files)
-  options.assets = action_helpers.parse_gn_list(options.assets)
-  options.uncompressed_assets = action_helpers.parse_gn_list(
+  options.jar_files = build_utils.ParseGnList(options.jar_files)
+  options.assets = build_utils.ParseGnList(options.assets)
+  options.uncompressed_assets = build_utils.ParseGnList(
       options.uncompressed_assets)
 
-  jar_inputs = _FindJarInputs(_RemoveDuplicatesFromList(options.jar_files))
+  jar_inputs = _FindJarInputs(set(options.jar_files))
   pak_inputs = _PakInfoPathsForAssets(options.assets +
                                       options.uncompressed_assets)
   res_inputs = options.in_res_info_path
@@ -186,9 +181,9 @@ def main(args):
   _MergeResInfoFiles(options.res_info_path, res_inputs)
 
   all_inputs = jar_inputs + pak_inputs + res_inputs
-  action_helpers.write_depfile(options.depfile,
-                               options.jar_info_path,
-                               inputs=all_inputs)
+  build_utils.WriteDepfile(options.depfile,
+                           options.jar_info_path,
+                           inputs=all_inputs)
 
 
 if __name__ == '__main__':

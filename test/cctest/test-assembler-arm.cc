@@ -25,18 +25,20 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include <iostream>
+#include <iostream>  // NOLINT(readability/streams)
 
-#include "src/base/numbers/double.h"
 #include "src/base/utils/random-number-generator.h"
 #include "src/codegen/assembler-inl.h"
 #include "src/codegen/macro-assembler.h"
+#include "src/diagnostics/disassembler.h"
 #include "src/execution/simulator.h"
 #include "src/heap/factory.h"
+#include "src/init/v8.h"
+#include "src/numbers/double.h"
 #include "src/utils/ostreams.h"
 #include "test/cctest/assembler-helper-arm.h"
 #include "test/cctest/cctest.h"
-#include "test/common/value-helper.h"
+#include "test/cctest/compiler/value-helper.h"
 
 namespace v8 {
 namespace internal {
@@ -64,7 +66,7 @@ TEST(0) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto f = GeneratedCode<F_iiiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_iiiii>::FromCode(*code);
   int res = reinterpret_cast<int>(f.Call(3, 4, 0, 0, 0));
   ::printf("f() = %d\n", res);
   CHECK_EQ(7, res);
@@ -100,7 +102,7 @@ TEST(1) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto f = GeneratedCode<F_iiiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_iiiii>::FromCode(*code);
   int res = reinterpret_cast<int>(f.Call(100, 0, 0, 0, 0));
   ::printf("f() = %d\n", res);
   CHECK_EQ(5050, res);
@@ -145,7 +147,7 @@ TEST(2) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto f = GeneratedCode<F_iiiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_iiiii>::FromCode(*code);
   int res = reinterpret_cast<int>(f.Call(10, 0, 0, 0, 0));
   ::printf("f() = %d\n", res);
   CHECK_EQ(3628800, res);
@@ -167,7 +169,7 @@ TEST(3) {
   Assembler assm(AssemblerOptions{});
 
   __ mov(ip, Operand(sp));
-  __ stm(db_w, sp, {r4, fp, lr});
+  __ stm(db_w, sp, r4.bit() | fp.bit() | lr.bit());
   __ sub(fp, ip, Operand(4));
   __ mov(r4, Operand(r0));
   __ ldr(r0, MemOperand(r4, offsetof(T, i)));
@@ -181,7 +183,7 @@ TEST(3) {
   __ add(r0, r2, Operand(r0));
   __ mov(r2, Operand(r2, ASR, 3));
   __ strh(r2, MemOperand(r4, offsetof(T, s)));
-  __ ldm(ia_w, sp, {r4, fp, pc});
+  __ ldm(ia_w, sp, r4.bit() | fp.bit() | pc.bit());
 
   CodeDesc desc;
   assm.GetCode(isolate, &desc);
@@ -191,7 +193,7 @@ TEST(3) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   t.i = 100000;
   t.c = 10;
   t.s = 1000;
@@ -238,7 +240,7 @@ TEST(4) {
     CpuFeatureScope scope(&assm, VFPv3);
 
     __ mov(ip, Operand(sp));
-    __ stm(db_w, sp, {r4, fp, lr});
+    __ stm(db_w, sp, r4.bit() | fp.bit() | lr.bit());
     __ sub(fp, ip, Operand(4));
 
     __ mov(r4, Operand(r0));
@@ -264,16 +266,16 @@ TEST(4) {
     __ vstr(s1, r4, offsetof(T, y));
 
     // Move a literal into a register that can be encoded in the instruction.
-    __ vmov(d4, base::Double(1.0));
+    __ vmov(d4, Double(1.0));
     __ vstr(d4, r4, offsetof(T, e));
 
     // Move a literal into a register that requires 64 bits to encode.
     // 0x3FF0000010000000 = 1.000000059604644775390625
-    __ vmov(d4, base::Double(1.000000059604644775390625));
+    __ vmov(d4, Double(1.000000059604644775390625));
     __ vstr(d4, r4, offsetof(T, d));
 
     // Convert from floating point to integer.
-    __ vmov(d4, base::Double(2.0));
+    __ vmov(d4, Double(2.0));
     __ vcvt_s32_f64(s1, d4);
     __ vstr(s1, r4, offsetof(T, i));
 
@@ -311,7 +313,7 @@ TEST(4) {
     __ vmov(s0, Float32(-16.0f));
     __ vstr(s0, r4, offsetof(T, p));
 
-    __ ldm(ia_w, sp, {r4, fp, pc});
+    __ ldm(ia_w, sp, r4.bit() | fp.bit() | pc.bit());
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
@@ -321,7 +323,7 @@ TEST(4) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_piiii>::FromCode(*code);
     t.a = 1.5;
     t.b = 2.75;
     t.c = 17.17;
@@ -383,7 +385,7 @@ TEST(5) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_iiiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_iiiii>::FromCode(*code);
     int res = reinterpret_cast<int>(f.Call(0xAAAAAAAA, 0, 0, 0, 0));
     ::printf("f() = %d\n", res);
     CHECK_EQ(-7, res);
@@ -414,7 +416,7 @@ TEST(6) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto f = GeneratedCode<F_iiiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_iiiii>::FromCode(*code);
   int res = reinterpret_cast<int>(f.Call(0xFFFF, 0, 0, 0, 0));
   ::printf("f() = %d\n", res);
   CHECK_EQ(382, res);
@@ -445,7 +447,7 @@ static void TestRoundingMode(VCVTTypes types,
   __ vmsr(r2);
 
   // Load value, convert, and move back result to r0 if everything went well.
-  __ vmov(d1, base::Double(value));
+  __ vmov(d1, Double(value));
   switch (types) {
     case s32_f64:
       __ vcvt_s32_f64(s0, d1, kFPSCRRounding);
@@ -481,7 +483,7 @@ static void TestRoundingMode(VCVTTypes types,
   StdoutStream os;
   code->Print(os);
 #endif
-  auto f = GeneratedCode<F_iiiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_iiiii>::FromCode(*code);
   int res = reinterpret_cast<int>(f.Call(0, 0, 0, 0, 0));
   ::printf("res = %d\n", res);
   CHECK_EQ(expected, res);
@@ -634,7 +636,7 @@ TEST(8) {
   Assembler assm(AssemblerOptions{});
 
   __ mov(ip, Operand(sp));
-  __ stm(db_w, sp, {r4, fp, lr});
+  __ stm(db_w, sp, r4.bit() | fp.bit() | lr.bit());
   __ sub(fp, ip, Operand(4));
 
   __ add(r4, r0, Operand(static_cast<int32_t>(offsetof(D, a))));
@@ -653,7 +655,7 @@ TEST(8) {
   __ vstm(ia_w, r4, s6, s7);
   __ vstm(ia_w, r4, s0, s5);
 
-  __ ldm(ia_w, sp, {r4, fp, pc});
+  __ ldm(ia_w, sp, r4.bit() | fp.bit() | pc.bit());
 
   CodeDesc desc;
   assm.GetCode(isolate, &desc);
@@ -663,7 +665,7 @@ TEST(8) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto fn = GeneratedCode<F_ppiii>::FromCode(isolate, *code);
+  auto fn = GeneratedCode<F_ppiii>::FromCode(*code);
   d.a = 1.1;
   d.b = 2.2;
   d.c = 3.3;
@@ -739,7 +741,7 @@ TEST(9) {
   Assembler assm(AssemblerOptions{});
 
   __ mov(ip, Operand(sp));
-  __ stm(db_w, sp, {r4, fp, lr});
+  __ stm(db_w, sp, r4.bit() | fp.bit() | lr.bit());
   __ sub(fp, ip, Operand(4));
 
   __ add(r4, r0, Operand(static_cast<int32_t>(offsetof(D, a))));
@@ -762,7 +764,7 @@ TEST(9) {
   __ add(r4, r4, Operand(2 * 4));
   __ vstm(ia, r4, s0, s5);
 
-  __ ldm(ia_w, sp, {r4, fp, pc});
+  __ ldm(ia_w, sp, r4.bit() | fp.bit() | pc.bit());
 
   CodeDesc desc;
   assm.GetCode(isolate, &desc);
@@ -772,7 +774,7 @@ TEST(9) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto fn = GeneratedCode<F_ppiii>::FromCode(isolate, *code);
+  auto fn = GeneratedCode<F_ppiii>::FromCode(*code);
   d.a = 1.1;
   d.b = 2.2;
   d.c = 3.3;
@@ -848,7 +850,7 @@ TEST(10) {
   Assembler assm(AssemblerOptions{});
 
   __ mov(ip, Operand(sp));
-  __ stm(db_w, sp, {r4, fp, lr});
+  __ stm(db_w, sp, r4.bit() | fp.bit() | lr.bit());
   __ sub(fp, ip, Operand(4));
 
   __ add(r4, r0, Operand(static_cast<int32_t>(offsetof(D, h)) + 8));
@@ -867,7 +869,7 @@ TEST(10) {
   __ vstm(db_w, r4, s0, s5);
   __ vstm(db_w, r4, s6, s7);
 
-  __ ldm(ia_w, sp, {r4, fp, pc});
+  __ ldm(ia_w, sp, r4.bit() | fp.bit() | pc.bit());
 
   CodeDesc desc;
   assm.GetCode(isolate, &desc);
@@ -877,7 +879,7 @@ TEST(10) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto fn = GeneratedCode<F_ppiii>::FromCode(isolate, *code);
+  auto fn = GeneratedCode<F_ppiii>::FromCode(*code);
   d.a = 1.1;
   d.b = 2.2;
   d.c = 3.3;
@@ -971,7 +973,7 @@ TEST(11) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   f.Call(&i, 0, 0, 0, 0);
 
   CHECK_EQ(static_cast<int32_t>(0xABCD0001), i.a);
@@ -1028,7 +1030,7 @@ TEST(13) {
   if (CpuFeatures::IsSupported(VFPv3)) {
     CpuFeatureScope scope(&assm, VFPv3);
 
-    __ stm(db_w, sp, {r4, lr});
+    __ stm(db_w, sp, r4.bit() | lr.bit());
 
     // Load a, b, c into d16, d17, d18.
     __ mov(r4, Operand(r0));
@@ -1072,8 +1074,8 @@ TEST(13) {
     __ vstm(ia_w, r4, d29, d31);
 
     // Move constants into d20, d21, d22 and store into i, j, k.
-    __ vmov(d20, base::Double(14.7610017472335499));
-    __ vmov(d21, base::Double(16.0));
+    __ vmov(d20, Double(14.7610017472335499));
+    __ vmov(d21, Double(16.0));
     __ mov(r1, Operand(372106121));
     __ mov(r2, Operand(1079146608));
     __ vmov(NeonS32, d22, 0, r1);
@@ -1086,7 +1088,7 @@ TEST(13) {
     __ vmov(NeonS32, r4, d22, 1);
     __ str(r4, MemOperand(r0, offsetof(T, high)));
 
-    __ ldm(ia_w, sp, {r4, pc});
+    __ ldm(ia_w, sp, r4.bit() | pc.bit());
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
@@ -1096,7 +1098,7 @@ TEST(13) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_piiii>::FromCode(*code);
     t.a = 1.5;
     t.b = 2.75;
     t.c = 17.17;
@@ -1168,8 +1170,8 @@ TEST(14) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
-  t.left = base::bit_cast<double>(kHoleNanInt64);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
+  t.left = bit_cast<double>(kHoleNanInt64);
   t.right = 1;
   t.add_result = 0;
   t.sub_result = 0;
@@ -1186,17 +1188,17 @@ TEST(14) {
   // With VFP2 the sign of the canonicalized Nan is undefined. So
   // we remove the sign bit for the upper tests.
   CHECK_EQ(kArmNanUpper32,
-           (base::bit_cast<int64_t>(t.add_result) >> 32) & 0x7FFFFFFF);
-  CHECK_EQ(kArmNanLower32, base::bit_cast<int64_t>(t.add_result) & 0xFFFFFFFFu);
+           (bit_cast<int64_t>(t.add_result) >> 32) & 0x7FFFFFFF);
+  CHECK_EQ(kArmNanLower32, bit_cast<int64_t>(t.add_result) & 0xFFFFFFFFu);
   CHECK_EQ(kArmNanUpper32,
-           (base::bit_cast<int64_t>(t.sub_result) >> 32) & 0x7FFFFFFF);
-  CHECK_EQ(kArmNanLower32, base::bit_cast<int64_t>(t.sub_result) & 0xFFFFFFFFu);
+           (bit_cast<int64_t>(t.sub_result) >> 32) & 0x7FFFFFFF);
+  CHECK_EQ(kArmNanLower32, bit_cast<int64_t>(t.sub_result) & 0xFFFFFFFFu);
   CHECK_EQ(kArmNanUpper32,
-           (base::bit_cast<int64_t>(t.mul_result) >> 32) & 0x7FFFFFFF);
-  CHECK_EQ(kArmNanLower32, base::bit_cast<int64_t>(t.mul_result) & 0xFFFFFFFFu);
+           (bit_cast<int64_t>(t.mul_result) >> 32) & 0x7FFFFFFF);
+  CHECK_EQ(kArmNanLower32, bit_cast<int64_t>(t.mul_result) & 0xFFFFFFFFu);
   CHECK_EQ(kArmNanUpper32,
-           (base::bit_cast<int64_t>(t.div_result) >> 32) & 0x7FFFFFFF);
-  CHECK_EQ(kArmNanLower32, base::bit_cast<int64_t>(t.div_result) & 0xFFFFFFFFu);
+           (bit_cast<int64_t>(t.div_result) >> 32) & 0x7FFFFFFF);
+  CHECK_EQ(kArmNanLower32, bit_cast<int64_t>(t.div_result) & 0xFFFFFFFFu);
 }
 
 #define CHECK_EQ_SPLAT(field, ex) \
@@ -1226,9 +1228,9 @@ TEST(14) {
   CHECK_ESTIMATE(ex, tol, t.field[3]);
 
 #define INT32_TO_FLOAT(val) \
-  std::round(static_cast<float>(base::bit_cast<int32_t>(val)))
+  std::round(static_cast<float>(bit_cast<int32_t>(val)))
 #define UINT32_TO_FLOAT(val) \
-  std::round(static_cast<float>(base::bit_cast<uint32_t>(val)))
+  std::round(static_cast<float>(bit_cast<uint32_t>(val)))
 
 TEST(15) {
   // Test the Neon instructions.
@@ -1281,8 +1283,6 @@ TEST(15) {
     uint32_t vmin_s8[4], vmin_u16[4], vmin_s32[4];
     uint32_t vmax_s8[4], vmax_u16[4], vmax_s32[4];
     uint32_t vpadd_i8[2], vpadd_i16[2], vpadd_i32[2];
-    uint32_t vpadal_s8[4], vpadal_s16[4], vpadal_s32[4];
-    uint32_t vpadal_u8[4], vpadal_u16[4], vpadal_u32[4];
     uint32_t vpaddl_s8[4], vpaddl_s16[4], vpaddl_s32[4];
     uint32_t vpaddl_u8[4], vpaddl_u16[4], vpaddl_u32[4];
     uint32_t vpmin_s8[2], vpmin_u16[2], vpmin_s32[2];
@@ -1327,7 +1327,7 @@ TEST(15) {
   if (CpuFeatures::IsSupported(NEON)) {
     CpuFeatureScope scope(&assm, NEON);
 
-    __ stm(db_w, sp, {r4, r5, lr});
+    __ stm(db_w, sp, r4.bit() | r5.bit() | lr.bit());
     // Move 32 bytes with neon.
     __ add(r4, r0, Operand(static_cast<int32_t>(offsetof(T, src0))));
     __ vld1(Neon8, NeonListOperand(d0, 4), NeonMemOperand(r4));
@@ -1364,12 +1364,12 @@ TEST(15) {
 
     // ARM core register to scalar.
     __ mov(r4, Operand(0xFFFFFFF8));
-    __ vmov(d0, base::Double(0.0));
+    __ vmov(d0, Double(0.0));
     __ vmov(NeonS8, d0, 1, r4);
     __ vmov(NeonS16, d0, 1, r4);
     __ vmov(NeonS32, d0, 1, r4);
     __ vstr(d0, r0, offsetof(T, vmov_to_scalar1));
-    __ vmov(d0, base::Double(0.0));
+    __ vmov(d0, Double(0.0));
     __ vmov(NeonS8, d0, 3, r4);
     __ vmov(NeonS16, d0, 3, r4);
     __ vstr(d0, r0, offsetof(T, vmov_to_scalar2));
@@ -1647,47 +1647,6 @@ TEST(15) {
     __ vstr(d0, r0, offsetof(T, vpadd_i16));
     __ vpadd(Neon32, d0, d0, d2);
     __ vstr(d0, r0, offsetof(T, vpadd_i32));
-
-    // vpadal signed.
-    __ mov(r4, Operand(0x81));
-    __ vdup(Neon8, q0, r4);
-
-    __ mov(r4, Operand(0x01));
-    __ vdup(Neon8, q2, r4);
-    __ vpadal(NeonS8, q2, q0);
-    __ add(r4, r0, Operand(static_cast<int32_t>(offsetof(T, vpadal_s8))));
-    __ vst1(Neon8, NeonListOperand(q2), NeonMemOperand(r4));
-
-    __ mov(r4, Operand(0x01));
-    __ vdup(Neon8, q2, r4);
-    __ vpadal(NeonS16, q2, q0);
-    __ add(r4, r0, Operand(static_cast<int32_t>(offsetof(T, vpadal_s16))));
-    __ vst1(Neon8, NeonListOperand(q2), NeonMemOperand(r4));
-
-    __ mov(r4, Operand(0x01));
-    __ vdup(Neon8, q2, r4);
-    __ vpadal(NeonS32, q2, q0);
-    __ add(r4, r0, Operand(static_cast<int32_t>(offsetof(T, vpadal_s32))));
-    __ vst1(Neon8, NeonListOperand(q2), NeonMemOperand(r4));
-
-    // vpadal unsigned.
-    __ mov(r4, Operand(0x01));
-    __ vdup(Neon8, q2, r4);
-    __ vpadal(NeonU8, q2, q0);
-    __ add(r4, r0, Operand(static_cast<int32_t>(offsetof(T, vpadal_u8))));
-    __ vst1(Neon8, NeonListOperand(q2), NeonMemOperand(r4));
-
-    __ mov(r4, Operand(0x01));
-    __ vdup(Neon8, q2, r4);
-    __ vpadal(NeonU16, q2, q0);
-    __ add(r4, r0, Operand(static_cast<int32_t>(offsetof(T, vpadal_u16))));
-    __ vst1(Neon8, NeonListOperand(q2), NeonMemOperand(r4));
-
-    __ mov(r4, Operand(0x01));
-    __ vdup(Neon8, q2, r4);
-    __ vpadal(NeonU32, q2, q0);
-    __ add(r4, r0, Operand(static_cast<int32_t>(offsetof(T, vpadal_u32))));
-    __ vst1(Neon8, NeonListOperand(q2), NeonMemOperand(r4));
 
     // vpaddl signed.
     __ mov(r4, Operand(0x81));
@@ -2162,7 +2121,7 @@ TEST(15) {
     __ vstr(d2, r0, offsetof(T, vtbx));
 
     // Restore and return.
-    __ ldm(ia_w, sp, {r4, r5, pc});
+    __ ldm(ia_w, sp, r4.bit() | r5.bit() | pc.bit());
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
@@ -2172,7 +2131,7 @@ TEST(15) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_piiii>::FromCode(*code);
     t.src0 = 0x01020304;
     t.src1 = 0x11121314;
     t.src2 = 0x21222324;
@@ -2295,14 +2254,6 @@ TEST(15) {
     CHECK_EQ_32X2(vpadd_i8, 0x03030303u, 0x06060606u);
     CHECK_EQ_32X2(vpadd_i16, 0x0C0C0606u, 0x06060606u);
     CHECK_EQ_32X2(vpadd_i32, 0x12120C0Cu, 0x06060606u);
-
-    CHECK_EQ_32X4(vpadal_s8, 0x30003, 0x30003, 0x30003, 0x30003);
-    CHECK_EQ_32X4(vpadal_s16, 0x1000403, 0x1000403, 0x1000403, 0x1000403);
-    CHECK_EQ_32X4(vpadal_s32, 0x4040403, 0x1010100, 0x4040403, 0x1010100);
-
-    CHECK_EQ_32X4(vpadal_u8, 0x2030203, 0x2030203, 0x2030203, 0x2030203);
-    CHECK_EQ_32X4(vpadal_u16, 0x1020403, 0x1020403, 0x1020403, 0x1020403);
-    CHECK_EQ_32X4(vpadal_u32, 0x4040403, 0x1010102, 0x4040403, 0x1010102);
 
     CHECK_EQ_32X4(vpaddl_s8, 0xFF02FF02, 0xFF02FF02, 0xFF02FF02, 0xFF02FF02);
     CHECK_EQ_32X4(vpaddl_s16, 0xFFFF0302, 0xFFFF0302, 0xFFFF0302, 0xFFFF0302);
@@ -2444,7 +2395,7 @@ TEST(16) {
   // the doubles and floats.
   Assembler assm(AssemblerOptions{});
 
-  __ stm(db_w, sp, {r4, lr});
+  __ stm(db_w, sp, r4.bit() | lr.bit());
 
   __ mov(r4, Operand(r0));
   __ ldr(r0, MemOperand(r4, offsetof(T, src0)));
@@ -2466,7 +2417,7 @@ TEST(16) {
   __ uxtab(r2, r0, r1, 8);
   __ str(r2, MemOperand(r4, offsetof(T, dst4)));
 
-  __ ldm(ia_w, sp, {r4, pc});
+  __ ldm(ia_w, sp, r4.bit() | pc.bit());
 
   CodeDesc desc;
   assm.GetCode(isolate, &desc);
@@ -2476,7 +2427,7 @@ TEST(16) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   t.src0 = 0x01020304;
   t.src1 = 0x11121314;
   t.src2 = 0x11121300;
@@ -2554,7 +2505,7 @@ TEST(sdiv) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_piiii>::FromCode(*code);
     TEST_SDIV(0, kMinInt, 0);
     TEST_SDIV(0, 1024, 0);
     TEST_SDIV(1073741824, kMinInt, -2);
@@ -2614,7 +2565,7 @@ TEST(udiv) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_piiii>::FromCode(*code);
     TEST_UDIV(0u, 0, 0);
     TEST_UDIV(0u, 1024, 0);
     TEST_UDIV(5u, 10, 2);
@@ -2642,7 +2593,7 @@ TEST(smmla) {
 #ifdef OBJECT_PRINT
   code->Print(std::cout);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   for (size_t i = 0; i < 128; ++i) {
     int32_t r, x = rng->NextInt(), y = rng->NextInt(), z = rng->NextInt();
     f.Call(&r, x, y, z, 0);
@@ -2667,7 +2618,7 @@ TEST(smmul) {
 #ifdef OBJECT_PRINT
   code->Print(std::cout);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   for (size_t i = 0; i < 128; ++i) {
     int32_t r, x = rng->NextInt(), y = rng->NextInt();
     f.Call(&r, x, y, 0, 0);
@@ -2692,7 +2643,7 @@ TEST(sxtb) {
 #ifdef OBJECT_PRINT
   code->Print(std::cout);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   for (size_t i = 0; i < 128; ++i) {
     int32_t r, x = rng->NextInt();
     f.Call(&r, x, 0, 0, 0);
@@ -2717,7 +2668,7 @@ TEST(sxtab) {
 #ifdef OBJECT_PRINT
   code->Print(std::cout);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   for (size_t i = 0; i < 128; ++i) {
     int32_t r, x = rng->NextInt(), y = rng->NextInt();
     f.Call(&r, x, y, 0, 0);
@@ -2742,7 +2693,7 @@ TEST(sxth) {
 #ifdef OBJECT_PRINT
   code->Print(std::cout);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   for (size_t i = 0; i < 128; ++i) {
     int32_t r, x = rng->NextInt();
     f.Call(&r, x, 0, 0, 0);
@@ -2767,7 +2718,7 @@ TEST(sxtah) {
 #ifdef OBJECT_PRINT
   code->Print(std::cout);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   for (size_t i = 0; i < 128; ++i) {
     int32_t r, x = rng->NextInt(), y = rng->NextInt();
     f.Call(&r, x, y, 0, 0);
@@ -2792,7 +2743,7 @@ TEST(uxtb) {
 #ifdef OBJECT_PRINT
   code->Print(std::cout);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   for (size_t i = 0; i < 128; ++i) {
     int32_t r, x = rng->NextInt();
     f.Call(&r, x, 0, 0, 0);
@@ -2817,7 +2768,7 @@ TEST(uxtab) {
 #ifdef OBJECT_PRINT
   code->Print(std::cout);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   for (size_t i = 0; i < 128; ++i) {
     int32_t r, x = rng->NextInt(), y = rng->NextInt();
     f.Call(&r, x, y, 0, 0);
@@ -2842,7 +2793,7 @@ TEST(uxth) {
 #ifdef OBJECT_PRINT
   code->Print(std::cout);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   for (size_t i = 0; i < 128; ++i) {
     int32_t r, x = rng->NextInt();
     f.Call(&r, x, 0, 0, 0);
@@ -2867,7 +2818,7 @@ TEST(uxtah) {
 #ifdef OBJECT_PRINT
   code->Print(std::cout);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   for (size_t i = 0; i < 128; ++i) {
     int32_t r, x = rng->NextInt(), y = rng->NextInt();
     f.Call(&r, x, y, 0, 0);
@@ -2910,7 +2861,7 @@ TEST(rbit) {
     code->Print(std::cout);
 #endif
 
-    auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_piiii>::FromCode(*code);
     TEST_RBIT(0xFFFFFFFF, 0xFFFFFFFF);
     TEST_RBIT(0x00000000, 0x00000000);
     TEST_RBIT(0xFFFF0000, 0x0000FFFF);
@@ -2935,7 +2886,7 @@ TEST(code_relative_offset) {
 
   Label start, target_away, target_faraway;
 
-  __ stm(db_w, sp, {r4, r5, lr});
+  __ stm(db_w, sp, r4.bit() | r5.bit() | lr.bit());
 
   // r3 is used as the address zero, the test will crash when we load it.
   __ mov(r3, Operand::Zero());
@@ -2980,14 +2931,14 @@ TEST(code_relative_offset) {
   // r0 = r0 + 5 + 5 + 11
   __ add(r0, r0, Operand(11));
 
-  __ ldm(ia_w, sp, {r4, r5, pc});
+  __ ldm(ia_w, sp, r4.bit() | r5.bit() | pc.bit());
 
   CodeDesc desc;
   assm.GetCode(isolate, &desc);
   Handle<Code> code = Factory::CodeBuilder(isolate, desc, CodeKind::FOR_TESTING)
                           .set_self_reference(code_object)
                           .Build();
-  auto f = GeneratedCode<F_iiiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_iiiii>::FromCode(*code);
   int res = reinterpret_cast<int>(f.Call(21, 0, 0, 0, 0));
   ::printf("f() = %d\n", res);
   CHECK_EQ(42, res);
@@ -3030,7 +2981,7 @@ TEST(msr_mrs) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto f = GeneratedCode<F_ippii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_ippii>::FromCode(*code);
 
 #define CHECK_MSR_MRS(n, z, c, v)                                  \
   do {                                                             \
@@ -3088,7 +3039,7 @@ TEST(ARMv8_float32_vrintX) {
     CpuFeatureScope scope(&assm, ARMv8);
 
     __ mov(ip, Operand(sp));
-    __ stm(db_w, sp, {r4, fp, lr});
+    __ stm(db_w, sp, r4.bit() | fp.bit() | lr.bit());
 
     __ mov(r4, Operand(r0));
 
@@ -3117,7 +3068,7 @@ TEST(ARMv8_float32_vrintX) {
     __ vrintz(s5, s6);
     __ vstr(s5, r4, offsetof(T, zr));
 
-    __ ldm(ia_w, sp, {r4, fp, pc});
+    __ ldm(ia_w, sp, r4.bit() | fp.bit() | pc.bit());
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
@@ -3127,7 +3078,7 @@ TEST(ARMv8_float32_vrintX) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_piiii>::FromCode(*code);
 
 #define CHECK_VRINT(input_val, ares, nres, mres, pres, zres) \
   t.input = input_val;                                       \
@@ -3153,11 +3104,11 @@ TEST(ARMv8_float32_vrintX) {
     float nan = std::numeric_limits<float>::quiet_NaN();
     t.input = nan;
     f.Call(&t, 0, 0, 0, 0);
-    CHECK_EQ(base::bit_cast<int32_t>(nan), base::bit_cast<int32_t>(t.ar));
-    CHECK_EQ(base::bit_cast<int32_t>(nan), base::bit_cast<int32_t>(t.nr));
-    CHECK_EQ(base::bit_cast<int32_t>(nan), base::bit_cast<int32_t>(t.mr));
-    CHECK_EQ(base::bit_cast<int32_t>(nan), base::bit_cast<int32_t>(t.pr));
-    CHECK_EQ(base::bit_cast<int32_t>(nan), base::bit_cast<int32_t>(t.zr));
+    CHECK_EQ(bit_cast<int32_t>(nan), bit_cast<int32_t>(t.ar));
+    CHECK_EQ(bit_cast<int32_t>(nan), bit_cast<int32_t>(t.nr));
+    CHECK_EQ(bit_cast<int32_t>(nan), bit_cast<int32_t>(t.mr));
+    CHECK_EQ(bit_cast<int32_t>(nan), bit_cast<int32_t>(t.pr));
+    CHECK_EQ(bit_cast<int32_t>(nan), bit_cast<int32_t>(t.zr));
 
 #undef CHECK_VRINT
   }
@@ -3189,7 +3140,7 @@ TEST(ARMv8_vrintX) {
     CpuFeatureScope scope(&assm, ARMv8);
 
     __ mov(ip, Operand(sp));
-    __ stm(db_w, sp, {r4, fp, lr});
+    __ stm(db_w, sp, r4.bit() | fp.bit() | lr.bit());
 
     __ mov(r4, Operand(r0));
 
@@ -3218,7 +3169,7 @@ TEST(ARMv8_vrintX) {
     __ vrintz(d5, d6);
     __ vstr(d5, r4, offsetof(T, zr));
 
-    __ ldm(ia_w, sp, {r4, fp, pc});
+    __ ldm(ia_w, sp, r4.bit() | fp.bit() | pc.bit());
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
@@ -3228,7 +3179,7 @@ TEST(ARMv8_vrintX) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_piiii>::FromCode(*code);
 
 #define CHECK_VRINT(input_val, ares, nres, mres, pres, zres) \
   t.input = input_val;                                       \
@@ -3254,11 +3205,11 @@ TEST(ARMv8_vrintX) {
     double nan = std::numeric_limits<double>::quiet_NaN();
     t.input = nan;
     f.Call(&t, 0, 0, 0, 0);
-    CHECK_EQ(base::bit_cast<int64_t>(nan), base::bit_cast<int64_t>(t.ar));
-    CHECK_EQ(base::bit_cast<int64_t>(nan), base::bit_cast<int64_t>(t.nr));
-    CHECK_EQ(base::bit_cast<int64_t>(nan), base::bit_cast<int64_t>(t.mr));
-    CHECK_EQ(base::bit_cast<int64_t>(nan), base::bit_cast<int64_t>(t.pr));
-    CHECK_EQ(base::bit_cast<int64_t>(nan), base::bit_cast<int64_t>(t.zr));
+    CHECK_EQ(bit_cast<int64_t>(nan), bit_cast<int64_t>(t.ar));
+    CHECK_EQ(bit_cast<int64_t>(nan), bit_cast<int64_t>(t.nr));
+    CHECK_EQ(bit_cast<int64_t>(nan), bit_cast<int64_t>(t.mr));
+    CHECK_EQ(bit_cast<int64_t>(nan), bit_cast<int64_t>(t.pr));
+    CHECK_EQ(bit_cast<int64_t>(nan), bit_cast<int64_t>(t.zr));
 
 #undef CHECK_VRINT
   }
@@ -3334,8 +3285,8 @@ TEST(ARMv8_vsel) {
     __ vsel(vc, s0, s1, s2);
     __ vstr(s0, r1, offsetof(ResultsF32, vselvc_));
 
-    __ vmov(d1, base::Double(kResultPass));
-    __ vmov(d2, base::Double(kResultFail));
+    __ vmov(d1, Double(kResultPass));
+    __ vmov(d2, Double(kResultFail));
 
     __ vsel(eq, d0, d1, d2);
     __ vstr(d0, r2, offsetof(ResultsF64, vseleq_));
@@ -3365,9 +3316,9 @@ TEST(ARMv8_vsel) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_ippii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_ippii>::FromCode(*code);
 
-    static_assert(kResultPass == -kResultFail);
+    STATIC_ASSERT(kResultPass == -kResultFail);
 #define CHECK_VSEL(n, z, c, v, vseleq, vselge, vselgt, vselvs)     \
   do {                                                             \
     ResultsF32 results_f32;                                        \
@@ -3456,22 +3407,20 @@ TEST(ARMv8_vminmax_f64) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_ppiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_ppiii>::FromCode(*code);
 
-#define CHECK_VMINMAX(left, right, vminnm, vmaxnm)                  \
-  do {                                                              \
-    Inputs inputs = {left, right};                                  \
-    Results results;                                                \
-    f.Call(&inputs, &results, 0, 0, 0);                             \
-    /* Use a base::bit_cast to correctly identify -0.0 and NaNs. */ \
-    CHECK_EQ(base::bit_cast<uint64_t>(vminnm),                      \
-             base::bit_cast<uint64_t>(results.vminnm_));            \
-    CHECK_EQ(base::bit_cast<uint64_t>(vmaxnm),                      \
-             base::bit_cast<uint64_t>(results.vmaxnm_));            \
+#define CHECK_VMINMAX(left, right, vminnm, vmaxnm)                             \
+  do {                                                                         \
+    Inputs inputs = {left, right};                                             \
+    Results results;                                                           \
+    f.Call(&inputs, &results, 0, 0, 0);                                        \
+    /* Use a bit_cast to correctly identify -0.0 and NaNs. */                  \
+    CHECK_EQ(bit_cast<uint64_t>(vminnm), bit_cast<uint64_t>(results.vminnm_)); \
+    CHECK_EQ(bit_cast<uint64_t>(vmaxnm), bit_cast<uint64_t>(results.vmaxnm_)); \
   } while (0);
 
-    double nan_a = base::bit_cast<double>(UINT64_C(0x7FF8000000000001));
-    double nan_b = base::bit_cast<double>(UINT64_C(0x7FF8000000000002));
+    double nan_a = bit_cast<double>(UINT64_C(0x7FF8000000000001));
+    double nan_b = bit_cast<double>(UINT64_C(0x7FF8000000000002));
 
     CHECK_VMINMAX(1.0, -1.0, -1.0, 1.0);
     CHECK_VMINMAX(-1.0, 1.0, -1.0, 1.0);
@@ -3538,22 +3487,20 @@ TEST(ARMv8_vminmax_f32) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_ppiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_ppiii>::FromCode(*code);
 
-#define CHECK_VMINMAX(left, right, vminnm, vmaxnm)                  \
-  do {                                                              \
-    Inputs inputs = {left, right};                                  \
-    Results results;                                                \
-    f.Call(&inputs, &results, 0, 0, 0);                             \
-    /* Use a base::bit_cast to correctly identify -0.0 and NaNs. */ \
-    CHECK_EQ(base::bit_cast<uint32_t>(vminnm),                      \
-             base::bit_cast<uint32_t>(results.vminnm_));            \
-    CHECK_EQ(base::bit_cast<uint32_t>(vmaxnm),                      \
-             base::bit_cast<uint32_t>(results.vmaxnm_));            \
+#define CHECK_VMINMAX(left, right, vminnm, vmaxnm)                             \
+  do {                                                                         \
+    Inputs inputs = {left, right};                                             \
+    Results results;                                                           \
+    f.Call(&inputs, &results, 0, 0, 0);                                        \
+    /* Use a bit_cast to correctly identify -0.0 and NaNs. */                  \
+    CHECK_EQ(bit_cast<uint32_t>(vminnm), bit_cast<uint32_t>(results.vminnm_)); \
+    CHECK_EQ(bit_cast<uint32_t>(vmaxnm), bit_cast<uint32_t>(results.vmaxnm_)); \
   } while (0);
 
-    float nan_a = base::bit_cast<float>(UINT32_C(0x7FC00001));
-    float nan_b = base::bit_cast<float>(UINT32_C(0x7FC00002));
+    float nan_a = bit_cast<float>(UINT32_C(0x7FC00001));
+    float nan_b = bit_cast<float>(UINT32_C(0x7FC00002));
 
     CHECK_VMINMAX(1.0f, -1.0f, -1.0f, 1.0f);
     CHECK_VMINMAX(-1.0f, 1.0f, -1.0f, 1.0f);
@@ -3673,7 +3620,7 @@ static GeneratedCode<F_ppiii> GenerateMacroFloatMinMax(
   StdoutStream os;
   code->Print(os);
 #endif
-  return GeneratedCode<F_ppiii>::FromCode(assm.isolate(), *code);
+  return GeneratedCode<F_ppiii>::FromCode(*code);
 }
 
 TEST(macro_float_minmax_f64) {
@@ -3702,28 +3649,22 @@ TEST(macro_float_minmax_f64) {
 
   auto f = GenerateMacroFloatMinMax<DwVfpRegister, Inputs, Results>(&assm);
 
-#define CHECK_MINMAX(left, right, min, max)                         \
-  do {                                                              \
-    Inputs inputs = {left, right};                                  \
-    Results results;                                                \
-    f.Call(&inputs, &results, 0, 0, 0);                             \
-    /* Use a base::bit_cast to correctly identify -0.0 and NaNs. */ \
-    CHECK_EQ(base::bit_cast<uint64_t>(min),                         \
-             base::bit_cast<uint64_t>(results.min_abc_));           \
-    CHECK_EQ(base::bit_cast<uint64_t>(min),                         \
-             base::bit_cast<uint64_t>(results.min_aab_));           \
-    CHECK_EQ(base::bit_cast<uint64_t>(min),                         \
-             base::bit_cast<uint64_t>(results.min_aba_));           \
-    CHECK_EQ(base::bit_cast<uint64_t>(max),                         \
-             base::bit_cast<uint64_t>(results.max_abc_));           \
-    CHECK_EQ(base::bit_cast<uint64_t>(max),                         \
-             base::bit_cast<uint64_t>(results.max_aab_));           \
-    CHECK_EQ(base::bit_cast<uint64_t>(max),                         \
-             base::bit_cast<uint64_t>(results.max_aba_));           \
+#define CHECK_MINMAX(left, right, min, max)                                  \
+  do {                                                                       \
+    Inputs inputs = {left, right};                                           \
+    Results results;                                                         \
+    f.Call(&inputs, &results, 0, 0, 0);                                      \
+    /* Use a bit_cast to correctly identify -0.0 and NaNs. */                \
+    CHECK_EQ(bit_cast<uint64_t>(min), bit_cast<uint64_t>(results.min_abc_)); \
+    CHECK_EQ(bit_cast<uint64_t>(min), bit_cast<uint64_t>(results.min_aab_)); \
+    CHECK_EQ(bit_cast<uint64_t>(min), bit_cast<uint64_t>(results.min_aba_)); \
+    CHECK_EQ(bit_cast<uint64_t>(max), bit_cast<uint64_t>(results.max_abc_)); \
+    CHECK_EQ(bit_cast<uint64_t>(max), bit_cast<uint64_t>(results.max_aab_)); \
+    CHECK_EQ(bit_cast<uint64_t>(max), bit_cast<uint64_t>(results.max_aba_)); \
   } while (0)
 
-  double nan_a = base::bit_cast<double>(UINT64_C(0x7FF8000000000001));
-  double nan_b = base::bit_cast<double>(UINT64_C(0x7FF8000000000002));
+  double nan_a = bit_cast<double>(UINT64_C(0x7FF8000000000001));
+  double nan_b = bit_cast<double>(UINT64_C(0x7FF8000000000002));
 
   CHECK_MINMAX(1.0, -1.0, -1.0, 1.0);
   CHECK_MINMAX(-1.0, 1.0, -1.0, 1.0);
@@ -3773,28 +3714,22 @@ TEST(macro_float_minmax_f32) {
 
   auto f = GenerateMacroFloatMinMax<SwVfpRegister, Inputs, Results>(&assm);
 
-#define CHECK_MINMAX(left, right, min, max)                         \
-  do {                                                              \
-    Inputs inputs = {left, right};                                  \
-    Results results;                                                \
-    f.Call(&inputs, &results, 0, 0, 0);                             \
-    /* Use a base::bit_cast to correctly identify -0.0 and NaNs. */ \
-    CHECK_EQ(base::bit_cast<uint32_t>(min),                         \
-             base::bit_cast<uint32_t>(results.min_abc_));           \
-    CHECK_EQ(base::bit_cast<uint32_t>(min),                         \
-             base::bit_cast<uint32_t>(results.min_aab_));           \
-    CHECK_EQ(base::bit_cast<uint32_t>(min),                         \
-             base::bit_cast<uint32_t>(results.min_aba_));           \
-    CHECK_EQ(base::bit_cast<uint32_t>(max),                         \
-             base::bit_cast<uint32_t>(results.max_abc_));           \
-    CHECK_EQ(base::bit_cast<uint32_t>(max),                         \
-             base::bit_cast<uint32_t>(results.max_aab_));           \
-    CHECK_EQ(base::bit_cast<uint32_t>(max),                         \
-             base::bit_cast<uint32_t>(results.max_aba_));           \
+#define CHECK_MINMAX(left, right, min, max)                                  \
+  do {                                                                       \
+    Inputs inputs = {left, right};                                           \
+    Results results;                                                         \
+    f.Call(&inputs, &results, 0, 0, 0);                                      \
+    /* Use a bit_cast to correctly identify -0.0 and NaNs. */                \
+    CHECK_EQ(bit_cast<uint32_t>(min), bit_cast<uint32_t>(results.min_abc_)); \
+    CHECK_EQ(bit_cast<uint32_t>(min), bit_cast<uint32_t>(results.min_aab_)); \
+    CHECK_EQ(bit_cast<uint32_t>(min), bit_cast<uint32_t>(results.min_aba_)); \
+    CHECK_EQ(bit_cast<uint32_t>(max), bit_cast<uint32_t>(results.max_abc_)); \
+    CHECK_EQ(bit_cast<uint32_t>(max), bit_cast<uint32_t>(results.max_aab_)); \
+    CHECK_EQ(bit_cast<uint32_t>(max), bit_cast<uint32_t>(results.max_aba_)); \
   } while (0)
 
-  float nan_a = base::bit_cast<float>(UINT32_C(0x7FC00001));
-  float nan_b = base::bit_cast<float>(UINT32_C(0x7FC00002));
+  float nan_a = bit_cast<float>(UINT32_C(0x7FC00001));
+  float nan_b = bit_cast<float>(UINT32_C(0x7FC00002));
 
   CHECK_MINMAX(1.0f, -1.0f, -1.0f, 1.0f);
   CHECK_MINMAX(-1.0f, 1.0f, -1.0f, 1.0f);
@@ -3848,7 +3783,7 @@ TEST(unaligned_loads) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto f = GeneratedCode<F_ppiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_ppiii>::FromCode(*code);
 
 #ifndef V8_TARGET_LITTLE_ENDIAN
 #error This test assumes a little-endian layout.
@@ -3891,7 +3826,7 @@ TEST(unaligned_stores) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto f = GeneratedCode<F_ppiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_ppiii>::FromCode(*code);
 
 #ifndef V8_TARGET_LITTLE_ENDIAN
 #error This test assumes a little-endian layout.
@@ -3944,12 +3879,12 @@ TEST(vswp) {
   };
   T t;
 
-  __ stm(db_w, sp, {r4, r5, r6, r7, lr});
+  __ stm(db_w, sp, r4.bit() | r5.bit() | r6.bit() | r7.bit() | lr.bit());
 
-  uint64_t one = base::bit_cast<uint64_t>(1.0);
+  uint64_t one = bit_cast<uint64_t>(1.0);
   __ mov(r5, Operand(one >> 32));
   __ mov(r4, Operand(one & 0xFFFFFFFF));
-  uint64_t minus_one = base::bit_cast<uint64_t>(-1.0);
+  uint64_t minus_one = bit_cast<uint64_t>(-1.0);
   __ mov(r7, Operand(minus_one >> 32));
   __ mov(r6, Operand(minus_one & 0xFFFFFFFF));
 
@@ -3980,7 +3915,7 @@ TEST(vswp) {
   __ add(r6, r0, Operand(static_cast<int32_t>(offsetof(T, vswp_q5))));
   __ vst1(Neon8, NeonListOperand(q5), NeonMemOperand(r6));
 
-  __ ldm(ia_w, sp, {r4, r5, r6, r7, pc});
+  __ ldm(ia_w, sp, r4.bit() | r5.bit() | r6.bit() | r7.bit() | pc.bit());
   __ bx(lr);
 
   CodeDesc desc;
@@ -3991,7 +3926,7 @@ TEST(vswp) {
   StdoutStream os;
   code->Print(os);
 #endif
-  auto f = GeneratedCode<F_piiii>::FromCode(isolate, *code);
+  auto f = GeneratedCode<F_piiii>::FromCode(*code);
   f.Call(&t, 0, 0, 0, 0);
   CHECK_EQ(minus_one, t.vswp_d0);
   CHECK_EQ(one, t.vswp_d1);
@@ -4074,18 +4009,18 @@ TEST(use_scratch_register_scope) {
   Assembler assm(AssemblerOptions{});
 
   // The assembler should have ip as a scratch by default.
-  CHECK_EQ(*assm.GetScratchRegisterList(), RegList{ip});
+  CHECK_EQ(*assm.GetScratchRegisterList(), ip.bit());
 
   {
     UseScratchRegisterScope temps(&assm);
-    CHECK_EQ(*assm.GetScratchRegisterList(), RegList{ip});
+    CHECK_EQ(*assm.GetScratchRegisterList(), ip.bit());
 
     Register scratch = temps.Acquire();
     CHECK_EQ(scratch.code(), ip.code());
-    CHECK_EQ(*assm.GetScratchRegisterList(), RegList{});
+    CHECK_EQ(*assm.GetScratchRegisterList(), 0);
   }
 
-  CHECK_EQ(*assm.GetScratchRegisterList(), RegList{ip});
+  CHECK_EQ(*assm.GetScratchRegisterList(), ip.bit());
 }
 
 TEST(use_scratch_vfp_register_scope) {
@@ -4203,7 +4138,7 @@ TEST(split_add_immediate) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_iiiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_iiiii>::FromCode(*code);
     uint32_t res = reinterpret_cast<int>(f.Call(0, 0, 0, 0, 0));
     ::printf("f() = 0x%x\n", res);
     CHECK_EQ(0x12345678, res);
@@ -4223,7 +4158,7 @@ TEST(split_add_immediate) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_iiiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_iiiii>::FromCode(*code);
     uint32_t res = reinterpret_cast<int>(f.Call(0, 0, 0, 0, 0));
     ::printf("f() = 0x%x\n", res);
     CHECK_EQ(0x12345678, res);
@@ -4246,7 +4181,7 @@ TEST(split_add_immediate) {
     StdoutStream os;
     code->Print(os);
 #endif
-    auto f = GeneratedCode<F_iiiii>::FromCode(isolate, *code);
+    auto f = GeneratedCode<F_iiiii>::FromCode(*code);
     uint32_t res = reinterpret_cast<int>(f.Call(0, 0, 0, 0, 0));
     ::printf("f() = 0x%x\n", res);
     CHECK_EQ(0x12345678, res);
@@ -4258,7 +4193,7 @@ namespace {
 std::vector<Float32> Float32Inputs() {
   std::vector<Float32> inputs;
   FOR_FLOAT32_INPUTS(f) {
-    inputs.push_back(Float32::FromBits(base::bit_cast<uint32_t>(f)));
+    inputs.push_back(Float32::FromBits(bit_cast<uint32_t>(f)));
   }
   FOR_UINT32_INPUTS(bits) { inputs.push_back(Float32::FromBits(bits)); }
   return inputs;
@@ -4267,7 +4202,7 @@ std::vector<Float32> Float32Inputs() {
 std::vector<Float64> Float64Inputs() {
   std::vector<Float64> inputs;
   FOR_FLOAT64_INPUTS(f) {
-    inputs.push_back(Float64::FromBits(base::bit_cast<uint64_t>(f)));
+    inputs.push_back(Float64::FromBits(bit_cast<uint64_t>(f)));
   }
   FOR_UINT64_INPUTS(bits) { inputs.push_back(Float64::FromBits(bits)); }
   return inputs;
@@ -4356,7 +4291,8 @@ TEST(move_pair) {
   HandleScope scope(isolate);
 
   auto f = AssembleCode<F_piiii>(isolate, [](MacroAssembler& assm) {
-    RegList used_callee_saved = {r4, r5, r6, r7, r8};
+    RegList used_callee_saved =
+        r4.bit() | r5.bit() | r6.bit() | r7.bit() | r8.bit();
     __ stm(db_w, sp, used_callee_saved);
 
     // Save output register bank pointer to r8.

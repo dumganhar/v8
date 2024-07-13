@@ -14,22 +14,13 @@
 #include "src/base/macros.h"
 #include "src/wasm/wasm-feature-flags.h"
 
-// Features that are always enabled and do not have a flag.
-#define FOREACH_WASM_NON_FLAG_FEATURE(V)      \
-  V(eh, "exception handling opcodes", true)   \
-  V(reftypes, "reference type opcodes", true) \
-  V(simd, "SIMD opcodes", true)               \
-  V(threads, "thread opcodes", true)
-
 // All features, including features that do not have flags.
-#define FOREACH_WASM_FEATURE(V) \
-  FOREACH_WASM_FEATURE_FLAG(V)  \
-  FOREACH_WASM_NON_FLAG_FEATURE(V)
+#define FOREACH_WASM_FEATURE FOREACH_WASM_FEATURE_FLAG
 
 namespace v8 {
 namespace internal {
 
-class NativeContext;
+class Context;
 template <typename T>
 class Handle;
 class Isolate;
@@ -67,12 +58,10 @@ class WasmFeatures : public base::EnumSet<WasmFeature> {
   static inline constexpr WasmFeatures All();
   static inline constexpr WasmFeatures None();
   static inline constexpr WasmFeatures ForAsmjs();
-  // Retuns optional features that are enabled by flags, plus features that are
-  // not enabled by a flag and are always on.
   static WasmFeatures FromFlags();
   static V8_EXPORT_PRIVATE WasmFeatures FromIsolate(Isolate*);
-  static V8_EXPORT_PRIVATE WasmFeatures
-  FromContext(Isolate*, Handle<NativeContext> context);
+  static V8_EXPORT_PRIVATE WasmFeatures FromContext(Isolate*,
+                                                    Handle<Context> context);
 };
 
 // static

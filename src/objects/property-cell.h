@@ -6,6 +6,7 @@
 #define V8_OBJECTS_PROPERTY_CELL_H_
 
 #include "src/objects/heap-object.h"
+#include "torque-generated/field-offsets.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -13,10 +14,7 @@
 namespace v8 {
 namespace internal {
 
-#include "torque-generated/src/objects/property-cell-tq.inc"
-
-class PropertyCell
-    : public TorqueGeneratedPropertyCell<PropertyCell, HeapObject> {
+class PropertyCell : public HeapObject {
  public:
   // [name]: the name of the global property.
   DECL_GETTER(name, Name)
@@ -41,12 +39,14 @@ class PropertyCell
   // For protectors:
   void InvalidateProtector();
 
-  static PropertyCellType InitialType(Isolate* isolate, Object value);
+  static PropertyCellType InitialType(Isolate* isolate, Handle<Object> value);
 
   // Computes the new type of the cell's contents for the given value, but
   // without actually modifying the details.
-  static PropertyCellType UpdatedType(Isolate* isolate, PropertyCell cell,
-                                      Object value, PropertyDetails details);
+  static PropertyCellType UpdatedType(Isolate* isolate,
+                                      Handle<PropertyCell> cell,
+                                      Handle<Object> value,
+                                      PropertyDetails details);
 
   // Prepares property cell at given entry for receiving given value and sets
   // that value.  As a result the old cell could be invalidated and/or dependent
@@ -65,12 +65,16 @@ class PropertyCell
   // approximation with false positives.
   static bool CheckDataIsCompatible(PropertyDetails details, Object value);
 
+  DECL_CAST(PropertyCell)
   DECL_PRINTER(PropertyCell)
   DECL_VERIFIER(PropertyCell)
 
+  DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize,
+                                TORQUE_GENERATED_PROPERTY_CELL_FIELDS)
+
   using BodyDescriptor = FixedBodyDescriptor<kNameOffset, kSize, kSize>;
 
-  TQ_OBJECT_CONSTRUCTORS(PropertyCell)
+  OBJECT_CONSTRUCTORS(PropertyCell, HeapObject);
 
  private:
   friend class Factory;

@@ -24,6 +24,9 @@ import { Root } from 'protobufjs';
 // JSON fields it will include/exclude based on the data present in the trace
 // event.
 
+// TODO(petermarshall): Replace with Array#flat once it lands in Node.js.
+const flatten = <T>(a: T[], b: T[]) => { a.push(...b); return a; }
+
 // Convert a string representing an int or uint (64 bit) to a Number or throw
 // if the value won't fit.
 function parseIntOrThrow(int: string) {
@@ -121,7 +124,7 @@ async function main() {
           }, {})
         };
       }))
-      .flat()
+      .reduce(flatten, [])
   };
   await fs.promises.writeFile(process.argv[4], JSON.stringify(output, null, 2));
 }

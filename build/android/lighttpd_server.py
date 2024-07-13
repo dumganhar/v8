@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 #
-# Copyright 2012 The Chromium Authors
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -10,9 +10,11 @@ Usage:
   lighttpd_server PATH_TO_DOC_ROOT
 """
 
+from __future__ import print_function
 
 import codecs
 import contextlib
+import httplib
 import os
 import random
 import shutil
@@ -22,14 +24,10 @@ import sys
 import tempfile
 import time
 
-from six.moves import http_client
-from six.moves import input  # pylint: disable=redefined-builtin
-
 from pylib import constants
 from pylib import pexpect
 
-
-class LighttpdServer:
+class LighttpdServer(object):
   """Wraps lighttpd server, providing robust startup.
 
   Args:
@@ -124,12 +122,11 @@ class LighttpdServer:
   def _TestServerConnection(self):
     # Wait for server to start
     server_msg = ''
-    for timeout in range(1, 5):
+    for timeout in xrange(1, 5):
       client_error = None
       try:
-        with contextlib.closing(
-            http_client.HTTPConnection('127.0.0.1', self.port,
-                                       timeout=timeout)) as http:
+        with contextlib.closing(httplib.HTTPConnection(
+            '127.0.0.1', self.port, timeout=timeout)) as http:
           http.set_debuglevel(timeout > 3)
           http.request('HEAD', '/')
           r = http.getresponse()
@@ -140,7 +137,7 @@ class LighttpdServer:
           client_error = ('Bad response: %s %s version %s\n  ' %
                           (r.status, r.reason, r.version) +
                           '\n  '.join([': '.join(h) for h in r.getheaders()]))
-      except (http_client.HTTPException, socket.error) as client_error:
+      except (httplib.HTTPException, socket.error) as client_error:
         pass  # Probably too quick connecting: try again
       # Check for server startup error messages
       # pylint: disable=no-member
@@ -251,8 +248,8 @@ def main(argv):
   server = LighttpdServer(*argv[1:])
   try:
     if server.StartupHttpServer():
-      input('Server running at http://127.0.0.1:%s -'
-            ' press Enter to exit it.' % server.port)
+      raw_input('Server running at http://127.0.0.1:%s -'
+                ' press Enter to exit it.' % server.port)
     else:
       print('Server exit code:', server.process.exitstatus)
   finally:

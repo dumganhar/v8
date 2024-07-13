@@ -3,16 +3,12 @@
 // found in the LICENSE file.
 
 #include "src/zone/zone-allocator.h"
-
-#include "test/unittests/test-utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace v8 {
 namespace internal {
 
-class RecyclingZoneAllocatorTest : public TestWithPlatform {};
-
-TEST_F(RecyclingZoneAllocatorTest, ReuseSameSize) {
+TEST(RecyclingZoneAllocator, ReuseSameSize) {
   AccountingAllocator accounting_allocator;
   Zone zone(&accounting_allocator, ZONE_NAME);
   RecyclingZoneAllocator<int> zone_allocator(&zone);
@@ -22,7 +18,7 @@ TEST_F(RecyclingZoneAllocatorTest, ReuseSameSize) {
   CHECK_EQ(zone_allocator.allocate(10), allocated);
 }
 
-TEST_F(RecyclingZoneAllocatorTest, ReuseSmallerSize) {
+TEST(RecyclingZoneAllocator, ReuseSmallerSize) {
   AccountingAllocator accounting_allocator;
   Zone zone(&accounting_allocator, ZONE_NAME);
   RecyclingZoneAllocator<int> zone_allocator(&zone);
@@ -32,7 +28,7 @@ TEST_F(RecyclingZoneAllocatorTest, ReuseSmallerSize) {
   CHECK_EQ(zone_allocator.allocate(10), allocated);
 }
 
-TEST_F(RecyclingZoneAllocatorTest, DontReuseTooSmallSize) {
+TEST(RecyclingZoneAllocator, DontReuseTooSmallSize) {
   AccountingAllocator accounting_allocator;
   Zone zone(&accounting_allocator, ZONE_NAME);
   RecyclingZoneAllocator<int> zone_allocator(&zone);
@@ -44,7 +40,7 @@ TEST_F(RecyclingZoneAllocatorTest, DontReuseTooSmallSize) {
   CHECK_NE(zone_allocator.allocate(1), allocated);
 }
 
-TEST_F(RecyclingZoneAllocatorTest, ReuseMultipleSize) {
+TEST(RecyclingZoneAllocator, ReuseMultipleSize) {
   AccountingAllocator accounting_allocator;
   Zone zone(&accounting_allocator, ZONE_NAME);
   RecyclingZoneAllocator<int> zone_allocator(&zone);
@@ -60,7 +56,7 @@ TEST_F(RecyclingZoneAllocatorTest, ReuseMultipleSize) {
   CHECK_EQ(zone_allocator.allocate(10), allocated1);
 }
 
-TEST_F(RecyclingZoneAllocatorTest, DontChainSmallerSizes) {
+TEST(RecyclingZoneAllocator, DontChainSmallerSizes) {
   AccountingAllocator accounting_allocator;
   Zone zone(&accounting_allocator, ZONE_NAME);
   RecyclingZoneAllocator<int> zone_allocator(&zone);

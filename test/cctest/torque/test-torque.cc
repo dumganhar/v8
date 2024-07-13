@@ -18,8 +18,8 @@
 #include "src/objects/promise-inl.h"
 #include "src/objects/torque-defined-classes-inl.h"
 #include "src/strings/char-predicates.h"
+#include "test/cctest/compiler/code-assembler-tester.h"
 #include "test/cctest/compiler/function-tester.h"
-#include "test/common/code-assembler-tester.h"
 
 namespace v8 {
 namespace internal {
@@ -37,116 +37,107 @@ class TestTorqueAssembler : public CodeStubAssembler {
 
 TEST(TestConstexpr1) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestConstexpr1();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
 TEST(TestConstexprIf) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestConstexprIf();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
 TEST(TestConstexprReturn) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestConstexprReturn();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
 TEST(TestGotoLabel) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   { m.Return(m.TestGotoLabel()); }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.CheckCall(ft.true_value());
 }
 
 TEST(TestGotoLabelWithOneParameter) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   { m.Return(m.TestGotoLabelWithOneParameter()); }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.CheckCall(ft.true_value());
 }
 
 TEST(TestGotoLabelWithTwoParameters) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   { m.Return(m.TestGotoLabelWithTwoParameters()); }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.CheckCall(ft.true_value());
 }
 
 TEST(TestPartiallyUnusedLabel) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   { m.Return(m.TestPartiallyUnusedLabel()); }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.CheckCall(ft.true_value());
 }
 
 TEST(TestBuiltinSpecialization) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestBuiltinSpecialization();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
 TEST(TestMacroSpecialization) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestMacroSpecialization();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
 TEST(TestFunctionPointers) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   TestTorqueAssembler m(asm_tester.state());
   {
-    auto context = m.GetJSContextParameter();
+    TNode<Context> context = m.UncheckedParameter<Context>(kNumParams + 2);
     m.Return(m.TestFunctionPointers(context));
   }
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
@@ -156,10 +147,10 @@ TEST(TestFunctionPointers) {
 TEST(TestTernaryOperator) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   TestTorqueAssembler m(asm_tester.state());
   {
-    TNode<Smi> arg = m.Parameter<Smi>(1);
+    TNode<Smi> arg = m.UncheckedParameter<Smi>(1);
     m.Return(m.TestTernaryOperator(arg));
   }
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
@@ -173,21 +164,19 @@ TEST(TestTernaryOperator) {
 
 TEST(TestFunctionPointerToGeneric) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestFunctionPointerToGeneric();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
 TEST(TestUnsafeCast) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     TNode<Object> temp = m.SmiConstant(0);
@@ -195,59 +184,55 @@ TEST(TestUnsafeCast) {
     m.Return(m.TestUnsafeCast(m.UncheckedCast<Context>(temp),
                               m.UncheckedCast<Number>(n)));
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.CheckCall(ft.true_value());
 }
 
 TEST(TestHexLiteral) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestHexLiteral();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
 TEST(TestModuleConstBindings) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestModuleConstBindings();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
 TEST(TestLocalConstBindings) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestLocalConstBindings();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
 TEST(TestForLoop) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestForLoop();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -257,14 +242,13 @@ TEST(TestTypeswitch) {
   i::HandleScope scope(isolate);
   Handle<Context> context =
       Utils::OpenHandle(*v8::Isolate::GetCurrent()->GetCurrentContext());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestTypeswitch(m.UncheckedCast<Context>(m.HeapConstant(context)));
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -274,14 +258,13 @@ TEST(TestGenericOverload) {
   i::HandleScope scope(isolate);
   Handle<Context> context =
       Utils::OpenHandle(*v8::Isolate::GetCurrent()->GetCurrentContext());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestGenericOverload(m.UncheckedCast<Context>(m.HeapConstant(context)));
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -291,34 +274,31 @@ TEST(TestEquality) {
   i::HandleScope scope(isolate);
   Handle<Context> context =
       Utils::OpenHandle(*v8::Isolate::GetCurrent()->GetCurrentContext());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestEquality(m.UncheckedCast<Context>(m.HeapConstant(context)));
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
 TEST(TestLogicalOperators) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestLogicalOperators();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
 TEST(TestOtherwiseAndLabels) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestOtherwiseWithCode1();
@@ -327,7 +307,7 @@ TEST(TestOtherwiseAndLabels) {
     m.TestForwardLabel();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -337,17 +317,16 @@ TEST(TestCatch1) {
   i::HandleScope scope(isolate);
   Handle<Context> context =
       Utils::OpenHandle(*v8::Isolate::GetCurrent()->GetCurrentContext());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     TNode<Smi> result =
         m.TestCatch1(m.UncheckedCast<Context>(m.HeapConstant(context)));
     USE(result);
-    CSA_DCHECK(&m, m.TaggedEqual(result, m.SmiConstant(1)));
+    CSA_ASSERT(&m, m.TaggedEqual(result, m.SmiConstant(1)));
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -357,17 +336,16 @@ TEST(TestCatch2) {
   i::HandleScope scope(isolate);
   Handle<Context> context =
       Utils::OpenHandle(*v8::Isolate::GetCurrent()->GetCurrentContext());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     TNode<Smi> result =
         m.TestCatch2(m.UncheckedCast<Context>(m.HeapConstant(context)));
     USE(result);
-    CSA_DCHECK(&m, m.TaggedEqual(result, m.SmiConstant(2)));
+    CSA_ASSERT(&m, m.TaggedEqual(result, m.SmiConstant(2)));
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -377,17 +355,16 @@ TEST(TestCatch3) {
   i::HandleScope scope(isolate);
   Handle<Context> context =
       Utils::OpenHandle(*v8::Isolate::GetCurrent()->GetCurrentContext());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     TNode<Smi> result =
         m.TestCatch3(m.UncheckedCast<Context>(m.HeapConstant(context)));
     USE(result);
-    CSA_DCHECK(&m, m.TaggedEqual(result, m.SmiConstant(2)));
+    CSA_ASSERT(&m, m.TaggedEqual(result, m.SmiConstant(2)));
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -397,14 +374,13 @@ TEST(TestLookup) {
   i::HandleScope scope(isolate);
   Handle<Context> context =
       Utils::OpenHandle(*v8::Isolate::GetCurrent()->GetCurrentContext());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 0);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestQualifiedAccess(m.UncheckedCast<Context>(m.HeapConstant(context)));
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -640,8 +616,7 @@ TEST(TestBranchOnBoolOptimization) {
   i::HandleScope scope(isolate);
   Handle<Context> context =
       Utils::OpenHandle(*v8::Isolate::GetCurrent()->GetCurrentContext());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 1);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestBranchOnBoolOptimization(
@@ -657,7 +632,7 @@ TEST(TestBitFieldLoad) {
   Isolate* isolate(CcTest::i_isolate());
   i::HandleScope scope(isolate);
   const int kNumParams = 5;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   TestTorqueAssembler m(asm_tester.state());
   {
     // Untag all of the parameters to get plain integer values.
@@ -697,7 +672,7 @@ TEST(TestBitFieldStore) {
   Isolate* isolate(CcTest::i_isolate());
   i::HandleScope scope(isolate);
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   TestTorqueAssembler m(asm_tester.state());
   {
     // Untag the parameters to get a plain integer value.
@@ -720,7 +695,7 @@ TEST(TestBitFieldInit) {
   Isolate* isolate(CcTest::i_isolate());
   i::HandleScope scope(isolate);
   const int kNumParams = 4;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   TestTorqueAssembler m(asm_tester.state());
   {
     // Untag all of the parameters to get plain integer values.
@@ -757,7 +732,7 @@ TEST(TestBitFieldUintptrOps) {
   Isolate* isolate(CcTest::i_isolate());
   i::HandleScope scope(isolate);
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   TestTorqueAssembler m(asm_tester.state());
   {
     // Untag the parameters to get a plain integer value.
@@ -783,7 +758,7 @@ TEST(TestBitFieldMultipleFlags) {
   Isolate* isolate(CcTest::i_isolate());
   i::HandleScope scope(isolate);
   const int kNumParams = 3;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   TestTorqueAssembler m(asm_tester.state());
   {
     TNode<BoolT> a =
@@ -804,8 +779,7 @@ TEST(TestTestParentFrameArguments) {
   i::HandleScope scope(isolate);
   Handle<Context> context =
       Utils::OpenHandle(*v8::Isolate::GetCurrent()->GetCurrentContext());
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 1);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestParentFrameArguments(
@@ -819,11 +793,10 @@ TEST(TestFullyGeneratedClassFromCpp) {
   CcTest::InitializeVM();
   Isolate* isolate(CcTest::i_isolate());
   i::HandleScope scope(isolate);
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 1);
   TestTorqueAssembler m(asm_tester.state());
   { m.Return(m.TestFullyGeneratedClassFromCpp()); }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   Handle<ExportedSubClass> result =
       Handle<ExportedSubClass>::cast(ft.Call().ToHandleChecked());
   CHECK_EQ(result->c_field(), 7);
@@ -835,14 +808,13 @@ TEST(TestFullyGeneratedClassWithElements) {
   CcTest::InitializeVM();
   Isolate* isolate(CcTest::i_isolate());
   i::HandleScope scope(isolate);
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 1);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestFullyGeneratedClassWithElements();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -850,8 +822,7 @@ TEST(TestGeneratedCastOperators) {
   CcTest::InitializeVM();
   Isolate* isolate(CcTest::i_isolate());
   i::HandleScope scope(isolate);
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 1);
   TestTorqueAssembler m(asm_tester.state());
   {
     Handle<Context> context =
@@ -860,7 +831,7 @@ TEST(TestGeneratedCastOperators) {
         m.UncheckedCast<Context>(m.HeapConstant(context)));
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -868,8 +839,7 @@ TEST(TestNewPretenured) {
   CcTest::InitializeVM();
   Isolate* isolate(CcTest::i_isolate());
   i::HandleScope scope(isolate);
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 1);
   TestTorqueAssembler m(asm_tester.state());
   {
     Handle<Context> context =
@@ -877,7 +847,7 @@ TEST(TestNewPretenured) {
     m.TestNewPretenured(m.UncheckedCast<Context>(m.HeapConstant(context)));
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -885,14 +855,13 @@ TEST(TestWord8Phi) {
   CcTest::InitializeVM();
   Isolate* isolate(CcTest::i_isolate());
   i::HandleScope scope(isolate);
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 1);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestWord8Phi();
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -900,8 +869,7 @@ TEST(TestOffHeapSlice) {
   CcTest::InitializeVM();
   Isolate* isolate(CcTest::i_isolate());
   i::HandleScope scope(isolate);
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 1);
   TestTorqueAssembler m(asm_tester.state());
   std::string data = "Hello World!";
   {
@@ -909,7 +877,7 @@ TEST(TestOffHeapSlice) {
                        m.IntPtrConstant(data.size()));
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -917,8 +885,7 @@ TEST(TestCallMultiReturnBuiltin) {
   CcTest::InitializeVM();
   Isolate* isolate(CcTest::i_isolate());
   i::HandleScope scope(isolate);
-  const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, 1);
   TestTorqueAssembler m(asm_tester.state());
   {
     Handle<Context> context =
@@ -927,7 +894,7 @@ TEST(TestCallMultiReturnBuiltin) {
         m.UncheckedCast<Context>(m.HeapConstant(context)));
     m.Return(m.UndefinedConstant());
   }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
 }
 
@@ -937,7 +904,7 @@ TEST(TestRunLazyTwice) {
   i::HandleScope scope(isolate);
   const int kNumParams = 0;
   int lazyNumber = 3;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   TestTorqueAssembler m(asm_tester.state());
   {
     CodeStubAssembler::LazyNode<Smi> lazy = [&]() {
@@ -956,7 +923,7 @@ TEST(TestCreateLazyNodeFromTorque) {
   Isolate* isolate(CcTest::i_isolate());
   i::HandleScope scope(isolate);
   const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   TestTorqueAssembler m(asm_tester.state());
   {
     m.TestCreateLazyNodeFromTorque();
@@ -964,64 +931,6 @@ TEST(TestCreateLazyNodeFromTorque) {
   }
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
   ft.Call();
-}
-
-TEST(TestReturnNever_NotCalled) {
-  CcTest::InitializeVM();
-  Isolate* isolate(CcTest::i_isolate());
-  i::HandleScope scope(isolate);
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
-  TestTorqueAssembler m(asm_tester.state());
-  {
-    auto context = m.GetJSContextParameter();
-    TNode<Smi> arg = m.SmiConstant(42);
-    TNode<Object> result = m.CallBuiltin(Builtin::kTestCallNever, context, arg);
-    m.Return(result);
-  }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
-  Handle<Object> result = ft.Call().ToHandleChecked();
-  CHECK_EQ(42, Handle<Smi>::cast(result)->value());
-}
-
-// Test calling a builtin that calls a runtime fct with return type {never}.
-TEST(TestReturnNever_Runtime_Called) {
-  CcTest::InitializeVM();
-  Isolate* isolate(CcTest::i_isolate());
-  i::HandleScope scope(isolate);
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
-  TestTorqueAssembler m(asm_tester.state());
-  {
-    auto context = m.GetJSContextParameter();
-    TNode<Smi> arg = m.SmiConstant(1);
-    TNode<Object> result = m.CallBuiltin(Builtin::kTestCallNever, context, arg);
-    m.Return(result);
-  }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
-  MaybeHandle<Object> result = ft.Call();
-  CHECK(result.is_null());
-  CHECK(isolate->has_pending_exception());
-}
-
-// Test calling a builtin that calls another builtin with return type {never}.
-TEST(TestReturnNever_Builtin_Called) {
-  CcTest::InitializeVM();
-  Isolate* isolate(CcTest::i_isolate());
-  i::HandleScope scope(isolate);
-  const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
-  TestTorqueAssembler m(asm_tester.state());
-  {
-    auto context = m.GetJSContextParameter();
-    TNode<Smi> arg = m.SmiConstant(-1);
-    TNode<Object> result = m.CallBuiltin(Builtin::kTestCallNever, context, arg);
-    m.Return(result);
-  }
-  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
-  MaybeHandle<Object> result = ft.Call();
-  CHECK(result.is_null());
-  CHECK(isolate->has_pending_exception());
 }
 
 }  // namespace compiler

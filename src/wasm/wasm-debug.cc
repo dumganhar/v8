@@ -7,10 +7,12 @@
 #include <iomanip>
 #include <unordered_map>
 
+#include "src/base/optional.h"
+#include "src/base/platform/wrappers.h"
+#include "src/codegen/assembler-inl.h"
 #include "src/common/assert-scope.h"
 #include "src/compiler/wasm-compiler.h"
 #include "src/debug/debug-evaluate.h"
-#include "src/debug/debug.h"
 #include "src/execution/frames-inl.h"
 #include "src/heap/factory.h"
 #include "src/wasm/baseline/liftoff-compiler.h"
@@ -39,7 +41,7 @@ enum ReturnLocation { kAfterBreakpoint, kAfterWasmCall };
 
 Address FindNewPC(WasmFrame* frame, WasmCode* wasm_code, int byte_offset,
                   ReturnLocation return_location) {
-  base::Vector<const uint8_t> new_pos_table = wasm_code->source_positions();
+  Vector<const uint8_t> new_pos_table = wasm_code->source_positions();
 
   DCHECK_LE(0, byte_offset);
 
@@ -47,7 +49,7 @@ Address FindNewPC(WasmFrame* frame, WasmCode* wasm_code, int byte_offset,
   // source position entry to the return address.
   WasmCode* old_code = frame->wasm_code();
   int pc_offset = static_cast<int>(frame->pc() - old_code->instruction_start());
-  base::Vector<const uint8_t> old_pos_table = old_code->source_positions();
+  Vector<const uint8_t> old_pos_table = old_code->source_positions();
   SourcePositionTableIterator old_it(old_pos_table);
   int call_offset = -1;
   while (!old_it.done() && old_it.code_offset() < pc_offset) {
@@ -155,11 +157,71 @@ class DebugInfoImpl {
     return module->functions[scope.code->index()];
   }
 
+  WireBytesRef GetExportName(ImportExportKindCode kind, uint32_t index) {
+    base::MutexGuard guard(&mutex_);
+    if (!export_names_) {
+      export_names_ =
+          std::make_unique<std::map<ImportExportKey, WireBytesRef>>();
+      for (auto exp : native_module_->module()->export_table) {
+        auto exp_key = std::make_pair(exp.kind, exp.index);
+        if (export_names_->find(exp_key) != export_names_->end()) continue;
+        export_names_->insert(std::make_pair(exp_key, exp.name));
+      }
+    }
+    auto it = export_names_->find(std::make_pair(kind, index));
+    if (it != export_names_->end()) return it->second;
+    return {};
+  }
+
+  std::pair<WireBytesRef, WireBytesRef> GetImportName(ImportExportKindCode kind,
+                                                      uint32_t index) {
+    base::MutexGuard guard(&mutex_);
+    if (!import_names_) {
+      import_names_ = std::make_unique<
+          std::map<ImportExportKey, std::pair<WireBytesRef, WireBytesRef>>>();
+      for (auto imp : native_module_->module()->import_table) {
+        import_names_->insert(
+            std::make_pair(std::make_pair(imp.kind, imp.index),
+                           std::make_pair(imp.module_name, imp.field_name)));
+      }
+    }
+    auto it = import_names_->find(std::make_pair(kind, index));
+    if (it != import_names_->end()) return it->second;
+    return {};
+  }
+
+  WireBytesRef GetTypeName(int type_index) {
+    base::MutexGuard guard(&mutex_);
+    if (!type_names_) {
+      type_names_ = std::make_unique<NameMap>(DecodeNameMap(
+          native_module_->wire_bytes(), NameSectionKindCode::kType));
+    }
+    return type_names_->GetName(type_index);
+  }
+
+  WireBytesRef GetLocalName(int func_index, int local_index) {
+    base::MutexGuard guard(&mutex_);
+    if (!local_names_) {
+      local_names_ = std::make_unique<IndirectNameMap>(DecodeIndirectNameMap(
+          native_module_->wire_bytes(), NameSectionKindCode::kLocal));
+    }
+    return local_names_->GetName(func_index, local_index);
+  }
+
+  WireBytesRef GetFieldName(int struct_index, int field_index) {
+    base::MutexGuard guard(&mutex_);
+    if (!field_names_) {
+      field_names_ = std::make_unique<IndirectNameMap>(DecodeIndirectNameMap(
+          native_module_->wire_bytes(), NameSectionKindCode::kField));
+    }
+    return field_names_->GetName(struct_index, field_index);
+  }
+
   // If the frame position is not in the list of breakpoints, return that
   // position. Return 0 otherwise.
   // This is used to generate a "dead breakpoint" in Liftoff, which is necessary
   // for OSR to find the correct return address.
-  int DeadBreakpoint(WasmFrame* frame, base::Vector<const int> breakpoints) {
+  int DeadBreakpoint(WasmFrame* frame, Vector<const int> breakpoints) {
     const auto& function =
         native_module_->module()->functions[frame->function_index()];
     int offset = frame->position() - function.code.offset();
@@ -171,9 +233,9 @@ class DebugInfoImpl {
 
   // Find the dead breakpoint (see above) for the top wasm frame, if that frame
   // is in the function of the given index.
-  int DeadBreakpoint(int func_index, base::Vector<const int> breakpoints,
+  int DeadBreakpoint(int func_index, Vector<const int> breakpoints,
                      Isolate* isolate) {
-    DebuggableStackFrameIterator it(isolate);
+    StackTraceFrameIterator it(isolate);
     if (it.done() || !it.is_wasm()) return 0;
     auto* wasm_frame = WasmFrame::cast(it.frame());
     if (static_cast<int>(wasm_frame->function_index()) != func_index) return 0;
@@ -181,7 +243,7 @@ class DebugInfoImpl {
   }
 
   WasmCode* RecompileLiftoffWithBreakpoints(int func_index,
-                                            base::Vector<const int> offsets,
+                                            Vector<const int> offsets,
                                             int dead_breakpoint) {
     DCHECK(!mutex_.TryLock());  // Mutex is held externally.
 
@@ -209,8 +271,8 @@ class DebugInfoImpl {
     // Recompile the function with Liftoff, setting the new breakpoints.
     // Not thread-safe. The caller is responsible for locking {mutex_}.
     CompilationEnv env = native_module_->CreateCompilationEnv();
-    auto* function = &env.module->functions[func_index];
-    base::Vector<const uint8_t> wire_bytes = native_module_->wire_bytes();
+    auto* function = &native_module_->module()->functions[func_index];
+    Vector<const uint8_t> wire_bytes = native_module_->wire_bytes();
     FunctionBody body{function->sig, function->code.offset(),
                       wire_bytes.begin() + function->code.offset(),
                       wire_bytes.begin() + function->code.end_offset()};
@@ -218,33 +280,19 @@ class DebugInfoImpl {
 
     // Debug side tables for stepping are generated lazily.
     bool generate_debug_sidetable = for_debugging == kWithBreakpoints;
-    // If lazy validation is on, we might need to lazily validate here.
-    if (V8_UNLIKELY(!env.module->function_was_validated(func_index))) {
-      WasmFeatures unused_detected_features;
-      DecodeResult validation_result = ValidateFunctionBody(
-          env.enabled_features, env.module, &unused_detected_features, body);
-      // Handling illegal modules here is tricky. As lazy validation is off by
-      // default anyway and this is for debugging only, we just crash for now.
-      CHECK_WITH_MSG(validation_result.ok(),
-                     validation_result.error().message().c_str());
-      env.module->set_function_validated(func_index);
-    }
+    Counters* counters = nullptr;
+    WasmFeatures unused_detected;
     WasmCompilationResult result = ExecuteLiftoffCompilation(
-        &env, body,
-        LiftoffOptions{}
-            .set_func_index(func_index)
-            .set_for_debugging(for_debugging)
-            .set_breakpoints(offsets)
-            .set_dead_breakpoint(dead_breakpoint)
-            .set_debug_sidetable(generate_debug_sidetable ? &debug_sidetable
-                                                          : nullptr));
+        native_module_->engine()->allocator(), &env, body, func_index,
+        for_debugging, counters, &unused_detected, offsets,
+        generate_debug_sidetable ? &debug_sidetable : nullptr, dead_breakpoint);
     // Liftoff compilation failure is a FATAL error. We rely on complete Liftoff
     // support for debugging.
     if (!result.succeeded()) FATAL("Liftoff compilation failed");
     DCHECK_EQ(generate_debug_sidetable, debug_sidetable != nullptr);
 
-    WasmCode* new_code =
-        native_module_->PublishCode(native_module_->AddCompiledCode(result));
+    WasmCode* new_code = native_module_->PublishCode(
+        native_module_->AddCompiledCode(std::move(result)));
 
     DCHECK(new_code->is_inspectable());
     if (generate_debug_sidetable) {
@@ -256,7 +304,7 @@ class DebugInfoImpl {
     // Insert new code into the cache. Insert before existing elements for LRU.
     cached_debugging_code_.insert(
         cached_debugging_code_.begin(),
-        CachedDebuggingCode{func_index, base::OwnedVector<int>::Of(offsets),
+        CachedDebuggingCode{func_index, OwnedVector<int>::Of(offsets),
                             dead_breakpoint, new_code});
     // Increase the ref count (for the cache entry).
     new_code->IncRef();
@@ -315,9 +363,9 @@ class DebugInfoImpl {
     } else {
       all_breakpoints.insert(insertion_point, offset);
       int dead_breakpoint =
-          DeadBreakpoint(func_index, base::VectorOf(all_breakpoints), isolate);
+          DeadBreakpoint(func_index, VectorOf(all_breakpoints), isolate);
       new_code = RecompileLiftoffWithBreakpoints(
-          func_index, base::VectorOf(all_breakpoints), dead_breakpoint);
+          func_index, VectorOf(all_breakpoints), dead_breakpoint);
     }
     UpdateReturnAddresses(isolate, new_code, isolate_data.stepping_frame);
   }
@@ -333,7 +381,7 @@ class DebugInfoImpl {
     return {breakpoints.begin(), breakpoints.end()};
   }
 
-  void UpdateBreakpoints(int func_index, base::Vector<int> breakpoints,
+  void UpdateBreakpoints(int func_index, Vector<int> breakpoints,
                          Isolate* isolate, StackFrameId stepping_frame,
                          int dead_breakpoint) {
     DCHECK(!mutex_.TryLock());  // Mutex is held externally.
@@ -349,7 +397,7 @@ class DebugInfoImpl {
     // Generate an additional source position for the current byte offset.
     base::MutexGuard guard(&mutex_);
     WasmCode* new_code = RecompileLiftoffWithBreakpoints(
-        frame->function_index(), base::ArrayVector(kFloodingBreakpoints), 0);
+        frame->function_index(), ArrayVector(kFloodingBreakpoints), 0);
     UpdateReturnAddress(frame, new_code, return_location);
 
     per_isolate_data_[frame->isolate()].stepping_frame = frame->id();
@@ -378,9 +426,9 @@ class DebugInfoImpl {
     if (code->for_debugging() != kForStepping) return;
     int func_index = code->index();
     std::vector<int> breakpoints = FindAllBreakpoints(func_index);
-    int dead_breakpoint = DeadBreakpoint(frame, base::VectorOf(breakpoints));
+    int dead_breakpoint = DeadBreakpoint(frame, VectorOf(breakpoints));
     WasmCode* new_code = RecompileLiftoffWithBreakpoints(
-        func_index, base::VectorOf(breakpoints), dead_breakpoint);
+        func_index, VectorOf(breakpoints), dead_breakpoint);
     UpdateReturnAddress(frame, new_code, kAfterBreakpoint);
   }
 
@@ -392,7 +440,7 @@ class DebugInfoImpl {
 
   bool IsStepping(WasmFrame* frame) {
     Isolate* isolate = frame->wasm_instance().GetIsolate();
-    if (isolate->debug()->last_step_action() == StepInto) return true;
+    if (isolate->debug()->last_step_action() == StepIn) return true;
     base::MutexGuard guard(&mutex_);
     auto it = per_isolate_data_.find(isolate);
     return it != per_isolate_data_.end() &&
@@ -426,12 +474,12 @@ class DebugInfoImpl {
     DCHECK(std::is_sorted(remaining.begin(), remaining.end()));
     if (std::binary_search(remaining.begin(), remaining.end(), offset)) return;
     int dead_breakpoint =
-        DeadBreakpoint(func_index, base::VectorOf(remaining), isolate);
-    UpdateBreakpoints(func_index, base::VectorOf(remaining), isolate,
+        DeadBreakpoint(func_index, VectorOf(remaining), isolate);
+    UpdateBreakpoints(func_index, VectorOf(remaining), isolate,
                       isolate_data.stepping_frame, dead_breakpoint);
   }
 
-  void RemoveDebugSideTables(base::Vector<WasmCode* const> codes) {
+  void RemoveDebugSideTables(Vector<WasmCode* const> codes) {
     base::MutexGuard guard(&debug_side_tables_mutex_);
     for (auto* code : codes) {
       debug_side_tables_.erase(code);
@@ -472,8 +520,7 @@ class DebugInfoImpl {
       std::vector<int>& removed = entry.second;
       std::vector<int> remaining = FindAllBreakpoints(func_index);
       if (HasRemovedBreakpoints(removed, remaining)) {
-        RecompileLiftoffWithBreakpoints(func_index, base::VectorOf(remaining),
-                                        0);
+        RecompileLiftoffWithBreakpoints(func_index, VectorOf(remaining), 0);
       }
     }
   }
@@ -481,7 +528,8 @@ class DebugInfoImpl {
  private:
   struct FrameInspectionScope {
     FrameInspectionScope(DebugInfoImpl* debug_info, Address pc)
-        : code(wasm::GetWasmCodeManager()->LookupCode(pc)),
+        : code(debug_info->native_module_->engine()->code_manager()->LookupCode(
+              pc)),
           pc_offset(static_cast<int>(pc - code->instruction_start())),
           debug_side_table(code->is_inspectable()
                                ? debug_info->GetDebugSideTable(code)
@@ -607,8 +655,9 @@ class DebugInfoImpl {
       case kS128:
         return WasmValue(Simd128(ReadUnalignedValue<int16>(stack_address)));
       case kRef:
-      case kRefNull:
-      case kRtt: {
+      case kOptRef:
+      case kRtt:
+      case kRttWithDepth: {
         Handle<Object> obj(Object(ReadUnalignedValue<Address>(stack_address)),
                            isolate);
         return WasmValue(obj, value->type);
@@ -629,7 +678,7 @@ class DebugInfoImpl {
     // The first return location is after the breakpoint, others are after wasm
     // calls.
     ReturnLocation return_location = kAfterBreakpoint;
-    for (DebuggableStackFrameIterator it(isolate); !it.done();
+    for (StackTraceFrameIterator it(isolate); !it.done();
          it.Advance(), return_location = kAfterWasmCall) {
       // We still need the flooded function for stepping.
       if (it.frame()->id() == stepping_frame) continue;
@@ -648,19 +697,13 @@ class DebugInfoImpl {
     DCHECK_EQ(frame->function_index(), new_code->index());
     DCHECK_EQ(frame->native_module(), new_code->native_module());
     DCHECK(frame->wasm_code()->is_liftoff());
-    Address new_pc = FindNewPC(frame, new_code, frame->generated_code_offset(),
-                               return_location);
 #ifdef DEBUG
     int old_position = frame->position();
 #endif
-#if V8_TARGET_ARCH_X64
-    if (frame->wasm_code()->for_debugging()) {
-      base::Memory<Address>(frame->fp() - kOSRTargetOffset) = new_pc;
-    }
-#else
+    Address new_pc =
+        FindNewPC(frame, new_code, frame->byte_offset(), return_location);
     PointerAuthentication::ReplacePC(frame->pc_address(), new_pc,
                                      kSystemPointerSize);
-#endif
     // The frame position should still be the same after OSR.
     DCHECK_EQ(old_position, frame->position());
   }
@@ -708,11 +751,26 @@ class DebugInfoImpl {
   static constexpr size_t kMaxCachedDebuggingCode = 3;
   struct CachedDebuggingCode {
     int func_index;
-    base::OwnedVector<const int> breakpoint_offsets;
+    OwnedVector<const int> breakpoint_offsets;
     int dead_breakpoint;
     WasmCode* code;
   };
   std::vector<CachedDebuggingCode> cached_debugging_code_;
+
+  // Names of exports, lazily derived from the exports table.
+  std::unique_ptr<std::map<ImportExportKey, wasm::WireBytesRef>> export_names_;
+
+  // Names of imports, lazily derived from the imports table.
+  std::unique_ptr<std::map<ImportExportKey,
+                           std::pair<wasm::WireBytesRef, wasm::WireBytesRef>>>
+      import_names_;
+
+  // Names of types, lazily decoded from the wire bytes.
+  std::unique_ptr<NameMap> type_names_;
+  // Names of locals, lazily decoded from the wire bytes.
+  std::unique_ptr<IndirectNameMap> local_names_;
+  // Names of struct fields, lazily decoded from the wire bytes.
+  std::unique_ptr<IndirectNameMap> field_names_;
 
   // Isolate-specific data.
   std::unordered_map<Isolate*, PerIsolateDebugData> per_isolate_data_;
@@ -739,6 +797,28 @@ WasmValue DebugInfo::GetStackValue(int index, Address pc, Address fp,
 
 const wasm::WasmFunction& DebugInfo::GetFunctionAtAddress(Address pc) {
   return impl_->GetFunctionAtAddress(pc);
+}
+
+WireBytesRef DebugInfo::GetExportName(ImportExportKindCode code,
+                                      uint32_t index) {
+  return impl_->GetExportName(code, index);
+}
+
+std::pair<WireBytesRef, WireBytesRef> DebugInfo::GetImportName(
+    ImportExportKindCode code, uint32_t index) {
+  return impl_->GetImportName(code, index);
+}
+
+WireBytesRef DebugInfo::GetTypeName(int type_index) {
+  return impl_->GetTypeName(type_index);
+}
+
+WireBytesRef DebugInfo::GetLocalName(int func_index, int local_index) {
+  return impl_->GetLocalName(func_index, local_index);
+}
+
+WireBytesRef DebugInfo::GetFieldName(int struct_index, int field_index) {
+  return impl_->GetFieldName(struct_index, field_index);
 }
 
 void DebugInfo::SetBreakpoint(int func_index, int offset,
@@ -769,7 +849,7 @@ void DebugInfo::RemoveBreakpoint(int func_index, int offset,
   impl_->RemoveBreakpoint(func_index, offset, current_isolate);
 }
 
-void DebugInfo::RemoveDebugSideTables(base::Vector<WasmCode* const> code) {
+void DebugInfo::RemoveDebugSideTables(Vector<WasmCode* const> code) {
   impl_->RemoveDebugSideTables(code);
 }
 
@@ -788,19 +868,19 @@ namespace {
 
 // Return the next breakable position at or after {offset_in_func} in function
 // {func_index}, or 0 if there is none.
-// Note that 0 is never a breakable position in wasm, since the first uint8_t
+// Note that 0 is never a breakable position in wasm, since the first byte
 // contains the locals count for the function.
 int FindNextBreakablePosition(wasm::NativeModule* native_module, int func_index,
                               int offset_in_func) {
   AccountingAllocator alloc;
   Zone tmp(&alloc, ZONE_NAME);
-  wasm::BodyLocalDecls locals;
-  const uint8_t* module_start = native_module->wire_bytes().begin();
+  wasm::BodyLocalDecls locals(&tmp);
+  const byte* module_start = native_module->wire_bytes().begin();
   const wasm::WasmFunction& func =
       native_module->module()->functions[func_index];
   wasm::BytecodeIterator iterator(module_start + func.code.offset(),
                                   module_start + func.code.end_offset(),
-                                  &locals, &tmp);
+                                  &locals);
   DCHECK_LT(0, locals.encoded_size);
   if (offset_in_func < 0) return 0;
   for (; iterator.has_next(); iterator.next()) {
@@ -811,25 +891,26 @@ int FindNextBreakablePosition(wasm::NativeModule* native_module, int func_index,
   return 0;
 }
 
-void SetBreakOnEntryFlag(Script script, bool enabled) {
-  if (script.break_on_entry() == enabled) return;
-
-  script.set_break_on_entry(enabled);
-  // Update the "break_on_entry" flag on all live instances.
-  i::WeakArrayList weak_instance_list = script.wasm_weak_instance_list();
-  for (int i = 0; i < weak_instance_list.length(); ++i) {
-    if (weak_instance_list.Get(i)->IsCleared()) continue;
-    i::WasmInstanceObject instance =
-        i::WasmInstanceObject::cast(weak_instance_list.Get(i)->GetHeapObject());
-    instance.set_break_on_entry(enabled);
-  }
-}
 }  // namespace
 
 // static
 bool WasmScript::SetBreakPoint(Handle<Script> script, int* position,
                                Handle<BreakPoint> break_point) {
-  DCHECK_NE(kOnEntryBreakpointPosition, *position);
+  // Special handling for on-entry breakpoints.
+  if (*position == kOnEntryBreakpointPosition) {
+    AddBreakpointToInfo(script, *position, break_point);
+    script->set_break_on_entry(true);
+
+    // Update the "break_on_entry" flag on all live instances.
+    i::WeakArrayList weak_instance_list = script->wasm_weak_instance_list();
+    for (int i = 0; i < weak_instance_list.length(); ++i) {
+      if (weak_instance_list.Get(i)->IsCleared()) continue;
+      i::WasmInstanceObject instance = i::WasmInstanceObject::cast(
+          weak_instance_list.Get(i)->GetHeapObject());
+      instance.set_break_on_entry(true);
+    }
+    return true;
+  }
 
   // Find the function for this breakpoint.
   const wasm::WasmModule* module = script->wasm_native_module()->module();
@@ -845,16 +926,6 @@ bool WasmScript::SetBreakPoint(Handle<Script> script, int* position,
 
   return WasmScript::SetBreakPointForFunction(script, func_index,
                                               breakable_offset, break_point);
-}
-
-// static
-void WasmScript::SetInstrumentationBreakpoint(Handle<Script> script,
-                                              Handle<BreakPoint> break_point) {
-  // Special handling for on-entry breakpoints.
-  AddBreakpointToInfo(script, kOnEntryBreakpointPosition, break_point);
-
-  // Update the "break_on_entry" flag on all live instances.
-  SetBreakOnEntryFlag(*script, true);
 }
 
 // static
@@ -954,17 +1025,12 @@ bool WasmScript::ClearBreakPoint(Handle<Script> script, int position,
     breakpoint_infos->set_undefined(breakpoint_infos->length() - 1);
   }
 
-  if (break_point->id() == v8::internal::Debug::kInstrumentationId) {
-    // Special handling for instrumentation breakpoints.
-    SetBreakOnEntryFlag(*script, false);
-  } else {
-    // Remove the breakpoint from DebugInfo and recompile.
-    wasm::NativeModule* native_module = script->wasm_native_module();
-    const wasm::WasmModule* module = native_module->module();
-    int func_index = GetContainingWasmFunction(module, position);
-    native_module->GetDebugInfo()->RemoveBreakpoint(func_index, position,
-                                                    isolate);
-  }
+  // Remove the breakpoint from DebugInfo and recompile.
+  wasm::NativeModule* native_module = script->wasm_native_module();
+  const wasm::WasmModule* module = native_module->module();
+  int func_index = GetContainingWasmFunction(module, position);
+  native_module->GetDebugInfo()->RemoveBreakpoint(func_index, position,
+                                                  isolate);
 
   return true;
 }
@@ -1001,7 +1067,6 @@ bool WasmScript::ClearBreakPointById(Handle<Script> script, int breakpoint_id) {
 void WasmScript::ClearAllBreakpoints(Script script) {
   script.set_wasm_breakpoint_infos(
       ReadOnlyRoots(script.GetIsolate()).empty_fixed_array());
-  SetBreakOnEntryFlag(script, false);
 }
 
 // static
@@ -1103,17 +1168,17 @@ bool WasmScript::GetPossibleBreakpoints(
     return false;
   AccountingAllocator alloc;
   Zone tmp(&alloc, ZONE_NAME);
-  const uint8_t* module_start = native_module->wire_bytes().begin();
+  const byte* module_start = native_module->wire_bytes().begin();
 
   for (int func_idx = start_func_index; func_idx <= end_func_index;
        ++func_idx) {
     const wasm::WasmFunction& func = functions[func_idx];
     if (func.code.length() == 0) continue;
 
-    wasm::BodyLocalDecls locals;
+    wasm::BodyLocalDecls locals(&tmp);
     wasm::BytecodeIterator iterator(module_start + func.code.offset(),
                                     module_start + func.code.end_offset(),
-                                    &locals, &tmp);
+                                    &locals);
     DCHECK_LT(0u, locals.encoded_size);
     for (; iterator.has_next(); iterator.next()) {
       uint32_t total_offset = func.code.offset() + iterator.pc_offset();

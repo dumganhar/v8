@@ -1,4 +1,4 @@
-# Copyright 2012 The Chromium Authors
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,6 +8,7 @@ This file is copied to the build directory as part of toolchain setup and
 is used to set up calls to tools used by the build that need wrappers.
 """
 
+from __future__ import print_function
 
 import os
 import re
@@ -140,11 +141,10 @@ class WinTool(object):
     # Read output one line at a time as it shows up to avoid OOM failures when
     # GBs of output is produced.
     for line in link.stdout:
-      line = line.decode('utf8')
-      if (not line.startswith('   Creating library ')
-          and not line.startswith('Generating code')
-          and not line.startswith('Finished generating code')):
-        print(line.rstrip())
+      if (not line.startswith(b'   Creating library ')
+          and not line.startswith(b'Generating code')
+          and not line.startswith(b'Finished generating code')):
+        print(line)
     return link.wait()
 
   def ExecAsmWrapper(self, arch, *args):
@@ -155,8 +155,7 @@ class WinTool(object):
       # separator, convert it to '\\' when running on Windows.
       args = list(args) # *args is a tuple by default, which is read-only
       args[0] = args[0].replace('/', '\\')
-    # See comment in ExecLinkWrapper() for why shell=False on non-win.
-    popen = subprocess.Popen(args, shell=sys.platform == 'win32', env=env,
+    popen = subprocess.Popen(args, shell=True, env=env,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out, _ = popen.communicate()
     for line in out.decode('utf8').splitlines():

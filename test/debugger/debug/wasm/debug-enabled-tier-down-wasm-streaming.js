@@ -4,4 +4,4 @@
 
 // Flags: --wasm-test-streaming
 
-d8.file.execute('test/debugger/debug/wasm/debug-enabled-tier-down-wasm.js');
+load('test/debugger/debug/wasm/debug-enabled-tier-down-wasm.js');

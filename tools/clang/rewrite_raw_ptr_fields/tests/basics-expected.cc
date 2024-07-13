@@ -1,32 +1,22 @@
-// Copyright 2020 The Chromium Authors
+// Copyright 2020 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/memory/raw_ptr.h"
-#include "base/memory/raw_ref.h"
+#include "base/memory/checked_ptr.h"
 
 class SomeClass;
 
 class MyClass {
-  MyClass(SomeClass& s) : raw_ref_field(s) {}
-  // Expected rewrite: raw_ptr<SomeClass> raw_ptr_field;
-  raw_ptr<SomeClass> raw_ptr_field;
-
-  // Expected rewrite: const raw_ref<SomeClass> raw_ref_field;
-  const raw_ref<SomeClass> raw_ref_field;
+  // Expected rewrite: CheckedPtr<SomeClass> raw_ptr_field;
+  CheckedPtr<SomeClass> raw_ptr_field;
 
   // No rewrite expected.
   int int_field;
 };
 
 struct MyStruct {
-  MyStruct(SomeClass& s1, SomeClass& s2)
-      : raw_ref_field(s1), raw_ref_field2(s2) {}
-  // Expected rewrite: raw_ptr<SomeClass> raw_ptr_field;
-  raw_ptr<SomeClass> raw_ptr_field;
-
-  // Expected rewrite: const raw_ref<SomeClass> raw_ref_field;
-  const raw_ref<SomeClass> raw_ref_field;
+  // Expected rewrite: CheckedPtr<SomeClass> raw_ptr_field;
+  CheckedPtr<SomeClass> raw_ptr_field;
 
   // No rewrite expected.
   int int_field;
@@ -35,29 +25,16 @@ struct MyStruct {
   // "clang-format off" is used to make sure |git cl format| won't change this
   // testcase.
   //
-  // Expected rewrite: raw_ptr<SomeClass> raw_ptr_field;
+  // Expected rewrite: CheckedPtr<SomeClass> raw_ptr_field;
   // clang-format off
-  raw_ptr<SomeClass> raw_ptr_field2;
-  // clang-format on
-
-  // "&" next to the field name.  This is non-standard formatting, so
-  // "clang-format off" is used to make sure |git cl format| won't change this
-  // testcase.
-  //
-  // Expected rewrite: const raw_ref<SomeClass> raw_ref_field;
-  // clang-format off
-  const raw_ref<SomeClass> raw_ref_field2;
+  CheckedPtr<SomeClass> raw_ptr_field2;
   // clang-format on
 };
 
 template <typename T>
 class MyTemplate {
-  MyTemplate(T& t) : raw_ref_field(t) {}
-  // Expected rewrite: raw_ptr<T> raw_ptr_field;
-  raw_ptr<T> raw_ptr_field;
-
-  // Expected rewrite: const raw_ref<T> raw_ref_field;
-  const raw_ref<T> raw_ref_field;
+  // Expected rewrite: CheckedPtr<T> raw_ptr_field;
+  CheckedPtr<T> raw_ptr_field;
 
   // No rewrite expected.
   int int_field;
@@ -71,10 +48,6 @@ template <typename T>
 struct MaybeProvidesType;
 template <typename T>
 struct DependentNameTest {
-  // Expected rewrite: raw_ptr<typename MaybeProvidesType<T>::Type> field;
-  raw_ptr<typename MaybeProvidesType<T>::Type> field;
-
-  // Expected rewrite: const raw_ref<typename MaybeProvidesType<T>::Type>
-  // field2;
-  const raw_ref<typename MaybeProvidesType<T>::Type> field2;
+  // Expected rewrite: CheckedPtr<typename MaybeProvidesType<T>::Type> field;
+  CheckedPtr<typename MaybeProvidesType<T>::Type> field;
 };

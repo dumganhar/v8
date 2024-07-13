@@ -48,7 +48,7 @@ class DelegatingTracingController : public TracingController {
 };
 
 class TestWithPlatform : public ::testing::Test {
- public:
+ protected:
   static void SetUpTestSuite();
   static void TearDownTestSuite();
 
@@ -67,29 +67,13 @@ class TestWithPlatform : public ::testing::Test {
 };
 
 class TestWithHeap : public TestWithPlatform {
- public:
+ protected:
   TestWithHeap();
-  ~TestWithHeap() override;
 
   void PreciseGC() {
     heap_->ForceGarbageCollectionSlow(
         ::testing::UnitTest::GetInstance()->current_test_info()->name(),
         "Testing", cppgc::Heap::StackState::kNoHeapPointers);
-  }
-
-  void ConservativeGC() {
-    heap_->ForceGarbageCollectionSlow(
-        ::testing::UnitTest::GetInstance()->current_test_info()->name(),
-        "Testing", cppgc::Heap::StackState::kMayContainHeapPointers);
-  }
-
-  // GC that also discards unused memory and thus changes the resident size
-  // size of the heap and corresponding pages.
-  void ConservativeMemoryDiscardingGC() {
-    internal::Heap::From(GetHeap())->CollectGarbage(
-        {CollectionType::kMajor, Heap::StackState::kMayContainHeapPointers,
-         cppgc::Heap::MarkingType::kAtomic, cppgc::Heap::SweepingType::kAtomic,
-         GCConfig::FreeMemoryHandling::kDiscardWherePossible});
   }
 
   cppgc::Heap* GetHeap() const { return heap_.get(); }
@@ -98,12 +82,12 @@ class TestWithHeap : public TestWithPlatform {
     return allocation_handle_;
   }
 
-  cppgc::HeapHandle& GetHeapHandle() const {
-    return GetHeap()->GetHeapHandle();
+  std::unique_ptr<MarkerBase>& GetMarkerRef() {
+    return Heap::From(GetHeap())->marker_;
   }
 
-  std::unique_ptr<MarkerBase>& GetMarkerRef() {
-    return Heap::From(GetHeap())->GetMarkerRefForTesting();
+  const std::unique_ptr<MarkerBase>& GetMarkerRef() const {
+    return Heap::From(GetHeap())->marker_;
   }
 
   void ResetLinearAllocationBuffers();
@@ -122,7 +106,6 @@ class TestSupportingAllocationOnly : public TestWithHeap {
   TestSupportingAllocationOnly();
 
  private:
-  CPPGC_STACK_ALLOCATED_IGNORE("permitted for test code")
   subtle::NoGarbageCollectionScope no_gc_scope_;
 };
 

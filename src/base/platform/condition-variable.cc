@@ -9,10 +9,6 @@
 
 #include "src/base/platform/time.h"
 
-#if V8_OS_WIN
-#include <windows.h>
-#endif
-
 namespace v8 {
 namespace base {
 
@@ -40,7 +36,7 @@ ConditionVariable::ConditionVariable() {
 
 
 ConditionVariable::~ConditionVariable() {
-#if defined(V8_OS_DARWIN)
+#if defined(V8_OS_MACOSX)
   // This hack is necessary to avoid a fatal pthreads subsystem bug in the
   // Darwin kernel. http://crbug.com/517681.
   {
@@ -86,7 +82,7 @@ bool ConditionVariable::WaitFor(Mutex* mutex, const TimeDelta& rel_time) {
   struct timespec ts;
   int result;
   mutex->AssertHeldAndUnmark();
-#if V8_OS_DARWIN
+#if V8_OS_MACOSX
   // Mac OS X provides pthread_cond_timedwait_relative_np(), which does
   // not depend on the real time clock, which is what you really WANT here!
   ts = rel_time.ToTimespec();
@@ -111,7 +107,7 @@ bool ConditionVariable::WaitFor(Mutex* mutex, const TimeDelta& rel_time) {
   ts = end_time.ToTimespec();
   result = pthread_cond_timedwait(
       &native_handle_, &mutex->native_handle(), &ts);
-#endif  // V8_OS_DARWIN
+#endif  // V8_OS_MACOSX
   mutex->AssertUnheldAndMark();
   if (result == ETIMEDOUT) {
     return false;
@@ -123,25 +119,22 @@ bool ConditionVariable::WaitFor(Mutex* mutex, const TimeDelta& rel_time) {
 #elif V8_OS_WIN
 
 ConditionVariable::ConditionVariable() {
-  InitializeConditionVariable(V8ToWindowsType(&native_handle_));
+  InitializeConditionVariable(&native_handle_);
 }
 
 
 ConditionVariable::~ConditionVariable() {}
 
-void ConditionVariable::NotifyOne() {
-  WakeConditionVariable(V8ToWindowsType(&native_handle_));
-}
+void ConditionVariable::NotifyOne() { WakeConditionVariable(&native_handle_); }
 
 void ConditionVariable::NotifyAll() {
-  WakeAllConditionVariable(V8ToWindowsType(&native_handle_));
+  WakeAllConditionVariable(&native_handle_);
 }
 
 
 void ConditionVariable::Wait(Mutex* mutex) {
   mutex->AssertHeldAndUnmark();
-  SleepConditionVariableSRW(V8ToWindowsType(&native_handle_),
-                            V8ToWindowsType(&mutex->native_handle()), INFINITE,
+  SleepConditionVariableSRW(&native_handle_, &mutex->native_handle(), INFINITE,
                             0);
   mutex->AssertUnheldAndMark();
 }
@@ -151,8 +144,7 @@ bool ConditionVariable::WaitFor(Mutex* mutex, const TimeDelta& rel_time) {
   int64_t msec = rel_time.InMilliseconds();
   mutex->AssertHeldAndUnmark();
   BOOL result = SleepConditionVariableSRW(
-      V8ToWindowsType(&native_handle_),
-      V8ToWindowsType(&mutex->native_handle()), static_cast<DWORD>(msec), 0);
+      &native_handle_, &mutex->native_handle(), static_cast<DWORD>(msec), 0);
 #ifdef DEBUG
   if (!result) {
     // On failure, we only expect the CV to timeout. Any other error value means

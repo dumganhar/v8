@@ -7,12 +7,16 @@
 #include "src/common/assert-scope.h"
 #include "src/snapshot/serializer.h"
 
+#ifdef V8_SNAPSHOT_COMPRESSION
+#include "src/snapshot/snapshot-compression.h"
+#endif
+
 namespace v8 {
 namespace internal {
 
 void SerializedData::AllocateData(uint32_t size) {
   DCHECK(!owns_data_);
-  data_ = NewArray<uint8_t>(size);
+  data_ = NewArray<byte>(size);
   size_ = size;
   owns_data_ = true;
 }
@@ -22,7 +26,7 @@ constexpr uint32_t SerializedData::kMagicNumber;
 
 SnapshotData::SnapshotData(const Serializer* serializer) {
   DisallowGarbageCollection no_gc;
-  const std::vector<uint8_t>* payload = serializer->Payload();
+  const std::vector<byte>* payload = serializer->Payload();
 
   // Calculate sizes.
   uint32_t size = kHeaderSize + static_cast<uint32_t>(payload->size());
@@ -42,11 +46,11 @@ SnapshotData::SnapshotData(const Serializer* serializer) {
             static_cast<size_t>(payload->size()));
 }
 
-base::Vector<const uint8_t> SnapshotData::Payload() const {
-  const uint8_t* payload = data_ + kHeaderSize;
+Vector<const byte> SnapshotData::Payload() const {
+  const byte* payload = data_ + kHeaderSize;
   uint32_t length = GetHeaderValue(kPayloadLengthOffset);
   DCHECK_EQ(data_ + size_, payload + length);
-  return base::Vector<const uint8_t>(payload, length);
+  return Vector<const byte>(payload, length);
 }
 
 }  // namespace internal

@@ -6,7 +6,6 @@
 
 #include "src/heap/cppgc/heap-object-header.h"
 #include "src/heap/cppgc/heap-page.h"
-#include "src/heap/cppgc/object-view.h"
 
 namespace cppgc {
 namespace internal {
@@ -14,8 +13,11 @@ namespace internal {
 // static
 size_t BaseObjectSizeTrait::GetObjectSizeForGarbageCollected(
     const void* object) {
-  return ObjectView<AccessMode::kAtomic>(HeapObjectHeader::FromObject(object))
-      .Size();
+  const auto& header = HeapObjectHeader::FromPayload(object);
+  return header.IsLargeObject()
+             ? static_cast<const LargePage*>(BasePage::FromPayload(&header))
+                   ->ObjectSize()
+             : header.ObjectSize();
 }
 
 // static
@@ -26,8 +28,8 @@ size_t BaseObjectSizeTrait::GetObjectSizeForGarbageCollectedMixin(
   const auto& header =
       BasePage::FromPayload(address)
           ->ObjectHeaderFromInnerAddress<AccessMode::kAtomic>(address);
-  DCHECK(!header.IsLargeObject<AccessMode::kAtomic>());
-  return header.ObjectSize<AccessMode::kAtomic>();
+  DCHECK(!header.IsLargeObject());
+  return header.ObjectSize();
 }
 
 }  // namespace internal

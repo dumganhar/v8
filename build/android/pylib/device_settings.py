@@ -1,10 +1,8 @@
-# Copyright 2014 The Chromium Authors
+# Copyright 2014 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-
 import logging
-import six
 
 from pylib import content_settings
 
@@ -35,7 +33,7 @@ def ConfigureContentSettings(device, desired_settings):
     for key, value in key_value:
       settings[key] = value
     logging.info('\n%s %s', table, (80 - len(table)) * '-')
-    for key, value in sorted(six.iteritems(settings)):
+    for key, value in sorted(settings.iteritems()):
       logging.info('\t%s: %s', key, value)
 
 

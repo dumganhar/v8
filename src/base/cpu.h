@@ -101,19 +101,10 @@ class V8_BASE_EXPORT CPU final {
   bool has_lzcnt() const { return has_lzcnt_; }
   bool has_popcnt() const { return has_popcnt_; }
   bool is_atom() const { return is_atom_; }
-  bool has_cetss() const { return has_cetss_; }
   bool has_non_stop_time_stamp_counter() const {
     return has_non_stop_time_stamp_counter_;
   }
   bool is_running_in_vm() const { return is_running_in_vm_; }
-  bool exposes_num_virtual_address_bits() const {
-    return num_virtual_address_bits_ != kUnknownNumVirtualAddressBits;
-  }
-  int num_virtual_address_bits() const {
-    DCHECK(exposes_num_virtual_address_bits());
-    return num_virtual_address_bits_;
-  }
-  static const int kUnknownNumVirtualAddressBits = 0;
 
   // arm features
   bool has_idiva() const { return has_idiva_; }
@@ -123,26 +114,12 @@ class V8_BASE_EXPORT CPU final {
   bool has_vfp3() const { return has_vfp3_; }
   bool has_vfp3_d32() const { return has_vfp3_d32_; }
   bool has_jscvt() const { return has_jscvt_; }
-  bool has_dot_prod() const { return has_dot_prod_; }
-  bool has_lse() const { return has_lse_; }
 
   // mips features
   bool is_fp64_mode() const { return is_fp64_mode_; }
   bool has_msa() const { return has_msa_; }
 
-  // riscv-specific part codes
-  bool has_rvv() const { return has_rvv_; }
-  enum class RV_MMU_MODE {
-    kRiscvSV39,
-    kRiscvSV48,
-    kRiscvSV57,
-  };
-  RV_MMU_MODE riscv_mmu() const { return riscv_mmu_; }
-
  private:
-#if defined(V8_OS_STARBOARD)
-  bool StarboardDetectCPU();
-#endif
   char vendor_[13];
   int stepping_;
   int model_;
@@ -156,7 +133,6 @@ class V8_BASE_EXPORT CPU final {
   int part_;
   int icache_line_size_;
   int dcache_line_size_;
-  int num_virtual_address_bits_;
   bool has_fpu_;
   bool has_cmov_;
   bool has_sahf_;
@@ -168,7 +144,6 @@ class V8_BASE_EXPORT CPU final {
   bool has_sse41_;
   bool has_sse42_;
   bool is_atom_;
-  bool has_cetss_;
   bool has_osxsave_;
   bool has_avx_;
   bool has_avx2_;
@@ -184,14 +159,10 @@ class V8_BASE_EXPORT CPU final {
   bool has_vfp3_;
   bool has_vfp3_d32_;
   bool has_jscvt_;
-  bool has_dot_prod_;
-  bool has_lse_;
   bool is_fp64_mode_;
   bool has_non_stop_time_stamp_counter_;
   bool is_running_in_vm_;
   bool has_msa_;
-  RV_MMU_MODE riscv_mmu_;
-  bool has_rvv_;
 };
 
 }  // namespace base

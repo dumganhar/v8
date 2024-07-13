@@ -10,10 +10,8 @@
 #include "src/ast/ast-value-factory.h"
 #include "src/ast/modules.h"
 #include "src/ast/variables.h"
-#include "src/base/pointer-with-payload.h"
 #include "src/base/threaded-list.h"
 #include "src/codegen/bailout-reason.h"
-#include "src/codegen/handler-table.h"
 #include "src/codegen/label.h"
 #include "src/common/globals.h"
 #include "src/heap/factory.h"
@@ -237,8 +235,6 @@ class Expression : public AstNode {
   // True iff the expression is the null literal.
   bool IsNullLiteral() const;
 
-  bool IsBooleanLiteral() const;
-
   // True iff the expression is the hole literal.
   bool IsTheHoleLiteral() const;
 
@@ -257,7 +253,7 @@ class Expression : public AstNode {
   bool IsCompileTimeValue();
 
   bool IsPattern() {
-    static_assert(kObjectLiteral + 1 == kArrayLiteral);
+    STATIC_ASSERT(kObjectLiteral + 1 == kArrayLiteral);
     return base::IsInRange(node_type(), kObjectLiteral, kArrayLiteral);
   }
 
@@ -636,7 +632,7 @@ class ReturnStatement final : public JumpStatement {
   // This constant is used to indicate that the return position
   // from the FunctionLiteral should be used when emitting code.
   static constexpr int kFunctionLiteralReturnPosition = -2;
-  static_assert(kFunctionLiteralReturnPosition == kNoSourcePosition - 1);
+  STATIC_ASSERT(kFunctionLiteralReturnPosition == kNoSourcePosition - 1);
 
   int end_position() const { return end_position_; }
 
@@ -958,11 +954,6 @@ class Literal final : public Expression {
     return Smi::FromInt(smi_);
   }
 
-  bool AsBooleanLiteral() const {
-    DCHECK_EQ(kBoolean, type());
-    return boolean_;
-  }
-
   // Returns true if literal represents a Number.
   bool IsNumber() const { return type() == kHeapNumber || type() == kSmi; }
   double AsNumber() const {
@@ -995,8 +986,8 @@ class Literal final : public Expression {
 
   // Returns an appropriate Object representing this Literal, allocating
   // a heap object if needed.
-  template <typename IsolateT>
-  Handle<Object> BuildValue(IsolateT* isolate) const;
+  template <typename LocalIsolate>
+  Handle<Object> BuildValue(LocalIsolate* isolate) const;
 
   // Support for using Literal as a HashMap key. NOTE: Currently, this works
   // only for string and number literals!
@@ -1007,7 +998,7 @@ class Literal final : public Expression {
   friend class AstNodeFactory;
   friend Zone;
 
-  using TypeField = Expression::NextBitField<Type, 3>;
+  using TypeField = Expression::NextBitField<Type, 4>;
 
   Literal(int smi, int position) : Expression(position, kLiteral), smi_(smi) {
     bit_field_ = TypeField::update(bit_field_, kSmi);
@@ -1057,13 +1048,27 @@ class MaterializedLiteral : public Expression {
  protected:
   MaterializedLiteral(int pos, NodeType type) : Expression(pos, type) {}
 
+  friend class CompileTimeValue;
+  friend class ArrayLiteral;
+  friend class ObjectLiteral;
+
+  // Populate the depth field and any flags the literal has, returns the depth.
+  int InitDepthAndFlags();
+
   bool NeedsInitialAllocationSite();
 
-  friend class CompileTimeValue;
+  // Populate the constant properties/elements fixed array.
+  template <typename LocalIsolate>
+  void BuildConstants(LocalIsolate* isolate);
 
-  friend class LiteralBoilerplateBuilder;
-  friend class ArrayLiteralBoilerplateBuilder;
-  friend class ObjectLiteralBoilerplateBuilder;
+  // If the expression is a literal, return the literal value;
+  // if the expression is a materialized literal and is_simple
+  // then return an Array or Object Boilerplate Description
+  // Otherwise, return undefined literal as the placeholder
+  // in the object literal boilerplate.
+  template <typename LocalIsolate>
+  Handle<Object> GetBoilerplateValue(Expression* expression,
+                                     LocalIsolate* isolate);
 };
 
 // Node for capturing a regexp literal.
@@ -1086,7 +1091,8 @@ class RegExpLiteral final : public MaterializedLiteral {
   const AstRawString* const pattern_;
 };
 
-// Base class for Array and Object literals
+// Base class for Array and Object literals, providing common code for handling
+// nested subliterals.
 class AggregateLiteral : public MaterializedLiteral {
  public:
   enum Flags {
@@ -1097,47 +1103,22 @@ class AggregateLiteral : public MaterializedLiteral {
     kIsShallowAndDisableMementos = kIsShallow | kDisableMementos,
   };
 
- protected:
-  AggregateLiteral(int pos, NodeType type) : MaterializedLiteral(pos, type) {}
-};
-
-// Base class for build literal boilerplate, providing common code for handling
-// nested subliterals.
-class LiteralBoilerplateBuilder {
- public:
-  enum DepthKind { kUninitialized, kShallow, kNotShallow };
-
-  static constexpr int kDepthKindBits = 2;
-  static_assert((1 << kDepthKindBits) > kNotShallow);
-
-  bool is_initialized() const {
-    return kUninitialized != DepthField::decode(bit_field_);
-  }
-  DepthKind depth() const {
+  bool is_initialized() const { return 0 < depth_; }
+  int depth() const {
     DCHECK(is_initialized());
-    return DepthField::decode(bit_field_);
+    return depth_;
   }
 
-  // If the expression is a literal, return the literal value;
-  // if the expression is a materialized literal and is_simple
-  // then return an Array or Object Boilerplate Description
-  // Otherwise, return undefined literal as the placeholder
-  // in the object literal boilerplate.
-  template <typename IsolateT>
-  static Handle<Object> GetBoilerplateValue(Expression* expression,
-                                            IsolateT* isolate);
-
-  bool is_shallow() const { return depth() == kShallow; }
+  bool is_shallow() const { return depth() == 1; }
   bool needs_initial_allocation_site() const {
     return NeedsInitialAllocationSiteField::decode(bit_field_);
   }
 
   int ComputeFlags(bool disable_mementos = false) const {
-    int flags = AggregateLiteral::kNoFlags;
-    if (is_shallow()) flags |= AggregateLiteral::kIsShallow;
-    if (disable_mementos) flags |= AggregateLiteral::kDisableMementos;
-    if (needs_initial_allocation_site())
-      flags |= AggregateLiteral::kNeedsInitialAllocationSite;
+    int flags = kNoFlags;
+    if (is_shallow()) flags |= kIsShallow;
+    if (disable_mementos) flags |= kDisableMementos;
+    if (needs_initial_allocation_site()) flags |= kNeedsInitialAllocationSite;
     return flags;
   }
 
@@ -1150,22 +1131,19 @@ class LiteralBoilerplateBuilder {
   }
 
  private:
-  // we actually only care three conditions for depth
-  // - depth == kUninitialized, DCHECK(!is_initialized())
-  // - depth == kShallow, which means depth = 1
-  // - depth == kNotShallow, which means depth > 1
-  using DepthField = base::BitField<DepthKind, 0, kDepthKindBits>;
-  using NeedsInitialAllocationSiteField = DepthField::Next<bool, 1>;
+  int depth_ : 31;
+  using NeedsInitialAllocationSiteField =
+      MaterializedLiteral::NextBitField<bool, 1>;
   using IsSimpleField = NeedsInitialAllocationSiteField::Next<bool, 1>;
   using BoilerplateDescriptorKindField =
       IsSimpleField::Next<ElementsKind, kFastElementsKindBits>;
 
  protected:
-  uint32_t bit_field_;
-
-  LiteralBoilerplateBuilder() {
-    bit_field_ =
-        DepthField::encode(kUninitialized) |
+  friend class AstNodeFactory;
+  friend Zone;
+  AggregateLiteral(int pos, NodeType type)
+      : MaterializedLiteral(pos, type), depth_(0) {
+    bit_field_ |=
         NeedsInitialAllocationSiteField::encode(false) |
         IsSimpleField::encode(false) |
         BoilerplateDescriptorKindField::encode(FIRST_FAST_ELEMENTS_KIND);
@@ -1180,21 +1158,14 @@ class LiteralBoilerplateBuilder {
     bit_field_ = BoilerplateDescriptorKindField::update(bit_field_, kind);
   }
 
-  void set_depth(DepthKind depth) {
+  void set_depth(int depth) {
     DCHECK(!is_initialized());
-    bit_field_ = DepthField::update(bit_field_, depth);
+    depth_ = depth;
   }
 
   void set_needs_initial_allocation_site(bool required) {
     bit_field_ = NeedsInitialAllocationSiteField::update(bit_field_, required);
   }
-
-  // Populate the depth field and any flags the literal builder has
-  static void InitDepthAndFlags(MaterializedLiteral* expr);
-
-  // Populate the constant properties/elements fixed array.
-  template <typename IsolateT>
-  void BuildConstants(IsolateT* isolate, MaterializedLiteral* expr);
 
   template <class T, int size>
   using NextBitField = BoilerplateDescriptorKindField::Next<T, size>;
@@ -1215,7 +1186,7 @@ class LiteralProperty : public ZoneObject {
   LiteralProperty(Expression* key, Expression* value, bool is_computed_name)
       : key_and_is_computed_name_(key, is_computed_name), value_(value) {}
 
-  base::PointerWithPayload<Expression, bool, 1> key_and_is_computed_name_;
+  PointerWithPayload<Expression, bool, 1> key_and_is_computed_name_;
   Expression* value_;
 };
 
@@ -1259,30 +1230,18 @@ class ObjectLiteralProperty final : public LiteralProperty {
   bool emit_store_;
 };
 
-// class for build object boilerplate
-class ObjectLiteralBoilerplateBuilder final : public LiteralBoilerplateBuilder {
+// An object literal has a boilerplate object that is used
+// for minimizing the work when constructing it at runtime.
+class ObjectLiteral final : public AggregateLiteral {
  public:
   using Property = ObjectLiteralProperty;
 
-  ObjectLiteralBoilerplateBuilder(ZoneList<Property*>* properties,
-                                  uint32_t boilerplate_properties,
-                                  bool has_rest_property)
-      : properties_(properties),
-        boilerplate_properties_(boilerplate_properties) {
-    bit_field_ |= HasElementsField::encode(false) |
-                  HasRestPropertyField::encode(has_rest_property) |
-                  FastElementsField::encode(false) |
-                  HasNullPrototypeField::encode(false);
-  }
   Handle<ObjectBoilerplateDescription> boilerplate_description() const {
     DCHECK(!boilerplate_description_.is_null());
     return boilerplate_description_;
   }
-  // Determines whether the {CreateShallowArrayLiteral} builtin can be used.
-  bool IsFastCloningSupported() const;
-
   int properties_count() const { return boilerplate_properties_; }
-  const ZonePtrList<Property>* properties() const { return properties_; }
+  const ZonePtrList<Property>* properties() const { return &properties_; }
   bool has_elements() const { return HasElementsField::decode(bit_field_); }
   bool has_rest_property() const {
     return HasRestPropertyField::decode(bit_field_);
@@ -1292,38 +1251,83 @@ class ObjectLiteralBoilerplateBuilder final : public LiteralBoilerplateBuilder {
     return HasNullPrototypeField::decode(bit_field_);
   }
 
-  // Populate the boilerplate description.
-  template <typename IsolateT>
-  void BuildBoilerplateDescription(IsolateT* isolate);
-
-  // Get the boilerplate description, populating it if necessary.
-  template <typename IsolateT>
-  Handle<ObjectBoilerplateDescription> GetOrBuildBoilerplateDescription(
-      IsolateT* isolate) {
-    if (boilerplate_description_.is_null()) {
-      BuildBoilerplateDescription(isolate);
-    }
-    return boilerplate_description_;
-  }
-
   bool is_empty() const {
     DCHECK(is_initialized());
     return !has_elements() && properties_count() == 0 &&
            properties()->length() == 0;
   }
-  // Assemble bitfield of flags for the CreateObjectLiteral helper.
-  int ComputeFlags(bool disable_mementos = false) const;
 
   bool IsEmptyObjectLiteral() const {
     return is_empty() && !has_null_prototype();
   }
 
-  int EncodeLiteralType();
-
   // Populate the depth field and flags, returns the depth.
-  void InitDepthAndFlags();
+  int InitDepthAndFlags();
+
+  // Get the boilerplate description, populating it if necessary.
+  template <typename LocalIsolate>
+  Handle<ObjectBoilerplateDescription> GetOrBuildBoilerplateDescription(
+      LocalIsolate* isolate) {
+    if (boilerplate_description_.is_null()) {
+      BuildBoilerplateDescription(isolate);
+    }
+    return boilerplate_description();
+  }
+
+  // Populate the boilerplate description.
+  template <typename LocalIsolate>
+  void BuildBoilerplateDescription(LocalIsolate* isolate);
+
+  // Mark all computed expressions that are bound to a key that
+  // is shadowed by a later occurrence of the same key. For the
+  // marked expressions, no store code is emitted.
+  void CalculateEmitStore(Zone* zone);
+
+  // Determines whether the {CreateShallowObjectLiteratal} builtin can be used.
+  bool IsFastCloningSupported() const;
+
+  // Assemble bitfield of flags for the CreateObjectLiteral helper.
+  int ComputeFlags(bool disable_mementos = false) const {
+    int flags = AggregateLiteral::ComputeFlags(disable_mementos);
+    if (fast_elements()) flags |= kFastElements;
+    if (has_null_prototype()) flags |= kHasNullPrototype;
+    return flags;
+  }
+
+  int EncodeLiteralType() {
+    int flags = kNoFlags;
+    if (fast_elements()) flags |= kFastElements;
+    if (has_null_prototype()) flags |= kHasNullPrototype;
+    return flags;
+  }
+
+  Variable* home_object() const { return home_object_; }
+
+  enum Flags {
+    kFastElements = 1 << 3,
+    kHasNullPrototype = 1 << 4,
+  };
+  STATIC_ASSERT(
+      static_cast<int>(AggregateLiteral::kNeedsInitialAllocationSite) <
+      static_cast<int>(kFastElements));
 
  private:
+  friend class AstNodeFactory;
+  friend Zone;
+
+  ObjectLiteral(Zone* zone, const ScopedPtrList<Property>& properties,
+                uint32_t boilerplate_properties, int pos,
+                bool has_rest_property, Variable* home_object)
+      : AggregateLiteral(pos, kObjectLiteral),
+        boilerplate_properties_(boilerplate_properties),
+        properties_(properties.ToConstVector(), zone),
+        home_object_(home_object) {
+    bit_field_ |= HasElementsField::encode(false) |
+                  HasRestPropertyField::encode(has_rest_property) |
+                  FastElementsField::encode(false) |
+                  HasNullPrototypeField::encode(false);
+  }
+
   void InitFlagsForPendingNullPrototype(int i);
 
   void set_has_elements(bool has_elements) {
@@ -1335,88 +1339,36 @@ class ObjectLiteralBoilerplateBuilder final : public LiteralBoilerplateBuilder {
   void set_has_null_protoype(bool has_null_prototype) {
     bit_field_ = HasNullPrototypeField::update(bit_field_, has_null_prototype);
   }
-  ZoneList<Property*>* properties_;
   uint32_t boilerplate_properties_;
   Handle<ObjectBoilerplateDescription> boilerplate_description_;
+  ZoneList<Property*> properties_;
+  Variable* home_object_;
 
-  using HasElementsField = LiteralBoilerplateBuilder::NextBitField<bool, 1>;
+  using HasElementsField = AggregateLiteral::NextBitField<bool, 1>;
   using HasRestPropertyField = HasElementsField::Next<bool, 1>;
   using FastElementsField = HasRestPropertyField::Next<bool, 1>;
   using HasNullPrototypeField = FastElementsField::Next<bool, 1>;
 };
 
-// An object literal has a boilerplate object that is used
+// An array literal has a literals object that is used
 // for minimizing the work when constructing it at runtime.
-class ObjectLiteral final : public AggregateLiteral {
+class ArrayLiteral final : public AggregateLiteral {
  public:
-  using Property = ObjectLiteralProperty;
-
-  enum Flags {
-    kFastElements = 1 << 3,
-    kHasNullPrototype = 1 << 4,
-  };
-  static_assert(
-      static_cast<int>(AggregateLiteral::kNeedsInitialAllocationSite) <
-      static_cast<int>(kFastElements));
-
-  // Mark all computed expressions that are bound to a key that
-  // is shadowed by a later occurrence of the same key. For the
-  // marked expressions, no store code is emitted.
-  void CalculateEmitStore(Zone* zone);
-
-  ZoneList<Property*>* properties() { return &properties_; }
-
-  const ObjectLiteralBoilerplateBuilder* builder() const { return &builder_; }
-
-  ObjectLiteralBoilerplateBuilder* builder() { return &builder_; }
-
-  Variable* home_object() const { return home_object_; }
-
- private:
-  friend class AstNodeFactory;
-  friend Zone;
-
-  ObjectLiteral(Zone* zone, const ScopedPtrList<Property>& properties,
-                uint32_t boilerplate_properties, int pos,
-                bool has_rest_property, Variable* home_object)
-      : AggregateLiteral(pos, kObjectLiteral),
-        properties_(properties.ToConstVector(), zone),
-        home_object_(home_object),
-        builder_(&properties_, boilerplate_properties, has_rest_property) {}
-
-  ZoneList<Property*> properties_;
-  Variable* home_object_;
-  ObjectLiteralBoilerplateBuilder builder_;
-};
-
-// class for build boilerplate for array literal, including
-// array_literal, spread call elements
-class ArrayLiteralBoilerplateBuilder final : public LiteralBoilerplateBuilder {
- public:
-  ArrayLiteralBoilerplateBuilder(const ZonePtrList<Expression>* values,
-                                 int first_spread_index)
-      : values_(values), first_spread_index_(first_spread_index) {}
   Handle<ArrayBoilerplateDescription> boilerplate_description() const {
     return boilerplate_description_;
   }
 
-  // Determines whether the {CreateShallowArrayLiteral} builtin can be used.
-  bool IsFastCloningSupported() const;
-
-  // Assemble bitfield of flags for the CreateArrayLiteral helper.
-  int ComputeFlags(bool disable_mementos = false) const {
-    return LiteralBoilerplateBuilder::ComputeFlags(disable_mementos);
-  }
+  const ZonePtrList<Expression>* values() const { return &values_; }
 
   int first_spread_index() const { return first_spread_index_; }
 
-  // Populate the depth field and flags
-  void InitDepthAndFlags();
+  // Populate the depth field and flags, returns the depth.
+  int InitDepthAndFlags();
 
   // Get the boilerplate description, populating it if necessary.
-  template <typename IsolateT>
+  template <typename LocalIsolate>
   Handle<ArrayBoilerplateDescription> GetOrBuildBoilerplateDescription(
-      IsolateT* isolate) {
+      LocalIsolate* isolate) {
     if (boilerplate_description_.is_null()) {
       BuildBoilerplateDescription(isolate);
     }
@@ -1424,22 +1376,16 @@ class ArrayLiteralBoilerplateBuilder final : public LiteralBoilerplateBuilder {
   }
 
   // Populate the boilerplate description.
-  template <typename IsolateT>
-  void BuildBoilerplateDescription(IsolateT* isolate);
+  template <typename LocalIsolate>
+  void BuildBoilerplateDescription(LocalIsolate* isolate);
 
-  const ZonePtrList<Expression>* values_;
-  int first_spread_index_;
-  Handle<ArrayBoilerplateDescription> boilerplate_description_;
-};
+  // Determines whether the {CreateShallowArrayLiteral} builtin can be used.
+  bool IsFastCloningSupported() const;
 
-// An array literal has a literals object that is used
-// for minimizing the work when constructing it at runtime.
-class ArrayLiteral final : public AggregateLiteral {
- public:
-  const ZonePtrList<Expression>* values() const { return &values_; }
-
-  const ArrayLiteralBoilerplateBuilder* builder() const { return &builder_; }
-  ArrayLiteralBoilerplateBuilder* builder() { return &builder_; }
+  // Assemble bitfield of flags for the CreateArrayLiteral helper.
+  int ComputeFlags(bool disable_mementos = false) const {
+    return AggregateLiteral::ComputeFlags(disable_mementos);
+  }
 
  private:
   friend class AstNodeFactory;
@@ -1448,11 +1394,12 @@ class ArrayLiteral final : public AggregateLiteral {
   ArrayLiteral(Zone* zone, const ScopedPtrList<Expression>& values,
                int first_spread_index, int pos)
       : AggregateLiteral(pos, kArrayLiteral),
-        values_(values.ToConstVector(), zone),
-        builder_(&values_, first_spread_index) {}
+        first_spread_index_(first_spread_index),
+        values_(values.ToConstVector(), zone) {}
 
+  int first_spread_index_;
+  Handle<ArrayBoilerplateDescription> boilerplate_description_;
   ZonePtrList<Expression> values_;
-  ArrayLiteralBoilerplateBuilder builder_;
 };
 
 enum class HoleCheckMode { kRequired, kElided };
@@ -1606,17 +1553,15 @@ class OptionalChain final : public Expression {
 // Otherwise, the assignment is to a non-property (a global, a local slot, a
 // parameter slot, or a destructuring pattern).
 enum AssignType {
-  NON_PROPERTY,          // destructuring
-  NAMED_PROPERTY,        // obj.key
-  KEYED_PROPERTY,        // obj[key] and obj.#key when #key is a private field
-  NAMED_SUPER_PROPERTY,  // super.key
-  KEYED_SUPER_PROPERTY,  // super[key]
-  PRIVATE_METHOD,        // obj.#key: #key is a private method
-  PRIVATE_GETTER_ONLY,   // obj.#key: #key only has a getter defined
-  PRIVATE_SETTER_ONLY,   // obj.#key: #key only has a setter defined
-  PRIVATE_GETTER_AND_SETTER,  // obj.#key: #key has both accessors defined
-  PRIVATE_DEBUG_DYNAMIC,      // obj.#key: #key is private that requries dynamic
-                              // lookup in debug-evaluate.
+  NON_PROPERTY,              // destructuring
+  NAMED_PROPERTY,            // obj.key
+  KEYED_PROPERTY,            // obj[key]
+  NAMED_SUPER_PROPERTY,      // super.key
+  KEYED_SUPER_PROPERTY,      // super[key]
+  PRIVATE_METHOD,            // obj.#key: #key is a private method
+  PRIVATE_GETTER_ONLY,       // obj.#key: #key only has a getter defined
+  PRIVATE_SETTER_ONLY,       // obj.#key: #key only has a setter defined
+  PRIVATE_GETTER_AND_SETTER  // obj.#key: #key has both accessors defined
 };
 
 class Property final : public Expression {
@@ -1653,9 +1598,6 @@ class Property final : public Expression {
           return PRIVATE_SETTER_ONLY;
         case VariableMode::kPrivateGetterAndSetter:
           return PRIVATE_GETTER_AND_SETTER;
-        case VariableMode::kDynamic:
-          // From debug-evaluate.
-          return PRIVATE_DEBUG_DYNAMIC;
         default:
           UNREACHABLE();
       }
@@ -1976,7 +1918,6 @@ class CompareOperation final : public Expression {
 
   // Match special cases.
   bool IsLiteralCompareTypeof(Expression** expr, Literal** literal);
-  bool IsLiteralStrictCompareBoolean(Expression** expr, Literal** literal);
   bool IsLiteralCompareUndefined(Expression** expr);
   bool IsLiteralCompareNull(Expression** expr);
 
@@ -2180,8 +2121,8 @@ class FunctionLiteral final : public Expression {
 
   // Empty handle means that the function does not have a shared name (i.e.
   // the name will be set dynamically after creation of the function closure).
-  template <typename IsolateT>
-  MaybeHandle<String> GetName(IsolateT* isolate) const {
+  template <typename LocalIsolate>
+  MaybeHandle<String> GetName(LocalIsolate* isolate) const {
     return raw_name_ ? raw_name_->AllocateFlat(isolate) : MaybeHandle<String>();
   }
   bool has_shared_name() const { return raw_name_ != nullptr; }
@@ -2197,6 +2138,10 @@ class FunctionLiteral final : public Expression {
     return syntax_kind() == FunctionSyntaxKind::kAnonymousExpression;
   }
 
+  void mark_as_oneshot_iife() {
+    bit_field_ = OneshotIIFEBit::update(bit_field_, true);
+  }
+  bool is_oneshot_iife() const { return OneshotIIFEBit::decode(bit_field_); }
   bool is_toplevel() const {
     return function_literal_id() == kFunctionLiteralIdTopLevel;
   }
@@ -2252,13 +2197,6 @@ class FunctionLiteral final : public Expression {
     return HasDuplicateParameters::decode(bit_field_);
   }
 
-  bool should_parallel_compile() const {
-    return ShouldParallelCompileField::decode(bit_field_);
-  }
-  void set_should_parallel_compile() {
-    bit_field_ = ShouldParallelCompileField::update(bit_field_, true);
-  }
-
   // This is used as a heuristic on when to eagerly compile a function
   // literal. We consider the following constructs as hints that the
   // function will be called immediately:
@@ -2271,6 +2209,16 @@ class FunctionLiteral final : public Expression {
     return FunctionSyntaxKindBits::decode(bit_field_);
   }
   FunctionKind kind() const;
+
+  bool dont_optimize() {
+    return dont_optimize_reason() != BailoutReason::kNoReason;
+  }
+  BailoutReason dont_optimize_reason() {
+    return DontOptimizeReasonField::decode(bit_field_);
+  }
+  void set_dont_optimize_reason(BailoutReason reason) {
+    bit_field_ = DontOptimizeReasonField::update(bit_field_, reason);
+  }
 
   bool IsAnonymousFunctionDefinition() const {
     return is_anonymous_expression();
@@ -2305,8 +2253,12 @@ class FunctionLiteral final : public Expression {
     return HasStaticPrivateMethodsOrAccessorsField::decode(bit_field_);
   }
 
-  void set_class_scope_has_private_brand(bool value);
-  bool class_scope_has_private_brand() const;
+  void set_class_scope_has_private_brand(bool value) {
+    bit_field_ = ClassScopeHasPrivateBrandField::update(bit_field_, value);
+  }
+  bool class_scope_has_private_brand() const {
+    return ClassScopeHasPrivateBrandField::decode(bit_field_);
+  }
 
   bool private_name_lookup_skips_outer_class() const;
 
@@ -2343,9 +2295,10 @@ class FunctionLiteral final : public Expression {
                   Pretenure::encode(false) |
                   HasDuplicateParameters::encode(has_duplicate_parameters ==
                                                  kHasDuplicateParameters) |
+                  DontOptimizeReasonField::encode(BailoutReason::kNoReason) |
                   RequiresInstanceMembersInitializer::encode(false) |
                   HasBracesField::encode(has_braces) |
-                  ShouldParallelCompileField::encode(false);
+                  OneshotIIFEBit::encode(false);
     if (eager_compile_hint == kShouldEagerCompile) SetShouldEagerCompile();
   }
 
@@ -2353,12 +2306,16 @@ class FunctionLiteral final : public Expression {
       Expression::NextBitField<FunctionSyntaxKind, 3>;
   using Pretenure = FunctionSyntaxKindBits::Next<bool, 1>;
   using HasDuplicateParameters = Pretenure::Next<bool, 1>;
+  using DontOptimizeReasonField =
+      HasDuplicateParameters::Next<BailoutReason, 8>;
   using RequiresInstanceMembersInitializer =
-      HasDuplicateParameters::Next<bool, 1>;
-  using HasStaticPrivateMethodsOrAccessorsField =
+      DontOptimizeReasonField::Next<bool, 1>;
+  using ClassScopeHasPrivateBrandField =
       RequiresInstanceMembersInitializer::Next<bool, 1>;
+  using HasStaticPrivateMethodsOrAccessorsField =
+      ClassScopeHasPrivateBrandField::Next<bool, 1>;
   using HasBracesField = HasStaticPrivateMethodsOrAccessorsField::Next<bool, 1>;
-  using ShouldParallelCompileField = HasBracesField::Next<bool, 1>;
+  using OneshotIIFEBit = HasBracesField::Next<bool, 1>;
 
   // expected_property_count_ is the sum of instance fields and properties.
   // It can vary depending on whether a function is lazily or eagerly parsed.
@@ -2503,6 +2460,9 @@ class ClassLiteral final : public Expression {
   ZonePtrList<Property>* private_members() const { return private_members_; }
   int start_position() const { return position(); }
   int end_position() const { return end_position_; }
+  bool has_name_static_property() const {
+    return HasNameStaticProperty::decode(bit_field_);
+  }
   bool has_static_computed_names() const {
     return HasStaticComputedNames::decode(bit_field_);
   }
@@ -2538,9 +2498,9 @@ class ClassLiteral final : public Expression {
                FunctionLiteral* static_initializer,
                FunctionLiteral* instance_members_initializer_function,
                int start_position, int end_position,
-               bool has_static_computed_names, bool is_anonymous,
-               bool has_private_methods, Variable* home_object,
-               Variable* static_home_object)
+               bool has_name_static_property, bool has_static_computed_names,
+               bool is_anonymous, bool has_private_methods,
+               Variable* home_object, Variable* static_home_object)
       : Expression(start_position, kClassLiteral),
         end_position_(end_position),
         scope_(scope),
@@ -2553,7 +2513,8 @@ class ClassLiteral final : public Expression {
             instance_members_initializer_function),
         home_object_(home_object),
         static_home_object_(static_home_object) {
-    bit_field_ |= HasStaticComputedNames::encode(has_static_computed_names) |
+    bit_field_ |= HasNameStaticProperty::encode(has_name_static_property) |
+                  HasStaticComputedNames::encode(has_static_computed_names) |
                   IsAnonymousExpression::encode(is_anonymous) |
                   HasPrivateMethods::encode(has_private_methods);
   }
@@ -2566,7 +2527,8 @@ class ClassLiteral final : public Expression {
   ZonePtrList<Property>* private_members_;
   FunctionLiteral* static_initializer_;
   FunctionLiteral* instance_members_initializer_function_;
-  using HasStaticComputedNames = Expression::NextBitField<bool, 1>;
+  using HasNameStaticProperty = Expression::NextBitField<bool, 1>;
+  using HasStaticComputedNames = HasNameStaticProperty::Next<bool, 1>;
   using IsAnonymousExpression = HasStaticComputedNames::Next<bool, 1>;
   using HasPrivateMethods = IsAnonymousExpression::Next<bool, 1>;
   Variable* home_object_;
@@ -2682,8 +2644,9 @@ class GetTemplateObject final : public Expression {
     return raw_strings_;
   }
 
-  template <typename IsolateT>
-  Handle<TemplateObjectDescription> GetOrBuildDescription(IsolateT* isolate);
+  template <typename LocalIsolate>
+  Handle<TemplateObjectDescription> GetOrBuildDescription(
+      LocalIsolate* isolate);
 
  private:
   friend class AstNodeFactory;
@@ -2946,6 +2909,14 @@ class AstNodeFactory final {
                                                     int pos) {
     return zone_->New<TryCatchStatement>(try_block, scope, catch_block,
                                          HandlerTable::UNCAUGHT, pos);
+  }
+
+  TryCatchStatement* NewTryCatchStatementForDesugaring(Block* try_block,
+                                                       Scope* scope,
+                                                       Block* catch_block,
+                                                       int pos) {
+    return zone_->New<TryCatchStatement>(try_block, scope, catch_block,
+                                         HandlerTable::DESUGARING, pos);
   }
 
   TryCatchStatement* NewTryCatchStatementForAsyncAwait(Block* try_block,
@@ -3288,14 +3259,16 @@ class AstNodeFactory final {
       ZonePtrList<ClassLiteral::Property>* private_members,
       FunctionLiteral* static_initializer,
       FunctionLiteral* instance_members_initializer_function,
-      int start_position, int end_position, bool has_static_computed_names,
-      bool is_anonymous, bool has_private_methods, Variable* home_object,
+      int start_position, int end_position, bool has_name_static_property,
+      bool has_static_computed_names, bool is_anonymous,
+      bool has_private_methods, Variable* home_object,
       Variable* static_home_object) {
     return zone_->New<ClassLiteral>(
         scope, extends, constructor, public_members, private_members,
         static_initializer, instance_members_initializer_function,
-        start_position, end_position, has_static_computed_names, is_anonymous,
-        has_private_methods, home_object, static_home_object);
+        start_position, end_position, has_name_static_property,
+        has_static_computed_names, is_anonymous, has_private_methods,
+        home_object, static_home_object);
   }
 
   NativeFunctionLiteral* NewNativeFunctionLiteral(const AstRawString* name,

@@ -49,6 +49,7 @@
 #include "src/base/cpu.h"
 #include "src/codegen/macro-assembler.h"
 #include "src/codegen/s390/assembler-s390-inl.h"
+#include "src/codegen/string-constants.h"
 #include "src/deoptimizer/deoptimizer.h"
 
 namespace v8 {
@@ -159,11 +160,7 @@ static bool supportsSTFLE() {
 }
 
 bool CpuFeatures::SupportsWasmSimd128() {
-#if V8_ENABLE_WEBASSEMBLY
   return CpuFeatures::IsSupported(VECTOR_ENHANCE_FACILITY_1);
-#else
-  return false;
-#endif  // V8_ENABLE_WEBASSEMBLY
 }
 
 void CpuFeatures::ProbeImpl(bool cross_compile) {
@@ -246,7 +243,6 @@ void CpuFeatures::ProbeImpl(bool cross_compile) {
   USE(supportsCPUFeature);
   supported_ |= (1u << VECTOR_FACILITY);
   supported_ |= (1u << VECTOR_ENHANCE_FACILITY_1);
-  supported_ |= (1u << VECTOR_ENHANCE_FACILITY_2);
 #endif
   supported_ |= (1u << FPU);
 
@@ -327,8 +323,15 @@ Operand Operand::EmbeddedNumber(double value) {
   int32_t smi;
   if (DoubleToSmiInteger(value, &smi)) return Operand(Smi::FromInt(smi));
   Operand result(0, RelocInfo::FULL_EMBEDDED_OBJECT);
-  result.is_heap_number_request_ = true;
-  result.value_.heap_number_request = HeapNumberRequest(value);
+  result.is_heap_object_request_ = true;
+  result.value_.heap_object_request = HeapObjectRequest(value);
+  return result;
+}
+
+Operand Operand::EmbeddedStringConstant(const StringConstantBase* str) {
+  Operand result(0, RelocInfo::FULL_EMBEDDED_OBJECT);
+  result.is_heap_object_request_ = true;
+  result.value_.heap_object_request = HeapObjectRequest(str);
   return result;
 }
 
@@ -338,15 +341,27 @@ MemOperand::MemOperand(Register rn, int32_t offset)
 MemOperand::MemOperand(Register rx, Register rb, int32_t offset)
     : baseRegister(rb), indexRegister(rx), offset_(offset) {}
 
-void Assembler::AllocateAndInstallRequestedHeapNumbers(Isolate* isolate) {
-  DCHECK_IMPLIES(isolate == nullptr, heap_number_requests_.empty());
-  for (auto& request : heap_number_requests_) {
+void Assembler::AllocateAndInstallRequestedHeapObjects(Isolate* isolate) {
+  DCHECK_IMPLIES(isolate == nullptr, heap_object_requests_.empty());
+  for (auto& request : heap_object_requests_) {
+    Handle<HeapObject> object;
     Address pc = reinterpret_cast<Address>(buffer_start_) + request.offset();
-    Handle<HeapObject> object =
-        isolate->factory()->NewHeapNumber<AllocationType::kOld>(
+    switch (request.kind()) {
+      case HeapObjectRequest::kHeapNumber: {
+        object = isolate->factory()->NewHeapNumber<AllocationType::kOld>(
             request.heap_number());
-    set_target_address_at(pc, kNullAddress, object.address(),
-                          SKIP_ICACHE_FLUSH);
+        set_target_address_at(pc, kNullAddress, object.address(),
+                              SKIP_ICACHE_FLUSH);
+        break;
+      }
+      case HeapObjectRequest::kStringConstant: {
+        const StringConstantBase* str = request.string();
+        CHECK_NOT_NULL(str);
+        set_target_address_at(pc, kNullAddress,
+                              str->AllocateStringConstant(isolate).address());
+        break;
+      }
+    }
   }
 }
 
@@ -355,14 +370,15 @@ void Assembler::AllocateAndInstallRequestedHeapNumbers(Isolate* isolate) {
 
 Assembler::Assembler(const AssemblerOptions& options,
                      std::unique_ptr<AssemblerBuffer> buffer)
-    : AssemblerBase(options, std::move(buffer)), scratch_register_list_({ip}) {
+    : AssemblerBase(options, std::move(buffer)),
+      scratch_register_list_(ip.bit()) {
   reloc_info_writer.Reposition(buffer_start_ + buffer_->size(), pc_);
   last_bound_pos_ = 0;
   relocations_.reserve(128);
 }
 
 void Assembler::GetCode(Isolate* isolate, CodeDesc* desc,
-                        SafepointTableBuilderBase* safepoint_table_builder,
+                        SafepointTableBuilder* safepoint_table_builder,
                         int handler_table_offset) {
   // As a crutch to avoid having to add manual Align calls wherever we use a
   // raw workflow to create Code objects (mostly in tests), add another Align
@@ -371,13 +387,13 @@ void Assembler::GetCode(Isolate* isolate, CodeDesc* desc,
   // TODO(jgruber): Consider moving responsibility for proper alignment to
   // metadata table builders (safepoint, handler, constant pool, code
   // comments).
-  DataAlign(InstructionStream::kMetadataAlignment);
+  DataAlign(Code::kMetadataAlignment);
 
   EmitRelocations();
 
   int code_comments_size = WriteCodeComments();
 
-  AllocateAndInstallRequestedHeapNumbers(isolate);
+  AllocateAndInstallRequestedHeapObjects(isolate);
 
   // Set up code descriptor.
   // TODO(jgruber): Reconsider how these offsets and sizes are maintained up to
@@ -393,7 +409,7 @@ void Assembler::GetCode(Isolate* isolate, CodeDesc* desc,
   const int safepoint_table_offset =
       (safepoint_table_builder == kNoSafepointTable)
           ? handler_table_offset2
-          : safepoint_table_builder->safepoint_table_offset();
+          : safepoint_table_builder->GetCodeOffset();
   const int reloc_info_offset =
       static_cast<int>(reloc_info_writer.pos() - buffer_->start());
   CodeDesc::Initialize(desc, this, safepoint_table_offset,
@@ -419,6 +435,7 @@ Condition Assembler::GetCondition(Instr instr) {
     default:
       UNIMPLEMENTED();
   }
+  return al;
 }
 
 #if V8_TARGET_ARCH_S390X
@@ -462,7 +479,7 @@ int Assembler::target_at(int pos) {
     if (imm16 == 0) return kEndOfChain;
     return pos + imm16;
   } else if (LLILF == opcode || BRCL == opcode || LARL == opcode ||
-             BRASL == opcode || LGRL == opcode) {
+             BRASL == opcode) {
     int32_t imm32 =
         static_cast<int32_t>(instr & (static_cast<uint64_t>(0xFFFFFFFF)));
     if (LLILF != opcode)
@@ -500,8 +517,7 @@ void Assembler::target_at_put(int pos, int target_pos, bool* is_branch) {
     DCHECK(is_int16(imm16));
     instr_at_put<FourByteInstr>(pos, instr | (imm16 >> 1));
     return;
-  } else if (BRCL == opcode || LARL == opcode || BRASL == opcode ||
-             LGRL == opcode) {
+  } else if (BRCL == opcode || LARL == opcode || BRASL == opcode) {
     // Immediate is in # of halfwords
     int32_t imm32 = target_pos - pos;
     instr &= (~static_cast<uint64_t>(0xFFFFFFFF));
@@ -510,10 +526,8 @@ void Assembler::target_at_put(int pos, int target_pos, bool* is_branch) {
   } else if (LLILF == opcode) {
     DCHECK(target_pos == kEndOfChain || target_pos >= 0);
     // Emitted label constant, not part of a branch.
-    // Make label relative to InstructionStream pointer of generated
-    // InstructionStream object.
-    int32_t imm32 =
-        target_pos + (InstructionStream::kHeaderSize - kHeapObjectTag);
+    // Make label relative to Code pointer of generated Code object.
+    int32_t imm32 = target_pos + (Code::kHeaderSize - kHeapObjectTag);
     instr &= (~static_cast<uint64_t>(0xFFFFFFFF));
     instr_at_put<SixByteInstr>(pos, instr | imm32);
     return;
@@ -539,7 +553,7 @@ int Assembler::max_reach_from(int pos) {
       BRXHG == opcode) {
     return 16;
   } else if (LLILF == opcode || BRCL == opcode || LARL == opcode ||
-             BRASL == opcode || LGRL == opcode) {
+             BRASL == opcode) {
     return 31;  // Using 31 as workaround instead of 32 as
                 // is_intn(x,32) doesn't work on 32-bit platforms.
                 // llilf: Emitted label constant, not part of
@@ -610,7 +624,7 @@ void Assembler::load_label_offset(Register r1, Label* L) {
   int constant;
   if (L->is_bound()) {
     target_pos = L->pos();
-    constant = target_pos + (InstructionStream::kHeaderSize - kHeapObjectTag);
+    constant = target_pos + (Code::kHeaderSize - kHeapObjectTag);
   } else {
     if (L->is_linked()) {
       target_pos = L->pos();  // L's link
@@ -681,10 +695,6 @@ void Assembler::larl(Register r1, Label* l) {
   larl(r1, Operand(branch_offset(l)));
 }
 
-void Assembler::lgrl(Register r1, Label* l) {
-  lgrl(r1, Operand(branch_offset(l)));
-}
-
 void Assembler::EnsureSpaceFor(int space_needed) {
   if (buffer_space() <= (kGap + space_needed)) {
     GrowBuffer(space_needed);
@@ -753,7 +763,7 @@ void Assembler::GrowBuffer(int needed) {
   // Set up new buffer.
   std::unique_ptr<AssemblerBuffer> new_buffer = buffer_->Grow(new_size);
   DCHECK_EQ(new_size, new_buffer->size());
-  uint8_t* new_start = new_buffer->start();
+  byte* new_start = new_buffer->start();
 
   // Copy the data.
   intptr_t pc_delta = new_start - buffer_start_;
@@ -781,20 +791,32 @@ void Assembler::db(uint8_t data) {
   pc_ += sizeof(uint8_t);
 }
 
-void Assembler::dd(uint32_t data) {
+void Assembler::dd(uint32_t data, RelocInfo::Mode rmode) {
   CheckBuffer();
+  if (!RelocInfo::IsNone(rmode)) {
+    DCHECK(RelocInfo::IsDataEmbeddedObject(rmode));
+    RecordRelocInfo(rmode);
+  }
   *reinterpret_cast<uint32_t*>(pc_) = data;
   pc_ += sizeof(uint32_t);
 }
 
-void Assembler::dq(uint64_t value) {
+void Assembler::dq(uint64_t value, RelocInfo::Mode rmode) {
   CheckBuffer();
+  if (!RelocInfo::IsNone(rmode)) {
+    DCHECK(RelocInfo::IsDataEmbeddedObject(rmode));
+    RecordRelocInfo(rmode);
+  }
   *reinterpret_cast<uint64_t*>(pc_) = value;
   pc_ += sizeof(uint64_t);
 }
 
-void Assembler::dp(uintptr_t data) {
+void Assembler::dp(uintptr_t data, RelocInfo::Mode rmode) {
   CheckBuffer();
+  if (!RelocInfo::IsNone(rmode)) {
+    DCHECK(RelocInfo::IsDataEmbeddedObject(rmode));
+    RecordRelocInfo(rmode);
+  }
   *reinterpret_cast<uintptr_t*>(pc_) = data;
   pc_ += sizeof(uintptr_t);
 }
@@ -821,7 +843,7 @@ void Assembler::EmitRelocations() {
        it != relocations_.end(); it++) {
     RelocInfo::Mode rmode = it->rmode();
     Address pc = reinterpret_cast<Address>(buffer_start_) + it->position();
-    RelocInfo rinfo(pc, rmode, it->data());
+    RelocInfo rinfo(pc, rmode, it->data(), Code());
 
     // Fix up internal references now that they are guaranteed to be bound.
     if (RelocInfo::IsInternalReference(rmode)) {
@@ -840,6 +862,23 @@ void Assembler::EmitRelocations() {
   }
 }
 
+UseScratchRegisterScope::UseScratchRegisterScope(Assembler* assembler)
+    : assembler_(assembler),
+      old_available_(*assembler->GetScratchRegisterList()) {}
+
+UseScratchRegisterScope::~UseScratchRegisterScope() {
+  *assembler_->GetScratchRegisterList() = old_available_;
+}
+
+Register UseScratchRegisterScope::Acquire() {
+  RegList* available = assembler_->GetScratchRegisterList();
+  DCHECK_NOT_NULL(available);
+  DCHECK_NE(*available, 0);
+  int index = static_cast<int>(base::bits::CountTrailingZeros32(*available));
+  Register reg = Register::from_code(index);
+  *available &= ~reg.bit();
+  return reg;
+}
 }  // namespace internal
 }  // namespace v8
 #endif  // V8_TARGET_ARCH_S390

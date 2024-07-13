@@ -21,6 +21,7 @@
 #include "include/v8-platform.h"
 #include "src/base/atomicops.h"
 #include "src/base/macros.h"
+#include "src/base/platform/wrappers.h"
 
 // This header file defines implementation details of how the trace macros in
 // trace_event_common.h collect and store trace events. Anything not
@@ -128,14 +129,10 @@ enum CategoryGroupEnabledFlags {
       ->UpdateTraceEventDuration
 
 // Defines atomic operations used internally by the tracing system.
-// Acquire/release barriers are important here: crbug.com/1330114#c8.
 #define TRACE_EVENT_API_ATOMIC_WORD v8::base::AtomicWord
-#define TRACE_EVENT_API_ATOMIC_LOAD(var) v8::base::Acquire_Load(&(var))
+#define TRACE_EVENT_API_ATOMIC_LOAD(var) v8::base::Relaxed_Load(&(var))
 #define TRACE_EVENT_API_ATOMIC_STORE(var, value) \
-  v8::base::Release_Store(&(var), (value))
-// This load can be Relaxed because it's reading the state of
-// `category_group_enabled` and not inferring other variable's state from the
-// result.
+  v8::base::Relaxed_Store(&(var), (value))
 #define TRACE_EVENT_API_LOAD_CATEGORY_GROUP_ENABLED()                \
   v8::base::Relaxed_Load(reinterpret_cast<const v8::base::Atomic8*>( \
       INTERNAL_TRACE_EVENT_UID(category_group_enabled)))
@@ -282,7 +279,6 @@ enum CategoryGroupEnabledFlags {
 #define TRACE_EVENT_CALL_STATS_SCOPED(isolate, category_group, name) \
   INTERNAL_TRACE_EVENT_CALL_STATS_SCOPED(isolate, category_group, name)
 
-#ifdef V8_RUNTIME_CALL_STATS
 #define INTERNAL_TRACE_EVENT_CALL_STATS_SCOPED(isolate, category_group, name)  \
   INTERNAL_TRACE_EVENT_GET_CATEGORY_INFO(category_group);                      \
   v8::internal::tracing::CallStatsScopedTracer INTERNAL_TRACE_EVENT_UID(       \
@@ -292,9 +288,6 @@ enum CategoryGroupEnabledFlags {
         .Initialize(isolate, INTERNAL_TRACE_EVENT_UID(category_group_enabled), \
                     name);                                                     \
   }
-#else  // V8_RUNTIME_CALL_STATS
-#define INTERNAL_TRACE_EVENT_CALL_STATS_SCOPED(isolate, category_group, name)
-#endif  // V8_RUNTIME_CALL_STATS
 
 namespace v8 {
 namespace internal {
@@ -444,8 +437,8 @@ SetTraceValue(T arg, unsigned char* type, uint64_t* value) {
                                       uint64_t* value) {                    \
     *type = value_type_id;                                                  \
     *value = 0;                                                             \
-    static_assert(sizeof(arg) <= sizeof(*value));                           \
-    memcpy(value, &arg, sizeof(arg));                                       \
+    STATIC_ASSERT(sizeof(arg) <= sizeof(*value));                           \
+    base::Memcpy(value, &arg, sizeof(arg));                                 \
   }
 INTERNAL_DECLARE_SET_TRACE_VALUE(double, TRACE_VALUE_TYPE_DOUBLE)
 INTERNAL_DECLARE_SET_TRACE_VALUE(const void*, TRACE_VALUE_TYPE_POINTER)
@@ -595,7 +588,6 @@ class ScopedTracer {
   Data data_;
 };
 
-#ifdef V8_RUNTIME_CALL_STATS
 // Do not use directly.
 class CallStatsScopedTracer {
  public:
@@ -620,15 +612,12 @@ class CallStatsScopedTracer {
   Data* p_data_;
   Data data_;
 };
-#endif  // V8_RUNTIME_CALL_STATS
 
 }  // namespace tracing
 }  // namespace internal
 }  // namespace v8
 
 #else  // defined(V8_USE_PERFETTO)
-
-#ifdef V8_RUNTIME_CALL_STATS
 
 #define TRACE_EVENT_CALL_STATS_SCOPED(isolate, category, name)             \
   struct PERFETTO_UID(ScopedEvent) {                                       \
@@ -654,15 +643,13 @@ class CallStatsScopedTracer {
           }                                                                \
         });                                                                \
       }                                                                    \
-      v8::internal::Isolate* isolate_ = nullptr;                           \
-      bool has_parent_scope_ = false;                                      \
+      v8::internal::Isolate* isolate_;                                     \
+      bool has_parent_scope_;                                              \
     } stats;                                                               \
   } PERFETTO_UID(scoped_event) {                                           \
     { isolate, 0 }                                                         \
   }
-#else  // V8_RUNTIME_CALL_STATS
-#define TRACE_EVENT_CALL_STATS_SCOPED(isolate, category, name)
-#endif  // V8_RUNTIME_CALL_STATS
+
 #endif  // defined(V8_USE_PERFETTO)
 
 #endif  // V8_TRACING_TRACE_EVENT_H_

@@ -63,7 +63,7 @@ class Operand {
  public:
   // Immediate.
   V8_INLINE explicit Operand(int64_t immediate,
-                             RelocInfo::Mode rmode = RelocInfo::NO_INFO)
+                             RelocInfo::Mode rmode = RelocInfo::NONE)
       : rm_(no_reg), rmode_(rmode) {
     value_.immediate = immediate;
   }
@@ -71,13 +71,14 @@ class Operand {
       : rm_(no_reg), rmode_(RelocInfo::EXTERNAL_REFERENCE) {
     value_.immediate = static_cast<int64_t>(f.address());
   }
+  V8_INLINE explicit Operand(const char* s);
   explicit Operand(Handle<HeapObject> handle);
-  V8_INLINE explicit Operand(Smi value)
-      : rm_(no_reg), rmode_(RelocInfo::NO_INFO) {
+  V8_INLINE explicit Operand(Smi value) : rm_(no_reg), rmode_(RelocInfo::NONE) {
     value_.immediate = static_cast<intptr_t>(value.ptr());
   }
 
   static Operand EmbeddedNumber(double number);  // Smi or HeapNumber.
+  static Operand EmbeddedStringConstant(const StringConstantBase* str);
 
   // Register.
   V8_INLINE explicit Operand(Register rm) : rm_(rm) {}
@@ -89,17 +90,17 @@ class Operand {
 
   bool IsImmediate() const { return !rm_.is_valid(); }
 
-  HeapNumberRequest heap_number_request() const {
-    DCHECK(IsHeapNumberRequest());
-    return value_.heap_number_request;
+  HeapObjectRequest heap_object_request() const {
+    DCHECK(IsHeapObjectRequest());
+    return value_.heap_object_request;
   }
 
-  bool IsHeapNumberRequest() const {
-    DCHECK_IMPLIES(is_heap_number_request_, IsImmediate());
-    DCHECK_IMPLIES(is_heap_number_request_,
+  bool IsHeapObjectRequest() const {
+    DCHECK_IMPLIES(is_heap_object_request_, IsImmediate());
+    DCHECK_IMPLIES(is_heap_object_request_,
                    rmode_ == RelocInfo::FULL_EMBEDDED_OBJECT ||
                        rmode_ == RelocInfo::CODE_TARGET);
-    return is_heap_number_request_;
+    return is_heap_object_request_;
   }
 
   Register rm() const { return rm_; }
@@ -110,10 +111,10 @@ class Operand {
   Register rm_;
   union Value {
     Value() {}
-    HeapNumberRequest heap_number_request;  // if is_heap_number_request_
+    HeapObjectRequest heap_object_request;  // if is_heap_object_request_
     int64_t immediate;                      // otherwise
   } value_;                                 // valid if rm_ == no_reg
-  bool is_heap_number_request_ = false;
+  bool is_heap_object_request_ = false;
   RelocInfo::Mode rmode_;
 
   friend class Assembler;
@@ -156,9 +157,9 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
 
   // GetCode emits any pending (non-emitted) code and fills the descriptor desc.
   static constexpr int kNoHandlerTable = 0;
-  static constexpr SafepointTableBuilderBase* kNoSafepointTable = nullptr;
+  static constexpr SafepointTableBuilder* kNoSafepointTable = nullptr;
   void GetCode(Isolate* isolate, CodeDesc* desc,
-               SafepointTableBuilderBase* safepoint_table_builder,
+               SafepointTableBuilder* safepoint_table_builder,
                int handler_table_offset);
 
   // Convenience wrapper for code without safepoint or handler tables.
@@ -175,9 +176,27 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   // BlockTrampolinePool, it must check if it needs to generate trampoline
   // immediately, if it does not do this, the branch range will go beyond the
   // max branch offset, that means the pc_offset after call CheckTrampolinePool
-  // may have changed. So we use pc_for_safepoint_ here for safepoint record.
+  // may be not the Call instruction's location. So we use last_call_pc here for
+  // safepoint record.
   int pc_offset_for_safepoint() {
-    return static_cast<int>(pc_for_safepoint_ - buffer_start_);
+#ifdef DEBUG
+    Instr instr1 =
+        instr_at(static_cast<int>(last_call_pc_ - buffer_start_ - kInstrSize));
+    Instr instr2 = instr_at(
+        static_cast<int>(last_call_pc_ - buffer_start_ - kInstrSize * 2));
+    if (GetOpcodeField(instr1) != SPECIAL) {  // instr1 == jialc.
+      DCHECK((kArchVariant == kMips64r6) && GetOpcodeField(instr1) == POP76 &&
+             GetRs(instr1) == 0);
+    } else {
+      if (GetFunctionField(instr1) == SLL) {  // instr1 == nop, instr2 == jalr.
+        DCHECK(GetOpcodeField(instr2) == SPECIAL &&
+               GetFunctionField(instr2) == JALR);
+      } else {  // instr1 == jalr.
+        DCHECK(GetFunctionField(instr1) == JALR);
+      }
+    }
+#endif
+    return static_cast<int>(last_call_pc_ - buffer_start_);
   }
 
   // Label operations & relative jumps (PPUM Appendix D).
@@ -294,16 +313,16 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
 
   // Adjust ra register in branch delay slot of bal instruction so to skip
   // instructions not needed after optimization of PIC in
-  // MacroAssembler::BranchAndLink method.
+  // TurboAssembler::BranchAndLink method.
 
   static constexpr int kOptimizedBranchAndLinkLongReturnOffset = 4 * kInstrSize;
 
   // Here we are patching the address in the LUI/ORI instruction pair.
   // These values are used in the serialization process and must be zero for
-  // MIPS platform, as InstructionStream, Embedded Object or External-reference
-  // pointers are split across two consecutive instructions and don't exist
-  // separately in the code, so the serializer should not step forwards in
-  // memory after a target is resolved and written.
+  // MIPS platform, as Code, Embedded Object or External-reference pointers
+  // are split across two consecutive instructions and don't exist separately
+  // in the code, so the serializer should not step forwards in memory after
+  // a target is resolved and written.
   static constexpr int kSpecialTargetSize = 0;
 
   // Number of consecutive instructions used to store 32bit/64bit constant.
@@ -329,7 +348,7 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   RegList* GetScratchRegisterList() { return &scratch_register_list_; }
 
   // ---------------------------------------------------------------------------
-  // InstructionStream generation.
+  // Code generation.
 
   // Insert the smallest number of nop instructions
   // possible to align the pc offset to a multiple
@@ -340,7 +359,6 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void DataAlign(int m);
   // Aligns code to something that's optimal for a jump target for the platform.
   void CodeTargetAlign();
-  void LoopHeaderAlign() { CodeTargetAlign(); }
 
   // Different nop operations are used by the code generator to detect certain
   // states of the generated code.
@@ -1449,8 +1467,8 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
 
   // Record a deoptimization reason that can be used by a log or cpu profiler.
   // Use --trace-deopt to enable.
-  void RecordDeoptReason(DeoptimizeReason reason, uint32_t node_id,
-                         SourcePosition position, int id);
+  void RecordDeoptReason(DeoptimizeReason reason, SourcePosition position,
+                         int id);
 
   static int RelocateInternalReference(RelocInfo::Mode rmode, Address pc,
                                        intptr_t pc_delta);
@@ -1458,9 +1476,11 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   // Writes a single byte or word of data in the code stream.  Used for
   // inline tables, e.g., jump-tables.
   void db(uint8_t data);
-  void dd(uint32_t data);
-  void dq(uint64_t data);
-  void dp(uintptr_t data) { dq(data); }
+  void dd(uint32_t data, RelocInfo::Mode rmode = RelocInfo::NONE);
+  void dq(uint64_t data, RelocInfo::Mode rmode = RelocInfo::NONE);
+  void dp(uintptr_t data, RelocInfo::Mode rmode = RelocInfo::NONE) {
+    dq(data, rmode);
+  }
   void dd(Label* label);
 
   // Postpone the generation of the trampoline pool for the specified number of
@@ -1559,8 +1579,6 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
 
   inline int UnboundLabelsCount() { return unbound_labels_count_; }
 
-  bool is_trampoline_emitted() const { return trampoline_emitted_; }
-
  protected:
   // Load Scaled Address instructions.
   void lsa(Register rd, Register rt, Register rs, uint8_t sa);
@@ -1617,6 +1635,8 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
 
   bool has_exception() const { return internal_trampoline_exception_; }
 
+  bool is_trampoline_emitted() const { return trampoline_emitted_; }
+
   // Temporarily block automatic assembly buffer growth.
   void StartBlockGrowBuffer() {
     DCHECK(!block_buffer_growth_);
@@ -1642,7 +1662,7 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
     }
   }
 
-  void set_pc_for_safepoint() { pc_for_safepoint_ = pc_; }
+  void set_last_call_pc_(byte* pc) { last_call_pc_ = pc; }
 
  private:
   // Avoid overflows for displacements etc.
@@ -1652,13 +1672,13 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   // intervals of kBufferCheckInterval emitted bytes.
   static constexpr int kBufferCheckInterval = 1 * KB / 2;
 
-  // InstructionStream generation.
+  // Code generation.
   // The relocation writer's position is at least kGap bytes below the end of
   // the generated instructions. This is so that multi-instruction sequences do
   // not have to check for overflow. The same is true for writes of large
   // relocation info entries.
   static constexpr int kGap = 64;
-  static_assert(AssemblerBase::kMinimalBufferSize >= 2 * kGap);
+  STATIC_ASSERT(AssemblerBase::kMinimalBufferSize >= 2 * kGap);
 
   // Repeated checking whether the trampoline pool should be emitted is rather
   // expensive. By default we only check again once a number of instructions
@@ -1690,7 +1710,7 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   // Readable constants for compact branch handling in emit()
   enum class CompactBranchType : bool { NO = false, COMPACT_BRANCH = true };
 
-  // InstructionStream emission.
+  // Code emission.
   inline void CheckBuffer();
   void GrowBuffer();
   inline void emit(Instr x,
@@ -1900,12 +1920,12 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   // Keep track of the last Call's position to ensure that safepoint can get the
   // correct information even if there is a trampoline immediately after the
   // Call.
-  uint8_t* pc_for_safepoint_;
+  byte* last_call_pc_;
 
   RegList scratch_register_list_;
 
  private:
-  void AllocateAndInstallRequestedHeapNumbers(Isolate* isolate);
+  void AllocateAndInstallRequestedHeapObjects(Isolate* isolate);
 
   int WriteCodeComments();
 
@@ -1922,28 +1942,11 @@ class EnsureSpace {
 
 class V8_EXPORT_PRIVATE V8_NODISCARD UseScratchRegisterScope {
  public:
-  explicit UseScratchRegisterScope(Assembler* assembler)
-      : available_(assembler->GetScratchRegisterList()),
-        old_available_(*available_) {}
+  explicit UseScratchRegisterScope(Assembler* assembler);
+  ~UseScratchRegisterScope();
 
-  ~UseScratchRegisterScope() { *available_ = old_available_; }
-
-  Register Acquire() {
-    return available_->PopFirst();
-  }
-
-  bool hasAvailable() const { return !available_->is_empty(); }
-
-  void Include(const RegList& list) { *available_ |= list; }
-  void Exclude(const RegList& list) { available_->clear(list); }
-  void Include(const Register& reg1, const Register& reg2 = no_reg) {
-    RegList list({reg1, reg2});
-    Include(list);
-  }
-  void Exclude(const Register& reg1, const Register& reg2 = no_reg) {
-    RegList list({reg1, reg2});
-    Exclude(list);
-  }
+  Register Acquire();
+  bool hasAvailable() const;
 
  private:
   RegList* available_;

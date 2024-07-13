@@ -20,8 +20,7 @@
 #pragma warning(disable : 4251)
 #endif // if defined(JSONCPP_DISABLE_DLL_INTERFACE_WARNING)
 
-#pragma pack(push)
-#pragma pack()
+#pragma pack(push, 8)
 
 namespace Json {
 
@@ -111,8 +110,6 @@ public:
    *  - Number of precision digits for formatting of real values.
    *  - "precisionType": "significant"(default) or "decimal"
    *  - Type of precision for formatting of real values.
-   *  - "emitUTF8": false or true
-   *  - If true, outputs raw UTF8 strings instead of escaping them.
 
    *  You can examine 'settings_` yourself
    *  to see the defaults. You can also write and read them just like any
@@ -148,7 +145,7 @@ public:
 /** \brief Abstract class for writers.
  * \deprecated Use StreamWriter. (And really, this is an implementation detail.)
  */
-class JSON_API Writer {
+class JSONCPP_DEPRECATED("Use StreamWriter instead") JSON_API Writer {
 public:
   virtual ~Writer();
 
@@ -168,7 +165,7 @@ public:
 #pragma warning(push)
 #pragma warning(disable : 4996) // Deriving from deprecated class
 #endif
-class JSON_API FastWriter
+class JSONCPP_DEPRECATED("Use StreamWriterBuilder instead") JSON_API FastWriter
     : public Writer {
 public:
   FastWriter();
@@ -218,7 +215,7 @@ private:
  *     - otherwise, it the values do not fit on one line, or the array contains
  *       object or non empty array, then print one value per line.
  *
- * If the Value have comments then they are outputted according to their
+ * If the Value have comments then they are outputed according to their
  *#CommentPlacement.
  *
  * \sa Reader, Value, Value::setComment()
@@ -228,7 +225,7 @@ private:
 #pragma warning(push)
 #pragma warning(disable : 4996) // Deriving from deprecated class
 #endif
-class JSON_API
+class JSONCPP_DEPRECATED("Use StreamWriterBuilder instead") JSON_API
     StyledWriter : public Writer {
 public:
   StyledWriter();
@@ -287,7 +284,7 @@ private:
  *     - otherwise, it the values do not fit on one line, or the array contains
  *       object or non empty array, then print one value per line.
  *
- * If the Value have comments then they are outputted according to their
+ * If the Value have comments then they are outputed according to their
  #CommentPlacement.
  *
  * \sa Reader, Value, Value::setComment()
@@ -297,7 +294,7 @@ private:
 #pragma warning(push)
 #pragma warning(disable : 4996) // Deriving from deprecated class
 #endif
-class JSON_API
+class JSONCPP_DEPRECATED("Use StreamWriterBuilder instead") JSON_API
     StyledStreamWriter {
 public:
   /**

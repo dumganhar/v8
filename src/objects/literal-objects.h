@@ -16,7 +16,6 @@ namespace v8 {
 namespace internal {
 
 class ClassLiteral;
-class StructBodyDescriptor;
 
 #include "torque-generated/src/objects/literal-objects-tq.inc"
 
@@ -72,8 +71,6 @@ class ArrayBoilerplateDescription
   DECL_PRINTER(ArrayBoilerplateDescription)
   void BriefPrintDetails(std::ostream& os);
 
-  using BodyDescriptor = StructBodyDescriptor;
-
  private:
   TQ_OBJECT_CONSTRUCTORS(ArrayBoilerplateDescription)
 };
@@ -83,9 +80,8 @@ class RegExpBoilerplateDescription
           RegExpBoilerplateDescription, Struct> {
  public:
   // Dispatched behavior.
+  DECL_PRINTER(RegExpBoilerplateDescription)
   void BriefPrintDetails(std::ostream& os);
-
-  using BodyDescriptor = StructBodyDescriptor;
 
  private:
   TQ_OBJECT_CONSTRUCTORS(RegExpBoilerplateDescription)
@@ -126,20 +122,20 @@ class ClassBoilerplate : public FixedArray {
   DECL_ACCESSORS(instance_elements_template, Object)
   DECL_ACCESSORS(instance_computed_properties, FixedArray)
 
-  template <typename IsolateT, typename Dictionary>
-  static void AddToPropertiesTemplate(IsolateT* isolate,
+  template <typename LocalIsolate, typename Dictionary>
+  static void AddToPropertiesTemplate(LocalIsolate* isolate,
                                       Handle<Dictionary> dictionary,
                                       Handle<Name> name, int key_index,
                                       ValueKind value_kind, Smi value);
 
-  template <typename IsolateT>
-  static void AddToElementsTemplate(IsolateT* isolate,
+  template <typename LocalIsolate>
+  static void AddToElementsTemplate(LocalIsolate* isolate,
                                     Handle<NumberDictionary> dictionary,
                                     uint32_t key, int key_index,
                                     ValueKind value_kind, Smi value);
 
-  template <typename IsolateT>
-  static Handle<ClassBoilerplate> BuildClassBoilerplate(IsolateT* isolate,
+  template <typename LocalIsolate>
+  static Handle<ClassBoilerplate> BuildClassBoilerplate(LocalIsolate* isolate,
                                                         ClassLiteral* expr);
 
   enum {

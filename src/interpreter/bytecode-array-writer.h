@@ -5,6 +5,7 @@
 #ifndef V8_INTERPRETER_BYTECODE_ARRAY_WRITER_H_
 #define V8_INTERPRETER_BYTECODE_ARRAY_WRITER_H_
 
+#include "src/base/compiler-specific.h"
 #include "src/codegen/source-position-table.h"
 #include "src/common/globals.h"
 #include "src/interpreter/bytecodes.h"
@@ -54,15 +55,15 @@ class V8_EXPORT_PRIVATE BytecodeArrayWriter final {
 
   void SetFunctionEntrySourcePosition(int position);
 
-  template <typename IsolateT>
+  template <typename LocalIsolate>
   EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
-  Handle<BytecodeArray> ToBytecodeArray(IsolateT* isolate, int register_count,
-                                        int parameter_count,
+  Handle<BytecodeArray> ToBytecodeArray(LocalIsolate* isolate,
+                                        int register_count, int parameter_count,
                                         Handle<ByteArray> handler_table);
 
-  template <typename IsolateT>
+  template <typename LocalIsolate>
   EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
-  Handle<ByteArray> ToSourcePositionTable(IsolateT* isolate);
+  Handle<ByteArray> ToSourcePositionTable(LocalIsolate* isolate);
 
 #ifdef DEBUG
   // Returns -1 if they match or the offset of the first mismatching byte.

@@ -44,13 +44,14 @@ DisallowGarbageCollectionScope::~DisallowGarbageCollectionScope() {
 // static
 void NoGarbageCollectionScope::Enter(cppgc::HeapHandle& heap_handle) {
   auto& heap_base = internal::HeapBase::From(heap_handle);
-  heap_base.EnterNoGCScope();
+  heap_base.no_gc_scope_++;
 }
 
 // static
 void NoGarbageCollectionScope::Leave(cppgc::HeapHandle& heap_handle) {
   auto& heap_base = internal::HeapBase::From(heap_handle);
-  heap_base.LeaveNoGCScope();
+  DCHECK_GT(heap_base.no_gc_scope_, 0);
+  heap_base.no_gc_scope_--;
 }
 
 NoGarbageCollectionScope::NoGarbageCollectionScope(

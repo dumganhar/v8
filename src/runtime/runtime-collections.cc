@@ -5,8 +5,11 @@
 #include "src/execution/arguments-inl.h"
 #include "src/heap/factory.h"
 #include "src/heap/heap-inl.h"  // For ToBoolean. TODO(jkummerow): Drop.
+#include "src/logging/counters.h"
+#include "src/numbers/conversions-inl.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/js-collection-inl.h"
+#include "src/runtime/runtime-utils.h"
 
 namespace v8 {
 namespace internal {
@@ -17,32 +20,16 @@ RUNTIME_FUNCTION(Runtime_TheHole) {
   return ReadOnlyRoots(isolate).the_hole_value();
 }
 
-RUNTIME_FUNCTION(Runtime_OrderedHashSetEnsureGrowable) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(2, args.length());
-  Handle<OrderedHashSet> table = args.at<OrderedHashSet>(0);
-  Handle<String> method_name = args.at<String>(1);
-  MaybeHandle<OrderedHashSet> table_candidate =
-      OrderedHashSet::EnsureGrowable(isolate, table);
-  if (!table_candidate.ToHandle(&table)) {
-    THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewRangeError(MessageTemplate::kOutOfMemory, method_name));
-  }
-  return *table;
-}
-
 RUNTIME_FUNCTION(Runtime_SetGrow) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
-  Handle<JSSet> holder = args.at<JSSet>(0);
+  CONVERT_ARG_HANDLE_CHECKED(JSSet, holder, 0);
   Handle<OrderedHashSet> table(OrderedHashSet::cast(holder->table()), isolate);
   MaybeHandle<OrderedHashSet> table_candidate =
       OrderedHashSet::EnsureGrowable(isolate, table);
   if (!table_candidate.ToHandle(&table)) {
     THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate,
-        NewRangeError(MessageTemplate::kCollectionGrowFailed,
-                      isolate->factory()->NewStringFromAsciiChecked("Set")));
+        isolate, NewRangeError(MessageTemplate::kValueOutOfRange));
   }
   holder->set_table(*table);
   return ReadOnlyRoots(isolate).undefined_value();
@@ -51,7 +38,7 @@ RUNTIME_FUNCTION(Runtime_SetGrow) {
 RUNTIME_FUNCTION(Runtime_SetShrink) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
-  Handle<JSSet> holder = args.at<JSSet>(0);
+  CONVERT_ARG_HANDLE_CHECKED(JSSet, holder, 0);
   Handle<OrderedHashSet> table(OrderedHashSet::cast(holder->table()), isolate);
   table = OrderedHashSet::Shrink(isolate, table);
   holder->set_table(*table);
@@ -61,7 +48,7 @@ RUNTIME_FUNCTION(Runtime_SetShrink) {
 RUNTIME_FUNCTION(Runtime_MapShrink) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
-  Handle<JSMap> holder = args.at<JSMap>(0);
+  CONVERT_ARG_HANDLE_CHECKED(JSMap, holder, 0);
   Handle<OrderedHashMap> table(OrderedHashMap::cast(holder->table()), isolate);
   table = OrderedHashMap::Shrink(isolate, table);
   holder->set_table(*table);
@@ -71,15 +58,13 @@ RUNTIME_FUNCTION(Runtime_MapShrink) {
 RUNTIME_FUNCTION(Runtime_MapGrow) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
-  Handle<JSMap> holder = args.at<JSMap>(0);
+  CONVERT_ARG_HANDLE_CHECKED(JSMap, holder, 0);
   Handle<OrderedHashMap> table(OrderedHashMap::cast(holder->table()), isolate);
   MaybeHandle<OrderedHashMap> table_candidate =
       OrderedHashMap::EnsureGrowable(isolate, table);
   if (!table_candidate.ToHandle(&table)) {
     THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate,
-        NewRangeError(MessageTemplate::kCollectionGrowFailed,
-                      isolate->factory()->NewStringFromAsciiChecked("Map")));
+        isolate, NewRangeError(MessageTemplate::kValueOutOfRange));
   }
   holder->set_table(*table);
   return ReadOnlyRoots(isolate).undefined_value();
@@ -88,12 +73,12 @@ RUNTIME_FUNCTION(Runtime_MapGrow) {
 RUNTIME_FUNCTION(Runtime_WeakCollectionDelete) {
   HandleScope scope(isolate);
   DCHECK_EQ(3, args.length());
-  Handle<JSWeakCollection> weak_collection = args.at<JSWeakCollection>(0);
-  Handle<Object> key = args.at(1);
-  int hash = args.smi_value_at(2);
+  CONVERT_ARG_HANDLE_CHECKED(JSWeakCollection, weak_collection, 0);
+  CONVERT_ARG_HANDLE_CHECKED(Object, key, 1);
+  CONVERT_SMI_ARG_CHECKED(hash, 2)
 
 #ifdef DEBUG
-  DCHECK(key->CanBeHeldWeakly());
+  DCHECK(key->IsJSReceiver());
   DCHECK(EphemeronHashTable::IsKey(ReadOnlyRoots(isolate), *key));
   Handle<EphemeronHashTable> table(
       EphemeronHashTable::cast(weak_collection->table()), isolate);
@@ -110,13 +95,13 @@ RUNTIME_FUNCTION(Runtime_WeakCollectionDelete) {
 RUNTIME_FUNCTION(Runtime_WeakCollectionSet) {
   HandleScope scope(isolate);
   DCHECK_EQ(4, args.length());
-  Handle<JSWeakCollection> weak_collection = args.at<JSWeakCollection>(0);
-  Handle<Object> key = args.at(1);
-  Handle<Object> value = args.at(2);
-  int hash = args.smi_value_at(3);
+  CONVERT_ARG_HANDLE_CHECKED(JSWeakCollection, weak_collection, 0);
+  CONVERT_ARG_HANDLE_CHECKED(Object, key, 1);
+  CONVERT_ARG_HANDLE_CHECKED(Object, value, 2);
+  CONVERT_SMI_ARG_CHECKED(hash, 3)
 
 #ifdef DEBUG
-  DCHECK(key->CanBeHeldWeakly());
+  DCHECK(key->IsJSReceiver());
   DCHECK(EphemeronHashTable::IsKey(ReadOnlyRoots(isolate), *key));
   Handle<EphemeronHashTable> table(
       EphemeronHashTable::cast(weak_collection->table()), isolate);
@@ -128,20 +113,6 @@ RUNTIME_FUNCTION(Runtime_WeakCollectionSet) {
 
   JSWeakCollection::Set(weak_collection, key, value, hash);
   return *weak_collection;
-}
-
-RUNTIME_FUNCTION(Runtime_OrderedHashMapEnsureGrowable) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(1, args.length());
-  Handle<OrderedHashMap> table = args.at<OrderedHashMap>(0);
-  Handle<String> methodName = args.at<String>(1);
-  MaybeHandle<OrderedHashMap> table_candidate =
-      OrderedHashMap::EnsureGrowable(isolate, table);
-  if (!table_candidate.ToHandle(&table)) {
-    THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewRangeError(MessageTemplate::kOutOfMemory, methodName));
-  }
-  return *table;
 }
 
 }  // namespace internal

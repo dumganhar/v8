@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2021 The Chromium Authors
+# Copyright 2021 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Creates an server to offload non-critical-path GN targets."""
@@ -110,7 +110,6 @@ class TaskManager:
         if line.startswith('procs_running'):
           return int(line.rstrip().split()[1])
     assert False, 'Could not read /proc/stat'
-    return 0
 
   def _maybe_start_tasks(self):
     if self._deactivated:
@@ -175,8 +174,6 @@ class Task:
       # TODO(wnwen): Use ionice to reduce resource consumption.
       TaskStats.add_process()
       log(f'STARTING {self.name}')
-      # This use of preexec_fn is sufficiently simple, just one os.nice call.
-      # pylint: disable=subprocess-popen-preexec-fn
       self._proc = subprocess.Popen(
           self.cmd,
           stdout=subprocess.PIPE,
@@ -284,8 +281,6 @@ def _process_requests(sock: socket.socket):
   tasks: Dict[Tuple[str, str], Task] = {}
   task_manager = TaskManager()
   try:
-    log('READY... Remember to set android_static_analysis="build_server" in '
-        'args.gn files')
     for data in _listen_for_request_data(sock):
       task = Task(name=data['name'],
                   cwd=data['cwd'],
@@ -308,28 +303,11 @@ def _process_requests(sock: socket.socket):
 
 def main():
   parser = argparse.ArgumentParser(description=__doc__)
-  parser.add_argument(
-      '--fail-if-not-running',
-      action='store_true',
-      help='Used by GN to fail fast if the build server is not running.')
-  args = parser.parse_args()
-  if args.fail_if_not_running:
-    with socket.socket(socket.AF_UNIX) as sock:
-      try:
-        sock.connect(server_utils.SOCKET_ADDRESS)
-      except socket.error:
-        print('Build server is not running and '
-              'android_static_analysis="build_server" is set.\nPlease run '
-              'this command in a separate terminal:\n\n'
-              '$ build/android/fast_local_dev_server.py\n')
-        return 1
-      else:
-        return 0
+  parser.parse_args()
   with socket.socket(socket.AF_UNIX) as sock:
     sock.bind(server_utils.SOCKET_ADDRESS)
     sock.listen()
     _process_requests(sock)
-  return 0
 
 
 if __name__ == '__main__':

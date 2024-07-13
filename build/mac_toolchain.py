@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
-# Copyright 2018 The Chromium Authors
+# Copyright 2018 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -18,6 +18,8 @@ The toolchain version can be overridden by setting MAC_TOOLCHAIN_REVISION with
 the full revision, e.g. 9A235.
 """
 
+from __future__ import print_function
+
 import argparse
 import os
 import pkg_resources
@@ -30,25 +32,20 @@ import sys
 
 def LoadPList(path):
   """Loads Plist at |path| and returns it as a dictionary."""
+  if sys.version_info.major == 2:
+    return plistlib.readPlist(path)
   with open(path, 'rb') as f:
     return plistlib.load(f)
 
 
-# This contains binaries from Xcode 14.3 14E222b along with the macOS 13.3 SDK
-# (13.3 22E245). To build these packages, see comments in
-# build/xcode_binaries.yaml
-# To update the version numbers, open Xcode's "About Xcode" for the first number
-# and run `xcrun --show-sdk-build-version` for the second.
-# To update the _TAG, use the output of the `cipd create` command mentioned in
-# xcode_binaries.yaml.
-
+# This contains binaries from Xcode 12.4 12D4e, along with the macOS 11 SDK.
+# To build these packages, see comments in build/xcode_binaries.yaml
 MAC_BINARIES_LABEL = 'infra_internal/ios/xcode/xcode_binaries/mac-amd64'
-MAC_BINARIES_TAG = 'ajH0-Cuzzqtyj98qUlsgO1-lepRhXoVVNAjVXDIYHxcC'
+MAC_BINARIES_TAG = 'Za4aUIwiTUjk8rnjRow4nXbth-j7ZoN5plyOSCLidcgC'
 
 # The toolchain will not be downloaded if the minimum OS version is not met. 19
-# is the major version number for macOS 10.15. Xcode 14.0 14B47b only runs on
-# macOS 12.4 and newer, but some bots are still running older OS versions. macOS
-# 10.15.4, the OS minimum through Xcode 12.4, still seems to work.
+# is the major version number for macOS 10.15. 12B5044c (Xcode 12.2rc) only runs
+# on 10.15.4 and newer.
 MAC_MINIMUM_OS_VERSION = [19, 4]
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -107,7 +104,7 @@ def PrintError(message):
   sys.stderr.flush()
 
 
-def InstallXcodeBinaries():
+def InstallXcodeBinaries(binaries_root=None):
   """Installs the Xcode binaries needed to build Chrome and accepts the license.
 
   This is the replacement for InstallXcode that installs a trimmed down version
@@ -115,7 +112,8 @@ def InstallXcodeBinaries():
   """
   # First make sure the directory exists. It will serve as the cipd root. This
   # also ensures that there will be no conflicts of cipd root.
-  binaries_root = os.path.join(TOOLCHAIN_ROOT, 'xcode_binaries')
+  if binaries_root is None:
+    binaries_root = os.path.join(TOOLCHAIN_ROOT, 'xcode_binaries')
   if not os.path.exists(binaries_root):
     os.makedirs(binaries_root)
 
@@ -123,7 +121,6 @@ def InstallXcodeBinaries():
   args = ['cipd', 'ensure', '-root', binaries_root, '-ensure-file', '-']
 
   p = subprocess.Popen(args,
-                       universal_newlines=True,
                        stdin=subprocess.PIPE,
                        stdout=subprocess.PIPE,
                        stderr=subprocess.PIPE)
@@ -164,10 +161,11 @@ def InstallXcodeBinaries():
     return 0
 
   # Use puppet's sudoers script to accept the license if its available.
-  license_accept_script = '/usr/local/bin/xcode_accept_license.sh'
+  license_accept_script = '/usr/local/bin/xcode_accept_license.py'
   if os.path.exists(license_accept_script):
     args = [
-        'sudo', license_accept_script, cipd_xcode_version, cipd_license_version
+        'sudo', license_accept_script, '--xcode-version', cipd_xcode_version,
+        '--license-version', cipd_license_version
     ]
     subprocess.check_call(args)
     return 0

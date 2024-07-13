@@ -17,9 +17,7 @@
 #include "src/objects/intl-objects.h"
 #include "src/objects/js-number-format.h"
 #include "src/objects/js-relative-time-format-inl.h"
-#include "src/objects/managed-inl.h"
 #include "src/objects/objects-inl.h"
-#include "src/objects/option-utils.h"
 #include "unicode/decimfmt.h"
 #include "unicode/numfmt.h"
 #include "unicode/reldatefmt.h"
@@ -80,7 +78,8 @@ MaybeHandle<JSRelativeTimeFormat> JSRelativeTimeFormat::New(
   Handle<JSReceiver> options;
   const char* service = "Intl.RelativeTimeFormat";
   ASSIGN_RETURN_ON_EXCEPTION(
-      isolate, options, CoerceOptionsToObject(isolate, input_options, service),
+      isolate, options,
+      Intl::CoerceOptionsToObject(isolate, input_options, service),
       JSRelativeTimeFormat);
 
   // 4. Let opt be a new Record.
@@ -148,7 +147,7 @@ MaybeHandle<JSRelativeTimeFormat> JSRelativeTimeFormat::New(
 
   // 16. Let s be ? GetOption(options, "style", "string",
   //                          «"long", "short", "narrow"», "long").
-  Maybe<Style> maybe_style = GetStringOption<Style>(
+  Maybe<Style> maybe_style = Intl::GetStringOption<Style>(
       isolate, options, "style", service, {"long", "short", "narrow"},
       {Style::LONG, Style::SHORT, Style::NARROW}, Style::LONG);
   MAYBE_RETURN(maybe_style, MaybeHandle<JSRelativeTimeFormat>());
@@ -158,7 +157,7 @@ MaybeHandle<JSRelativeTimeFormat> JSRelativeTimeFormat::New(
 
   // 18. Let numeric be ? GetOption(options, "numeric", "string",
   //                                «"always", "auto"», "always").
-  Maybe<Numeric> maybe_numeric = GetStringOption<Numeric>(
+  Maybe<Numeric> maybe_numeric = Intl::GetStringOption<Numeric>(
       isolate, options, "numeric", service, {"always", "auto"},
       {Numeric::ALWAYS, Numeric::AUTO}, Numeric::ALWAYS);
   MAYBE_RETURN(maybe_numeric, MaybeHandle<JSRelativeTimeFormat>());
@@ -345,7 +344,7 @@ MaybeHandle<T> FormatCommon(
     Handle<Object> value_obj, Handle<Object> unit_obj, const char* func_name,
     MaybeHandle<T> (*formatToResult)(Isolate*,
                                      const icu::FormattedRelativeDateTime&,
-                                     Handle<String>, bool)) {
+                                     Handle<Object>, Handle<String>)) {
   // 3. Let value be ? ToNumber(value).
   Handle<Object> value;
   ASSIGN_RETURN_ON_EXCEPTION(isolate, value,
@@ -382,13 +381,13 @@ MaybeHandle<T> FormatCommon(
   if (U_FAILURE(status)) {
     THROW_NEW_ERROR(isolate, NewTypeError(MessageTemplate::kIcuError), T);
   }
-  return formatToResult(isolate, formatted, UnitAsString(isolate, unit_enum),
-                        value->IsNaN());
+  return formatToResult(isolate, formatted, value,
+                        UnitAsString(isolate, unit_enum));
 }
 
 MaybeHandle<String> FormatToString(
     Isolate* isolate, const icu::FormattedRelativeDateTime& formatted,
-    Handle<String> unit, bool is_nan) {
+    Handle<Object> value, Handle<String> unit) {
   UErrorCode status = U_ZERO_ERROR;
   icu::UnicodeString result = formatted.toString(status);
   if (U_FAILURE(status)) {
@@ -411,22 +410,21 @@ Maybe<bool> AddLiteral(Isolate* isolate, Handle<JSArray> array,
 
 Maybe<bool> AddUnit(Isolate* isolate, Handle<JSArray> array,
                     const icu::UnicodeString& string, int32_t index,
-                    const NumberFormatSpan& part, Handle<String> unit,
-                    bool is_nan) {
+                    int32_t start, int32_t limit, int32_t field_id,
+                    Handle<Object> value, Handle<String> unit) {
   Handle<String> substring;
   ASSIGN_RETURN_ON_EXCEPTION_VALUE(
-      isolate, substring,
-      Intl::ToString(isolate, string, part.begin_pos, part.end_pos),
+      isolate, substring, Intl::ToString(isolate, string, start, limit),
       Nothing<bool>());
   Intl::AddElement(isolate, array, index,
-                   Intl::NumberFieldToType(isolate, part, string, is_nan),
-                   substring, isolate->factory()->unit_string(), unit);
+                   Intl::NumberFieldToType(isolate, value, field_id), substring,
+                   isolate->factory()->unit_string(), unit);
   return Just(true);
 }
 
 MaybeHandle<JSArray> FormatToJSArray(
     Isolate* isolate, const icu::FormattedRelativeDateTime& formatted,
-    Handle<String> unit, bool is_nan) {
+    Handle<Object> value, Handle<String> unit) {
   UErrorCode status = U_ZERO_ERROR;
   icu::UnicodeString string = formatted.toString(status);
 
@@ -458,23 +456,19 @@ MaybeHandle<JSArray> FormatToJSArray(
         for (auto start_limit : groups) {
           if (start_limit.first > start) {
             Maybe<bool> maybe_added =
-                AddUnit(isolate, array, string, index++,
-                        NumberFormatSpan(field, start, start_limit.first), unit,
-                        is_nan);
+                AddUnit(isolate, array, string, index++, start,
+                        start_limit.first, field, value, unit);
             MAYBE_RETURN(maybe_added, Handle<JSArray>());
-            maybe_added =
-                AddUnit(isolate, array, string, index++,
-                        NumberFormatSpan(UNUM_GROUPING_SEPARATOR_FIELD,
-                                         start_limit.first, start_limit.second),
-                        unit, is_nan);
+            maybe_added = AddUnit(isolate, array, string, index++,
+                                  start_limit.first, start_limit.second,
+                                  UNUM_GROUPING_SEPARATOR_FIELD, value, unit);
             MAYBE_RETURN(maybe_added, Handle<JSArray>());
             start = start_limit.second;
           }
         }
       }
-      Maybe<bool> maybe_added =
-          AddUnit(isolate, array, string, index++,
-                  NumberFormatSpan(field, start, limit), unit, is_nan);
+      Maybe<bool> maybe_added = AddUnit(isolate, array, string, index++, start,
+                                        limit, field, value, unit);
       MAYBE_RETURN(maybe_added, Handle<JSArray>());
       previous_end = limit;
     }

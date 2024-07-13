@@ -16,7 +16,6 @@ namespace internal {
 
 // Forward declarations.
 class JSPromise;
-class StructBodyDescriptor;
 
 #include "torque-generated/src/objects/js-generator-tq.inc"
 
@@ -32,7 +31,6 @@ class JSGeneratorObject
   // For suspended generators: the source position at which the generator
   // is suspended.
   int source_position() const;
-  int code_offset() const;
 
   // Dispatched behavior.
   DECL_PRINTER(JSGeneratorObject)
@@ -72,8 +70,6 @@ class AsyncGeneratorRequest
  public:
   DECL_PRINTER(AsyncGeneratorRequest)
   DECL_VERIFIER(AsyncGeneratorRequest)
-
-  using BodyDescriptor = StructBodyDescriptor;
 
   TQ_OBJECT_CONSTRUCTORS(AsyncGeneratorRequest)
 };

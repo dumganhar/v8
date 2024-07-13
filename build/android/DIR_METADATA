@@ -1,1 +1,1 @@
-mixins: "//build/android/COMMON_METADATA"
+os: ANDROID

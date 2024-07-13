@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 #
-# Copyright 2015 The Chromium Authors
+# Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -13,7 +13,6 @@ import sys
 import zipfile
 
 from util import build_utils
-import zip_helpers
 
 sys.path.append(
     os.path.abspath(os.path.join(sys.path[0], '../../../google_apis')))
@@ -30,7 +29,7 @@ def GetScriptName():
 
 def GenerateOutput(constant_definitions):
   template = string.Template("""
-// Copyright 2015 The Chromium Authors
+// Copyright 2015 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -49,7 +48,7 @@ ${CONSTANT_ENTRIES}
   constant_template = string.Template(
       '  public static final String ${NAME} = "${VALUE}";')
   constant_entries_list = []
-  for constant_name, constant_value in constant_definitions.items():
+  for constant_name, constant_value in constant_definitions.iteritems():
     values = {
         'NAME': constant_name,
         'VALUE': constant_value,
@@ -82,7 +81,7 @@ def _DoWriteJarOutput(output_path, constant_definition):
   with zipfile.ZipFile(output_path, 'w') as srcjar:
     path = '%s/%s' % (PACKAGE.replace('.', '/'), CLASSNAME + '.java')
     data = GenerateOutput(constant_definition)
-    zip_helpers.add_to_zip_hermetic(srcjar, path, data=data)
+    build_utils.AddToZipHermetic(srcjar, path, data=data)
 
 
 def _DoMain(argv):
@@ -96,10 +95,14 @@ def _DoMain(argv):
 
   values = {}
   values['GOOGLE_API_KEY'] = google_api_keys.GetAPIKey()
-  values['GOOGLE_API_KEY_ANDROID_NON_STABLE'] = (
-      google_api_keys.GetAPIKeyAndroidNonStable())
+  values['GOOGLE_API_KEY_PHYSICAL_WEB_TEST'] = (google_api_keys.
+      GetAPIKeyPhysicalWebTest())
   values['GOOGLE_CLIENT_ID_MAIN'] = google_api_keys.GetClientID('MAIN')
   values['GOOGLE_CLIENT_SECRET_MAIN'] = google_api_keys.GetClientSecret('MAIN')
+  values['GOOGLE_CLIENT_ID_CLOUD_PRINT'] = google_api_keys.GetClientID(
+      'CLOUD_PRINT')
+  values['GOOGLE_CLIENT_SECRET_CLOUD_PRINT'] = google_api_keys.GetClientSecret(
+      'CLOUD_PRINT')
   values['GOOGLE_CLIENT_ID_REMOTING'] = google_api_keys.GetClientID('REMOTING')
   values['GOOGLE_CLIENT_SECRET_REMOTING'] = google_api_keys.GetClientSecret(
       'REMOTING')
@@ -107,6 +110,8 @@ def _DoMain(argv):
       'REMOTING_HOST')
   values['GOOGLE_CLIENT_SECRET_REMOTING_HOST'] = (google_api_keys.
       GetClientSecret('REMOTING_HOST'))
+  values['GOOGLE_CLIENT_ID_REMOTING_IDENTITY_API'] = (google_api_keys.
+      GetClientID('REMOTING_IDENTITY_API'))
 
   if options.out:
     _DoWriteJavaOutput(options.out, values)

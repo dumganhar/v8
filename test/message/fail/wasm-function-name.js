@@ -4,7 +4,7 @@
 
 // Flags: --expose-wasm
 
-d8.file.execute("test/mjsunit/wasm/wasm-module-builder.js");
+load("test/mjsunit/wasm/wasm-module-builder.js");
 
 var builder = new WasmModuleBuilder();
 builder.addFunction('main', kSig_i_v).addBody([kExprUnreachable]).exportFunc();

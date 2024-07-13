@@ -2,6 +2,9 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+# for py2/py3 compatibility
+from __future__ import print_function
+
 import os
 
 from testrunner.local import command
@@ -10,36 +13,24 @@ from testrunner.local import testsuite
 from testrunner.objects import testcase
 
 
-ADDITIONAL_VARIANTS = set(["minor_mc"])
-
-
 class VariantsGenerator(testsuite.VariantsGenerator):
-
-  def __init__(self, variants):
-    super().__init__(variants)
-    self._supported_variants = self._standard_variant + [
-        v for v in variants if v in ADDITIONAL_VARIANTS
-    ]
-
   def _get_variants(self, test):
-    if test.only_standard_variant:
-      return self._standard_variant
-    return self._supported_variants
+    return self._standard_variant
 
 
 class TestLoader(testsuite.TestLoader):
   def _list_test_filenames(self):
     shell = os.path.abspath(
-      os.path.join(self.test_config.shell_dir, "v8_unittests"))
+      os.path.join(self.test_config.shell_dir, "unittests"))
     if utils.IsWindows():
       shell += ".exe"
 
     output = None
     for i in range(3): # Try 3 times in case of errors.
-      cmd = self.ctx.command(
-          cmd_prefix=self.test_config.command_prefix,
-          shell=shell,
-          args=['--gtest_list_tests'] + self.test_config.extra_flags)
+      cmd = command.Command(
+        cmd_prefix=self.test_config.command_prefix,
+        shell=shell,
+        args=['--gtest_list_tests'] + self.test_config.extra_flags)
       output = cmd.execute()
       if output.exit_code == 0:
         break
@@ -88,16 +79,8 @@ class TestCase(testcase.TestCase):
     )
 
   def get_shell(self):
-    return 'v8_' + self.suite.name
+    return self.suite.name
 
-  def get_android_resources(self):
-    # Bytecode-generator tests are the only ones requiring extra files on
-    # Android.
-    parts = self.name.split('.')
-    if parts[0] == 'BytecodeGeneratorTest':
-      expectation_file = os.path.join(self.suite.root, 'interpreter',
-                                      'bytecode_expectations',
-                                      '%s.golden' % parts[1])
-      if os.path.exists(expectation_file):
-        return [expectation_file]
-    return []
+
+def GetSuite(*args, **kwargs):
+  return TestSuite(*args, **kwargs)

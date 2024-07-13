@@ -27,7 +27,8 @@ std::vector<PropertyDetails> MakeDistinctDetails() {
             if (!configurable) {
               attrs |= PropertyAttributes::DONT_DELETE;
             }
-            auto attributes = PropertyAttributesFromInt(attrs);
+            PropertyAttributes attributes =
+                static_cast<PropertyAttributes>(attrs);
             PropertyDetails details(kind, attributes,
                                     PropertyCellType::kNoCell);
             details = details.CopyWithConstness(constness);
@@ -99,9 +100,15 @@ Handle<Name> CreateKeyWithHash(Isolate* isolate, KeyCache& keys,
         fake_hash |= swiss_table::H2(override_with);
       }
 
+      // Ensure that just doing a shift below is correct.
+      static_assert(Name::kNofHashBitFields == 2, "This test needs updating");
+      static_assert(Name::kHashNotComputedMask == 1,
+                    "This test needs updating");
+      static_assert(Name::kIsNotIntegerIndexMask == 2,
+                    "This test needs updating");
+
       // Prepare what to put into the hash field.
-      uint32_t hash_field =
-          Name::CreateHashFieldValue(fake_hash, Name::HashFieldType::kHash);
+      uint32_t hash_field = fake_hash << Name::kHashShift;
       CHECK_NE(hash_field, 0);
 
       key_symbol->set_raw_hash_field(hash_field);

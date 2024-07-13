@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors
+// Copyright 2019 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #ifndef V8_CRDTP_MAYBE_H_
@@ -47,7 +47,7 @@ class ValueMaybe {
   ValueMaybe(ValueMaybe&& other) noexcept
       : is_just_(other.is_just_), value_(std::move(other.value_)) {}
   void operator=(T value) {
-    value_ = std::move(value);
+    value_ = value;
     is_just_ = true;
   }
   const T& fromJust() const {

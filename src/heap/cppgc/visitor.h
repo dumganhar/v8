@@ -15,7 +15,7 @@ class HeapBase;
 class HeapObjectHeader;
 class PageBackend;
 
-class VisitorFactory final {
+class VisitorFactory {
  public:
   static constexpr Visitor::Key CreateKey() { return {}; }
 };
@@ -24,29 +24,20 @@ class VisitorFactory final {
 // use its internals.
 class VisitorBase : public cppgc::Visitor {
  public:
-  template <typename T>
-  static void TraceRawForTesting(cppgc::Visitor* visitor, const T* t) {
-    visitor->TraceImpl(t);
-  }
-
   VisitorBase() : cppgc::Visitor(VisitorFactory::CreateKey()) {}
   ~VisitorBase() override = default;
 
   VisitorBase(const VisitorBase&) = delete;
   VisitorBase& operator=(const VisitorBase&) = delete;
-};
 
-class RootVisitorBase : public RootVisitor {
- public:
-  RootVisitorBase() : RootVisitor(VisitorFactory::CreateKey()) {}
-  ~RootVisitorBase() override = default;
-
-  RootVisitorBase(const RootVisitorBase&) = delete;
-  RootVisitorBase& operator=(const RootVisitorBase&) = delete;
+  template <typename Persistent>
+  void TraceRootForTesting(const Persistent& p, const SourceLocation& loc) {
+    TraceRoot(p, loc);
+  }
 };
 
 // Regular visitor that additionally allows for conservative tracing.
-class V8_EXPORT_PRIVATE ConservativeTracingVisitor {
+class ConservativeTracingVisitor {
  public:
   ConservativeTracingVisitor(HeapBase&, PageBackend&, cppgc::Visitor&);
   virtual ~ConservativeTracingVisitor() = default;
@@ -55,18 +46,16 @@ class V8_EXPORT_PRIVATE ConservativeTracingVisitor {
   ConservativeTracingVisitor& operator=(const ConservativeTracingVisitor&) =
       delete;
 
-  virtual void TraceConservativelyIfNeeded(const void*);
+  void TraceConservativelyIfNeeded(const void*);
   void TraceConservativelyIfNeeded(HeapObjectHeader&);
-  void TraceConservatively(const HeapObjectHeader&);
 
  protected:
   using TraceConservativelyCallback = void(ConservativeTracingVisitor*,
                                            const HeapObjectHeader&);
-  virtual void VisitFullyConstructedConservatively(HeapObjectHeader&);
+  virtual void V8_EXPORT_PRIVATE
+  VisitFullyConstructedConservatively(HeapObjectHeader&);
   virtual void VisitInConstructionConservatively(HeapObjectHeader&,
                                                  TraceConservativelyCallback) {}
-
-  void TryTracePointerConservatively(Address address);
 
   HeapBase& heap_;
   PageBackend& page_backend_;

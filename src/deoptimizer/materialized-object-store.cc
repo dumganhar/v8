@@ -5,7 +5,6 @@
 #include "src/deoptimizer/materialized-object-store.h"
 
 #include "src/execution/isolate.h"
-#include "src/heap/heap-inl.h"
 #include "src/objects/fixed-array-inl.h"
 #include "src/objects/oddball.h"
 

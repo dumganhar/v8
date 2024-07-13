@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-# Copyright 2014 The Chromium Authors
+# Copyright 2014 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-"""Generates compile DBs that are more amenable for clang tooling."""
+
+"""
+Helper for generating compile DBs for clang tooling. On non-Windows platforms,
+this is pretty straightforward. On Windows, the tool does a bit of extra work to
+integrate the content of response files, force clang tooling to run in clang-cl
+mode, etc.
+"""
 
 import argparse
 import json
@@ -19,36 +25,26 @@ from clang import compile_db
 def main(argv):
   parser = argparse.ArgumentParser()
   parser.add_argument(
-      '--filter_arg',
+      '-p',
+      required=True,
+      help='Path to build directory')
+  parser.add_argument(
+      'targets',
       nargs='*',
-      help='Additional argument(s) to filter out from compilation database.')
+      help='Additional targets to pass to ninja')
+  parser.add_argument(
+      '--target_os',
+      choices=['android', 'chromeos', 'ios', 'linux', 'nacl', 'mac', 'win'],
+      help='Target OS - see `gn help target_os`. Set to "win" when ' +
+      'cross-compiling Windows from Linux or another host')
   parser.add_argument(
       '-o',
       help='File to write the compilation database to. Defaults to stdout')
-  parser.add_argument('-p', required=True, help='Path to build directory')
-  parser.add_argument(
-      '--target_os',
-      choices=[
-          'android',
-          'chromeos',
-          'fuchsia',
-          'ios',
-          'linux',
-          'mac',
-          'nacl',
-          'win',
-      ],
-      help='Target OS - see `gn help target_os`. Set to "win" when ' +
-      'cross-compiling Windows from Linux or another host')
-  parser.add_argument('targets',
-                      nargs='*',
-                      help='Additional targets to pass to ninja')
 
   args = parser.parse_args()
 
-  compdb_text = json.dumps(compile_db.ProcessCompileDatabase(
-      compile_db.GenerateWithNinja(args.p, args.targets), args.filter_arg,
-      args.target_os),
+  compdb_text = json.dumps(compile_db.ProcessCompileDatabaseIfNeeded(
+      compile_db.GenerateWithNinja(args.p, args.targets), args.target_os),
                            indent=2)
   if args.o is None:
     print(compdb_text)

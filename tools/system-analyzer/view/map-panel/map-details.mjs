@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 import {FocusEvent} from '../events.mjs';
-import {DOM, ExpandableText, V8CustomElement} from '../helper.mjs';
+import {DOM, V8CustomElement} from '../helper.mjs';
 
 DOM.defineCustomElement(
     './view/map-panel/map-details',
@@ -11,49 +11,37 @@ DOM.defineCustomElement(
 
       constructor() {
         super(templateText);
+        this._filePositionNode.onclick = e => this._handleFilePositionClick(e);
       }
 
       get _mapDetails() {
         return this.$('#mapDetails');
       }
 
-      get _mapProperties() {
-        return this.$('#mapProperties');
+      get _filePositionNode() {
+        return this.$('#filePositionNode');
       }
 
       set map(map) {
         if (this._map === map) return;
         this._map = map;
-        this.requestUpdate();
+        this.update();
       }
 
       _update() {
-        this._mapProperties.innerText = '';
+        let details = '';
+        let clickableDetails = '';
         if (this._map) {
-          let clickableDetailsTable = DOM.table('properties');
-
-          {
-            const row = clickableDetailsTable.insertRow();
-            row.insertCell().innerText = 'ID';
-            row.insertCell().innerText = `${this._map.id}`;
-          }
-          {
-            const row = clickableDetailsTable.insertRow();
-            row.insertCell().innerText = 'Source location';
-            const sourceLocation = row.insertCell();
-            new ExpandableText(sourceLocation, `${this._map.sourcePosition}`);
-            sourceLocation.className = 'clickable';
-            sourceLocation.onclick = e => this._handleSourcePositionClick(e);
-          }
-
-          this._mapProperties.appendChild(clickableDetailsTable);
-          this._mapDetails.innerText = this._map.description;
-        } else {
-          this._mapDetails.innerText = '';
+          clickableDetails = `ID: ${this._map.id}`;
+          clickableDetails += `\nSource location: ${this._map.filePosition}`;
+          details = this._map.description;
         }
+        this._filePositionNode.innerText = clickableDetails;
+        this._filePositionNode.classList.add('clickable');
+        this._mapDetails.innerText = details;
       }
 
-      _handleSourcePositionClick(event) {
+      _handleFilePositionClick(event) {
         this.dispatchEvent(new FocusEvent(this._map.sourcePosition));
       }
     });

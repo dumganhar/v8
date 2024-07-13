@@ -4,7 +4,6 @@
 
 #include "src/heap/memory-measurement-inl.h"
 #include "src/heap/memory-measurement.h"
-#include "src/objects/smi.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-tester.h"
 #include "test/cctest/heap/heap-utils.h"
@@ -58,6 +57,8 @@ TEST(NativeContextInferrerJSObject) {
   Handle<HeapObject> function = Handle<HeapObject>::cast(object);
   NativeContextInferrer inferrer;
   Address inferred_context = 0;
+  // TODO(ulan): Enable this test once we have more precise native
+  // context inference.
   CHECK(inferrer.Infer(isolate, function->map(), *function, &inferred_context));
   CHECK_EQ(native_context->ptr(), inferred_context);
 }
@@ -132,7 +133,10 @@ namespace {
 
 class MockPlatform : public TestPlatform {
  public:
-  MockPlatform() : mock_task_runner_(new MockTaskRunner()) {}
+  MockPlatform() : TestPlatform(), mock_task_runner_(new MockTaskRunner()) {
+    // Now that it's completely constructed, make this the current platform.
+    i::V8::SetPlatformForTesting(this);
+  }
 
   std::shared_ptr<v8::TaskRunner> GetForegroundTaskRunner(
       v8::Isolate*) override {
@@ -196,10 +200,14 @@ class MockMeasureMemoryDelegate : public v8::MeasureMemoryDelegate {
 
 }  // namespace
 
-TEST_WITH_PLATFORM(RandomizedTimeout, MockPlatform) {
+TEST(RandomizedTimeout) {
+  MockPlatform platform;
   v8::Isolate::CreateParams create_params;
   create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
-  v8::Isolate* isolate = CcTest::isolate();
+  // We have to create the isolate manually here. Using CcTest::isolate() would
+  // lead to the situation when the isolate outlives MockPlatform which may lead
+  // to UAF on the background thread.
+  v8::Isolate* isolate = v8::Isolate::New(create_params);
   std::vector<double> delays;
   for (int i = 0; i < 10; i++) {
     isolate->MeasureMemory(std::make_unique<MockMeasureMemoryDelegate>());
@@ -207,6 +215,7 @@ TEST_WITH_PLATFORM(RandomizedTimeout, MockPlatform) {
     platform.PerformTask();
   }
   std::sort(delays.begin(), delays.end());
+  isolate->Dispose();
   CHECK_LT(delays[0], delays.back());
 }
 
@@ -232,7 +241,7 @@ TEST(PartiallyInitializedJSFunction) {
   isolate->RegisterDeserializerStarted();
   // 2. Set the context field to the uninitialized sentintel.
   TaggedField<Object, JSFunction::kContextOffset>::store(
-      *js_function, Smi::uninitialized_deserialization_value());
+      *js_function, Deserializer::uninitialized_field_value());
   // 3. Request memory meaurement and run all tasks. GC that runs as part
   // of the measurement should not crash.
   CcTest::isolate()->MeasureMemory(
@@ -262,7 +271,7 @@ TEST(PartiallyInitializedContext) {
   isolate->RegisterDeserializerStarted();
   // 2. Set the native context field to the uninitialized sentintel.
   TaggedField<Object, Map::kConstructorOrBackPointerOrNativeContextOffset>::
-      store(*map, Smi::uninitialized_deserialization_value());
+      store(*map, Deserializer::uninitialized_field_value());
   // 3. Request memory meaurement and run all tasks. GC that runs as part
   // of the measurement should not crash.
   CcTest::isolate()->MeasureMemory(

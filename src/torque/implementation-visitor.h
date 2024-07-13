@@ -11,7 +11,6 @@
 #include "src/base/macros.h"
 #include "src/torque/ast.h"
 #include "src/torque/cfg.h"
-#include "src/torque/cpp-builder.h"
 #include "src/torque/declarations.h"
 #include "src/torque/global-context.h"
 #include "src/torque/type-oracle.h"
@@ -228,8 +227,6 @@ struct LayoutForInitialization {
   VisitResult size;
 };
 
-extern uint64_t next_unique_binding_index;
-
 template <class T>
 class Binding;
 
@@ -264,8 +261,7 @@ class Binding : public T {
         name_(name),
         previous_binding_(this),
         used_(false),
-        written_(false),
-        unique_index_(next_unique_binding_index++) {
+        written_(false) {
     std::swap(previous_binding_, manager_->current_bindings_[name]);
   }
   template <class... Args>
@@ -303,8 +299,6 @@ class Binding : public T {
   bool Written() const { return written_; }
   void SetWritten() { written_ = true; }
 
-  uint64_t unique_index() const { return unique_index_; }
-
  private:
   bool SkipLintCheck() const { return name_.length() > 0 && name_[0] == '_'; }
 
@@ -314,31 +308,26 @@ class Binding : public T {
   SourcePosition declaration_position_ = CurrentSourcePosition::Get();
   bool used_;
   bool written_;
-  uint64_t unique_index_;
 };
 
 template <class T>
 class BlockBindings {
  public:
   explicit BlockBindings(BindingsManager<T>* manager) : manager_(manager) {}
-  Binding<T>* Add(std::string name, T value, bool mark_as_used = false) {
+  void Add(std::string name, T value, bool mark_as_used = false) {
     ReportErrorIfAlreadyBound(name);
     auto binding =
         std::make_unique<Binding<T>>(manager_, name, std::move(value));
-    Binding<T>* result = binding.get();
     if (mark_as_used) binding->SetUsed();
     bindings_.push_back(std::move(binding));
-    return result;
   }
 
-  Binding<T>* Add(const Identifier* name, T value, bool mark_as_used = false) {
+  void Add(const Identifier* name, T value, bool mark_as_used = false) {
     ReportErrorIfAlreadyBound(name->value);
     auto binding =
         std::make_unique<Binding<T>>(manager_, name, std::move(value));
-    Binding<T>* result = binding.get();
     if (mark_as_used) binding->SetUsed();
     bindings_.push_back(std::move(binding));
-    return result;
   }
 
   std::vector<Binding<T>*> bindings() const {
@@ -443,7 +432,7 @@ class ImplementationVisitor {
  public:
   void GenerateBuiltinDefinitionsAndInterfaceDescriptors(
       const std::string& output_directory);
-  void GenerateVisitorLists(const std::string& output_directory);
+  void GenerateClassFieldOffsets(const std::string& output_directory);
   void GenerateBitFields(const std::string& output_directory);
   void GeneratePrintDefinitions(const std::string& output_directory);
   void GenerateClassDefinitions(const std::string& output_directory);
@@ -555,8 +544,7 @@ class ImplementationVisitor {
   VisitResult Visit(IncrementDecrementExpression* expr);
   VisitResult Visit(AssignmentExpression* expr);
   VisitResult Visit(StringLiteralExpression* expr);
-  VisitResult Visit(FloatingPointLiteralExpression* expr);
-  VisitResult Visit(IntegerLiteralExpression* expr);
+  VisitResult Visit(NumberLiteralExpression* expr);
   VisitResult Visit(AssumeTypeImpossibleExpression* expr);
   VisitResult Visit(TryLabelExpression* expr);
   VisitResult Visit(StatementExpression* expr);
@@ -754,12 +742,12 @@ class ImplementationVisitor {
   void GenerateExpressionBranch(Expression* expression, Block* true_block,
                                 Block* false_block);
 
-  cpp::Function GenerateMacroFunctionDeclaration(Macro* macro);
-
-  cpp::Function GenerateFunction(
-      cpp::Class* owner, const std::string& name, const Signature& signature,
-      const NameVector& parameter_names, bool pass_code_assembler_state = true,
-      std::vector<std::string>* generated_parameter_names = nullptr);
+  void GenerateMacroFunctionDeclaration(std::ostream& o,
+                                        Macro* macro);
+  std::vector<std::string> GenerateFunctionDeclaration(
+      std::ostream& o, const std::string& macro_prefix, const std::string& name,
+      const Signature& signature, const NameVector& parameter_names,
+      bool pass_code_assembler_state = true);
 
   VisitResult GenerateImplicitConvert(const Type* destination_type,
                                       VisitResult source);
@@ -853,8 +841,6 @@ class ImplementationVisitor {
     }
   }
 
-  class MacroInliningScope;
-
   base::Optional<CfgAssembler> assembler_;
   NullOStream null_stream_;
   bool is_dry_run_;
@@ -866,10 +852,6 @@ class ImplementationVisitor {
   // the value to load.
   std::unordered_map<const Expression*, const Identifier*>
       bitfield_expressions_;
-
-  // For emitting warnings. Contains the current set of macros being inlined in
-  // calls to InlineMacro.
-  std::unordered_set<const Macro*> inlining_macros_;
 
   // The contents of the debug macros output files. These contain all Torque
   // macros that have been generated using the C++ backend with debug purpose.

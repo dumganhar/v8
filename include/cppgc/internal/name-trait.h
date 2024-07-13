@@ -6,8 +6,6 @@
 #define INCLUDE_CPPGC_INTERNAL_NAME_TRAIT_H_
 
 #include <cstddef>
-#include <cstdint>
-#include <type_traits>
 
 #include "cppgc/name-provider.h"
 #include "v8config.h"  // NOLINT(build/include_directory)
@@ -59,11 +57,6 @@ struct HeapObjectName {
   bool name_was_hidden;
 };
 
-enum class HeapObjectNameForUnnamedObject : uint8_t {
-  kUseClassNameIfSupported,
-  kUseHiddenName,
-};
-
 class V8_EXPORT NameTraitBase {
  protected:
   static HeapObjectName GetNameFromTypeSignature(const char*);
@@ -74,34 +67,16 @@ class V8_EXPORT NameTraitBase {
 template <typename T>
 class NameTrait final : public NameTraitBase {
  public:
-  static constexpr bool HasNonHiddenName() {
-#if CPPGC_SUPPORTS_COMPILE_TIME_TYPENAME
-    return true;
-#elif CPPGC_SUPPORTS_OBJECT_NAMES
-    return true;
-#else   // !CPPGC_SUPPORTS_OBJECT_NAMES
-    return std::is_base_of<NameProvider, T>::value;
-#endif  // !CPPGC_SUPPORTS_OBJECT_NAMES
-  }
-
-  static HeapObjectName GetName(
-      const void* obj, HeapObjectNameForUnnamedObject name_retrieval_mode) {
-    return GetNameFor(static_cast<const T*>(obj), name_retrieval_mode);
+  static HeapObjectName GetName(const void* obj) {
+    return GetNameFor(static_cast<const T*>(obj));
   }
 
  private:
-  static HeapObjectName GetNameFor(const NameProvider* name_provider,
-                                   HeapObjectNameForUnnamedObject) {
-    // Objects inheriting from `NameProvider` are not considered unnamed as
-    // users already provided a name for them.
-    return {name_provider->GetHumanReadableName(), false};
+  static HeapObjectName GetNameFor(const NameProvider* name_provider) {
+    return {name_provider->GetName(), false};
   }
 
-  static HeapObjectName GetNameFor(
-      const void*, HeapObjectNameForUnnamedObject name_retrieval_mode) {
-    if (name_retrieval_mode == HeapObjectNameForUnnamedObject::kUseHiddenName)
-      return {NameProvider::kHiddenName, true};
-
+  static HeapObjectName GetNameFor(...) {
 #if CPPGC_SUPPORTS_COMPILE_TIME_TYPENAME
     return {GetTypename<T>(), false};
 #elif CPPGC_SUPPORTS_OBJECT_NAMES
@@ -126,8 +101,7 @@ class NameTrait final : public NameTraitBase {
   }
 };
 
-using NameCallback = HeapObjectName (*)(const void*,
-                                        HeapObjectNameForUnnamedObject);
+using NameCallback = HeapObjectName (*)(const void*);
 
 }  // namespace internal
 }  // namespace cppgc

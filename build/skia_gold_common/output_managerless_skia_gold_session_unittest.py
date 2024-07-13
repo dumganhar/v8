@@ -1,23 +1,15 @@
-#!/usr/bin/env vpython3
-# Copyright 2020 The Chromium Authors
+#!/usr/bin/env vpython
+# Copyright 2020 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 #pylint: disable=protected-access
 
 import os
-import re
-import sys
 import tempfile
-from typing import Any
 import unittest
 
-import six
-
-if six.PY2:
-  import mock
-else:
-  import unittest.mock as mock
+import mock
 
 from pyfakefs import fake_filesystem_unittest
 
@@ -28,21 +20,20 @@ from skia_gold_common import unittest_utils
 createSkiaGoldArgs = unittest_utils.createSkiaGoldArgs
 
 
-def assertArgWith(test: unittest.TestCase, arg_list: list, arg: Any,
-                  value: Any) -> None:
+def assertArgWith(test, arg_list, arg, value):
   i = arg_list.index(arg)
   test.assertEqual(arg_list[i + 1], value)
 
 
 class GpuSkiaGoldSessionDiffTest(fake_filesystem_unittest.TestCase):
-  def setUp(self) -> None:
+  def setUp(self):
     self.setUpPyfakefs()
     self._working_dir = tempfile.mkdtemp()
     self._json_keys = tempfile.NamedTemporaryFile(delete=False).name
 
   @mock.patch.object(omsgs.OutputManagerlessSkiaGoldSession,
                      '_RunCmdForRcAndOutput')
-  def test_commandCommonArgs(self, cmd_mock: mock.MagicMock) -> None:
+  def test_commandCommonArgs(self, cmd_mock):
     cmd_mock.return_value = (None, None)
     args = createSkiaGoldArgs(git_revision='a', local_pixel_tests=False)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
@@ -72,48 +63,20 @@ class GpuSkiaGoldSessionDiffTest(fake_filesystem_unittest.TestCase):
     # directory.
     self.assertNotIn(self._working_dir, call_args[i + 1])
 
-  @mock.patch.object(omsgs.OutputManagerlessSkiaGoldSession, '_StoreDiffLinks')
-  @mock.patch.object(omsgs.OutputManagerlessSkiaGoldSession,
-                     '_RunCmdForRcAndOutput')
-  def test_explicitLocalPngDirectory(self, cmd_mock: mock.MagicMock, _) -> None:
-    cmd_mock.return_value = (0, '')
-    if sys.platform == 'win32':
-      local_png_dir = 'c:\\tmp\\foo'
-    else:
-      local_png_dir = '/tmp/foo'
-    args = createSkiaGoldArgs(git_revision='a',
-                              skia_gold_local_png_write_directory=local_png_dir)
-    sgp = skia_gold_properties.SkiaGoldProperties(args)
-    session = omsgs.OutputManagerlessSkiaGoldSession(self._working_dir, sgp,
-                                                     self._json_keys, '', '')
-    _, _ = session.Diff('name', '', None)
-    self.assertEqual(cmd_mock.call_count, 1)
-    if six.PY3:
-      call_args = cmd_mock.call_args.args[0]
-    else:
-      call_args = cmd_mock.call_args[0][0]
-    self.assertIn('--out-dir', call_args)
-    output_dir = call_args[call_args.index('--out-dir') + 1]
-    # Directory should be a subdirectory of the directory we gave and be made
-    # up of the image name and a timestamp.
-    parent_dir, sub_dir = output_dir.rsplit(os.sep, 1)
-    self.assertEqual(parent_dir, local_png_dir)
-    sub_dir = os.path.normpath(sub_dir)
-    self.assertIsNotNone(re.match(r'^name_\d+$', sub_dir))
-
 
 class OutputManagerlessSkiaGoldSessionStoreDiffLinksTest(
     fake_filesystem_unittest.TestCase):
-  def setUp(self) -> None:
+  def setUp(self):
     self.setUpPyfakefs()
     self._working_dir = tempfile.mkdtemp()
     self._json_keys = tempfile.NamedTemporaryFile(delete=False).name
 
-  def test_outputManagerNotNeeded(self) -> None:
+  def test_outputManagerNotNeeded(self):
     args = createSkiaGoldArgs(git_revision='a', local_pixel_tests=True)
     sgp = skia_gold_properties.SkiaGoldProperties(args)
     session = omsgs.OutputManagerlessSkiaGoldSession(self._working_dir, sgp,
-                                                     self._json_keys, '', '')
+                                                     self._json_keys, None,
+                                                     None)
     input_filepath = os.path.join(self._working_dir, 'input-inputhash.png')
     with open(input_filepath, 'w') as f:
       f.write('')

@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "src/base/optional.h"
-#include "src/numbers/integer-literal.h"
 #include "src/torque/constants.h"
 #include "src/torque/source-positions.h"
 #include "src/torque/utils.h"
@@ -34,8 +33,7 @@ namespace torque {
   V(ConditionalExpression)               \
   V(IdentifierExpression)                \
   V(StringLiteralExpression)             \
-  V(IntegerLiteralExpression)            \
-  V(FloatingPointLiteralExpression)      \
+  V(NumberLiteralExpression)             \
   V(FieldAccessExpression)               \
   V(ElementAccessExpression)             \
   V(DereferenceExpression)               \
@@ -461,28 +459,16 @@ struct StringLiteralExpression : Expression {
   std::string literal;
 };
 
-struct IntegerLiteralExpression : Expression {
-  DEFINE_AST_NODE_LEAF_BOILERPLATE(IntegerLiteralExpression)
-  IntegerLiteralExpression(SourcePosition pos, IntegerLiteral value)
-      : Expression(kKind, pos), value(std::move(value)) {}
+struct NumberLiteralExpression : Expression {
+  DEFINE_AST_NODE_LEAF_BOILERPLATE(NumberLiteralExpression)
+  NumberLiteralExpression(SourcePosition pos, double number)
+      : Expression(kKind, pos), number(number) {}
 
   void VisitAllSubExpressions(VisitCallback callback) override {
     callback(this);
   }
 
-  IntegerLiteral value;
-};
-
-struct FloatingPointLiteralExpression : Expression {
-  DEFINE_AST_NODE_LEAF_BOILERPLATE(FloatingPointLiteralExpression)
-  FloatingPointLiteralExpression(SourcePosition pos, double value)
-      : Expression(kKind, pos), value(value) {}
-
-  void VisitAllSubExpressions(VisitCallback callback) override {
-    callback(this);
-  }
-
-  double value;
+  double number;
 };
 
 struct ElementAccessExpression : LocationExpression {
@@ -595,13 +581,11 @@ struct AssumeTypeImpossibleExpression : Expression {
 struct NewExpression : Expression {
   DEFINE_AST_NODE_LEAF_BOILERPLATE(NewExpression)
   NewExpression(SourcePosition pos, TypeExpression* type,
-                std::vector<NameAndExpression> initializers, bool pretenured,
-                bool clear_padding)
+                std::vector<NameAndExpression> initializers, bool pretenured)
       : Expression(kKind, pos),
         type(type),
         initializers(std::move(initializers)),
-        pretenured(pretenured),
-        clear_padding(clear_padding) {}
+        pretenured(pretenured) {}
 
   void VisitAllSubExpressions(VisitCallback callback) override {
     for (auto& initializer : initializers) {
@@ -613,7 +597,6 @@ struct NewExpression : Expression {
   TypeExpression* type;
   std::vector<NameAndExpression> initializers;
   bool pretenured;
-  bool clear_padding;
 };
 
 enum class ImplicitKind { kNoImplicit, kJSImplicit, kImplicit };
@@ -642,18 +625,18 @@ struct BasicTypeExpression : TypeExpression {
   DEFINE_AST_NODE_LEAF_BOILERPLATE(BasicTypeExpression)
   BasicTypeExpression(SourcePosition pos,
                       std::vector<std::string> namespace_qualification,
-                      Identifier* name,
+                      std::string name,
                       std::vector<TypeExpression*> generic_arguments)
       : TypeExpression(kKind, pos),
         namespace_qualification(std::move(namespace_qualification)),
-        is_constexpr(IsConstexprName(name->value)),
-        name(name),
+        is_constexpr(IsConstexprName(name)),
+        name(std::move(name)),
         generic_arguments(std::move(generic_arguments)) {}
-  BasicTypeExpression(SourcePosition pos, Identifier* name)
-      : BasicTypeExpression(pos, {}, name, {}) {}
+  BasicTypeExpression(SourcePosition pos, std::string name)
+      : BasicTypeExpression(pos, {}, std::move(name), {}) {}
   std::vector<std::string> namespace_qualification;
   bool is_constexpr;
-  Identifier* name;
+  std::string name;
   std::vector<TypeExpression*> generic_arguments;
 };
 
@@ -727,15 +710,18 @@ struct ReturnStatement : Statement {
 
 struct DebugStatement : Statement {
   DEFINE_AST_NODE_LEAF_BOILERPLATE(DebugStatement)
-  enum class Kind { kUnreachable, kDebug };
-  DebugStatement(SourcePosition pos, Kind kind)
-      : Statement(kKind, pos), kind(kind) {}
-  Kind kind;
+  DebugStatement(SourcePosition pos, const std::string& reason,
+                 bool never_continues)
+      : Statement(kKind, pos),
+        reason(reason),
+        never_continues(never_continues) {}
+  std::string reason;
+  bool never_continues;
 };
 
 struct AssertStatement : Statement {
   DEFINE_AST_NODE_LEAF_BOILERPLATE(AssertStatement)
-  enum class AssertKind { kDcheck, kCheck, kStaticAssert };
+  enum class AssertKind { kAssert, kCheck, kStaticAssert };
   AssertStatement(SourcePosition pos, AssertKind kind, Expression* expression,
                   std::string source)
       : Statement(kKind, pos),
@@ -951,8 +937,9 @@ struct ClassFieldExpression {
   NameAndTypeExpression name_and_type;
   base::Optional<ClassFieldIndexInfo> index;
   std::vector<ConditionalAnnotation> conditions;
-  bool custom_weak_marking;
+  bool weak;
   bool const_qualified;
+  bool generate_verify;
   FieldSynchronization read_synchronization;
   FieldSynchronization write_synchronization;
 };
@@ -1083,13 +1070,10 @@ struct TorqueBuiltinDeclaration : BuiltinDeclaration {
                            bool javascript_linkage, Identifier* name,
                            ParameterList parameters,
                            TypeExpression* return_type,
-                           bool has_custom_interface_descriptor,
                            base::Optional<Statement*> body)
       : BuiltinDeclaration(kKind, pos, javascript_linkage, transitioning, name,
                            std::move(parameters), return_type),
-        has_custom_interface_descriptor(has_custom_interface_descriptor),
         body(body) {}
-  bool has_custom_interface_descriptor;
   base::Optional<Statement*> body;
 };
 
@@ -1322,9 +1306,10 @@ inline VarDeclarationStatement* MakeConstDeclarationStatement(
 }
 
 inline BasicTypeExpression* MakeBasicTypeExpression(
-    std::vector<std::string> namespace_qualification, Identifier* name,
+    std::vector<std::string> namespace_qualification, std::string name,
     std::vector<TypeExpression*> generic_arguments = {}) {
-  return MakeNode<BasicTypeExpression>(std::move(namespace_qualification), name,
+  return MakeNode<BasicTypeExpression>(std::move(namespace_qualification),
+                                       std::move(name),
                                        std::move(generic_arguments));
 }
 

@@ -3,8 +3,12 @@
 // found in the LICENSE file.
 
 #include "src/builtins/accessors.h"
+#include "src/codegen/compiler.h"
+#include "src/execution/arguments-inl.h"
 #include "src/execution/isolate-inl.h"
 #include "src/heap/heap-inl.h"  // For ToBoolean. TODO(jkummerow): Drop.
+#include "src/logging/counters.h"
+#include "src/runtime/runtime-utils.h"
 
 namespace v8 {
 namespace internal {
@@ -13,7 +17,7 @@ namespace internal {
 RUNTIME_FUNCTION(Runtime_FunctionGetScriptSource) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
-  Handle<JSReceiver> function = args.at<JSReceiver>(0);
+  CONVERT_ARG_HANDLE_CHECKED(JSReceiver, function, 0);
 
   if (function->IsJSFunction()) {
     Handle<Object> script(Handle<JSFunction>::cast(function)->shared().script(),
@@ -26,7 +30,7 @@ RUNTIME_FUNCTION(Runtime_FunctionGetScriptSource) {
 RUNTIME_FUNCTION(Runtime_FunctionGetScriptId) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
-  Handle<JSReceiver> function = args.at<JSReceiver>(0);
+  CONVERT_ARG_HANDLE_CHECKED(JSReceiver, function, 0);
 
   if (function->IsJSFunction()) {
     Handle<Object> script(Handle<JSFunction>::cast(function)->shared().script(),
@@ -41,11 +45,11 @@ RUNTIME_FUNCTION(Runtime_FunctionGetScriptId) {
 RUNTIME_FUNCTION(Runtime_FunctionGetSourceCode) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
-  Handle<JSReceiver> function = args.at<JSReceiver>(0);
+  CONVERT_ARG_HANDLE_CHECKED(JSReceiver, function, 0);
   if (function->IsJSFunction()) {
     Handle<SharedFunctionInfo> shared(
         Handle<JSFunction>::cast(function)->shared(), isolate);
-    return *SharedFunctionInfo::GetSourceCode(isolate, shared);
+    return *SharedFunctionInfo::GetSourceCode(shared);
   }
   return ReadOnlyRoots(isolate).undefined_value();
 }
@@ -55,7 +59,7 @@ RUNTIME_FUNCTION(Runtime_FunctionGetScriptSourcePosition) {
   SealHandleScope shs(isolate);
   DCHECK_EQ(1, args.length());
 
-  auto fun = JSFunction::cast(args[0]);
+  CONVERT_ARG_CHECKED(JSFunction, fun, 0);
   int pos = fun.shared().StartPosition();
   return Smi::FromInt(pos);
 }
@@ -65,7 +69,7 @@ RUNTIME_FUNCTION(Runtime_FunctionIsAPIFunction) {
   SealHandleScope shs(isolate);
   DCHECK_EQ(1, args.length());
 
-  auto f = JSFunction::cast(args[0]);
+  CONVERT_ARG_CHECKED(JSFunction, f, 0);
   return isolate->heap()->ToBoolean(f.shared().IsApiFunction());
 }
 
@@ -74,9 +78,9 @@ RUNTIME_FUNCTION(Runtime_Call) {
   HandleScope scope(isolate);
   DCHECK_LE(2, args.length());
   int const argc = args.length() - 2;
-  Handle<Object> target = args.at(0);
-  Handle<Object> receiver = args.at(1);
-  base::ScopedVector<Handle<Object>> argv(argc);
+  CONVERT_ARG_HANDLE_CHECKED(Object, target, 0);
+  CONVERT_ARG_HANDLE_CHECKED(Object, receiver, 1);
+  ScopedVector<Handle<Object>> argv(argc);
   for (int i = 0; i < argc; ++i) {
     argv[i] = args.at(2 + i);
   }
@@ -88,7 +92,7 @@ RUNTIME_FUNCTION(Runtime_Call) {
 RUNTIME_FUNCTION(Runtime_IsFunction) {
   SealHandleScope shs(isolate);
   DCHECK_EQ(1, args.length());
-  Object object = args[0];
+  CONVERT_ARG_CHECKED(Object, object, 0);
   return isolate->heap()->ToBoolean(object.IsFunction());
 }
 

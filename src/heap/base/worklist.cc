@@ -4,21 +4,16 @@
 
 #include "src/heap/base/worklist.h"
 
-namespace heap::base {
-
-// static
-bool WorklistBase::predictable_order_ = false;
-
-// static
-void WorklistBase::EnforcePredictableOrder() { predictable_order_ = true; }
-
+namespace heap {
+namespace base {
 namespace internal {
 
 // static
 SegmentBase* SegmentBase::GetSentinelSegmentAddress() {
-  static SegmentBase sentinel_segment(0);
-  return &sentinel_segment;
+static SegmentBase kSentinelSegment(0);
+return &kSentinelSegment;
 }
 
 }  // namespace internal
-}  // namespace heap::base
+}  // namespace base
+}  // namespace heap

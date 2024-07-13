@@ -66,7 +66,7 @@ bool IsDisjoint(const CodeProtectionInfo* a, const CodeProtectionInfo* b) {
 // registered.
 void VerifyCodeRangeIsDisjoint(const CodeProtectionInfo* code_info) {
   for (size_t i = 0; i < gNumCodeObjects; ++i) {
-    TH_DCHECK(IsDisjoint(code_info, gCodeObjects[i].code_info));
+    DCHECK(IsDisjoint(code_info, gCodeObjects[i].code_info));
   }
 }
 
@@ -78,25 +78,24 @@ void ValidateCodeObjects() {
     if (data == nullptr) continue;
 
     // Do some sanity checks on the protected instruction data
-    for (unsigned j = 0; j < data->num_protected_instructions; ++j) {
-      TH_DCHECK(data->instructions[j].instr_offset >= 0);
-      TH_DCHECK(data->instructions[j].instr_offset < data->size);
-      TH_DCHECK(data->instructions[j].landing_offset >= 0);
-      TH_DCHECK(data->instructions[j].landing_offset < data->size);
-      TH_DCHECK(data->instructions[j].landing_offset >
-                data->instructions[j].instr_offset);
+    for (unsigned i = 0; i < data->num_protected_instructions; ++i) {
+      DCHECK_GE(data->instructions[i].instr_offset, 0);
+      DCHECK_LT(data->instructions[i].instr_offset, data->size);
+      DCHECK_GE(data->instructions[i].landing_offset, 0);
+      DCHECK_LT(data->instructions[i].landing_offset, data->size);
+      DCHECK_GT(data->instructions[i].landing_offset,
+                data->instructions[i].instr_offset);
     }
   }
 
   // Check the validity of the free list.
-#ifdef DEBUG
   size_t free_count = 0;
   for (size_t i = gNextCodeObject; i != gNumCodeObjects;
        i = gCodeObjects[i].next_free) {
-    TH_DCHECK(i < gNumCodeObjects);
+    DCHECK_LT(i, gNumCodeObjects);
     ++free_count;
     // This check will fail if we encounter a cycle.
-    TH_DCHECK(free_count <= gNumCodeObjects);
+    DCHECK_LE(free_count, gNumCodeObjects);
   }
 
   // Check that all free entries are reachable via the free list.
@@ -106,13 +105,12 @@ void ValidateCodeObjects() {
       ++free_count2;
     }
   }
-  TH_DCHECK(free_count == free_count2);
-#endif
+  DCHECK_EQ(free_count, free_count2);
 }
 }  // namespace
 
 CodeProtectionInfo* CreateHandlerData(
-    uintptr_t base, size_t size, size_t num_protected_instructions,
+    Address base, size_t size, size_t num_protected_instructions,
     const ProtectedInstructionData* protected_instructions) {
   const size_t alloc_size = HandlerDataSize(num_protected_instructions);
   CodeProtectionInfo* data =
@@ -133,8 +131,9 @@ CodeProtectionInfo* CreateHandlerData(
 }
 
 int RegisterHandlerData(
-    uintptr_t base, size_t size, size_t num_protected_instructions,
+    Address base, size_t size, size_t num_protected_instructions,
     const ProtectedInstructionData* protected_instructions) {
+
   CodeProtectionInfo* data = CreateHandlerData(
       base, size, num_protected_instructions, protected_instructions);
 
@@ -189,7 +188,7 @@ int RegisterHandlerData(
     gNumCodeObjects = new_size;
   }
 
-  TH_DCHECK(gCodeObjects[i].code_info == nullptr);
+  DCHECK(gCodeObjects[i].code_info == nullptr);
 
   // Find out where the next entry should go.
   gNextCodeObject = gCodeObjects[i].next_free;
@@ -212,7 +211,7 @@ void ReleaseHandlerData(int index) {
   if (index == kInvalidIndex) {
     return;
   }
-  TH_DCHECK(index >= 0);
+  DCHECK_GE(index, 0);
 
   // Remove the data from the global list if it's there.
   CodeProtectionInfo* data = nullptr;
@@ -231,7 +230,7 @@ void ReleaseHandlerData(int index) {
   }
   // TODO(eholk): on debug builds, ensure there are no more copies in
   // the list.
-  TH_DCHECK(data);  // make sure we're releasing legitimate handler data.
+  DCHECK_NOT_NULL(data);  // make sure we're releasing legitimate handler data.
   free(data);
 }
 
@@ -260,9 +259,9 @@ bool EnableTrapHandler(bool use_v8_handler) {
   // trap handlers are disabled.
   bool can_enable =
       g_can_enable_trap_handler.exchange(false, std::memory_order_relaxed);
-  // EnableTrapHandler called twice, or after IsTrapHandlerEnabled.
-  TH_CHECK(can_enable);
-
+  if (!can_enable) {
+    FATAL("EnableTrapHandler called twice, or after IsTrapHandlerEnabled");
+  }
   if (!V8_TRAP_HANDLER_SUPPORTED) {
     return false;
   }

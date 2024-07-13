@@ -8,14 +8,13 @@
 #include "src/objects/fixed-array.h"
 #include "src/objects/js-objects.h"
 #include "src/objects/struct.h"
+#include "torque-generated/field-offsets.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
 
 namespace v8 {
 namespace internal {
-
-class StructBodyDescriptor;
 
 #include "torque-generated/src/objects/arguments-tq.inc"
 
@@ -30,10 +29,12 @@ class JSArgumentsObject
 
 // JSSloppyArgumentsObject is just a JSArgumentsObject with specific initial
 // map. This initial map adds in-object properties for "length" and "callee".
-class JSSloppyArgumentsObject
-    : public TorqueGeneratedJSSloppyArgumentsObject<JSSloppyArgumentsObject,
-                                                    JSArgumentsObject> {
+class JSSloppyArgumentsObject : public JSArgumentsObject {
  public:
+  DEFINE_FIELD_OFFSET_CONSTANTS(
+      JSArgumentsObject::kHeaderSize,
+      TORQUE_GENERATED_JS_SLOPPY_ARGUMENTS_OBJECT_FIELDS)
+
   // Indices of in-object properties.
   static const int kLengthIndex = 0;
   static const int kCalleeIndex = kLengthIndex + 1;
@@ -44,13 +45,16 @@ class JSSloppyArgumentsObject
 
 // JSStrictArgumentsObject is just a JSArgumentsObject with specific initial
 // map. This initial map adds an in-object property for "length".
-class JSStrictArgumentsObject
-    : public TorqueGeneratedJSStrictArgumentsObject<JSStrictArgumentsObject,
-                                                    JSArgumentsObject> {
+class JSStrictArgumentsObject : public JSArgumentsObject {
  public:
+  // Layout description.
+  DEFINE_FIELD_OFFSET_CONSTANTS(
+      JSArgumentsObject::kHeaderSize,
+      TORQUE_GENERATED_JS_STRICT_ARGUMENTS_OBJECT_FIELDS)
+
   // Indices of in-object properties.
   static const int kLengthIndex = 0;
-  static_assert(kLengthIndex == JSSloppyArgumentsObject::kLengthIndex);
+  STATIC_ASSERT(kLengthIndex == JSSloppyArgumentsObject::kLengthIndex);
 
  private:
   DISALLOW_IMPLICIT_CONSTRUCTORS(JSStrictArgumentsObject);
@@ -68,8 +72,6 @@ class AliasedArgumentsEntry
     : public TorqueGeneratedAliasedArgumentsEntry<AliasedArgumentsEntry,
                                                   Struct> {
  public:
-  using BodyDescriptor = StructBodyDescriptor;
-
   TQ_OBJECT_CONSTRUCTORS(AliasedArgumentsEntry)
 };
 

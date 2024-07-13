@@ -17,11 +17,9 @@ namespace v8 {
 namespace internal {
 
 class Isolate;
-class LocalIsolate;
 class ReadOnlyRoots;
 
 inline uint64_t HashSeed(Isolate* isolate);
-inline uint64_t HashSeed(LocalIsolate* isolate);
 inline uint64_t HashSeed(ReadOnlyRoots roots);
 
 }  // namespace internal
@@ -38,13 +36,10 @@ inline uint64_t HashSeed(Isolate* isolate) {
   return HashSeed(ReadOnlyRoots(isolate));
 }
 
-inline uint64_t HashSeed(LocalIsolate* isolate) {
-  return HashSeed(ReadOnlyRoots(isolate));
-}
-
 inline uint64_t HashSeed(ReadOnlyRoots roots) {
   uint64_t seed;
-  roots.hash_seed()->copy_out(0, reinterpret_cast<uint8_t*>(&seed), kInt64Size);
+  roots.hash_seed().copy_out(0, reinterpret_cast<byte*>(&seed), kInt64Size);
+  DCHECK(FLAG_randomize_hashes || seed == 0);
   return seed;
 }
 

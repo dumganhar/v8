@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 #
-# Copyright 2018 The Chromium Authors
+# Copyright 2018 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -27,9 +27,6 @@ sys.path.insert(
 
 from util import build_utils
 from util import resource_utils
-import action_helpers  # build_utils adds //build to sys.path.
-import zip_helpers
-
 
 # A small string template for the content of each strings.xml file.
 # NOTE: The name is chosen to avoid any conflicts with other string defined
@@ -55,10 +52,8 @@ def _AddLocaleResourceFileToZip(out_zip, android_locale, locale):
     zip_path = 'values-%s/strings.xml' % android_locale
   else:
     zip_path = 'values/strings.xml'
-  zip_helpers.add_to_zip_hermetic(out_zip,
-                                  zip_path,
-                                  data=locale_data,
-                                  compress=False)
+  build_utils.AddToZipHermetic(
+      out_zip, zip_path, data=locale_data, compress=False)
 
 
 def main():
@@ -74,11 +69,11 @@ def main():
 
   args = parser.parse_args()
 
-  locale_list = action_helpers.parse_gn_list(args.locale_list)
+  locale_list = build_utils.ParseGnList(args.locale_list)
   if not locale_list:
     raise Exception('Locale list cannot be empty!')
 
-  with action_helpers.atomic_output(args.output_zip) as tmp_file:
+  with build_utils.AtomicOutput(args.output_zip) as tmp_file:
     with zipfile.ZipFile(tmp_file, 'w') as out_zip:
       # First, write the default value, since aapt requires one.
       _AddLocaleResourceFileToZip(out_zip, '', _DEFAULT_CHROME_LOCALE)

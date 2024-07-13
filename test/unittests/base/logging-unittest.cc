@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/base/logging.h"
-
 #include <cstdint>
 
+#include "src/base/logging.h"
+#include "src/objects/objects.h"
 #include "src/objects/smi.h"
 #include "testing/gtest-support.h"
 
@@ -85,23 +85,17 @@ std::string SanitizeRegexp(std::string msg) {
   return msg;
 }
 
-std::string FailureMessage(std::string msg) {
-#if !defined(DEBUG) && defined(OFFICIAL_BUILD)
-  // Official release builds strip all fatal messages for saving binary size,
-  // see src/base/logging.h.
-  USE(SanitizeRegexp);
-  return "";
-#else
-  return SanitizeRegexp(msg);
-#endif
-}
-
 std::string FailureMessage(const char* msg, const char* lhs, const char* rhs) {
 #ifdef DEBUG
   return SanitizeRegexp(
       std::string{msg}.append(" (").append(lhs).append(" vs. ").append(rhs));
+#elif defined(OFFICIAL_BUILD)
+  // Official release builds strip all fatal messages for saving binary size,
+  // see src/base/logging.h.
+  USE(SanitizeRegexp);
+  return "ignored";
 #else
-  return FailureMessage(msg);
+  return SanitizeRegexp(msg);
 #endif
 }
 
@@ -279,8 +273,7 @@ TEST(LoggingDeathTest, OutputLongValues) {
 }
 
 TEST(LoggingDeathTest, FatalKills) {
-  ASSERT_DEATH_IF_SUPPORTED(FATAL("Dread pirate"),
-                            FailureMessage("Dread pirate"));
+  ASSERT_DEATH_IF_SUPPORTED(FATAL("Dread pirate"), "Dread pirate");
 }
 
 TEST(LoggingDeathTest, DcheckIsOnlyFatalInDebug) {

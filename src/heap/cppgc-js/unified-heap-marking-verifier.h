@@ -13,9 +13,10 @@ namespace internal {
 class V8_EXPORT_PRIVATE UnifiedHeapMarkingVerifier final
     : public cppgc::internal::MarkingVerifierBase {
  public:
-  UnifiedHeapMarkingVerifier(cppgc::internal::HeapBase&,
-                             cppgc::internal::CollectionType);
+  explicit UnifiedHeapMarkingVerifier(cppgc::internal::HeapBase&);
   ~UnifiedHeapMarkingVerifier() final = default;
+
+  void SetCurrentParent(const cppgc::internal::HeapObjectHeader*) final;
 
  private:
   // TODO(chromium:1056170): Use a verification state that can handle JS

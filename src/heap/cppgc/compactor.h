@@ -12,10 +12,9 @@
 namespace cppgc {
 namespace internal {
 
-class NormalPageSpace;
-
 class V8_EXPORT_PRIVATE Compactor final {
-  using CompactableSpaceHandling = SweepingConfig::CompactableSpaceHandling;
+  using CompactableSpaceHandling =
+      Sweeper::SweepingConfig::CompactableSpaceHandling;
 
  public:
   explicit Compactor(RawHeap&);
@@ -24,10 +23,11 @@ class V8_EXPORT_PRIVATE Compactor final {
   Compactor(const Compactor&) = delete;
   Compactor& operator=(const Compactor&) = delete;
 
-  void InitializeIfShouldCompact(GCConfig::MarkingType, StackState);
-  void CancelIfShouldNotCompact(GCConfig::MarkingType, StackState);
-  // Returns whether spaces need to be processed by the Sweeper after
-  // compaction.
+  void InitializeIfShouldCompact(GarbageCollector::Config::MarkingType,
+                                 GarbageCollector::Config::StackState);
+  // Returns true is compaction was cancelled.
+  bool CancelIfShouldNotCompact(GarbageCollector::Config::MarkingType,
+                                GarbageCollector::Config::StackState);
   CompactableSpaceHandling CompactSpacesIfEnabled();
 
   CompactionWorklists* compaction_worklists() {
@@ -38,7 +38,8 @@ class V8_EXPORT_PRIVATE Compactor final {
   bool IsEnabledForTesting() const { return is_enabled_; }
 
  private:
-  bool ShouldCompact(GCConfig::MarkingType, StackState) const;
+  bool ShouldCompact(GarbageCollector::Config::MarkingType,
+                     GarbageCollector::Config::StackState) const;
 
   RawHeap& heap_;
   // Compactor does not own the compactable spaces. The heap owns all spaces.
@@ -47,7 +48,6 @@ class V8_EXPORT_PRIVATE Compactor final {
   std::unique_ptr<CompactionWorklists> compaction_worklists_;
 
   bool is_enabled_ = false;
-  bool is_cancelled_ = false;
   bool enable_for_next_gc_for_testing_ = false;
 };
 

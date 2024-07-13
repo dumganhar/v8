@@ -7,7 +7,9 @@
 
 #include <iosfwd>
 
+#include "src/common/globals.h"
 #include "src/interpreter/bytecode-register.h"
+#include "src/interpreter/bytecodes.h"
 
 namespace v8 {
 namespace internal {
@@ -38,7 +40,7 @@ class V8_EXPORT_PRIVATE BytecodeDecoder final {
 
   // Decode a single bytecode and operands to |os|.
   static std::ostream& Decode(std::ostream& os, const uint8_t* bytecode_start,
-                              bool with_hex = true);
+                              int number_of_parameters);
 };
 
 }  // namespace interpreter

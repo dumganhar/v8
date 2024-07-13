@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+#!/user/bin/env python
 #
-# Copyright 2019 The Chromium Authors
+# Copyright 2019 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -12,8 +12,6 @@ import zipfile
 
 from util import build_utils
 from util import java_cpp_utils
-import action_helpers  # build_utils adds //build to sys.path.
-import zip_helpers
 
 
 class StringParserDelegate(java_cpp_utils.CppConstantParser.Delegate):
@@ -95,10 +93,10 @@ def _Main(argv):
       'inputs', nargs='+', help='Input file(s)', metavar='INPUTFILE')
   args = parser.parse_args(argv)
 
-  with action_helpers.atomic_output(args.srcjar) as f:
+  with build_utils.AtomicOutput(args.srcjar) as f:
     with zipfile.ZipFile(f, 'w', zipfile.ZIP_STORED) as srcjar:
       data, path = _Generate(args.inputs, args.template)
-      zip_helpers.add_to_zip_hermetic(srcjar, path, data=data)
+      build_utils.AddToZipHermetic(srcjar, path, data=data)
 
 
 if __name__ == '__main__':

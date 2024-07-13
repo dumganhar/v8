@@ -16,9 +16,8 @@ namespace internal {
 class ConstructorBuiltins {
  public:
   static int MaximumFunctionContextSlots() {
-    return v8_flags.test_small_max_function_context_stub_size
-               ? kSmallMaximumSlots
-               : kMaximumSlots;
+    return FLAG_test_small_max_function_context_stub_size ? kSmallMaximumSlots
+                                                          : kMaximumSlots;
   }
 
   // Maximum number of elements in copied array (chosen so that even an array
@@ -38,7 +37,7 @@ class ConstructorBuiltins {
 
   // FastNewFunctionContext can only allocate closures which fit in the
   // new space.
-  static_assert(Context::SizeFor(kMaximumSlots + Context::MIN_CONTEXT_SLOTS) <
+  STATIC_ASSERT(Context::SizeFor(kMaximumSlots + Context::MIN_CONTEXT_SLOTS) <
                 kMaxRegularHeapObjectSize);
 };
 

@@ -21,7 +21,7 @@ void StringTableKey::set_raw_hash_field(uint32_t raw_hash_field) {
 }
 
 uint32_t StringTableKey::hash() const {
-  return Name::HashBits::decode(raw_hash_field_);
+  return raw_hash_field_ >> Name::kHashShift;
 }
 
 }  // namespace internal

@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "src/base/platform/wrappers.h"
 #include "src/compiler/backend/instruction-selector-impl.h"
 #include "src/compiler/node-matchers.h"
 #include "src/compiler/node-properties.h"
@@ -79,13 +80,10 @@ OperandModes immediateModeMask =
   (OperandMode::kArithmeticCommonMode | OperandMode::kInt32Imm)
 
 // Adds S390-specific methods for generating operands.
-template <typename Adapter>
-class S390OperandGeneratorT final : public OperandGeneratorT<Adapter> {
+class S390OperandGenerator final : public OperandGenerator {
  public:
-  OPERAND_GENERATOR_T_BOILERPLATE(Adapter)
-
-  explicit S390OperandGeneratorT(InstructionSelectorT<Adapter>* selector)
-      : super(selector) {}
+  explicit S390OperandGenerator(InstructionSelector* selector)
+      : OperandGenerator(selector) {}
 
   InstructionOperand UseOperand(Node* node, OperandModes mode) {
     if (CanBeImmediate(node, mode)) {
@@ -98,7 +96,7 @@ class S390OperandGeneratorT final : public OperandGeneratorT<Adapter> {
     if (NodeProperties::IsConstant(node))
       return UseRegister(node);
     else
-      return this->Use(node);
+      return Use(node);
   }
 
   int64_t GetImmediate(Node* node) {
@@ -108,6 +106,7 @@ class S390OperandGeneratorT final : public OperandGeneratorT<Adapter> {
       return OpParameter<int64_t>(node->op());
     else
       UNIMPLEMENTED();
+    return 0L;
   }
 
   bool CanBeImmediate(Node* node, OperandModes mode) {
@@ -142,8 +141,7 @@ class S390OperandGeneratorT final : public OperandGeneratorT<Adapter> {
 
   bool CanBeMemoryOperand(InstructionCode opcode, Node* user, Node* input,
                           int effect_level) {
-    if ((input->opcode() != IrOpcode::kLoad &&
-         input->opcode() != IrOpcode::kLoadImmutable) ||
+    if (input->opcode() != IrOpcode::kLoad ||
         !selector()->CanCover(user, input)) {
       return false;
     }
@@ -223,14 +221,8 @@ class S390OperandGeneratorT final : public OperandGeneratorT<Adapter> {
                                             AddressOption::kAllowInputSwap);
 #endif
     DCHECK(m.matches());
-    if (m.base() != nullptr &&
-        m.base()->opcode() == IrOpcode::kLoadRootRegister) {
-      DCHECK_EQ(m.index(), nullptr);
-      DCHECK_EQ(m.scale(), 0);
-      inputs[(*input_count)++] = UseImmediate(m.displacement());
-      return kMode_Root;
-    } else if ((m.displacement() == nullptr ||
-                CanBeImmediate(m.displacement(), immediate_mode))) {
+    if ((m.displacement() == nullptr ||
+         CanBeImmediate(m.displacement(), immediate_mode))) {
       DCHECK_EQ(0, m.scale());
       return GenerateMemoryOperandInputs(m.index(), m.base(), m.displacement(),
                                          m.displacement_mode(), inputs,
@@ -247,8 +239,7 @@ class S390OperandGeneratorT final : public OperandGeneratorT<Adapter> {
   }
 
   MachineRepresentation GetRepresentation(Node* node) {
-    return this->sequence()->GetRepresentation(
-        selector()->GetVirtualRegister(node));
+    return sequence()->GetRepresentation(selector()->GetVirtualRegister(node));
   }
 
   bool Is64BitOperand(Node* node) {
@@ -280,7 +271,8 @@ bool S390OpcodeOnlySupport12BitDisp(InstructionCode op) {
   (S390OpcodeOnlySupport12BitDisp(op) ? OperandMode::kUint12Imm \
                                       : OperandMode::kInt20Imm)
 
-ArchOpcode SelectLoadOpcode(LoadRepresentation load_rep) {
+ArchOpcode SelectLoadOpcode(Node* node) {
+  LoadRepresentation load_rep = LoadRepresentationOf(node->op());
   ArchOpcode opcode;
   switch (load_rep.representation()) {
     case MachineRepresentation::kFloat32:
@@ -301,7 +293,6 @@ ArchOpcode SelectLoadOpcode(LoadRepresentation load_rep) {
       break;
     case MachineRepresentation::kCompressedPointer:  // Fall through.
     case MachineRepresentation::kCompressed:
-    case MachineRepresentation::kSandboxedPointer:  // Fall through.
 #ifdef V8_COMPRESS_POINTERS
       opcode = kS390_LoadWordS32;
       break;
@@ -313,10 +304,10 @@ ArchOpcode SelectLoadOpcode(LoadRepresentation load_rep) {
       opcode = kS390_LoadDecompressTaggedSigned;
       break;
     case MachineRepresentation::kTaggedPointer:
-      opcode = kS390_LoadDecompressTagged;
+      opcode = kS390_LoadDecompressTaggedPointer;
       break;
     case MachineRepresentation::kTagged:
-      opcode = kS390_LoadDecompressTagged;
+      opcode = kS390_LoadDecompressAnyTagged;
       break;
 #else
     case MachineRepresentation::kTaggedSigned:   // Fall through.
@@ -329,8 +320,6 @@ ArchOpcode SelectLoadOpcode(LoadRepresentation load_rep) {
     case MachineRepresentation::kSimd128:
       opcode = kS390_LoadSimd128;
       break;
-    case MachineRepresentation::kSimd256:  // Fall through.
-    case MachineRepresentation::kMapWord:  // Fall through.
     case MachineRepresentation::kNone:
     default:
       UNREACHABLE();
@@ -442,10 +431,9 @@ void VisitShift() { }
 #endif
 
 #if V8_TARGET_ARCH_S390X
-template <typename Adapter>
-void VisitTryTruncateDouble(InstructionSelectorT<Adapter>* selector,
-                            ArchOpcode opcode, Node* node) {
-  S390OperandGeneratorT<Adapter> g(selector);
+void VisitTryTruncateDouble(InstructionSelector* selector, ArchOpcode opcode,
+                            Node* node) {
+  S390OperandGenerator g(selector);
   InstructionOperand inputs[] = {g.UseRegister(node->InputAt(0))};
   InstructionOperand outputs[2];
   size_t output_count = 0;
@@ -460,13 +448,13 @@ void VisitTryTruncateDouble(InstructionSelectorT<Adapter>* selector,
 }
 #endif
 
-template <typename Adapter, class CanCombineWithLoad>
-void GenerateRightOperands(InstructionSelectorT<Adapter>* selector, Node* node,
+template <class CanCombineWithLoad>
+void GenerateRightOperands(InstructionSelector* selector, Node* node,
                            Node* right, InstructionCode* opcode,
                            OperandModes* operand_mode,
                            InstructionOperand* inputs, size_t* input_count,
                            CanCombineWithLoad canCombineWithLoad) {
-  S390OperandGeneratorT<Adapter> g(selector);
+  S390OperandGenerator g(selector);
 
   if ((*operand_mode & OperandMode::kAllowImmediate) &&
       g.CanBeImmediate(right, *operand_mode)) {
@@ -476,8 +464,7 @@ void GenerateRightOperands(InstructionSelectorT<Adapter>* selector, Node* node,
   } else if (*operand_mode & OperandMode::kAllowMemoryOperand) {
     NodeMatcher mright(right);
     if (mright.IsLoad() && selector->CanCover(node, right) &&
-        canCombineWithLoad(
-            SelectLoadOpcode(LoadRepresentationOf(right->op())))) {
+        canCombineWithLoad(SelectLoadOpcode(right))) {
       AddressingMode mode = g.GetEffectiveAddressMemoryOperand(
           right, inputs, input_count, OpcodeImmMode(*opcode));
       *opcode |= AddressingModeField::encode(mode);
@@ -505,13 +492,13 @@ void GenerateRightOperands(InstructionSelectorT<Adapter>* selector, Node* node,
   }
 }
 
-template <typename Adapter, class CanCombineWithLoad>
-void GenerateBinOpOperands(InstructionSelectorT<Adapter>* selector, Node* node,
+template <class CanCombineWithLoad>
+void GenerateBinOpOperands(InstructionSelector* selector, Node* node,
                            Node* left, Node* right, InstructionCode* opcode,
                            OperandModes* operand_mode,
                            InstructionOperand* inputs, size_t* input_count,
                            CanCombineWithLoad canCombineWithLoad) {
-  S390OperandGeneratorT<Adapter> g(selector);
+  S390OperandGenerator g(selector);
   // left is always register
   InstructionOperand const left_input = g.UseRegister(left);
   inputs[(*input_count)++] = left_input;
@@ -526,14 +513,14 @@ void GenerateBinOpOperands(InstructionSelectorT<Adapter>* selector, Node* node,
   }
 }
 
-template <typename Adapter, class CanCombineWithLoad>
-void VisitUnaryOp(InstructionSelectorT<Adapter>* selector, Node* node,
+template <class CanCombineWithLoad>
+void VisitUnaryOp(InstructionSelector* selector, Node* node,
                   InstructionCode opcode, OperandModes operand_mode,
                   FlagsContinuation* cont,
                   CanCombineWithLoad canCombineWithLoad);
 
-template <typename Adapter, class CanCombineWithLoad>
-void VisitBinOp(InstructionSelectorT<Adapter>* selector, Node* node,
+template <class CanCombineWithLoad>
+void VisitBinOp(InstructionSelector* selector, Node* node,
                 InstructionCode opcode, OperandModes operand_mode,
                 FlagsContinuation* cont, CanCombineWithLoad canCombineWithLoad);
 
@@ -568,18 +555,15 @@ void VisitBinOp(InstructionSelectorT<Adapter>* selector, Node* node,
 #endif
 
 #define DECLARE_VISIT_HELPER_FUNCTIONS(type1, type2, canCombineWithLoad)  \
-  template <typename Adapter>                                             \
   static inline void Visit##type1##type2##Op(                             \
-      InstructionSelectorT<Adapter>* selector, Node* node,                \
-      InstructionCode opcode, OperandModes operand_mode,                  \
-      FlagsContinuation* cont) {                                          \
+      InstructionSelector* selector, Node* node, InstructionCode opcode,  \
+      OperandModes operand_mode, FlagsContinuation* cont) {               \
     Visit##type2##Op(selector, node, opcode, operand_mode, cont,          \
                      canCombineWithLoad);                                 \
   }                                                                       \
-  template <typename Adapter>                                             \
   static inline void Visit##type1##type2##Op(                             \
-      InstructionSelectorT<Adapter>* selector, Node* node,                \
-      InstructionCode opcode, OperandModes operand_mode) {                \
+      InstructionSelector* selector, Node* node, InstructionCode opcode,  \
+      OperandModes operand_mode) {                                        \
     FlagsContinuation cont;                                               \
     Visit##type1##type2##Op(selector, node, opcode, operand_mode, &cont); \
   }
@@ -588,12 +572,12 @@ VISIT_OP_LIST(DECLARE_VISIT_HELPER_FUNCTIONS)
 #undef VISIT_OP_LIST_32
 #undef VISIT_OP_LIST
 
-template <typename Adapter, class CanCombineWithLoad>
-void VisitUnaryOp(InstructionSelectorT<Adapter>* selector, Node* node,
+template <class CanCombineWithLoad>
+void VisitUnaryOp(InstructionSelector* selector, Node* node,
                   InstructionCode opcode, OperandModes operand_mode,
                   FlagsContinuation* cont,
                   CanCombineWithLoad canCombineWithLoad) {
-  S390OperandGeneratorT<Adapter> g(selector);
+  S390OperandGenerator g(selector);
   InstructionOperand inputs[8];
   size_t input_count = 0;
   InstructionOperand outputs[2];
@@ -636,12 +620,12 @@ void VisitUnaryOp(InstructionSelectorT<Adapter>* selector, Node* node,
                                  inputs, cont);
 }
 
-template <typename Adapter, class CanCombineWithLoad>
-void VisitBinOp(InstructionSelectorT<Adapter>* selector, Node* node,
+template <class CanCombineWithLoad>
+void VisitBinOp(InstructionSelector* selector, Node* node,
                 InstructionCode opcode, OperandModes operand_mode,
                 FlagsContinuation* cont,
                 CanCombineWithLoad canCombineWithLoad) {
-  S390OperandGeneratorT<Adapter> g(selector);
+  S390OperandGenerator g(selector);
   Int32BinopMatcher m(node);
   Node* left = m.left().node();
   Node* right = m.right().node();
@@ -695,8 +679,7 @@ void VisitBinOp(InstructionSelectorT<Adapter>* selector, Node* node,
 
 }  // namespace
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitStackSlot(Node* node) {
+void InstructionSelector::VisitStackSlot(Node* node) {
   StackSlotRepresentation rep = StackSlotRepresentationOf(node->op());
   int slot = frame_->AllocateSpillSlot(rep.size(), rep.alignment());
   OperandGenerator g(this);
@@ -705,49 +688,42 @@ void InstructionSelectorT<Adapter>::VisitStackSlot(Node* node) {
        sequence()->AddImmediate(Constant(slot)), 0, nullptr);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitAbortCSADcheck(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
-  Emit(kArchAbortCSADcheck, g.NoOutput(), g.UseFixed(node->InputAt(0), r3));
+void InstructionSelector::VisitAbortCSAAssert(Node* node) {
+  S390OperandGenerator g(this);
+  Emit(kArchAbortCSAAssert, g.NoOutput(), g.UseFixed(node->InputAt(0), r3));
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitLoad(Node* node, Node* value,
-                                              InstructionCode opcode) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitLoad(Node* node) {
+  S390OperandGenerator g(this);
+  InstructionCode opcode = SelectLoadOpcode(node);
   InstructionOperand outputs[] = {g.DefineAsRegister(node)};
   InstructionOperand inputs[3];
   size_t input_count = 0;
   AddressingMode mode =
-      g.GetEffectiveAddressMemoryOperand(value, inputs, &input_count);
+      g.GetEffectiveAddressMemoryOperand(node, inputs, &input_count);
   opcode |= AddressingModeField::encode(mode);
+  if (node->opcode() == IrOpcode::kPoisonedLoad) {
+    CHECK_NE(poisoning_level_, PoisoningMitigationLevel::kDontPoison);
+    opcode |= AccessModeField::encode(kMemoryAccessPoisoned);
+  }
   Emit(opcode, 1, outputs, input_count, inputs);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitLoad(Node* node) {
-  LoadRepresentation load_rep = LoadRepresentationOf(node->op());
-  InstructionCode opcode = SelectLoadOpcode(load_rep);
-  VisitLoad(node, node, opcode);
-}
+void InstructionSelector::VisitPoisonedLoad(Node* node) { VisitLoad(node); }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitProtectedLoad(Node* node) {
+void InstructionSelector::VisitProtectedLoad(Node* node) {
   // TODO(eholk)
   UNIMPLEMENTED();
 }
 
-template <typename Adapter>
 static void VisitGeneralStore(
-    InstructionSelectorT<Adapter>* selector, Node* node,
-    MachineRepresentation rep,
+    InstructionSelector* selector, Node* node, MachineRepresentation rep,
     WriteBarrierKind write_barrier_kind = kNoWriteBarrier) {
-  S390OperandGeneratorT<Adapter> g(selector);
+  S390OperandGenerator g(selector);
   Node* base = node->InputAt(0);
   Node* offset = node->InputAt(1);
   Node* value = node->InputAt(2);
-  if (write_barrier_kind != kNoWriteBarrier &&
-      !v8_flags.disable_write_barriers) {
+  if (write_barrier_kind != kNoWriteBarrier && !FLAG_disable_write_barriers) {
     DCHECK(CanBeTaggedOrCompressedPointer(rep));
     AddressingMode addressing_mode;
     InstructionOperand inputs[3];
@@ -769,7 +745,7 @@ static void VisitGeneralStore(
     size_t const temp_count = arraysize(temps);
     InstructionCode code = kArchStoreWithWriteBarrier;
     code |= AddressingModeField::encode(addressing_mode);
-    code |= RecordWriteModeField::encode(record_write_mode);
+    code |= MiscField::encode(static_cast<int>(record_write_mode));
     selector->Emit(code, 0, nullptr, input_count, inputs, temp_count, temps);
   } else {
     ArchOpcode opcode;
@@ -797,7 +773,6 @@ static void VisitGeneralStore(
         break;
       case MachineRepresentation::kCompressedPointer:  // Fall through.
       case MachineRepresentation::kCompressed:
-      case MachineRepresentation::kSandboxedPointer:  // Fall through.
 #ifdef V8_COMPRESS_POINTERS
         opcode = kS390_StoreCompressTagged;
         break;
@@ -823,8 +798,6 @@ static void VisitGeneralStore(
           value = value->InputAt(0);
         }
         break;
-      case MachineRepresentation::kSimd256:  // Fall through.
-      case MachineRepresentation::kMapWord:  // Fall through.
       case MachineRepresentation::kNone:
         UNREACHABLE();
     }
@@ -841,18 +814,12 @@ static void VisitGeneralStore(
   }
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitStorePair(Node* node) {
-  UNREACHABLE();
-}
-
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitStore(Node* node) {
+void InstructionSelector::VisitStore(Node* node) {
   StoreRepresentation store_rep = StoreRepresentationOf(node->op());
   WriteBarrierKind write_barrier_kind = store_rep.write_barrier_kind();
   MachineRepresentation rep = store_rep.representation();
 
-  if (v8_flags.enable_unconditional_write_barriers &&
+  if (FLAG_enable_unconditional_write_barriers &&
       CanBeTaggedOrCompressedPointer(rep)) {
     write_barrier_kind = kFullWriteBarrier;
   }
@@ -860,32 +827,24 @@ void InstructionSelectorT<Adapter>::VisitStore(Node* node) {
   VisitGeneralStore(this, node, rep, write_barrier_kind);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitProtectedStore(Node* node) {
+void InstructionSelector::VisitProtectedStore(Node* node) {
   // TODO(eholk)
   UNIMPLEMENTED();
 }
 
 // Architecture supports unaligned access, therefore VisitLoad is used instead
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitUnalignedLoad(Node* node) {
-  UNREACHABLE();
-}
+void InstructionSelector::VisitUnalignedLoad(Node* node) { UNREACHABLE(); }
 
 // Architecture supports unaligned access, therefore VisitStore is used instead
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitUnalignedStore(Node* node) {
-  UNREACHABLE();
-}
+void InstructionSelector::VisitUnalignedStore(Node* node) { UNREACHABLE(); }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitStackPointerGreaterThan(
+void InstructionSelector::VisitStackPointerGreaterThan(
     Node* node, FlagsContinuation* cont) {
   StackCheckKind kind = StackCheckKindOf(node->op());
   InstructionCode opcode =
       kArchStackPointerGreaterThan | MiscField::encode(static_cast<int>(kind));
 
-  S390OperandGeneratorT<Adapter> g(this);
+  S390OperandGenerator g(this);
 
   // No outputs.
   InstructionOperand* const outputs = nullptr;
@@ -935,9 +894,8 @@ static inline bool IsContiguousMask64(uint64_t value, int* mb, int* me) {
 #endif
 
 #if V8_TARGET_ARCH_S390X
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64And(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitWord64And(Node* node) {
+  S390OperandGenerator g(this);
   Int64BinopMatcher m(node);
   int mb = 0;
   int me = 0;
@@ -988,9 +946,8 @@ void InstructionSelectorT<Adapter>::VisitWord64And(Node* node) {
   VisitWord64BinOp(this, node, kS390_And64, And64OperandMode);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64Shl(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitWord64Shl(Node* node) {
+  S390OperandGenerator g(this);
   Int64BinopMatcher m(node);
   // TODO(mbrandy): eliminate left sign extension if right >= 32
   if (m.left().IsWord64And() && m.right().IsInRange(0, 63)) {
@@ -1031,9 +988,8 @@ void InstructionSelectorT<Adapter>::VisitWord64Shl(Node* node) {
   VisitWord64BinOp(this, node, kS390_ShiftLeft64, Shift64OperandMode);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64Shr(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitWord64Shr(Node* node) {
+  S390OperandGenerator g(this);
   Int64BinopMatcher m(node);
   if (m.left().IsWord64And() && m.right().IsInRange(0, 63)) {
     Int64BinopMatcher mleft(m.left().node());
@@ -1072,10 +1028,9 @@ void InstructionSelectorT<Adapter>::VisitWord64Shr(Node* node) {
 }
 #endif
 
-template <typename Adapter>
 static inline bool TryMatchSignExtInt16OrInt8FromWord32Sar(
-    InstructionSelectorT<Adapter>* selector, Node* node) {
-  S390OperandGeneratorT<Adapter> g(selector);
+    InstructionSelector* selector, Node* node) {
+  S390OperandGenerator g(selector);
   Int32BinopMatcher m(node);
   if (selector->CanCover(node, m.left().node()) && m.left().IsWord32Shl()) {
     Int32BinopMatcher mleft(m.left().node());
@@ -1100,73 +1055,38 @@ static inline bool TryMatchSignExtInt16OrInt8FromWord32Sar(
   return false;
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord32Rol(Node* node) {
-  UNREACHABLE();
-}
+void InstructionSelector::VisitWord32Rol(Node* node) { UNREACHABLE(); }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64Rol(Node* node) {
-  UNREACHABLE();
-}
+void InstructionSelector::VisitWord64Rol(Node* node) { UNREACHABLE(); }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord32Ctz(Node* node) {
-  UNREACHABLE();
-}
+void InstructionSelector::VisitWord32Ctz(Node* node) { UNREACHABLE(); }
 
 #if V8_TARGET_ARCH_S390X
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64Ctz(Node* node) {
-  UNREACHABLE();
-}
+void InstructionSelector::VisitWord64Ctz(Node* node) { UNREACHABLE(); }
 #endif
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord32ReverseBits(Node* node) {
-  UNREACHABLE();
-}
+void InstructionSelector::VisitWord32ReverseBits(Node* node) { UNREACHABLE(); }
 
 #if V8_TARGET_ARCH_S390X
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64ReverseBits(Node* node) {
-  UNREACHABLE();
-}
+void InstructionSelector::VisitWord64ReverseBits(Node* node) { UNREACHABLE(); }
 #endif
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitInt32AbsWithOverflow(Node* node) {
+void InstructionSelector::VisitInt32AbsWithOverflow(Node* node) {
   VisitWord32UnaryOp(this, node, kS390_Abs32, OperandMode::kNone);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitInt64AbsWithOverflow(Node* node) {
+void InstructionSelector::VisitInt64AbsWithOverflow(Node* node) {
   VisitWord64UnaryOp(this, node, kS390_Abs64, OperandMode::kNone);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64ReverseBytes(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
-  NodeMatcher input(node->InputAt(0));
-  if (CanCover(node, input.node()) && input.IsLoad()) {
-    LoadRepresentation load_rep = LoadRepresentationOf(input.node()->op());
-    if (load_rep.representation() == MachineRepresentation::kWord64) {
-      Node* base = input.node()->InputAt(0);
-      Node* offset = input.node()->InputAt(1);
-      Emit(kS390_LoadReverse64 | AddressingModeField::encode(kMode_MRR),
-           // TODO(miladfarca): one of the base and offset can be imm.
-           g.DefineAsRegister(node), g.UseRegister(base),
-           g.UseRegister(offset));
-      return;
-    }
-  }
+void InstructionSelector::VisitWord64ReverseBytes(Node* node) {
+  S390OperandGenerator g(this);
   Emit(kS390_LoadReverse64RR, g.DefineAsRegister(node),
        g.UseRegister(node->InputAt(0)));
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord32ReverseBytes(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitWord32ReverseBytes(Node* node) {
+  S390OperandGenerator g(this);
   NodeMatcher input(node->InputAt(0));
   if (CanCover(node, input.node()) && input.IsLoad()) {
     LoadRepresentation load_rep = LoadRepresentationOf(input.node()->op());
@@ -1184,9 +1104,8 @@ void InstructionSelectorT<Adapter>::VisitWord32ReverseBytes(Node* node) {
        g.UseRegister(node->InputAt(0)));
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitSimd128ReverseBytes(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitSimd128ReverseBytes(Node* node) {
+  S390OperandGenerator g(this);
   NodeMatcher input(node->InputAt(0));
   if (CanCover(node, input.node()) && input.IsLoad()) {
     LoadRepresentation load_rep = LoadRepresentationOf(input.node()->op());
@@ -1204,10 +1123,10 @@ void InstructionSelectorT<Adapter>::VisitSimd128ReverseBytes(Node* node) {
        g.UseRegister(node->InputAt(0)));
 }
 
-template <typename Adapter, class Matcher, ArchOpcode neg_opcode>
-static inline bool TryMatchNegFromSub(InstructionSelectorT<Adapter>* selector,
+template <class Matcher, ArchOpcode neg_opcode>
+static inline bool TryMatchNegFromSub(InstructionSelector* selector,
                                       Node* node) {
-  S390OperandGeneratorT<Adapter> g(selector);
+  S390OperandGenerator g(selector);
   Matcher m(node);
   static_assert(neg_opcode == kS390_Neg32 || neg_opcode == kS390_Neg64,
                 "Provided opcode is not a Neg opcode.");
@@ -1230,9 +1149,9 @@ static inline bool TryMatchNegFromSub(InstructionSelectorT<Adapter>* selector,
   return false;
 }
 
-template <typename Adapter, class Matcher, ArchOpcode shift_op>
-bool TryMatchShiftFromMul(InstructionSelectorT<Adapter>* selector, Node* node) {
-  S390OperandGeneratorT<Adapter> g(selector);
+template <class Matcher, ArchOpcode shift_op>
+bool TryMatchShiftFromMul(InstructionSelector* selector, Node* node) {
+  S390OperandGenerator g(selector);
   Matcher m(node);
   Node* left = m.left().node();
   Node* right = m.right().node();
@@ -1257,9 +1176,9 @@ bool TryMatchShiftFromMul(InstructionSelectorT<Adapter>* selector, Node* node) {
   return false;
 }
 
-template <typename Adapter, ArchOpcode opcode>
-static inline bool TryMatchInt32OpWithOverflow(
-    InstructionSelectorT<Adapter>* selector, Node* node, OperandModes mode) {
+template <ArchOpcode opcode>
+static inline bool TryMatchInt32OpWithOverflow(InstructionSelector* selector,
+                                               Node* node, OperandModes mode) {
   if (Node* ovf = NodeProperties::FindProjection(node, 1)) {
     FlagsContinuation cont = FlagsContinuation::ForSet(kOverflow, ovf);
     VisitWord32BinOp(selector, node, opcode, mode, &cont);
@@ -1268,26 +1187,23 @@ static inline bool TryMatchInt32OpWithOverflow(
   return false;
 }
 
-template <typename Adapter>
-static inline bool TryMatchInt32AddWithOverflow(
-    InstructionSelectorT<Adapter>* selector, Node* node) {
-  return TryMatchInt32OpWithOverflow<Adapter, kS390_Add32>(selector, node,
-                                                           AddOperandMode);
+static inline bool TryMatchInt32AddWithOverflow(InstructionSelector* selector,
+                                                Node* node) {
+  return TryMatchInt32OpWithOverflow<kS390_Add32>(selector, node,
+                                                  AddOperandMode);
 }
 
-template <typename Adapter>
-static inline bool TryMatchInt32SubWithOverflow(
-    InstructionSelectorT<Adapter>* selector, Node* node) {
-  return TryMatchInt32OpWithOverflow<Adapter, kS390_Sub32>(selector, node,
-                                                           SubOperandMode);
+static inline bool TryMatchInt32SubWithOverflow(InstructionSelector* selector,
+                                                Node* node) {
+  return TryMatchInt32OpWithOverflow<kS390_Sub32>(selector, node,
+                                                  SubOperandMode);
 }
 
-template <typename Adapter>
-static inline bool TryMatchInt32MulWithOverflow(
-    InstructionSelectorT<Adapter>* selector, Node* node) {
+static inline bool TryMatchInt32MulWithOverflow(InstructionSelector* selector,
+                                                Node* node) {
   if (Node* ovf = NodeProperties::FindProjection(node, 1)) {
     if (CpuFeatures::IsSupported(MISC_INSTR_EXT2)) {
-      TryMatchInt32OpWithOverflow<Adapter, kS390_Mul32>(
+      TryMatchInt32OpWithOverflow<kS390_Mul32>(
           selector, node, OperandMode::kAllowRRR | OperandMode::kAllowRM);
     } else {
       FlagsContinuation cont = FlagsContinuation::ForSet(kNotEqual, ovf);
@@ -1297,14 +1213,14 @@ static inline bool TryMatchInt32MulWithOverflow(
     }
     return true;
   }
-  return TryMatchShiftFromMul<Adapter, Int32BinopMatcher, kS390_ShiftLeft32>(
-      selector, node);
+  return TryMatchShiftFromMul<Int32BinopMatcher, kS390_ShiftLeft32>(selector,
+                                                                    node);
 }
 
 #if V8_TARGET_ARCH_S390X
-template <typename Adapter, ArchOpcode opcode>
-static inline bool TryMatchInt64OpWithOverflow(
-    InstructionSelectorT<Adapter>* selector, Node* node, OperandModes mode) {
+template <ArchOpcode opcode>
+static inline bool TryMatchInt64OpWithOverflow(InstructionSelector* selector,
+                                               Node* node, OperandModes mode) {
   if (Node* ovf = NodeProperties::FindProjection(node, 1)) {
     FlagsContinuation cont = FlagsContinuation::ForSet(kOverflow, ovf);
     VisitWord64BinOp(selector, node, opcode, mode, &cont);
@@ -1313,43 +1229,22 @@ static inline bool TryMatchInt64OpWithOverflow(
   return false;
 }
 
-template <typename Adapter>
-static inline bool TryMatchInt64AddWithOverflow(
-    InstructionSelectorT<Adapter>* selector, Node* node) {
-  return TryMatchInt64OpWithOverflow<Adapter, kS390_Add64>(selector, node,
-                                                           AddOperandMode);
+static inline bool TryMatchInt64AddWithOverflow(InstructionSelector* selector,
+                                                Node* node) {
+  return TryMatchInt64OpWithOverflow<kS390_Add64>(selector, node,
+                                                  AddOperandMode);
 }
 
-template <typename Adapter>
-static inline bool TryMatchInt64SubWithOverflow(
-    InstructionSelectorT<Adapter>* selector, Node* node) {
-  return TryMatchInt64OpWithOverflow<Adapter, kS390_Sub64>(selector, node,
-                                                           SubOperandMode);
+static inline bool TryMatchInt64SubWithOverflow(InstructionSelector* selector,
+                                                Node* node) {
+  return TryMatchInt64OpWithOverflow<kS390_Sub64>(selector, node,
+                                                  SubOperandMode);
 }
-
-template <typename Adapter>
-void EmitInt64MulWithOverflow(InstructionSelectorT<Adapter>* selector,
-                              Node* node, FlagsContinuation* cont) {
-  S390OperandGeneratorT<Adapter> g(selector);
-  Int64BinopMatcher m(node);
-  InstructionOperand inputs[2];
-  size_t input_count = 0;
-  InstructionOperand outputs[1];
-  size_t output_count = 0;
-
-  inputs[input_count++] = g.UseUniqueRegister(m.left().node());
-  inputs[input_count++] = g.UseUniqueRegister(m.right().node());
-  outputs[output_count++] = g.DefineAsRegister(node);
-  selector->EmitWithContinuation(kS390_Mul64WithOverflow, output_count, outputs,
-                                 input_count, inputs, cont);
-}
-
 #endif
 
-template <typename Adapter>
 static inline bool TryMatchDoubleConstructFromInsert(
-    InstructionSelectorT<Adapter>* selector, Node* node) {
-  S390OperandGeneratorT<Adapter> g(selector);
+    InstructionSelector* selector, Node* node) {
+  S390OperandGenerator g(selector);
   Node* left = node->InputAt(0);
   Node* right = node->InputAt(1);
   Node* lo32 = nullptr;
@@ -1412,10 +1307,6 @@ static inline bool TryMatchDoubleConstructFromInsert(
   V(Float64, Float64RoundTruncate, kS390_TruncateDouble, OperandMode::kNone,   \
     null)                                                                      \
   V(Float64, Float64RoundTiesAway, kS390_RoundDouble, OperandMode::kNone,      \
-    null)                                                                      \
-  V(Float32, Float32RoundTiesEven, kS390_FloatNearestInt, OperandMode::kNone,  \
-    null)                                                                      \
-  V(Float64, Float64RoundTiesEven, kS390_DoubleNearestInt, OperandMode::kNone, \
     null)                                                                      \
   V(Float32, Float32Neg, kS390_NegFloat, OperandMode::kNone, null)             \
   V(Float64, Float64Neg, kS390_NegDouble, OperandMode::kNone, null)            \
@@ -1493,50 +1384,49 @@ static inline bool TryMatchDoubleConstructFromInsert(
 #define WORD32_UNARY_OP_LIST(V) WORD32_UNARY_OP_LIST_32(V)
 #endif
 
-#define WORD32_BIN_OP_LIST(V)                                                 \
-  V(Word32, Int32Add, kS390_Add32, AddOperandMode, null)                      \
-  V(Word32, Int32Sub, kS390_Sub32, SubOperandMode, ([&]() {                   \
-      return TryMatchNegFromSub<Adapter, Int32BinopMatcher, kS390_Neg32>(     \
-          this, node);                                                        \
-    }))                                                                       \
-  V(Word32, Int32Mul, kS390_Mul32, MulOperandMode, ([&]() {                   \
-      return TryMatchShiftFromMul<Adapter, Int32BinopMatcher,                 \
-                                  kS390_ShiftLeft32>(this, node);             \
-    }))                                                                       \
-  V(Word32, Int32AddWithOverflow, kS390_Add32, AddOperandMode,                \
-    ([&]() { return TryMatchInt32AddWithOverflow(this, node); }))             \
-  V(Word32, Int32SubWithOverflow, kS390_Sub32, SubOperandMode,                \
-    ([&]() { return TryMatchInt32SubWithOverflow(this, node); }))             \
-  V(Word32, Int32MulWithOverflow, kS390_Mul32, MulOperandMode,                \
-    ([&]() { return TryMatchInt32MulWithOverflow(this, node); }))             \
-  V(Word32, Int32MulHigh, kS390_MulHigh32,                                    \
-    OperandMode::kInt32Imm | OperandMode::kAllowDistinctOps, null)            \
-  V(Word32, Uint32MulHigh, kS390_MulHighU32,                                  \
-    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                    \
-  V(Word32, Int32Div, kS390_Div32,                                            \
-    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                    \
-  V(Word32, Uint32Div, kS390_DivU32,                                          \
-    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                    \
-  V(Word32, Int32Mod, kS390_Mod32,                                            \
-    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                    \
-  V(Word32, Uint32Mod, kS390_ModU32,                                          \
-    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                    \
-  V(Word32, Word32Ror, kS390_RotRight32,                                      \
-    OperandMode::kAllowRI | OperandMode::kAllowRRR | OperandMode::kAllowRRI | \
-        OperandMode::kShift32Imm,                                             \
-    null)                                                                     \
-  V(Word32, Word32And, kS390_And32, And32OperandMode, null)                   \
-  V(Word32, Word32Or, kS390_Or32, Or32OperandMode, null)                      \
-  V(Word32, Word32Xor, kS390_Xor32, Xor32OperandMode, null)                   \
-  V(Word32, Word32Shl, kS390_ShiftLeft32, Shift32OperandMode, null)           \
-  V(Word32, Word32Shr, kS390_ShiftRight32, Shift32OperandMode, null)          \
-  V(Word32, Word32Sar, kS390_ShiftRightArith32, Shift32OperandMode,           \
-    [&]() { return TryMatchSignExtInt16OrInt8FromWord32Sar(this, node); })    \
-  V(Word32, Float64InsertLowWord32, kS390_DoubleInsertLowWord32,              \
-    OperandMode::kAllowRRR,                                                   \
-    [&]() -> bool { return TryMatchDoubleConstructFromInsert(this, node); })  \
-  V(Word32, Float64InsertHighWord32, kS390_DoubleInsertHighWord32,            \
-    OperandMode::kAllowRRR,                                                   \
+#define WORD32_BIN_OP_LIST(V)                                                  \
+  V(Word32, Int32Add, kS390_Add32, AddOperandMode, null)                       \
+  V(Word32, Int32Sub, kS390_Sub32, SubOperandMode, ([&]() {                    \
+      return TryMatchNegFromSub<Int32BinopMatcher, kS390_Neg32>(this, node);   \
+    }))                                                                        \
+  V(Word32, Int32Mul, kS390_Mul32, MulOperandMode, ([&]() {                    \
+      return TryMatchShiftFromMul<Int32BinopMatcher, kS390_ShiftLeft32>(this,  \
+                                                                        node); \
+    }))                                                                        \
+  V(Word32, Int32AddWithOverflow, kS390_Add32, AddOperandMode,                 \
+    ([&]() { return TryMatchInt32AddWithOverflow(this, node); }))              \
+  V(Word32, Int32SubWithOverflow, kS390_Sub32, SubOperandMode,                 \
+    ([&]() { return TryMatchInt32SubWithOverflow(this, node); }))              \
+  V(Word32, Int32MulWithOverflow, kS390_Mul32, MulOperandMode,                 \
+    ([&]() { return TryMatchInt32MulWithOverflow(this, node); }))              \
+  V(Word32, Int32MulHigh, kS390_MulHigh32,                                     \
+    OperandMode::kInt32Imm | OperandMode::kAllowDistinctOps, null)             \
+  V(Word32, Uint32MulHigh, kS390_MulHighU32,                                   \
+    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                     \
+  V(Word32, Int32Div, kS390_Div32,                                             \
+    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                     \
+  V(Word32, Uint32Div, kS390_DivU32,                                           \
+    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                     \
+  V(Word32, Int32Mod, kS390_Mod32,                                             \
+    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                     \
+  V(Word32, Uint32Mod, kS390_ModU32,                                           \
+    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                     \
+  V(Word32, Word32Ror, kS390_RotRight32,                                       \
+    OperandMode::kAllowRI | OperandMode::kAllowRRR | OperandMode::kAllowRRI |  \
+        OperandMode::kShift32Imm,                                              \
+    null)                                                                      \
+  V(Word32, Word32And, kS390_And32, And32OperandMode, null)                    \
+  V(Word32, Word32Or, kS390_Or32, Or32OperandMode, null)                       \
+  V(Word32, Word32Xor, kS390_Xor32, Xor32OperandMode, null)                    \
+  V(Word32, Word32Shl, kS390_ShiftLeft32, Shift32OperandMode, null)            \
+  V(Word32, Word32Shr, kS390_ShiftRight32, Shift32OperandMode, null)           \
+  V(Word32, Word32Sar, kS390_ShiftRightArith32, Shift32OperandMode,            \
+    [&]() { return TryMatchSignExtInt16OrInt8FromWord32Sar(this, node); })     \
+  V(Word32, Float64InsertLowWord32, kS390_DoubleInsertLowWord32,               \
+    OperandMode::kAllowRRR,                                                    \
+    [&]() -> bool { return TryMatchDoubleConstructFromInsert(this, node); })   \
+  V(Word32, Float64InsertHighWord32, kS390_DoubleInsertHighWord32,             \
+    OperandMode::kAllowRRR,                                                    \
     [&]() -> bool { return TryMatchDoubleConstructFromInsert(this, node); })
 
 #define WORD64_UNARY_OP_LIST(V)                                              \
@@ -1557,47 +1447,42 @@ static inline bool TryMatchDoubleConstructFromInsert(
   V(Word64, BitcastInt64ToFloat64, kS390_BitcastInt64ToDouble,               \
     OperandMode::kNone, null)
 
-#define WORD64_BIN_OP_LIST(V)                                              \
-  V(Word64, Int64Add, kS390_Add64, AddOperandMode, null)                   \
-  V(Word64, Int64MulHigh, kS390_MulHighS64, OperandMode::kAllowRRR, null)  \
-  V(Word64, Uint64MulHigh, kS390_MulHighU64, OperandMode::kAllowRRR, null) \
-  V(Word64, Int64Sub, kS390_Sub64, SubOperandMode, ([&]() {                \
-      return TryMatchNegFromSub<Adapter, Int64BinopMatcher, kS390_Neg64>(  \
-          this, node);                                                     \
-    }))                                                                    \
-  V(Word64, Int64AddWithOverflow, kS390_Add64, AddOperandMode,             \
-    ([&]() { return TryMatchInt64AddWithOverflow(this, node); }))          \
-  V(Word64, Int64SubWithOverflow, kS390_Sub64, SubOperandMode,             \
-    ([&]() { return TryMatchInt64SubWithOverflow(this, node); }))          \
-  V(Word64, Int64Mul, kS390_Mul64, MulOperandMode, ([&]() {                \
-      return TryMatchShiftFromMul<Adapter, Int64BinopMatcher,              \
-                                  kS390_ShiftLeft64>(this, node);          \
-    }))                                                                    \
-  V(Word64, Int64Div, kS390_Div64,                                         \
-    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                 \
-  V(Word64, Uint64Div, kS390_DivU64,                                       \
-    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                 \
-  V(Word64, Int64Mod, kS390_Mod64,                                         \
-    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                 \
-  V(Word64, Uint64Mod, kS390_ModU64,                                       \
-    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                 \
-  V(Word64, Word64Sar, kS390_ShiftRightArith64, Shift64OperandMode, null)  \
-  V(Word64, Word64Ror, kS390_RotRight64, Shift64OperandMode, null)         \
-  V(Word64, Word64Or, kS390_Or64, Or64OperandMode, null)                   \
+#define WORD64_BIN_OP_LIST(V)                                                  \
+  V(Word64, Int64Add, kS390_Add64, AddOperandMode, null)                       \
+  V(Word64, Int64Sub, kS390_Sub64, SubOperandMode, ([&]() {                    \
+      return TryMatchNegFromSub<Int64BinopMatcher, kS390_Neg64>(this, node);   \
+    }))                                                                        \
+  V(Word64, Int64AddWithOverflow, kS390_Add64, AddOperandMode,                 \
+    ([&]() { return TryMatchInt64AddWithOverflow(this, node); }))              \
+  V(Word64, Int64SubWithOverflow, kS390_Sub64, SubOperandMode,                 \
+    ([&]() { return TryMatchInt64SubWithOverflow(this, node); }))              \
+  V(Word64, Int64Mul, kS390_Mul64, MulOperandMode, ([&]() {                    \
+      return TryMatchShiftFromMul<Int64BinopMatcher, kS390_ShiftLeft64>(this,  \
+                                                                        node); \
+    }))                                                                        \
+  V(Word64, Int64Div, kS390_Div64,                                             \
+    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                     \
+  V(Word64, Uint64Div, kS390_DivU64,                                           \
+    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                     \
+  V(Word64, Int64Mod, kS390_Mod64,                                             \
+    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                     \
+  V(Word64, Uint64Mod, kS390_ModU64,                                           \
+    OperandMode::kAllowRRM | OperandMode::kAllowRRR, null)                     \
+  V(Word64, Word64Sar, kS390_ShiftRightArith64, Shift64OperandMode, null)      \
+  V(Word64, Word64Ror, kS390_RotRight64, Shift64OperandMode, null)             \
+  V(Word64, Word64Or, kS390_Or64, Or64OperandMode, null)                       \
   V(Word64, Word64Xor, kS390_Xor64, Xor64OperandMode, null)
 
-#define DECLARE_UNARY_OP(type, name, op, mode, try_extra)       \
-  template <typename Adapter>                                   \
-  void InstructionSelectorT<Adapter>::Visit##name(Node* node) { \
-    if (std::function<bool()>(try_extra)()) return;             \
-    Visit##type##UnaryOp(this, node, op, mode);                 \
+#define DECLARE_UNARY_OP(type, name, op, mode, try_extra) \
+  void InstructionSelector::Visit##name(Node* node) {     \
+    if (std::function<bool()>(try_extra)()) return;       \
+    Visit##type##UnaryOp(this, node, op, mode);           \
   }
 
-#define DECLARE_BIN_OP(type, name, op, mode, try_extra)         \
-  template <typename Adapter>                                   \
-  void InstructionSelectorT<Adapter>::Visit##name(Node* node) { \
-    if (std::function<bool()>(try_extra)()) return;             \
-    Visit##type##BinOp(this, node, op, mode);                   \
+#define DECLARE_BIN_OP(type, name, op, mode, try_extra) \
+  void InstructionSelector::Visit##name(Node* node) {   \
+    if (std::function<bool()>(try_extra)()) return;     \
+    Visit##type##BinOp(this, node, op, mode);           \
   }
 
 WORD32_BIN_OP_LIST(DECLARE_BIN_OP)
@@ -1623,82 +1508,58 @@ WORD64_BIN_OP_LIST(DECLARE_BIN_OP)
 #undef null
 
 #if V8_TARGET_ARCH_S390X
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitTryTruncateFloat32ToInt64(Node* node) {
+void InstructionSelector::VisitTryTruncateFloat32ToInt64(Node* node) {
   VisitTryTruncateDouble(this, kS390_Float32ToInt64, node);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitTryTruncateFloat64ToInt64(Node* node) {
+void InstructionSelector::VisitTryTruncateFloat64ToInt64(Node* node) {
   VisitTryTruncateDouble(this, kS390_DoubleToInt64, node);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitTryTruncateFloat32ToUint64(
-    Node* node) {
+void InstructionSelector::VisitTryTruncateFloat32ToUint64(Node* node) {
   VisitTryTruncateDouble(this, kS390_Float32ToUint64, node);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitTryTruncateFloat64ToUint64(
-    Node* node) {
+void InstructionSelector::VisitTryTruncateFloat64ToUint64(Node* node) {
   VisitTryTruncateDouble(this, kS390_DoubleToUint64, node);
 }
 
 #endif
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitTryTruncateFloat64ToInt32(Node* node) {
-  UNIMPLEMENTED();
-}
-
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitTryTruncateFloat64ToUint32(
-    Node* node) {
-  UNIMPLEMENTED();
-}
-
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitBitcastWord32ToWord64(Node* node) {
+void InstructionSelector::VisitBitcastWord32ToWord64(Node* node) {
   DCHECK(SmiValuesAre31Bits());
   DCHECK(COMPRESS_POINTERS_BOOL);
   EmitIdentity(node);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitFloat64Mod(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitFloat64Mod(Node* node) {
+  S390OperandGenerator g(this);
   Emit(kS390_ModDouble, g.DefineAsFixed(node, d1),
        g.UseFixed(node->InputAt(0), d1), g.UseFixed(node->InputAt(1), d2))
       ->MarkAsCall();
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitFloat64Ieee754Unop(
-    Node* node, InstructionCode opcode) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitFloat64Ieee754Unop(Node* node,
+                                                  InstructionCode opcode) {
+  S390OperandGenerator g(this);
   Emit(opcode, g.DefineAsFixed(node, d1), g.UseFixed(node->InputAt(0), d1))
       ->MarkAsCall();
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitFloat64Ieee754Binop(
-    Node* node, InstructionCode opcode) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitFloat64Ieee754Binop(Node* node,
+                                                   InstructionCode opcode) {
+  S390OperandGenerator g(this);
   Emit(opcode, g.DefineAsFixed(node, d1), g.UseFixed(node->InputAt(0), d1),
        g.UseFixed(node->InputAt(1), d2))
       ->MarkAsCall();
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitInt64MulWithOverflow(Node* node) {
-  if (Node* ovf = NodeProperties::FindProjection(node, 1)) {
-    FlagsContinuation cont = FlagsContinuation::ForSet(
-        CpuFeatures::IsSupported(MISC_INSTR_EXT2) ? kOverflow : kNotEqual, ovf);
-    return EmitInt64MulWithOverflow(this, node, &cont);
-  }
-  FlagsContinuation cont;
-  EmitInt64MulWithOverflow(this, node, &cont);
+void InstructionSelector::VisitFloat32RoundTiesEven(Node* node) {
+  UNREACHABLE();
+}
+
+void InstructionSelector::VisitFloat64RoundTiesEven(Node* node) {
+  UNREACHABLE();
 }
 
 static bool CompareLogical(FlagsContinuation* cont) {
@@ -1717,24 +1578,21 @@ static bool CompareLogical(FlagsContinuation* cont) {
 namespace {
 
 // Shared routine for multiple compare operations.
-template <typename Adapter>
-void VisitCompare(InstructionSelectorT<Adapter>* selector,
-                  InstructionCode opcode, InstructionOperand left,
-                  InstructionOperand right, FlagsContinuation* cont) {
+void VisitCompare(InstructionSelector* selector, InstructionCode opcode,
+                  InstructionOperand left, InstructionOperand right,
+                  FlagsContinuation* cont) {
   selector->EmitWithContinuation(opcode, left, right, cont);
 }
 
-template <typename Adapter>
-void VisitLoadAndTest(InstructionSelectorT<Adapter>* selector,
-                      InstructionCode opcode, Node* node, Node* value,
-                      FlagsContinuation* cont, bool discard_output = false);
+void VisitLoadAndTest(InstructionSelector* selector, InstructionCode opcode,
+                      Node* node, Node* value, FlagsContinuation* cont,
+                      bool discard_output = false);
 
 // Shared routine for multiple word compare operations.
-template <typename Adapter>
-void VisitWordCompare(InstructionSelectorT<Adapter>* selector, Node* node,
+void VisitWordCompare(InstructionSelector* selector, Node* node,
                       InstructionCode opcode, FlagsContinuation* cont,
                       OperandModes immediate_mode) {
-  S390OperandGeneratorT<Adapter> g(selector);
+  S390OperandGenerator g(selector);
   Node* left = node->InputAt(0);
   Node* right = node->InputAt(1);
 
@@ -1785,8 +1643,7 @@ void VisitWordCompare(InstructionSelectorT<Adapter>* selector, Node* node,
                                  inputs, cont);
 }
 
-template <typename Adapter>
-void VisitWord32Compare(InstructionSelectorT<Adapter>* selector, Node* node,
+void VisitWord32Compare(InstructionSelector* selector, Node* node,
                         FlagsContinuation* cont) {
   OperandModes mode =
       (CompareLogical(cont) ? OperandMode::kUint32Imm : OperandMode::kInt32Imm);
@@ -1794,8 +1651,7 @@ void VisitWord32Compare(InstructionSelectorT<Adapter>* selector, Node* node,
 }
 
 #if V8_TARGET_ARCH_S390X
-template <typename Adapter>
-void VisitWord64Compare(InstructionSelectorT<Adapter>* selector, Node* node,
+void VisitWord64Compare(InstructionSelector* selector, Node* node,
                         FlagsContinuation* cont) {
   OperandModes mode =
       (CompareLogical(cont) ? OperandMode::kUint32Imm : OperandMode::kInt32Imm);
@@ -1804,27 +1660,24 @@ void VisitWord64Compare(InstructionSelectorT<Adapter>* selector, Node* node,
 #endif
 
 // Shared routine for multiple float32 compare operations.
-template <typename Adapter>
-void VisitFloat32Compare(InstructionSelectorT<Adapter>* selector, Node* node,
+void VisitFloat32Compare(InstructionSelector* selector, Node* node,
                          FlagsContinuation* cont) {
   VisitWordCompare(selector, node, kS390_CmpFloat, cont, OperandMode::kNone);
 }
 
 // Shared routine for multiple float64 compare operations.
-template <typename Adapter>
-void VisitFloat64Compare(InstructionSelectorT<Adapter>* selector, Node* node,
+void VisitFloat64Compare(InstructionSelector* selector, Node* node,
                          FlagsContinuation* cont) {
   VisitWordCompare(selector, node, kS390_CmpDouble, cont, OperandMode::kNone);
 }
 
-template <typename Adapter>
-void VisitTestUnderMask(InstructionSelectorT<Adapter>* selector, Node* node,
+void VisitTestUnderMask(InstructionSelector* selector, Node* node,
                         FlagsContinuation* cont) {
   DCHECK(node->opcode() == IrOpcode::kWord32And ||
          node->opcode() == IrOpcode::kWord64And);
   ArchOpcode opcode =
       (node->opcode() == IrOpcode::kWord32And) ? kS390_Tst32 : kS390_Tst64;
-  S390OperandGeneratorT<Adapter> g(selector);
+  S390OperandGenerator g(selector);
   Node* left = node->InputAt(0);
   Node* right = node->InputAt(1);
   if (!g.CanBeImmediate(right, OperandMode::kUint32Imm) &&
@@ -1835,10 +1688,9 @@ void VisitTestUnderMask(InstructionSelectorT<Adapter>* selector, Node* node,
                g.UseOperand(right, OperandMode::kUint32Imm), cont);
 }
 
-template <typename Adapter>
-void VisitLoadAndTest(InstructionSelectorT<Adapter>* selector,
-                      InstructionCode opcode, Node* node, Node* value,
-                      FlagsContinuation* cont, bool discard_output) {
+void VisitLoadAndTest(InstructionSelector* selector, InstructionCode opcode,
+                      Node* node, Node* value, FlagsContinuation* cont,
+                      bool discard_output) {
   static_assert(kS390_LoadAndTestFloat64 - kS390_LoadAndTestWord32 == 3,
                 "LoadAndTest Opcode shouldn't contain other opcodes.");
 
@@ -1846,7 +1698,7 @@ void VisitLoadAndTest(InstructionSelectorT<Adapter>* selector,
   DCHECK(opcode >= kS390_LoadAndTestWord32 ||
          opcode <= kS390_LoadAndTestWord64);
 
-  S390OperandGeneratorT<Adapter> g(selector);
+  S390OperandGenerator g(selector);
   InstructionOperand inputs[8];
   InstructionOperand outputs[2];
   size_t input_count = 0;
@@ -1877,9 +1729,8 @@ void VisitLoadAndTest(InstructionSelectorT<Adapter>* selector,
 }  // namespace
 
 // Shared routine for word comparisons against zero.
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWordCompareZero(
-    Node* user, Node* value, FlagsContinuation* cont) {
+void InstructionSelector::VisitWordCompareZero(Node* user, Node* value,
+                                               FlagsContinuation* cont) {
   // Try to combine with comparisons against 0 by simply inverting the branch.
   while (value->opcode() == IrOpcode::kWord32Equal && CanCover(user, value)) {
     Int32BinopMatcher m(value);
@@ -2028,11 +1879,6 @@ void InstructionSelectorT<Adapter>::VisitWordCompareZero(
                 cont->OverwriteAndNegateIfEqual(kOverflow);
                 return VisitWord64BinOp(this, node, kS390_Sub64, SubOperandMode,
                                         cont);
-              case IrOpcode::kInt64MulWithOverflow:
-                cont->OverwriteAndNegateIfEqual(
-                    CpuFeatures::IsSupported(MISC_INSTR_EXT2) ? kOverflow
-                                                              : kNotEqual);
-                return EmitInt64MulWithOverflow(this, node, cont);
 #endif
               default:
                 break;
@@ -2116,10 +1962,8 @@ void InstructionSelectorT<Adapter>::VisitWordCompareZero(
   VisitLoadAndTest(this, kS390_LoadAndTestWord32, user, value, cont, true);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitSwitch(Node* node,
-                                                const SwitchInfo& sw) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitSwitch(Node* node, const SwitchInfo& sw) {
+  S390OperandGenerator g(this);
   InstructionOperand value_operand = g.UseRegister(node->InputAt(0));
 
   // Emit either ArchTableSwitch or ArchBinarySearchSwitch.
@@ -2154,8 +1998,7 @@ void InstructionSelectorT<Adapter>::VisitSwitch(Node* node,
   return EmitBinarySearchSwitch(sw, value_operand);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord32Equal(Node* const node) {
+void InstructionSelector::VisitWord32Equal(Node* const node) {
   FlagsContinuation cont = FlagsContinuation::ForSet(kEqual, node);
   Int32BinopMatcher m(node);
   if (m.right().Is(0)) {
@@ -2165,35 +2008,30 @@ void InstructionSelectorT<Adapter>::VisitWord32Equal(Node* const node) {
   VisitWord32Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitInt32LessThan(Node* node) {
+void InstructionSelector::VisitInt32LessThan(Node* node) {
   FlagsContinuation cont = FlagsContinuation::ForSet(kSignedLessThan, node);
   VisitWord32Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitInt32LessThanOrEqual(Node* node) {
+void InstructionSelector::VisitInt32LessThanOrEqual(Node* node) {
   FlagsContinuation cont =
       FlagsContinuation::ForSet(kSignedLessThanOrEqual, node);
   VisitWord32Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitUint32LessThan(Node* node) {
+void InstructionSelector::VisitUint32LessThan(Node* node) {
   FlagsContinuation cont = FlagsContinuation::ForSet(kUnsignedLessThan, node);
   VisitWord32Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitUint32LessThanOrEqual(Node* node) {
+void InstructionSelector::VisitUint32LessThanOrEqual(Node* node) {
   FlagsContinuation cont =
       FlagsContinuation::ForSet(kUnsignedLessThanOrEqual, node);
   VisitWord32Compare(this, node, &cont);
 }
 
 #if V8_TARGET_ARCH_S390X
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64Equal(Node* const node) {
+void InstructionSelector::VisitWord64Equal(Node* const node) {
   FlagsContinuation cont = FlagsContinuation::ForSet(kEqual, node);
   Int64BinopMatcher m(node);
   if (m.right().Is(0)) {
@@ -2203,89 +2041,69 @@ void InstructionSelectorT<Adapter>::VisitWord64Equal(Node* const node) {
   VisitWord64Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitInt64LessThan(Node* node) {
+void InstructionSelector::VisitInt64LessThan(Node* node) {
   FlagsContinuation cont = FlagsContinuation::ForSet(kSignedLessThan, node);
   VisitWord64Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitInt64LessThanOrEqual(Node* node) {
+void InstructionSelector::VisitInt64LessThanOrEqual(Node* node) {
   FlagsContinuation cont =
       FlagsContinuation::ForSet(kSignedLessThanOrEqual, node);
   VisitWord64Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitUint64LessThan(Node* node) {
+void InstructionSelector::VisitUint64LessThan(Node* node) {
   FlagsContinuation cont = FlagsContinuation::ForSet(kUnsignedLessThan, node);
   VisitWord64Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitUint64LessThanOrEqual(Node* node) {
+void InstructionSelector::VisitUint64LessThanOrEqual(Node* node) {
   FlagsContinuation cont =
       FlagsContinuation::ForSet(kUnsignedLessThanOrEqual, node);
   VisitWord64Compare(this, node, &cont);
 }
 #endif
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitFloat32Equal(Node* node) {
+void InstructionSelector::VisitFloat32Equal(Node* node) {
   FlagsContinuation cont = FlagsContinuation::ForSet(kEqual, node);
   VisitFloat32Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitFloat32LessThan(Node* node) {
+void InstructionSelector::VisitFloat32LessThan(Node* node) {
   FlagsContinuation cont = FlagsContinuation::ForSet(kUnsignedLessThan, node);
   VisitFloat32Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitFloat32LessThanOrEqual(Node* node) {
+void InstructionSelector::VisitFloat32LessThanOrEqual(Node* node) {
   FlagsContinuation cont =
       FlagsContinuation::ForSet(kUnsignedLessThanOrEqual, node);
   VisitFloat32Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitFloat64Equal(Node* node) {
+void InstructionSelector::VisitFloat64Equal(Node* node) {
   FlagsContinuation cont = FlagsContinuation::ForSet(kEqual, node);
   VisitFloat64Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitFloat64LessThan(Node* node) {
+void InstructionSelector::VisitFloat64LessThan(Node* node) {
   FlagsContinuation cont = FlagsContinuation::ForSet(kUnsignedLessThan, node);
   VisitFloat64Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitFloat64LessThanOrEqual(Node* node) {
+void InstructionSelector::VisitFloat64LessThanOrEqual(Node* node) {
   FlagsContinuation cont =
       FlagsContinuation::ForSet(kUnsignedLessThanOrEqual, node);
   VisitFloat64Compare(this, node, &cont);
 }
 
-template <typename Adapter>
-bool InstructionSelectorT<Adapter>::ZeroExtendsWord32ToWord64NoPhis(
-    Node* node) {
+bool InstructionSelector::ZeroExtendsWord32ToWord64NoPhis(Node* node) {
   UNIMPLEMENTED();
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::EmitMoveParamToFPR(Node* node, int index) {}
-
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::EmitMoveFPRToParam(
-    InstructionOperand* op, LinkageLocation location) {}
-
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::EmitPrepareArguments(
+void InstructionSelector::EmitPrepareArguments(
     ZoneVector<PushParameter>* arguments, const CallDescriptor* call_descriptor,
     Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+  S390OperandGenerator g(this);
 
   // Prepare for C function call.
   if (call_descriptor->IsCFunctionCall()) {
@@ -2315,34 +2133,30 @@ void InstructionSelectorT<Adapter>::EmitPrepareArguments(
   }
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitMemoryBarrier(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitMemoryBarrier(Node* node) {
+  S390OperandGenerator g(this);
   Emit(kArchNop, g.NoOutput());
 }
 
-template <typename Adapter>
-bool InstructionSelectorT<Adapter>::IsTailCallAddressImmediate() {
-  return false;
+bool InstructionSelector::IsTailCallAddressImmediate() { return false; }
+
+void InstructionSelector::VisitWord32AtomicLoad(Node* node) {
+  LoadRepresentation load_rep = LoadRepresentationOf(node->op());
+  DCHECK(load_rep.representation() == MachineRepresentation::kWord8 ||
+         load_rep.representation() == MachineRepresentation::kWord16 ||
+         load_rep.representation() == MachineRepresentation::kWord32);
+  USE(load_rep);
+  VisitLoad(node);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord32AtomicLoad(Node* node) {
-  AtomicLoadParameters atomic_load_params = AtomicLoadParametersOf(node->op());
-  LoadRepresentation load_rep = atomic_load_params.representation();
-  VisitLoad(node, node, SelectLoadOpcode(load_rep));
+void InstructionSelector::VisitWord32AtomicStore(Node* node) {
+  MachineRepresentation rep = AtomicStoreRepresentationOf(node->op());
+  VisitGeneralStore(this, node, rep);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord32AtomicStore(Node* node) {
-  AtomicStoreParameters store_params = AtomicStoreParametersOf(node->op());
-  VisitGeneralStore(this, node, store_params.representation());
-}
-
-template <typename Adapter>
-void VisitAtomicExchange(InstructionSelectorT<Adapter>* selector, Node* node,
-                         ArchOpcode opcode, AtomicWidth width) {
-  S390OperandGeneratorT<Adapter> g(selector);
+void VisitAtomicExchange(InstructionSelector* selector, Node* node,
+                         ArchOpcode opcode) {
+  S390OperandGenerator g(selector);
   Node* base = node->InputAt(0);
   Node* index = node->InputAt(1);
   Node* value = node->InputAt(2);
@@ -2355,54 +2169,49 @@ void VisitAtomicExchange(InstructionSelectorT<Adapter>* selector, Node* node,
   inputs[input_count++] = g.UseUniqueRegister(value);
   InstructionOperand outputs[1];
   outputs[0] = g.DefineAsRegister(node);
-  InstructionCode code = opcode | AddressingModeField::encode(addressing_mode) |
-                         AtomicWidthField::encode(width);
+  InstructionCode code = opcode | AddressingModeField::encode(addressing_mode);
   selector->Emit(code, 1, outputs, input_count, inputs);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord32AtomicExchange(Node* node) {
+void InstructionSelector::VisitWord32AtomicExchange(Node* node) {
   ArchOpcode opcode;
   MachineType type = AtomicOpType(node->op());
   if (type == MachineType::Int8()) {
-    opcode = kAtomicExchangeInt8;
+    opcode = kWord32AtomicExchangeInt8;
   } else if (type == MachineType::Uint8()) {
-    opcode = kAtomicExchangeUint8;
+    opcode = kWord32AtomicExchangeUint8;
   } else if (type == MachineType::Int16()) {
-    opcode = kAtomicExchangeInt16;
+    opcode = kWord32AtomicExchangeInt16;
   } else if (type == MachineType::Uint16()) {
-    opcode = kAtomicExchangeUint16;
+    opcode = kWord32AtomicExchangeUint16;
   } else if (type == MachineType::Int32() || type == MachineType::Uint32()) {
-    opcode = kAtomicExchangeWord32;
+    opcode = kWord32AtomicExchangeWord32;
   } else {
     UNREACHABLE();
   }
-  VisitAtomicExchange(this, node, opcode, AtomicWidth::kWord32);
+  VisitAtomicExchange(this, node, opcode);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64AtomicExchange(Node* node) {
+void InstructionSelector::VisitWord64AtomicExchange(Node* node) {
   ArchOpcode opcode;
   MachineType type = AtomicOpType(node->op());
   if (type == MachineType::Uint8()) {
-    opcode = kAtomicExchangeUint8;
+    opcode = kS390_Word64AtomicExchangeUint8;
   } else if (type == MachineType::Uint16()) {
-    opcode = kAtomicExchangeUint16;
+    opcode = kS390_Word64AtomicExchangeUint16;
   } else if (type == MachineType::Uint32()) {
-    opcode = kAtomicExchangeWord32;
+    opcode = kS390_Word64AtomicExchangeUint32;
   } else if (type == MachineType::Uint64()) {
     opcode = kS390_Word64AtomicExchangeUint64;
   } else {
     UNREACHABLE();
   }
-  VisitAtomicExchange(this, node, opcode, AtomicWidth::kWord64);
+  VisitAtomicExchange(this, node, opcode);
 }
 
-template <typename Adapter>
-void VisitAtomicCompareExchange(InstructionSelectorT<Adapter>* selector,
-                                Node* node, ArchOpcode opcode,
-                                AtomicWidth width) {
-  S390OperandGeneratorT<Adapter> g(selector);
+void VisitAtomicCompareExchange(InstructionSelector* selector, Node* node,
+                                ArchOpcode opcode) {
+  S390OperandGenerator g(selector);
   Node* base = node->InputAt(0);
   Node* index = node->InputAt(1);
   Node* old_value = node->InputAt(2);
@@ -2427,55 +2236,49 @@ void VisitAtomicCompareExchange(InstructionSelectorT<Adapter>* selector,
   size_t output_count = 0;
   outputs[output_count++] = g.DefineSameAsFirst(node);
 
-  InstructionCode code = opcode | AddressingModeField::encode(addressing_mode) |
-                         AtomicWidthField::encode(width);
+  InstructionCode code = opcode | AddressingModeField::encode(addressing_mode);
   selector->Emit(code, output_count, outputs, input_count, inputs);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord32AtomicCompareExchange(
-    Node* node) {
+void InstructionSelector::VisitWord32AtomicCompareExchange(Node* node) {
   MachineType type = AtomicOpType(node->op());
   ArchOpcode opcode;
   if (type == MachineType::Int8()) {
-    opcode = kAtomicCompareExchangeInt8;
+    opcode = kWord32AtomicCompareExchangeInt8;
   } else if (type == MachineType::Uint8()) {
-    opcode = kAtomicCompareExchangeUint8;
+    opcode = kWord32AtomicCompareExchangeUint8;
   } else if (type == MachineType::Int16()) {
-    opcode = kAtomicCompareExchangeInt16;
+    opcode = kWord32AtomicCompareExchangeInt16;
   } else if (type == MachineType::Uint16()) {
-    opcode = kAtomicCompareExchangeUint16;
+    opcode = kWord32AtomicCompareExchangeUint16;
   } else if (type == MachineType::Int32() || type == MachineType::Uint32()) {
-    opcode = kAtomicCompareExchangeWord32;
+    opcode = kWord32AtomicCompareExchangeWord32;
   } else {
     UNREACHABLE();
   }
-  VisitAtomicCompareExchange(this, node, opcode, AtomicWidth::kWord32);
+  VisitAtomicCompareExchange(this, node, opcode);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64AtomicCompareExchange(
-    Node* node) {
+void InstructionSelector::VisitWord64AtomicCompareExchange(Node* node) {
   MachineType type = AtomicOpType(node->op());
   ArchOpcode opcode;
   if (type == MachineType::Uint8()) {
-    opcode = kAtomicCompareExchangeUint8;
+    opcode = kS390_Word64AtomicCompareExchangeUint8;
   } else if (type == MachineType::Uint16()) {
-    opcode = kAtomicCompareExchangeUint16;
+    opcode = kS390_Word64AtomicCompareExchangeUint16;
   } else if (type == MachineType::Uint32()) {
-    opcode = kAtomicCompareExchangeWord32;
+    opcode = kS390_Word64AtomicCompareExchangeUint32;
   } else if (type == MachineType::Uint64()) {
     opcode = kS390_Word64AtomicCompareExchangeUint64;
   } else {
     UNREACHABLE();
   }
-  VisitAtomicCompareExchange(this, node, opcode, AtomicWidth::kWord64);
+  VisitAtomicCompareExchange(this, node, opcode);
 }
 
-template <typename Adapter>
-void VisitAtomicBinop(InstructionSelectorT<Adapter>* selector, Node* node,
-                      ArchOpcode opcode, AtomicWidth width) {
-  S390OperandGeneratorT<Adapter> g(selector);
+void VisitAtomicBinop(InstructionSelector* selector, Node* node,
+                      ArchOpcode opcode) {
+  S390OperandGenerator g(selector);
   Node* base = node->InputAt(0);
   Node* index = node->InputAt(1);
   Node* value = node->InputAt(2);
@@ -2503,14 +2306,12 @@ void VisitAtomicBinop(InstructionSelectorT<Adapter>* selector, Node* node,
   size_t temp_count = 0;
   temps[temp_count++] = g.TempRegister();
 
-  InstructionCode code = opcode | AddressingModeField::encode(addressing_mode) |
-                         AtomicWidthField::encode(width);
+  InstructionCode code = opcode | AddressingModeField::encode(addressing_mode);
   selector->Emit(code, output_count, outputs, input_count, inputs, temp_count,
                  temps);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord32AtomicBinaryOperation(
+void InstructionSelector::VisitWord32AtomicBinaryOperation(
     Node* node, ArchOpcode int8_op, ArchOpcode uint8_op, ArchOpcode int16_op,
     ArchOpcode uint16_op, ArchOpcode word32_op) {
   MachineType type = AtomicOpType(node->op());
@@ -2529,15 +2330,15 @@ void InstructionSelectorT<Adapter>::VisitWord32AtomicBinaryOperation(
   } else {
     UNREACHABLE();
   }
-  VisitAtomicBinop(this, node, opcode, AtomicWidth::kWord32);
+  VisitAtomicBinop(this, node, opcode);
 }
 
-#define VISIT_ATOMIC_BINOP(op)                                            \
-  template <typename Adapter>                                             \
-  void InstructionSelectorT<Adapter>::VisitWord32Atomic##op(Node* node) { \
-    VisitWord32AtomicBinaryOperation(                                     \
-        node, kAtomic##op##Int8, kAtomic##op##Uint8, kAtomic##op##Int16,  \
-        kAtomic##op##Uint16, kAtomic##op##Word32);                        \
+#define VISIT_ATOMIC_BINOP(op)                                   \
+  void InstructionSelector::VisitWord32Atomic##op(Node* node) {  \
+    VisitWord32AtomicBinaryOperation(                            \
+        node, kWord32Atomic##op##Int8, kWord32Atomic##op##Uint8, \
+        kWord32Atomic##op##Int16, kWord32Atomic##op##Uint16,     \
+        kWord32Atomic##op##Word32);                              \
   }
 VISIT_ATOMIC_BINOP(Add)
 VISIT_ATOMIC_BINOP(Sub)
@@ -2546,8 +2347,7 @@ VISIT_ATOMIC_BINOP(Or)
 VISIT_ATOMIC_BINOP(Xor)
 #undef VISIT_ATOMIC_BINOP
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64AtomicBinaryOperation(
+void InstructionSelector::VisitWord64AtomicBinaryOperation(
     Node* node, ArchOpcode uint8_op, ArchOpcode uint16_op, ArchOpcode word32_op,
     ArchOpcode word64_op) {
   MachineType type = AtomicOpType(node->op());
@@ -2564,15 +2364,14 @@ void InstructionSelectorT<Adapter>::VisitWord64AtomicBinaryOperation(
   } else {
     UNREACHABLE();
   }
-  VisitAtomicBinop(this, node, opcode, AtomicWidth::kWord64);
+  VisitAtomicBinop(this, node, opcode);
 }
 
-#define VISIT_ATOMIC64_BINOP(op)                                               \
-  template <typename Adapter>                                                  \
-  void InstructionSelectorT<Adapter>::VisitWord64Atomic##op(Node* node) {      \
-    VisitWord64AtomicBinaryOperation(node, kAtomic##op##Uint8,                 \
-                                     kAtomic##op##Uint16, kAtomic##op##Word32, \
-                                     kS390_Word64Atomic##op##Uint64);          \
+#define VISIT_ATOMIC64_BINOP(op)                                             \
+  void InstructionSelector::VisitWord64Atomic##op(Node* node) {              \
+    VisitWord64AtomicBinaryOperation(                                        \
+        node, kS390_Word64Atomic##op##Uint8, kS390_Word64Atomic##op##Uint16, \
+        kS390_Word64Atomic##op##Uint32, kS390_Word64Atomic##op##Uint64);     \
   }
 VISIT_ATOMIC64_BINOP(Add)
 VISIT_ATOMIC64_BINOP(Sub)
@@ -2581,17 +2380,15 @@ VISIT_ATOMIC64_BINOP(Or)
 VISIT_ATOMIC64_BINOP(Xor)
 #undef VISIT_ATOMIC64_BINOP
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64AtomicLoad(Node* node) {
-  AtomicLoadParameters atomic_load_params = AtomicLoadParametersOf(node->op());
-  LoadRepresentation load_rep = atomic_load_params.representation();
-  VisitLoad(node, node, SelectLoadOpcode(load_rep));
+void InstructionSelector::VisitWord64AtomicLoad(Node* node) {
+  LoadRepresentation load_rep = LoadRepresentationOf(node->op());
+  USE(load_rep);
+  VisitLoad(node);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64AtomicStore(Node* node) {
-  AtomicStoreParameters store_params = AtomicStoreParametersOf(node->op());
-  VisitGeneralStore(this, node, store_params.representation());
+void InstructionSelector::VisitWord64AtomicStore(Node* node) {
+  MachineRepresentation rep = AtomicStoreRepresentationOf(node->op());
+  VisitGeneralStore(this, node, rep);
 }
 
 #define SIMD_TYPES(V) \
@@ -2613,8 +2410,6 @@ void InstructionSelectorT<Adapter>::VisitWord64AtomicStore(Node* node) {
   V(F64x2Le)               \
   V(F64x2Min)              \
   V(F64x2Max)              \
-  V(F64x2Pmin)             \
-  V(F64x2Pmax)             \
   V(F32x4Add)              \
   V(F32x4Sub)              \
   V(F32x4Mul)              \
@@ -2625,8 +2420,6 @@ void InstructionSelectorT<Adapter>::VisitWord64AtomicStore(Node* node) {
   V(F32x4Div)              \
   V(F32x4Min)              \
   V(F32x4Max)              \
-  V(F32x4Pmin)             \
-  V(F32x4Pmax)             \
   V(I64x2Add)              \
   V(I64x2Sub)              \
   V(I64x2Mul)              \
@@ -2635,12 +2428,10 @@ void InstructionSelectorT<Adapter>::VisitWord64AtomicStore(Node* node) {
   V(I64x2ExtMulHighI32x4S) \
   V(I64x2ExtMulLowI32x4U)  \
   V(I64x2ExtMulHighI32x4U) \
+  V(I16x8Q15MulRSatS)      \
   V(I64x2Ne)               \
   V(I64x2GtS)              \
   V(I64x2GeS)              \
-  V(I64x2Shl)              \
-  V(I64x2ShrS)             \
-  V(I64x2ShrU)             \
   V(I32x4Add)              \
   V(I32x4Sub)              \
   V(I32x4Mul)              \
@@ -2654,14 +2445,11 @@ void InstructionSelectorT<Adapter>::VisitWord64AtomicStore(Node* node) {
   V(I32x4GeS)              \
   V(I32x4GtU)              \
   V(I32x4GeU)              \
+  V(I32x4DotI16x8S)        \
   V(I32x4ExtMulLowI16x8S)  \
   V(I32x4ExtMulHighI16x8S) \
   V(I32x4ExtMulLowI16x8U)  \
   V(I32x4ExtMulHighI16x8U) \
-  V(I32x4Shl)              \
-  V(I32x4ShrS)             \
-  V(I32x4ShrU)             \
-  V(I32x4DotI16x8S)        \
   V(I16x8Add)              \
   V(I16x8Sub)              \
   V(I16x8Mul)              \
@@ -2677,14 +2465,15 @@ void InstructionSelectorT<Adapter>::VisitWord64AtomicStore(Node* node) {
   V(I16x8GeU)              \
   V(I16x8SConvertI32x4)    \
   V(I16x8UConvertI32x4)    \
+  V(I16x8AddSatS)          \
+  V(I16x8SubSatS)          \
+  V(I16x8AddSatU)          \
+  V(I16x8SubSatU)          \
   V(I16x8RoundingAverageU) \
   V(I16x8ExtMulLowI8x16S)  \
   V(I16x8ExtMulHighI8x16S) \
   V(I16x8ExtMulLowI8x16U)  \
   V(I16x8ExtMulHighI8x16U) \
-  V(I16x8Shl)              \
-  V(I16x8ShrS)             \
-  V(I16x8ShrU)             \
   V(I8x16Add)              \
   V(I8x16Sub)              \
   V(I8x16MinS)             \
@@ -2699,103 +2488,108 @@ void InstructionSelectorT<Adapter>::VisitWord64AtomicStore(Node* node) {
   V(I8x16GeU)              \
   V(I8x16SConvertI16x8)    \
   V(I8x16UConvertI16x8)    \
+  V(I8x16AddSatS)          \
+  V(I8x16SubSatS)          \
+  V(I8x16AddSatU)          \
+  V(I8x16SubSatU)          \
   V(I8x16RoundingAverageU) \
-  V(I8x16Shl)              \
-  V(I8x16ShrS)             \
-  V(I8x16ShrU)             \
   V(S128And)               \
   V(S128Or)                \
   V(S128Xor)               \
   V(S128AndNot)
 
-#define SIMD_BINOP_UNIQUE_REGISTER_LIST(V) \
-  V(I16x8AddSatS)                          \
-  V(I16x8SubSatS)                          \
-  V(I16x8AddSatU)                          \
-  V(I16x8SubSatU)                          \
-  V(I16x8Q15MulRSatS)                      \
-  V(I8x16AddSatS)                          \
-  V(I8x16SubSatS)                          \
-  V(I8x16AddSatU)                          \
-  V(I8x16SubSatU)
+#define SIMD_UNOP_LIST(V)      \
+  V(F64x2Abs)                  \
+  V(F64x2Neg)                  \
+  V(F64x2Sqrt)                 \
+  V(F64x2Ceil)                 \
+  V(F64x2Floor)                \
+  V(F64x2Trunc)                \
+  V(F64x2NearestInt)           \
+  V(F64x2ConvertLowI32x4S)     \
+  V(F64x2ConvertLowI32x4U)     \
+  V(F64x2PromoteLowF32x4)      \
+  V(F32x4Abs)                  \
+  V(F32x4Neg)                  \
+  V(F32x4RecipApprox)          \
+  V(F32x4RecipSqrtApprox)      \
+  V(F32x4Sqrt)                 \
+  V(F32x4Ceil)                 \
+  V(F32x4Floor)                \
+  V(F32x4Trunc)                \
+  V(F32x4NearestInt)           \
+  V(F32x4DemoteF64x2Zero)      \
+  V(I64x2Neg)                  \
+  V(I64x2SConvertI32x4Low)     \
+  V(I64x2SConvertI32x4High)    \
+  V(I64x2UConvertI32x4Low)     \
+  V(I64x2UConvertI32x4High)    \
+  V(I64x2Abs)                  \
+  V(I32x4Neg)                  \
+  V(I32x4Abs)                  \
+  V(I32x4SConvertI16x8Low)     \
+  V(I32x4SConvertI16x8High)    \
+  V(I32x4UConvertI16x8Low)     \
+  V(I32x4UConvertI16x8High)    \
+  V(I32x4TruncSatF64x2SZero)   \
+  V(I32x4TruncSatF64x2UZero)   \
+  V(I32x4ExtAddPairwiseI16x8S) \
+  V(I32x4ExtAddPairwiseI16x8U) \
+  V(I16x8Neg)                  \
+  V(I16x8Abs)                  \
+  V(I16x8SConvertI8x16Low)     \
+  V(I16x8SConvertI8x16High)    \
+  V(I16x8UConvertI8x16Low)     \
+  V(I16x8UConvertI8x16High)    \
+  V(I16x8ExtAddPairwiseI8x16S) \
+  V(I16x8ExtAddPairwiseI8x16U) \
+  V(I8x16Neg)                  \
+  V(I8x16Abs)                  \
+  V(I8x16Popcnt)               \
+  V(S128Not)
 
-#define SIMD_UNOP_LIST(V)    \
-  V(F64x2Abs)                \
-  V(F64x2Neg)                \
-  V(F64x2Sqrt)               \
-  V(F64x2Ceil)               \
-  V(F64x2Floor)              \
-  V(F64x2Trunc)              \
-  V(F64x2NearestInt)         \
-  V(F64x2ConvertLowI32x4S)   \
-  V(F64x2ConvertLowI32x4U)   \
-  V(F64x2PromoteLowF32x4)    \
-  V(F64x2Splat)              \
-  V(F32x4Abs)                \
-  V(F32x4Neg)                \
-  V(F32x4Sqrt)               \
-  V(F32x4Ceil)               \
-  V(F32x4Floor)              \
-  V(F32x4Trunc)              \
-  V(F32x4NearestInt)         \
-  V(F32x4DemoteF64x2Zero)    \
-  V(F32x4SConvertI32x4)      \
-  V(F32x4UConvertI32x4)      \
-  V(F32x4Splat)              \
-  V(I64x2Neg)                \
-  V(I64x2SConvertI32x4Low)   \
-  V(I64x2SConvertI32x4High)  \
-  V(I64x2UConvertI32x4Low)   \
-  V(I64x2UConvertI32x4High)  \
-  V(I64x2Abs)                \
-  V(I64x2BitMask)            \
-  V(I64x2Splat)              \
-  V(I64x2AllTrue)            \
-  V(I32x4Neg)                \
-  V(I32x4Abs)                \
-  V(I32x4SConvertF32x4)      \
-  V(I32x4UConvertF32x4)      \
-  V(I32x4SConvertI16x8Low)   \
-  V(I32x4SConvertI16x8High)  \
-  V(I32x4UConvertI16x8Low)   \
-  V(I32x4UConvertI16x8High)  \
-  V(I32x4TruncSatF64x2SZero) \
-  V(I32x4TruncSatF64x2UZero) \
-  V(I32x4BitMask)            \
-  V(I32x4Splat)              \
-  V(I32x4AllTrue)            \
-  V(I16x8Neg)                \
-  V(I16x8Abs)                \
-  V(I16x8SConvertI8x16Low)   \
-  V(I16x8SConvertI8x16High)  \
-  V(I16x8UConvertI8x16Low)   \
-  V(I16x8UConvertI8x16High)  \
-  V(I16x8BitMask)            \
-  V(I16x8Splat)              \
-  V(I16x8AllTrue)            \
-  V(I8x16Neg)                \
-  V(I8x16Abs)                \
-  V(I8x16Popcnt)             \
-  V(I8x16BitMask)            \
-  V(I8x16Splat)              \
-  V(I8x16AllTrue)            \
-  V(S128Not)                 \
-  V(V128AnyTrue)
+#define SIMD_SHIFT_LIST(V) \
+  V(I64x2Shl)              \
+  V(I64x2ShrS)             \
+  V(I64x2ShrU)             \
+  V(I32x4Shl)              \
+  V(I32x4ShrS)             \
+  V(I32x4ShrU)             \
+  V(I16x8Shl)              \
+  V(I16x8ShrS)             \
+  V(I16x8ShrU)             \
+  V(I8x16Shl)              \
+  V(I8x16ShrS)             \
+  V(I8x16ShrU)
 
-#define SIMD_UNOP_UNIQUE_REGISTER_LIST(V) \
-  V(I32x4ExtAddPairwiseI16x8S)            \
-  V(I32x4ExtAddPairwiseI16x8U)            \
-  V(I16x8ExtAddPairwiseI8x16S)            \
-  V(I16x8ExtAddPairwiseI8x16U)
+#define SIMD_BOOL_LIST(V) \
+  V(V128AnyTrue)          \
+  V(I64x2AllTrue)         \
+  V(I32x4AllTrue)         \
+  V(I16x8AllTrue)         \
+  V(I8x16AllTrue)
 
-#define SIMD_VISIT_EXTRACT_LANE(Type, Sign)                           \
-  template <typename Adapter>                                         \
-  void InstructionSelectorT<Adapter>::Visit##Type##ExtractLane##Sign( \
-      Node* node) {                                                   \
-    S390OperandGeneratorT<Adapter> g(this);                           \
-    int32_t lane = OpParameter<int32_t>(node->op());                  \
-    Emit(kS390_##Type##ExtractLane##Sign, g.DefineAsRegister(node),   \
-         g.UseRegister(node->InputAt(0)), g.UseImmediate(lane));      \
+#define SIMD_CONVERSION_LIST(V) \
+  V(I32x4SConvertF32x4)         \
+  V(I32x4UConvertF32x4)         \
+  V(F32x4SConvertI32x4)         \
+  V(F32x4UConvertI32x4)
+
+#define SIMD_VISIT_SPLAT(Type)                               \
+  void InstructionSelector::Visit##Type##Splat(Node* node) { \
+    S390OperandGenerator g(this);                            \
+    Emit(kS390_##Type##Splat, g.DefineAsRegister(node),      \
+         g.UseRegister(node->InputAt(0)));                   \
+  }
+SIMD_TYPES(SIMD_VISIT_SPLAT)
+#undef SIMD_VISIT_SPLAT
+
+#define SIMD_VISIT_EXTRACT_LANE(Type, Sign)                              \
+  void InstructionSelector::Visit##Type##ExtractLane##Sign(Node* node) { \
+    S390OperandGenerator g(this);                                        \
+    int32_t lane = OpParameter<int32_t>(node->op());                     \
+    Emit(kS390_##Type##ExtractLane##Sign, g.DefineAsRegister(node),      \
+         g.UseRegister(node->InputAt(0)), g.UseImmediate(lane));         \
   }
 SIMD_VISIT_EXTRACT_LANE(F64x2, )
 SIMD_VISIT_EXTRACT_LANE(F32x4, )
@@ -2807,73 +2601,81 @@ SIMD_VISIT_EXTRACT_LANE(I8x16, U)
 SIMD_VISIT_EXTRACT_LANE(I8x16, S)
 #undef SIMD_VISIT_EXTRACT_LANE
 
-#define SIMD_VISIT_REPLACE_LANE(Type)                                        \
-  template <typename Adapter>                                                \
-  void InstructionSelectorT<Adapter>::Visit##Type##ReplaceLane(Node* node) { \
-    S390OperandGeneratorT<Adapter> g(this);                                  \
-    int32_t lane = OpParameter<int32_t>(node->op());                         \
-    Emit(kS390_##Type##ReplaceLane, g.DefineAsRegister(node),                \
-         g.UseRegister(node->InputAt(0)), g.UseImmediate(lane),              \
-         g.UseRegister(node->InputAt(1)));                                   \
+#define SIMD_VISIT_REPLACE_LANE(Type)                              \
+  void InstructionSelector::Visit##Type##ReplaceLane(Node* node) { \
+    S390OperandGenerator g(this);                                  \
+    int32_t lane = OpParameter<int32_t>(node->op());               \
+    Emit(kS390_##Type##ReplaceLane, g.DefineAsRegister(node),      \
+         g.UseRegister(node->InputAt(0)), g.UseImmediate(lane),    \
+         g.UseRegister(node->InputAt(1)));                         \
   }
 SIMD_TYPES(SIMD_VISIT_REPLACE_LANE)
 #undef SIMD_VISIT_REPLACE_LANE
 
-#define SIMD_VISIT_BINOP(Opcode)                                            \
-  template <typename Adapter>                                               \
-  void InstructionSelectorT<Adapter>::Visit##Opcode(Node* node) {           \
-    S390OperandGeneratorT<Adapter> g(this);                                 \
-    Emit(kS390_##Opcode, g.DefineAsRegister(node),                          \
-         g.UseRegister(node->InputAt(0)), g.UseRegister(node->InputAt(1))); \
-  }
-SIMD_BINOP_LIST(SIMD_VISIT_BINOP)
-#undef SIMD_VISIT_BINOP
-#undef SIMD_BINOP_LIST
-
-#define SIMD_VISIT_BINOP_UNIQUE_REGISTER(Opcode)                          \
-  template <typename Adapter>                                             \
-  void InstructionSelectorT<Adapter>::Visit##Opcode(Node* node) {         \
-    S390OperandGeneratorT<Adapter> g(this);                               \
+#define SIMD_VISIT_BINOP(Opcode)                                          \
+  void InstructionSelector::Visit##Opcode(Node* node) {                   \
+    S390OperandGenerator g(this);                                         \
     InstructionOperand temps[] = {g.TempSimd128Register(),                \
                                   g.TempSimd128Register()};               \
     Emit(kS390_##Opcode, g.DefineAsRegister(node),                        \
          g.UseUniqueRegister(node->InputAt(0)),                           \
          g.UseUniqueRegister(node->InputAt(1)), arraysize(temps), temps); \
   }
-SIMD_BINOP_UNIQUE_REGISTER_LIST(SIMD_VISIT_BINOP_UNIQUE_REGISTER)
-#undef SIMD_VISIT_BINOP_UNIQUE_REGISTER
-#undef SIMD_BINOP_UNIQUE_REGISTER_LIST
+SIMD_BINOP_LIST(SIMD_VISIT_BINOP)
+#undef SIMD_VISIT_BINOP
+#undef SIMD_BINOP_LIST
 
-#define SIMD_VISIT_UNOP(Opcode)                                   \
-  template <typename Adapter>                                     \
-  void InstructionSelectorT<Adapter>::Visit##Opcode(Node* node) { \
-    S390OperandGeneratorT<Adapter> g(this);                       \
-    Emit(kS390_##Opcode, g.DefineAsRegister(node),                \
-         g.UseRegister(node->InputAt(0)));                        \
+#define SIMD_VISIT_UNOP(Opcode)                                     \
+  void InstructionSelector::Visit##Opcode(Node* node) {             \
+    S390OperandGenerator g(this);                                   \
+    InstructionOperand temps[] = {g.TempSimd128Register()};         \
+    Emit(kS390_##Opcode, g.DefineAsRegister(node),                  \
+         g.UseRegister(node->InputAt(0)), arraysize(temps), temps); \
   }
 SIMD_UNOP_LIST(SIMD_VISIT_UNOP)
 #undef SIMD_VISIT_UNOP
 #undef SIMD_UNOP_LIST
 
-#define SIMD_VISIT_UNOP_UNIQUE_REGISTER(Opcode)                           \
-  template <typename Adapter>                                             \
-  void InstructionSelectorT<Adapter>::Visit##Opcode(Node* node) {         \
-    S390OperandGeneratorT<Adapter> g(this);                               \
-    InstructionOperand temps[] = {g.TempSimd128Register()};               \
+#define SIMD_VISIT_SHIFT(Opcode)                        \
+  void InstructionSelector::Visit##Opcode(Node* node) { \
+    S390OperandGenerator g(this);                       \
+    Emit(kS390_##Opcode, g.DefineAsRegister(node),      \
+         g.UseUniqueRegister(node->InputAt(0)),         \
+         g.UseUniqueRegister(node->InputAt(1)));        \
+  }
+SIMD_SHIFT_LIST(SIMD_VISIT_SHIFT)
+#undef SIMD_VISIT_SHIFT
+#undef SIMD_SHIFT_LIST
+
+#define SIMD_VISIT_BOOL(Opcode)                                           \
+  void InstructionSelector::Visit##Opcode(Node* node) {                   \
+    S390OperandGenerator g(this);                                         \
+    InstructionOperand temps[] = {g.TempRegister()};                      \
     Emit(kS390_##Opcode, g.DefineAsRegister(node),                        \
          g.UseUniqueRegister(node->InputAt(0)), arraysize(temps), temps); \
   }
-SIMD_UNOP_UNIQUE_REGISTER_LIST(SIMD_VISIT_UNOP_UNIQUE_REGISTER)
-#undef SIMD_VISIT_UNOP_UNIQUE_REGISTER
-#undef SIMD_UNOP_UNIQUE_REGISTER_LIST
+SIMD_BOOL_LIST(SIMD_VISIT_BOOL)
+#undef SIMD_VISIT_BOOL
+#undef SIMD_BOOL_LIST
 
-#define SIMD_VISIT_QFMOP(Opcode)                                           \
-  template <typename Adapter>                                              \
-  void InstructionSelectorT<Adapter>::Visit##Opcode(Node* node) {          \
-    S390OperandGeneratorT<Adapter> g(this);                                \
-    Emit(kS390_##Opcode, g.DefineSameAsFirst(node),                        \
-         g.UseRegister(node->InputAt(0)), g.UseRegister(node->InputAt(1)), \
-         g.UseRegister(node->InputAt(2)));                                 \
+#define SIMD_VISIT_CONVERSION(Opcode)                               \
+  void InstructionSelector::Visit##Opcode(Node* node) {             \
+    S390OperandGenerator g(this);                                   \
+    InstructionOperand temps[] = {g.TempSimd128Register()};         \
+    Emit(kS390_##Opcode, g.DefineAsRegister(node),                  \
+         g.UseRegister(node->InputAt(0)), arraysize(temps), temps); \
+  }
+SIMD_CONVERSION_LIST(SIMD_VISIT_CONVERSION)
+#undef SIMD_VISIT_CONVERSION
+#undef SIMD_CONVERSION_LIST
+
+#define SIMD_VISIT_QFMOP(Opcode)                        \
+  void InstructionSelector::Visit##Opcode(Node* node) { \
+    S390OperandGenerator g(this);                       \
+    Emit(kS390_##Opcode, g.DefineSameAsFirst(node),     \
+         g.UseUniqueRegister(node->InputAt(0)),         \
+         g.UseUniqueRegister(node->InputAt(1)),         \
+         g.UseRegister(node->InputAt(2)));              \
   }
 SIMD_VISIT_QFMOP(F64x2Qfma)
 SIMD_VISIT_QFMOP(F64x2Qfms)
@@ -2881,38 +2683,37 @@ SIMD_VISIT_QFMOP(F32x4Qfma)
 SIMD_VISIT_QFMOP(F32x4Qfms)
 #undef SIMD_VISIT_QFMOP
 
-#define SIMD_RELAXED_OP_LIST(V)                           \
-  V(F64x2RelaxedMin, F64x2Pmin)                           \
-  V(F64x2RelaxedMax, F64x2Pmax)                           \
-  V(F32x4RelaxedMin, F32x4Pmin)                           \
-  V(F32x4RelaxedMax, F32x4Pmax)                           \
-  V(I32x4RelaxedTruncF32x4S, I32x4SConvertF32x4)          \
-  V(I32x4RelaxedTruncF32x4U, I32x4UConvertF32x4)          \
-  V(I32x4RelaxedTruncF64x2SZero, I32x4TruncSatF64x2SZero) \
-  V(I32x4RelaxedTruncF64x2UZero, I32x4TruncSatF64x2UZero) \
-  V(I16x8RelaxedQ15MulRS, I16x8Q15MulRSatS)               \
-  V(I8x16RelaxedLaneSelect, S128Select)                   \
-  V(I16x8RelaxedLaneSelect, S128Select)                   \
-  V(I32x4RelaxedLaneSelect, S128Select)                   \
-  V(I64x2RelaxedLaneSelect, S128Select)
-
-#define SIMD_VISIT_RELAXED_OP(name, op)                         \
-  template <typename Adapter>                                   \
-  void InstructionSelectorT<Adapter>::Visit##name(Node* node) { \
-    Visit##op(node);                                            \
+#define SIMD_VISIT_BITMASK(Opcode)                      \
+  void InstructionSelector::Visit##Opcode(Node* node) { \
+    S390OperandGenerator g(this);                       \
+    Emit(kS390_##Opcode, g.DefineAsRegister(node),      \
+         g.UseUniqueRegister(node->InputAt(0)));        \
   }
-SIMD_RELAXED_OP_LIST(SIMD_VISIT_RELAXED_OP)
-#undef SIMD_VISIT_RELAXED_OP
-#undef SIMD_RELAXED_OP_LIST
+SIMD_VISIT_BITMASK(I8x16BitMask)
+SIMD_VISIT_BITMASK(I16x8BitMask)
+SIMD_VISIT_BITMASK(I32x4BitMask)
+SIMD_VISIT_BITMASK(I64x2BitMask)
+#undef SIMD_VISIT_BITMASK
+
+#define SIMD_VISIT_PMIN_MAX(Type)                                           \
+  void InstructionSelector::Visit##Type(Node* node) {                       \
+    S390OperandGenerator g(this);                                           \
+    Emit(kS390_##Type, g.DefineAsRegister(node),                            \
+         g.UseRegister(node->InputAt(0)), g.UseRegister(node->InputAt(1))); \
+  }
+SIMD_VISIT_PMIN_MAX(F64x2Pmin)
+SIMD_VISIT_PMIN_MAX(F32x4Pmin)
+SIMD_VISIT_PMIN_MAX(F64x2Pmax)
+SIMD_VISIT_PMIN_MAX(F32x4Pmax)
+#undef SIMD_VISIT_PMIN_MAX
 #undef SIMD_TYPES
 
 #if V8_ENABLE_WEBASSEMBLY
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitI8x16Shuffle(Node* node) {
+void InstructionSelector::VisitI8x16Shuffle(Node* node) {
   uint8_t shuffle[kSimd128Size];
   bool is_swizzle;
   CanonicalizeShuffle(node, shuffle, &is_swizzle);
-  S390OperandGeneratorT<Adapter> g(this);
+  S390OperandGenerator g(this);
   Node* input0 = node->InputAt(0);
   Node* input1 = node->InputAt(1);
   // Remap the shuffle indices to match IBM lane numbering.
@@ -2925,53 +2726,29 @@ void InstructionSelectorT<Adapter>::VisitI8x16Shuffle(Node* node) {
                                ? max_index - current_index
                                : total_lane_count - current_index + max_index);
   }
-  Emit(kS390_I8x16Shuffle, g.DefineAsRegister(node), g.UseRegister(input0),
-       g.UseRegister(input1),
+  Emit(kS390_I8x16Shuffle, g.DefineAsRegister(node),
+       g.UseUniqueRegister(input0), g.UseUniqueRegister(input1),
        g.UseImmediate(wasm::SimdShuffle::Pack4Lanes(shuffle_remapped)),
        g.UseImmediate(wasm::SimdShuffle::Pack4Lanes(shuffle_remapped + 4)),
        g.UseImmediate(wasm::SimdShuffle::Pack4Lanes(shuffle_remapped + 8)),
        g.UseImmediate(wasm::SimdShuffle::Pack4Lanes(shuffle_remapped + 12)));
 }
-
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitI8x16Swizzle(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
-  bool relaxed = OpParameter<bool>(node->op());
-  // TODO(miladfarca): Optimize Swizzle if relaxed.
-  USE(relaxed);
-
-  Emit(kS390_I8x16Swizzle, g.DefineAsRegister(node),
-       g.UseUniqueRegister(node->InputAt(0)),
-       g.UseUniqueRegister(node->InputAt(1)));
-}
 #else
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitI8x16Shuffle(Node* node) {
-  UNREACHABLE();
-}
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitI8x16Swizzle(Node* node) {
-  UNREACHABLE();
-}
+void InstructionSelector::VisitI8x16Shuffle(Node* node) { UNREACHABLE(); }
 #endif  // V8_ENABLE_WEBASSEMBLY
 
-// This is a replica of SimdShuffle::Pack4Lanes. However, above function will
-// not be available on builds with webassembly disabled, hence we need to have
-// it declared locally as it is used on other visitors such as S128Const.
-static int32_t Pack4Lanes(const uint8_t* shuffle) {
-  int32_t result = 0;
-  for (int i = 3; i >= 0; --i) {
-    result <<= 8;
-    result |= shuffle[i];
-  }
-  return result;
+void InstructionSelector::VisitI8x16Swizzle(Node* node) {
+  S390OperandGenerator g(this);
+  InstructionOperand temps[] = {g.TempSimd128Register()};
+  Emit(kS390_I8x16Swizzle, g.DefineAsRegister(node),
+       g.UseUniqueRegister(node->InputAt(0)),
+       g.UseUniqueRegister(node->InputAt(1)), arraysize(temps), temps);
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitS128Const(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitS128Const(Node* node) {
+  S390OperandGenerator g(this);
   uint32_t val[kSimd128Size / sizeof(uint32_t)];
-  memcpy(val, S128ImmediateParameterOf(node->op()).data(), kSimd128Size);
+  base::Memcpy(val, S128ImmediateParameterOf(node->op()).data(), kSimd128Size);
   // If all bytes are zeros, avoid emitting code for generic constants.
   bool all_zeros = !(val[0] || val[1] || val[2] || val[3]);
   bool all_ones = val[0] == UINT32_MAX && val[1] == UINT32_MAX &&
@@ -2984,33 +2761,34 @@ void InstructionSelectorT<Adapter>::VisitS128Const(Node* node) {
   } else {
     // We have to use Pack4Lanes to reverse the bytes (lanes) on BE,
     // Which in this case is ineffective on LE.
-    Emit(kS390_S128Const, dst,
-         g.UseImmediate(Pack4Lanes(base::bit_cast<uint8_t*>(&val[0]))),
-         g.UseImmediate(Pack4Lanes(base::bit_cast<uint8_t*>(&val[0]) + 4)),
-         g.UseImmediate(Pack4Lanes(base::bit_cast<uint8_t*>(&val[0]) + 8)),
-         g.UseImmediate(Pack4Lanes(base::bit_cast<uint8_t*>(&val[0]) + 12)));
+    Emit(kS390_S128Const, g.DefineAsRegister(node),
+         g.UseImmediate(
+             wasm::SimdShuffle::Pack4Lanes(reinterpret_cast<uint8_t*>(val))),
+         g.UseImmediate(wasm::SimdShuffle::Pack4Lanes(
+             reinterpret_cast<uint8_t*>(val) + 4)),
+         g.UseImmediate(wasm::SimdShuffle::Pack4Lanes(
+             reinterpret_cast<uint8_t*>(val) + 8)),
+         g.UseImmediate(wasm::SimdShuffle::Pack4Lanes(
+             reinterpret_cast<uint8_t*>(val) + 12)));
   }
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitS128Zero(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitS128Zero(Node* node) {
+  S390OperandGenerator g(this);
   Emit(kS390_S128Zero, g.DefineAsRegister(node));
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitS128Select(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitS128Select(Node* node) {
+  S390OperandGenerator g(this);
   Emit(kS390_S128Select, g.DefineAsRegister(node),
        g.UseRegister(node->InputAt(0)), g.UseRegister(node->InputAt(1)),
        g.UseRegister(node->InputAt(2)));
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::EmitPrepareResults(
+void InstructionSelector::EmitPrepareResults(
     ZoneVector<PushParameter>* results, const CallDescriptor* call_descriptor,
     Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+  S390OperandGenerator g(this);
 
   for (PushParameter output : *results) {
     if (!output.location.IsCallerFrameSlot()) continue;
@@ -3032,133 +2810,23 @@ void InstructionSelectorT<Adapter>::EmitPrepareResults(
   }
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitLoadLane(Node* node) {
-  LoadLaneParameters params = LoadLaneParametersOf(node->op());
-  InstructionCode opcode;
-  if (params.rep == MachineType::Int8()) {
-    opcode = kS390_S128Load8Lane;
-  } else if (params.rep == MachineType::Int16()) {
-    opcode = kS390_S128Load16Lane;
-  } else if (params.rep == MachineType::Int32()) {
-    opcode = kS390_S128Load32Lane;
-  } else if (params.rep == MachineType::Int64()) {
-    opcode = kS390_S128Load64Lane;
-  } else {
-    UNREACHABLE();
-  }
-
-  S390OperandGeneratorT<Adapter> g(this);
-  InstructionOperand outputs[] = {g.DefineSameAsFirst(node)};
-  InstructionOperand inputs[5];
-  size_t input_count = 0;
-
-  inputs[input_count++] = g.UseRegister(node->InputAt(2));
-  inputs[input_count++] = g.UseImmediate(params.laneidx);
-
-  AddressingMode mode =
-      g.GetEffectiveAddressMemoryOperand(node, inputs, &input_count);
-  opcode |= AddressingModeField::encode(mode);
-  Emit(opcode, 1, outputs, input_count, inputs);
+void InstructionSelector::VisitLoadLane(Node* node) {
+  // We should never reach here, see http://crrev.com/c/2577820
+  UNIMPLEMENTED();
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitLoadTransform(Node* node) {
-  LoadTransformParameters params = LoadTransformParametersOf(node->op());
-  ArchOpcode opcode;
-  switch (params.transformation) {
-    case LoadTransformation::kS128Load8Splat:
-      opcode = kS390_S128Load8Splat;
-      break;
-    case LoadTransformation::kS128Load16Splat:
-      opcode = kS390_S128Load16Splat;
-      break;
-    case LoadTransformation::kS128Load32Splat:
-      opcode = kS390_S128Load32Splat;
-      break;
-    case LoadTransformation::kS128Load64Splat:
-      opcode = kS390_S128Load64Splat;
-      break;
-    case LoadTransformation::kS128Load8x8S:
-      opcode = kS390_S128Load8x8S;
-      break;
-    case LoadTransformation::kS128Load8x8U:
-      opcode = kS390_S128Load8x8U;
-      break;
-    case LoadTransformation::kS128Load16x4S:
-      opcode = kS390_S128Load16x4S;
-      break;
-    case LoadTransformation::kS128Load16x4U:
-      opcode = kS390_S128Load16x4U;
-      break;
-    case LoadTransformation::kS128Load32x2S:
-      opcode = kS390_S128Load32x2S;
-      break;
-    case LoadTransformation::kS128Load32x2U:
-      opcode = kS390_S128Load32x2U;
-      break;
-    case LoadTransformation::kS128Load32Zero:
-      opcode = kS390_S128Load32Zero;
-      break;
-    case LoadTransformation::kS128Load64Zero:
-      opcode = kS390_S128Load64Zero;
-      break;
-    default:
-      UNREACHABLE();
-  }
-  VisitLoad(node, node, opcode);
+void InstructionSelector::VisitLoadTransform(Node* node) {
+  // We should never reach here, see http://crrev.com/c/2050811
+  UNREACHABLE();
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitStoreLane(Node* node) {
-  StoreLaneParameters params = StoreLaneParametersOf(node->op());
-  InstructionCode opcode;
-  if (params.rep == MachineRepresentation::kWord8) {
-    opcode = kS390_S128Store8Lane;
-  } else if (params.rep == MachineRepresentation::kWord16) {
-    opcode = kS390_S128Store16Lane;
-  } else if (params.rep == MachineRepresentation::kWord32) {
-    opcode = kS390_S128Store32Lane;
-  } else if (params.rep == MachineRepresentation::kWord64) {
-    opcode = kS390_S128Store64Lane;
-  } else {
-    UNREACHABLE();
-  }
-
-  S390OperandGeneratorT<Adapter> g(this);
-  InstructionOperand inputs[5];
-  size_t input_count = 0;
-
-  inputs[input_count++] = g.UseRegister(node->InputAt(2));
-  inputs[input_count++] = g.UseImmediate(params.laneidx);
-
-  AddressingMode mode =
-      g.GetEffectiveAddressMemoryOperand(node, inputs, &input_count);
-  opcode |= AddressingModeField::encode(mode);
-  Emit(opcode, 0, nullptr, input_count, inputs);
+void InstructionSelector::VisitStoreLane(Node* node) {
+  // We should never reach here, see http://crrev.com/c/2577820
+  UNIMPLEMENTED();
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitI16x8DotI8x16I7x16S(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
-  Emit(kS390_I16x8DotI8x16S, g.DefineAsRegister(node),
-       g.UseUniqueRegister(node->InputAt(0)),
-       g.UseUniqueRegister(node->InputAt(1)));
-}
-
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitI32x4DotI8x16I7x16AddS(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
-  InstructionOperand temps[] = {g.TempSimd128Register()};
-  Emit(kS390_I32x4DotI8x16AddS, g.DefineAsRegister(node),
-       g.UseUniqueRegister(node->InputAt(0)),
-       g.UseUniqueRegister(node->InputAt(1)),
-       g.UseUniqueRegister(node->InputAt(2)), arraysize(temps), temps);
-}
-
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitTruncateFloat32ToInt32(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitTruncateFloat32ToInt32(Node* node) {
+  S390OperandGenerator g(this);
 
   InstructionCode opcode = kS390_Float32ToInt32;
   TruncateKind kind = OpParameter<TruncateKind>(node->op());
@@ -3169,9 +2837,8 @@ void InstructionSelectorT<Adapter>::VisitTruncateFloat32ToInt32(Node* node) {
   Emit(opcode, g.DefineAsRegister(node), g.UseRegister(node->InputAt(0)));
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitTruncateFloat32ToUint32(Node* node) {
-  S390OperandGeneratorT<Adapter> g(this);
+void InstructionSelector::VisitTruncateFloat32ToUint32(Node* node) {
+  S390OperandGenerator g(this);
 
   InstructionCode opcode = kS390_Float32ToUint32;
   TruncateKind kind = OpParameter<TruncateKind>(node->op());
@@ -3182,24 +2849,15 @@ void InstructionSelectorT<Adapter>::VisitTruncateFloat32ToUint32(Node* node) {
   Emit(opcode, g.DefineAsRegister(node), g.UseRegister(node->InputAt(0)));
 }
 
-template <typename Adapter>
-void InstructionSelectorT<Adapter>::AddOutputToSelectContinuation(
-    OperandGenerator* g, int first_input_index, Node* node) {
-  UNREACHABLE();
-}
-
 // static
-template <typename Adapter>
 MachineOperatorBuilder::Flags
-InstructionSelectorT<Adapter>::SupportedMachineOperatorFlags() {
+InstructionSelector::SupportedMachineOperatorFlags() {
   return MachineOperatorBuilder::kFloat32RoundDown |
          MachineOperatorBuilder::kFloat64RoundDown |
          MachineOperatorBuilder::kFloat32RoundUp |
          MachineOperatorBuilder::kFloat64RoundUp |
          MachineOperatorBuilder::kFloat32RoundTruncate |
          MachineOperatorBuilder::kFloat64RoundTruncate |
-         MachineOperatorBuilder::kFloat32RoundTiesEven |
-         MachineOperatorBuilder::kFloat64RoundTiesEven |
          MachineOperatorBuilder::kFloat64RoundTiesAway |
          MachineOperatorBuilder::kWord32Popcnt |
          MachineOperatorBuilder::kInt32AbsWithOverflow |
@@ -3208,17 +2866,11 @@ InstructionSelectorT<Adapter>::SupportedMachineOperatorFlags() {
 }
 
 // static
-template <typename Adapter>
 MachineOperatorBuilder::AlignmentRequirements
-InstructionSelectorT<Adapter>::AlignmentRequirements() {
+InstructionSelector::AlignmentRequirements() {
   return MachineOperatorBuilder::AlignmentRequirements::
       FullUnalignedAccessSupport();
 }
-
-template class EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE)
-    InstructionSelectorT<TurbofanAdapter>;
-template class EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE)
-    InstructionSelectorT<TurboshaftAdapter>;
 
 }  // namespace compiler
 }  // namespace internal

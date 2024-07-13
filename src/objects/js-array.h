@@ -8,6 +8,7 @@
 #include "src/objects/allocation-site.h"
 #include "src/objects/fixed-array.h"
 #include "src/objects/js-objects.h"
+#include "torque-generated/field-offsets.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -15,14 +16,12 @@
 namespace v8 {
 namespace internal {
 
-#include "torque-generated/src/objects/js-array-tq.inc"
-
 // The JSArray describes JavaScript Arrays
 //  Such an array can be in one of two modes:
 //    - fast, backing storage is a FixedArray and length <= elements.length();
 //       Please note: push and pop can be used to grow and shrink the array.
 //    - slow, backing storage is a HashTable with numbers as keys.
-class JSArray : public TorqueGeneratedJSArray<JSArray, JSObject> {
+class JSArray : public JSObject {
  public:
   // [length]: The length property.
   DECL_ACCESSORS(length, Object)
@@ -57,8 +56,10 @@ class JSArray : public TorqueGeneratedJSArray<JSArray, JSObject> {
   static inline bool SetLengthWouldNormalize(Heap* heap, uint32_t new_length);
 
   // Initializes the array to a certain length.
-  V8_EXPORT_PRIVATE static Maybe<bool> SetLength(Handle<JSArray> array,
-                                                 uint32_t length);
+  inline bool AllowsSetLength();
+
+  V8_EXPORT_PRIVATE static void SetLength(Handle<JSArray> array,
+                                          uint32_t length);
 
   // Set the content of the array to the content of storage.
   static inline void SetContent(Handle<JSArray> array,
@@ -84,14 +85,10 @@ class JSArray : public TorqueGeneratedJSArray<JSArray, JSObject> {
   //      separators.
   //   2) Implicitly between two consecutive strings a single separator.
   //
-  // In addition repeated strings are represented by a negative smi, indicating
-  // how many times the previously written string has to be repeated.
-  //
   // Here are some input/output examples given the separator string is ',':
   //
   //   [1, 'hello', 2, 'world', 1] => ',hello,,world,'
   //   ['hello', 'world']          => 'hello,world'
-  //   ['hello', -2, 'world']      => 'hello,hello,hello,world'
   //
   // To avoid any allocations, this helper assumes the destination string is the
   // exact length necessary to write the strings and separators from the fixed
@@ -112,12 +109,17 @@ class JSArray : public TorqueGeneratedJSArray<JSArray, JSObject> {
   // to Proxies and objects with a hidden prototype.
   inline bool HasArrayPrototype(Isolate* isolate);
 
+  DECL_CAST(JSArray)
+
   // Dispatched behavior.
   DECL_PRINTER(JSArray)
   DECL_VERIFIER(JSArray)
 
   // Number of element slots to pre-allocate for an empty array.
   static const int kPreallocatedArrayElements = 4;
+
+  DEFINE_FIELD_OFFSET_CONSTANTS(JSObject::kHeaderSize,
+                                TORQUE_GENERATED_JS_ARRAY_FIELDS)
 
   static const int kLengthDescriptorIndex = 0;
 
@@ -127,12 +129,12 @@ class JSArray : public TorqueGeneratedJSArray<JSArray, JSObject> {
   // Valid array indices range from +0 <= i < 2^32 - 1 (kMaxUInt32).
   static constexpr uint32_t kMaxArrayLength = JSObject::kMaxElementCount;
   static constexpr uint32_t kMaxArrayIndex = JSObject::kMaxElementIndex;
-  static_assert(kMaxArrayLength == kMaxUInt32);
-  static_assert(kMaxArrayIndex == kMaxUInt32 - 1);
+  STATIC_ASSERT(kMaxArrayLength == kMaxUInt32);
+  STATIC_ASSERT(kMaxArrayIndex == kMaxUInt32 - 1);
 
   // This constant is somewhat arbitrary. Any large enough value would work.
   static constexpr uint32_t kMaxFastArrayLength = 32 * 1024 * 1024;
-  static_assert(kMaxFastArrayLength <= kMaxArrayLength);
+  STATIC_ASSERT(kMaxFastArrayLength <= kMaxArrayLength);
 
   // Min. stack size for detecting an Array.prototype.join() call cycle.
   static const uint32_t kMinJoinStackSize = 2;
@@ -142,36 +144,61 @@ class JSArray : public TorqueGeneratedJSArray<JSArray, JSObject> {
        AllocationMemento::kSize) >>
       kDoubleSizeLog2;
 
-  TQ_OBJECT_CONSTRUCTORS(JSArray)
+  OBJECT_CONSTRUCTORS(JSArray, JSObject);
 };
+
+Handle<Object> CacheInitialJSArrayMaps(Isolate* isolate,
+                                       Handle<Context> native_context,
+                                       Handle<Map> initial_map);
 
 // The JSArrayIterator describes JavaScript Array Iterators Objects, as
 // defined in ES section #sec-array-iterator-objects.
-class JSArrayIterator
-    : public TorqueGeneratedJSArrayIterator<JSArrayIterator, JSObject> {
+class JSArrayIterator : public JSObject {
  public:
   DECL_PRINTER(JSArrayIterator)
   DECL_VERIFIER(JSArrayIterator)
+
+  DECL_CAST(JSArrayIterator)
+
+  // [iterated_object]: the [[IteratedObject]] inobject property.
+  DECL_ACCESSORS(iterated_object, Object)
+
+  // [next_index]: The [[ArrayIteratorNextIndex]] inobject property.
+  // The next_index is always a positive integer, and it points to
+  // the next index that is to be returned by this iterator. It's
+  // possible range is fixed depending on the [[iterated_object]]:
+  //
+  //   1. For JSArray's the next_index is always in Unsigned32
+  //      range, and when the iterator reaches the end it's set
+  //      to kMaxUInt32 to indicate that this iterator should
+  //      never produce values anymore even if the "length"
+  //      property of the JSArray changes at some later point.
+  //   2. For JSTypedArray's the next_index is always in
+  //      UnsignedSmall range, and when the iterator terminates
+  //      it's set to Smi::kMaxValue.
+  //   3. For all other JSReceiver's it's always between 0 and
+  //      kMaxSafeInteger, and the latter value is used to mark
+  //      termination.
+  //
+  // It's important that for 1. and 2. the value fits into the
+  // Unsigned32 range (UnsignedSmall is a subset of Unsigned32),
+  // since we use this knowledge in the fast-path for the array
+  // iterator next calls in TurboFan (in the JSCallReducer) to
+  // keep the index in Word32 representation. This invariant is
+  // checked in JSArrayIterator::JSArrayIteratorVerify().
+  DECL_ACCESSORS(next_index, Object)
 
   // [kind]: the [[ArrayIterationKind]] inobject property.
   inline IterationKind kind() const;
   inline void set_kind(IterationKind kind);
 
+  DEFINE_FIELD_OFFSET_CONSTANTS(JSObject::kHeaderSize,
+                                TORQUE_GENERATED_JS_ARRAY_ITERATOR_FIELDS)
+
  private:
   DECL_INT_ACCESSORS(raw_kind)
 
-  TQ_OBJECT_CONSTRUCTORS(JSArrayIterator)
-};
-
-// Helper class for JSArrays that are template literal objects
-class TemplateLiteralObject
-    : public TorqueGeneratedTemplateLiteralObject<TemplateLiteralObject,
-                                                  JSArray> {
- public:
-  DECL_CAST(TemplateLiteralObject)
-
- private:
-  TQ_OBJECT_CONSTRUCTORS(TemplateLiteralObject)
+  OBJECT_CONSTRUCTORS(JSArrayIterator, JSObject);
 };
 
 }  // namespace internal

@@ -15,9 +15,7 @@ function callWithAsyncStack(f, depth) {
 }
 //# sourceURL=utils.js`);
 
-session.setupScriptMap();
-
-InspectorTest.runAsyncTestSuite([async function test() {
+(async function test() {
   Protocol.Debugger.enable();
   Protocol.Debugger.setAsyncCallStackDepth({maxDepth: 4});
   Protocol.Runtime.evaluate({
@@ -42,4 +40,5 @@ InspectorTest.runAsyncTestSuite([async function test() {
       break;
     }
   }
-}]);
+  InspectorTest.completeTest();
+})()

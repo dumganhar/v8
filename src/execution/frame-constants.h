@@ -55,14 +55,14 @@ class CommonFrameConstants : public AllStatic {
   static constexpr int kCallerSPOffset = kCallerPCOffset + 1 * kPCOnStackSize;
 
   // Fixed part of the frame consists of return address, caller fp,
-  // constant pool (if V8_EMBEDDED_CONSTANT_POOL_BOOL), context, and
+  // constant pool (if FLAG_enable_embedded_constant_pool), context, and
   // function. CommonFrame::IterateExpressions assumes that kLastObjectOffset
   // is the last object pointer.
   static constexpr int kFixedFrameSizeAboveFp = kPCOnStackSize + kFPOnStackSize;
   static constexpr int kFixedSlotCountAboveFp =
       kFixedFrameSizeAboveFp / kSystemPointerSize;
   static constexpr int kCPSlotSize =
-      V8_EMBEDDED_CONSTANT_POOL_BOOL ? kSystemPointerSize : 0;
+      FLAG_enable_embedded_constant_pool ? kSystemPointerSize : 0;
   static constexpr int kCPSlotCount = kCPSlotSize / kSystemPointerSize;
   static constexpr int kConstantPoolOffset =
       kCPSlotSize ? -1 * kSystemPointerSize : 0;
@@ -204,22 +204,6 @@ class BuiltinFrameConstants : public TypedFrameConstants {
   DEFINE_TYPED_FRAME_SIZES(2);
 };
 
-// Fixed frame slots shared by the js-to-wasm wrapper, the
-// ReturnPromiseOnSuspend wrapper and the WasmResume wrapper.
-class BuiltinWasmWrapperConstants : public TypedFrameConstants {
- public:
-  // This slot contains the number of slots at the top of the frame that need to
-  // be scanned by the GC.
-  static constexpr int kGCScanSlotCountOffset =
-      TYPED_FRAME_PUSHED_VALUE_OFFSET(0);
-  // The number of parameters passed to this function.
-  static constexpr int kInParamCountOffset = TYPED_FRAME_PUSHED_VALUE_OFFSET(1);
-  // The number of parameters according to the signature.
-  static constexpr int kParamCountOffset = TYPED_FRAME_PUSHED_VALUE_OFFSET(2);
-  static constexpr int kSuspenderOffset = TYPED_FRAME_PUSHED_VALUE_OFFSET(3);
-  static constexpr int kFunctionDataOffset = TYPED_FRAME_PUSHED_VALUE_OFFSET(4);
-};
-
 class ConstructFrameConstants : public TypedFrameConstants {
  public:
   // FP-relative.
@@ -253,37 +237,6 @@ class WasmExitFrameConstants : public WasmFrameConstants {
   static const int kCallingPCOffset = TYPED_FRAME_PUSHED_VALUE_OFFSET(1);
   DEFINE_TYPED_FRAME_SIZES(2);
 };
-
-class JSToWasmWrapperConstants {
- public:
-  // FP-relative.
-  static constexpr int kResultArrayOffset = 2 * kSystemPointerSize;
-  static constexpr int kInstanceOffset = 3 * kSystemPointerSize;
-
-  // Offsets into the wrapper buffer for values passed from Torque to the
-  // assembly builtin.
-  static constexpr size_t kWrapperBufferReturnCount = 0;
-  static constexpr size_t kWrapperBufferRefReturnCount = 4;
-  static constexpr size_t kWrapperBufferSigRepresentationArray = 8;
-  static constexpr size_t kWrapperBufferStackReturnBufferSize = 16;
-  static constexpr size_t kWrapperBufferCallTarget = 24;
-  static constexpr size_t kWrapperBufferParamStart = 32;
-  static constexpr size_t kWrapperBufferParamEnd = 40;
-
-  // Offsets into the wrapper buffer for values passed from the assembly builtin
-  // to Torque.
-  static constexpr size_t kWrapperBufferStackReturnBufferStart = 16;
-  static constexpr size_t kWrapperBufferFPReturnRegister1 = 24;
-  static constexpr size_t kWrapperBufferFPReturnRegister2 = 32;
-  static constexpr size_t kWrapperBufferGPReturnRegister1 = 40;
-  static constexpr size_t kWrapperBufferGPReturnRegister2 =
-      kWrapperBufferGPReturnRegister1 + kSystemPointerSize;
-
-  // Size of the wrapper buffer
-  static constexpr int kWrapperBufferSize =
-      kWrapperBufferGPReturnRegister2 + kSystemPointerSize;
-};
-
 #endif  // V8_ENABLE_WEBASSEMBLY
 
 class BuiltinContinuationFrameConstants : public TypedFrameConstants {
@@ -319,8 +272,7 @@ class ExitFrameConstants : public TypedFrameConstants {
   static constexpr int kCallerSPDisplacement = kCallerSPOffset;
 };
 
-// Behaves like an exit frame but with target, new target and arguments count
-// args.
+// Behaves like an exit frame but with target and new target args.
 class BuiltinExitFrameConstants : public ExitFrameConstants {
  public:
   static constexpr int kNewTargetOffset =
@@ -331,34 +283,7 @@ class BuiltinExitFrameConstants : public ExitFrameConstants {
   static constexpr int kPaddingOffset = kArgcOffset + 1 * kSystemPointerSize;
   static constexpr int kFirstArgumentOffset =
       kPaddingOffset + 1 * kSystemPointerSize;
-  static constexpr int kNumExtraArgsWithoutReceiver = 4;
-  static constexpr int kNumExtraArgsWithReceiver =
-      kNumExtraArgsWithoutReceiver + 1;
-};
-
-// Behaves like an exit frame but with target and arguments count args followed
-// by v8::FunctionCallbackInfo's implicit arguments, followed by JS arguments
-// passed to the JS function (receiver and etc.).
-class ApiCallbackExitFrameConstants : public ExitFrameConstants {
- public:
-  // The following two constants must be in sync with v8::FunctionCallbackInfo's
-  // layout.
-  static constexpr int kFunctionCallbackInfoNewTargetIndex = 5;
-  static constexpr int kFunctionCallbackInfoArgsLength = 6;
-
-  // Target and argc.
-  static constexpr int kTargetOffset = kCallerPCOffset + 1 * kSystemPointerSize;
-  static constexpr int kArgcOffset = kTargetOffset + 1 * kSystemPointerSize;
-  // FunctionCallbackInfo.
-  static constexpr int kFunctionCallbackInfoOffset =
-      kArgcOffset + 1 * kSystemPointerSize;
-  static constexpr int kNewTargetOffset =
-      kFunctionCallbackInfoOffset +
-      kFunctionCallbackInfoNewTargetIndex * kSystemPointerSize;
-  // JS arguments.
-  static constexpr int kFirstArgumentOffset =
-      kFunctionCallbackInfoOffset +
-      kFunctionCallbackInfoArgsLength * kSystemPointerSize;
+  static constexpr int kNumExtraArgsWithReceiver = 5;
 };
 
 // Unoptimized frames are used for interpreted and baseline-compiled JavaScript
@@ -465,23 +390,23 @@ inline static int FrameSlotToFPOffset(int slot) {
 }  // namespace v8
 
 #if V8_TARGET_ARCH_IA32
-#include "src/execution/ia32/frame-constants-ia32.h"
+#include "src/execution/ia32/frame-constants-ia32.h"  // NOLINT
 #elif V8_TARGET_ARCH_X64
-#include "src/execution/x64/frame-constants-x64.h"
+#include "src/execution/x64/frame-constants-x64.h"  // NOLINT
 #elif V8_TARGET_ARCH_ARM64
-#include "src/execution/arm64/frame-constants-arm64.h"
+#include "src/execution/arm64/frame-constants-arm64.h"  // NOLINT
 #elif V8_TARGET_ARCH_ARM
-#include "src/execution/arm/frame-constants-arm.h"
+#include "src/execution/arm/frame-constants-arm.h"  // NOLINT
 #elif V8_TARGET_ARCH_PPC || V8_TARGET_ARCH_PPC64
-#include "src/execution/ppc/frame-constants-ppc.h"
+#include "src/execution/ppc/frame-constants-ppc.h"  // NOLINT
+#elif V8_TARGET_ARCH_MIPS
+#include "src/execution/mips/frame-constants-mips.h"  // NOLINT
 #elif V8_TARGET_ARCH_MIPS64
-#include "src/execution/mips64/frame-constants-mips64.h"
-#elif V8_TARGET_ARCH_LOONG64
-#include "src/execution/loong64/frame-constants-loong64.h"
+#include "src/execution/mips64/frame-constants-mips64.h"  // NOLINT
 #elif V8_TARGET_ARCH_S390
-#include "src/execution/s390/frame-constants-s390.h"
-#elif V8_TARGET_ARCH_RISCV32 || V8_TARGET_ARCH_RISCV64
-#include "src/execution/riscv/frame-constants-riscv.h"
+#include "src/execution/s390/frame-constants-s390.h"  // NOLINT
+#elif V8_TARGET_ARCH_RISCV64
+#include "src/execution/riscv64/frame-constants-riscv64.h"  // NOLINT
 #else
 #error Unsupported target architecture.
 #endif

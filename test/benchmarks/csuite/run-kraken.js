@@ -43,9 +43,9 @@ for (var krakenCounter = 0; krakenCounter < tests.length; krakenCounter++) {
     var testName = testBase + ".js";
     var testData = testBase + "-data.js";
     // load test data
-    d8.file.execute(testData);
+    load(testData);
     var startTime = new Date;
-    d8.file.execute(testName);
+    load(testName);
     times[krakenCounter] = new Date() - startTime;
     gc();
 }

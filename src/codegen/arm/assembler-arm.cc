@@ -45,6 +45,7 @@
 #include "src/codegen/assembler-inl.h"
 #include "src/codegen/machine-type.h"
 #include "src/codegen/macro-assembler.h"
+#include "src/codegen/string-constants.h"
 #include "src/deoptimizer/deoptimizer.h"
 #include "src/objects/objects-inl.h"
 
@@ -58,18 +59,17 @@ static const unsigned kArmv8 = kArmv7WithSudiv | (1u << ARMv8);
 
 static unsigned CpuFeaturesFromCommandLine() {
   unsigned result;
-  const char* arm_arch = v8_flags.arm_arch;
-  if (strcmp(arm_arch, "armv8") == 0) {
+  if (strcmp(FLAG_arm_arch, "armv8") == 0) {
     result = kArmv8;
-  } else if (strcmp(arm_arch, "armv7+sudiv") == 0) {
+  } else if (strcmp(FLAG_arm_arch, "armv7+sudiv") == 0) {
     result = kArmv7WithSudiv;
-  } else if (strcmp(arm_arch, "armv7") == 0) {
+  } else if (strcmp(FLAG_arm_arch, "armv7") == 0) {
     result = kArmv7;
-  } else if (strcmp(arm_arch, "armv6") == 0) {
+  } else if (strcmp(FLAG_arm_arch, "armv6") == 0) {
     result = kArmv6;
   } else {
     fprintf(stderr, "Error: unrecognised value for --arm-arch ('%s').\n",
-            arm_arch);
+            FLAG_arm_arch);
     fprintf(stderr,
             "Supported values are:  armv8\n"
             "                       armv7+sudiv\n"
@@ -81,15 +81,9 @@ static unsigned CpuFeaturesFromCommandLine() {
   // If any of the old (deprecated) flags are specified, print a warning, but
   // otherwise try to respect them for now.
   // TODO(jbramley): When all the old bots have been updated, remove this.
-  base::Optional<bool> maybe_enable_armv7 = v8_flags.enable_armv7;
-  base::Optional<bool> maybe_enable_vfp3 = v8_flags.enable_vfp3;
-  base::Optional<bool> maybe_enable_32dregs = v8_flags.enable_32dregs;
-  base::Optional<bool> maybe_enable_neon = v8_flags.enable_neon;
-  base::Optional<bool> maybe_enable_sudiv = v8_flags.enable_sudiv;
-  base::Optional<bool> maybe_enable_armv8 = v8_flags.enable_armv8;
-  if (maybe_enable_armv7.has_value() || maybe_enable_vfp3.has_value() ||
-      maybe_enable_32dregs.has_value() || maybe_enable_neon.has_value() ||
-      maybe_enable_sudiv.has_value() || maybe_enable_armv8.has_value()) {
+  if (FLAG_enable_armv7.has_value || FLAG_enable_vfp3.has_value ||
+      FLAG_enable_32dregs.has_value || FLAG_enable_neon.has_value ||
+      FLAG_enable_sudiv.has_value || FLAG_enable_armv8.has_value) {
     // As an approximation of the old behaviour, set the default values from the
     // arm_arch setting, then apply the flags over the top.
     bool enable_armv7 = (result & (1u << ARMv7)) != 0;
@@ -98,41 +92,41 @@ static unsigned CpuFeaturesFromCommandLine() {
     bool enable_neon = (result & (1u << ARMv7)) != 0;
     bool enable_sudiv = (result & (1u << ARMv7_SUDIV)) != 0;
     bool enable_armv8 = (result & (1u << ARMv8)) != 0;
-    if (maybe_enable_armv7.has_value()) {
+    if (FLAG_enable_armv7.has_value) {
       fprintf(stderr,
               "Warning: --enable_armv7 is deprecated. "
               "Use --arm_arch instead.\n");
-      enable_armv7 = maybe_enable_armv7.value();
+      enable_armv7 = FLAG_enable_armv7.value;
     }
-    if (maybe_enable_vfp3.has_value()) {
+    if (FLAG_enable_vfp3.has_value) {
       fprintf(stderr,
               "Warning: --enable_vfp3 is deprecated. "
               "Use --arm_arch instead.\n");
-      enable_vfp3 = maybe_enable_vfp3.value();
+      enable_vfp3 = FLAG_enable_vfp3.value;
     }
-    if (maybe_enable_32dregs.has_value()) {
+    if (FLAG_enable_32dregs.has_value) {
       fprintf(stderr,
               "Warning: --enable_32dregs is deprecated. "
               "Use --arm_arch instead.\n");
-      enable_32dregs = maybe_enable_32dregs.value();
+      enable_32dregs = FLAG_enable_32dregs.value;
     }
-    if (maybe_enable_neon.has_value()) {
+    if (FLAG_enable_neon.has_value) {
       fprintf(stderr,
               "Warning: --enable_neon is deprecated. "
               "Use --arm_arch instead.\n");
-      enable_neon = maybe_enable_neon.value();
+      enable_neon = FLAG_enable_neon.value;
     }
-    if (maybe_enable_sudiv.has_value()) {
+    if (FLAG_enable_sudiv.has_value) {
       fprintf(stderr,
               "Warning: --enable_sudiv is deprecated. "
               "Use --arm_arch instead.\n");
-      enable_sudiv = maybe_enable_sudiv.value();
+      enable_sudiv = FLAG_enable_sudiv.value;
     }
-    if (maybe_enable_armv8.has_value()) {
+    if (FLAG_enable_armv8.has_value) {
       fprintf(stderr,
               "Warning: --enable_armv8 is deprecated. "
               "Use --arm_arch instead.\n");
-      enable_armv8 = maybe_enable_armv8.value();
+      enable_armv8 = FLAG_enable_armv8.value;
     }
     // Emulate the old implications.
     if (enable_armv8) {
@@ -397,8 +391,15 @@ Operand Operand::EmbeddedNumber(double value) {
   int32_t smi;
   if (DoubleToSmiInteger(value, &smi)) return Operand(Smi::FromInt(smi));
   Operand result(0, RelocInfo::FULL_EMBEDDED_OBJECT);
-  result.is_heap_number_request_ = true;
-  result.value_.heap_number_request = HeapNumberRequest(value);
+  result.is_heap_object_request_ = true;
+  result.value_.heap_object_request = HeapObjectRequest(value);
+  return result;
+}
+
+Operand Operand::EmbeddedStringConstant(const StringConstantBase* str) {
+  Operand result(0, RelocInfo::FULL_EMBEDDED_OBJECT);
+  result.is_heap_object_request_ = true;
+  result.value_.heap_object_request = HeapObjectRequest(str);
   return result;
 }
 
@@ -455,12 +456,22 @@ void NeonMemOperand::SetAlignment(int align) {
   }
 }
 
-void Assembler::AllocateAndInstallRequestedHeapNumbers(Isolate* isolate) {
-  DCHECK_IMPLIES(isolate == nullptr, heap_number_requests_.empty());
-  for (auto& request : heap_number_requests_) {
-    Handle<HeapObject> object =
-        isolate->factory()->NewHeapNumber<AllocationType::kOld>(
+void Assembler::AllocateAndInstallRequestedHeapObjects(Isolate* isolate) {
+  DCHECK_IMPLIES(isolate == nullptr, heap_object_requests_.empty());
+  for (auto& request : heap_object_requests_) {
+    Handle<HeapObject> object;
+    switch (request.kind()) {
+      case HeapObjectRequest::kHeapNumber:
+        object = isolate->factory()->NewHeapNumber<AllocationType::kOld>(
             request.heap_number());
+        break;
+      case HeapObjectRequest::kStringConstant: {
+        const StringConstantBase* str = request.string();
+        CHECK_NOT_NULL(str);
+        object = str->AllocateStringConstant(isolate);
+        break;
+      }
+    }
     Address pc = reinterpret_cast<Address>(buffer_start_) + request.offset();
     Memory<Address>(constant_pool_entry_address(pc, 0 /* unused */)) =
         object.address();
@@ -522,10 +533,10 @@ Assembler::Assembler(const AssemblerOptions& options,
                      std::unique_ptr<AssemblerBuffer> buffer)
     : AssemblerBase(options, std::move(buffer)),
       pending_32_bit_constants_(),
-      scratch_register_list_(DefaultTmpList()),
-      scratch_vfp_register_list_(DefaultFPTmpList()) {
+      scratch_register_list_(ip.bit()) {
+  pending_32_bit_constants_.reserve(kMinNumPendingConstants);
   reloc_info_writer.Reposition(buffer_start_ + buffer_->size(), pc_);
-  constant_pool_deadline_ = kMaxInt;
+  next_buffer_check_ = 0;
   const_pool_blocked_nesting_ = 0;
   no_const_pool_before_ = 0;
   first_const_pool_32_use_ = -1;
@@ -535,41 +546,29 @@ Assembler::Assembler(const AssemblerOptions& options,
     // it's awkward to use CpuFeatures::VFP32DREGS with CpuFeatureScope. To make
     // its use consistent with other features, we always enable it if we can.
     EnableCpuFeature(VFP32DREGS);
-  }
-}
-
-Assembler::~Assembler() {
-  DCHECK_EQ(const_pool_blocked_nesting_, 0);
-  DCHECK_EQ(first_const_pool_32_use_, -1);
-}
-
-// static
-RegList Assembler::DefaultTmpList() { return {ip}; }
-
-// static
-VfpRegList Assembler::DefaultFPTmpList() {
-  if (CpuFeatures::IsSupported(VFP32DREGS)) {
     // Make sure we pick two D registers which alias a Q register. This way, we
     // can use a Q as a scratch if NEON is supported.
-    return d14.ToVfpRegList() | d15.ToVfpRegList();
+    scratch_vfp_register_list_ = d14.ToVfpRegList() | d15.ToVfpRegList();
   } else {
     // When VFP32DREGS is not supported, d15 become allocatable. Therefore we
     // cannot use it as a scratch.
-    return d14.ToVfpRegList();
+    scratch_vfp_register_list_ = d14.ToVfpRegList();
   }
 }
 
+Assembler::~Assembler() { DCHECK_EQ(const_pool_blocked_nesting_, 0); }
+
 void Assembler::GetCode(Isolate* isolate, CodeDesc* desc,
-                        SafepointTableBuilderBase* safepoint_table_builder,
+                        SafepointTableBuilder* safepoint_table_builder,
                         int handler_table_offset) {
   // As a crutch to avoid having to add manual Align calls wherever we use a
-  // raw workflow to create InstructionStream objects (mostly in tests), add
-  // another Align call here. It does no harm - the end of the InstructionStream
-  // object is aligned to the (larger) kCodeAlignment anyways.
+  // raw workflow to create Code objects (mostly in tests), add another Align
+  // call here. It does no harm - the end of the Code object is aligned to the
+  // (larger) kCodeAlignment anyways.
   // TODO(jgruber): Consider moving responsibility for proper alignment to
   // metadata table builders (safepoint, handler, constant pool, code
   // comments).
-  DataAlign(InstructionStream::kMetadataAlignment);
+  DataAlign(Code::kMetadataAlignment);
 
   // Emit constant pool if necessary.
   CheckConstPool(true, false);
@@ -577,7 +576,7 @@ void Assembler::GetCode(Isolate* isolate, CodeDesc* desc,
 
   int code_comments_size = WriteCodeComments();
 
-  AllocateAndInstallRequestedHeapNumbers(isolate);
+  AllocateAndInstallRequestedHeapObjects(isolate);
 
   // Set up code descriptor.
   // TODO(jgruber): Reconsider how these offsets and sizes are maintained up to
@@ -593,7 +592,7 @@ void Assembler::GetCode(Isolate* isolate, CodeDesc* desc,
   const int safepoint_table_offset =
       (safepoint_table_builder == kNoSafepointTable)
           ? handler_table_offset2
-          : safepoint_table_builder->safepoint_table_offset();
+          : safepoint_table_builder->GetCodeOffset();
   const int reloc_info_offset =
       static_cast<int>(reloc_info_writer.pos() - buffer_->start());
   CodeDesc::Initialize(desc, this, safepoint_table_offset,
@@ -841,14 +840,13 @@ void Assembler::target_at_put(int pos, int target_pos) {
     //      orr dst, dst, #target8_1 << 8
     //      orr dst, dst, #target8_2 << 16
 
-    uint32_t target24 =
-        target_pos + (InstructionStream::kHeaderSize - kHeapObjectTag);
-    CHECK(is_uint24(target24));
+    uint32_t target24 = target_pos + (Code::kHeaderSize - kHeapObjectTag);
+    DCHECK(is_uint24(target24));
     if (is_uint8(target24)) {
       // If the target fits in a byte then only patch with a mov
       // instruction.
       PatchingAssembler patcher(
-          options(), reinterpret_cast<uint8_t*>(buffer_start_ + pos), 1);
+          options(), reinterpret_cast<byte*>(buffer_start_ + pos), 1);
       patcher.mov(dst, Operand(target24));
     } else {
       uint16_t target16_0 = target24 & kImm16Mask;
@@ -857,12 +855,12 @@ void Assembler::target_at_put(int pos, int target_pos) {
         // Patch with movw/movt.
         if (target16_1 == 0) {
           PatchingAssembler patcher(
-              options(), reinterpret_cast<uint8_t*>(buffer_start_ + pos), 1);
+              options(), reinterpret_cast<byte*>(buffer_start_ + pos), 1);
           CpuFeatureScope scope(&patcher, ARMv7);
           patcher.movw(dst, target16_0);
         } else {
           PatchingAssembler patcher(
-              options(), reinterpret_cast<uint8_t*>(buffer_start_ + pos), 2);
+              options(), reinterpret_cast<byte*>(buffer_start_ + pos), 2);
           CpuFeatureScope scope(&patcher, ARMv7);
           patcher.movw(dst, target16_0);
           patcher.movt(dst, target16_1);
@@ -874,12 +872,12 @@ void Assembler::target_at_put(int pos, int target_pos) {
         uint8_t target8_2 = target16_1 & kImm8Mask;
         if (target8_2 == 0) {
           PatchingAssembler patcher(
-              options(), reinterpret_cast<uint8_t*>(buffer_start_ + pos), 2);
+              options(), reinterpret_cast<byte*>(buffer_start_ + pos), 2);
           patcher.mov(dst, Operand(target8_0));
           patcher.orr(dst, dst, Operand(target8_1 << 8));
         } else {
           PatchingAssembler patcher(
-              options(), reinterpret_cast<uint8_t*>(buffer_start_ + pos), 3);
+              options(), reinterpret_cast<byte*>(buffer_start_ + pos), 3);
           patcher.mov(dst, Operand(target8_0));
           patcher.orr(dst, dst, Operand(target8_1 << 8));
           patcher.orr(dst, dst, Operand(target8_2 << 16));
@@ -899,7 +897,7 @@ void Assembler::target_at_put(int pos, int target_pos) {
     instr &= ~kImm24Mask;
   }
   int imm24 = imm26 >> 2;
-  CHECK(is_int24(imm24));
+  DCHECK(is_int24(imm24));
   instr_at_put(pos, instr | (imm24 & kImm24Mask));
 }
 
@@ -1032,53 +1030,10 @@ namespace {
 bool FitsShifter(uint32_t imm32, uint32_t* rotate_imm, uint32_t* immed_8,
                  Instr* instr) {
   // imm32 must be unsigned.
-  {
-    // 32-bit immediates can be encoded as:
-    //   (8-bit value, 2*N bit left rotation)
-    // e.g. 0xab00 can be encoded as 0xab shifted left by 8 == 2*4, i.e.
-    //   (0xab, 4)
-    //
-    // Check three categories which cover all possible shifter fits:
-    //   1. 0x000000FF: The value is already 8-bit (no shifting necessary),
-    //   2. 0x000FF000: The 8-bit value is somewhere in the middle of the 32-bit
-    //                  value, and
-    //   3. 0xF000000F: The 8-bit value is split over the beginning and end of
-    //                  the 32-bit value.
-
-    // For 0x000000FF.
-    if (imm32 <= 0xFF) {
-      *rotate_imm = 0;
-      *immed_8 = imm32;
-      return true;
-    }
-    // For 0x000FF000, count trailing zeros and shift down to 0x000000FF. Note
-    // that we have to round the trailing zeros down to the nearest multiple of
-    // two, since we can only encode shifts of 2*N. Note also that we know that
-    // imm32 isn't zero, since we already checked if it's less than 0xFF.
-    int half_trailing_zeros = base::bits::CountTrailingZerosNonZero(imm32) / 2;
-    uint32_t imm8 = imm32 >> (half_trailing_zeros * 2);
-    if (imm8 <= 0xFF) {
-      DCHECK_GT(half_trailing_zeros, 0);
-      // Rotating right by trailing_zeros is equivalent to rotating left by
-      // 32 - trailing_zeros. We return rotate_right / 2, so calculate
-      // (32 - trailing_zeros)/2 == 16 - trailing_zeros/2.
-      *rotate_imm = (16 - half_trailing_zeros);
-      *immed_8 = imm8;
-      return true;
-    }
-    // For 0xF000000F, rotate by 16 to get 0x000FF000 and continue as if it
-    // were that case.
-    uint32_t imm32_rot16 = base::bits::RotateLeft32(imm32, 16);
-    half_trailing_zeros =
-        base::bits::CountTrailingZerosNonZero(imm32_rot16) / 2;
-    imm8 = imm32_rot16 >> (half_trailing_zeros * 2);
-    if (imm8 <= 0xFF) {
-      // We've rotated left by 2*8, so we can't have more than that many
-      // trailing zeroes.
-      DCHECK_LT(half_trailing_zeros, 8);
-      // We've already rotated by 2*8, before calculating trailing_zeros/2,
-      // so we need (32 - (16 + trailing_zeros))/2 == 8 - trailing_zeros/2.
-      *rotate_imm = 8 - half_trailing_zeros;
+  for (int rot = 0; rot < 16; rot++) {
+    uint32_t imm8 = base::bits::RotateLeft32(imm32, 2 * rot);
+    if ((imm8 <= 0xFF)) {
+      *rotate_imm = rot;
       *immed_8 = imm8;
       return true;
     }
@@ -1132,7 +1087,7 @@ bool MustOutputRelocInfo(RelocInfo::Mode rmode, const Assembler* assembler) {
   if (RelocInfo::IsOnlyForSerializer(rmode)) {
     if (assembler->predictable_code_size()) return true;
     return assembler->options().record_reloc_info_for_serialization;
-  } else if (RelocInfo::IsNoInfo(rmode)) {
+  } else if (RelocInfo::IsNone(rmode)) {
     return false;
   }
   return true;
@@ -1207,8 +1162,8 @@ void Assembler::Move32BitImmediate(Register rd, const Operand& x,
     }
   } else {
     int32_t immediate;
-    if (x.IsHeapNumberRequest()) {
-      RequestHeapNumber(x.heap_number_request());
+    if (x.IsHeapObjectRequest()) {
+      RequestHeapObject(x.heap_object_request());
       immediate = 0;
     } else {
       immediate = x.immediate();
@@ -1412,9 +1367,9 @@ void Assembler::AddrMode3(Instr instr, Register rd, const MemOperand& x) {
 
 void Assembler::AddrMode4(Instr instr, Register rn, RegList rl) {
   DCHECK((instr & ~(kCondMask | P | U | W | L)) == B27);
-  DCHECK(!rl.is_empty());
+  DCHECK_NE(rl, 0);
   DCHECK(rn != pc);
-  emit(instr | rn.code() * B16 | rl.bits());
+  emit(instr | rn.code() * B16 | rl);
 }
 
 void Assembler::AddrMode5(Instr instr, CRegister crd, const MemOperand& x) {
@@ -1455,21 +1410,20 @@ int Assembler::branch_offset(Label* L) {
     L->link_to(pc_offset());
   }
 
+  // Block the emission of the constant pool, since the branch instruction must
+  // be emitted at the pc offset recorded by the label.
+  if (!is_const_pool_blocked()) BlockConstPoolFor(1);
+
   return target_pos - (pc_offset() + Instruction::kPcLoadDelta);
 }
 
 // Branch instructions.
 void Assembler::b(int branch_offset, Condition cond, RelocInfo::Mode rmode) {
-  if (!RelocInfo::IsNoInfo(rmode)) RecordRelocInfo(rmode);
+  if (!RelocInfo::IsNone(rmode)) RecordRelocInfo(rmode);
   DCHECK_EQ(branch_offset & 3, 0);
   int imm24 = branch_offset >> 2;
   const bool b_imm_check = is_int24(imm24);
   CHECK(b_imm_check);
-
-  // Block the emission of the constant pool before the next instruction.
-  // Otherwise the passed-in branch offset would be off.
-  BlockConstPoolFor(1);
-
   emit(cond | B27 | B25 | (imm24 & kImm24Mask));
 
   if (cond == al) {
@@ -1479,16 +1433,11 @@ void Assembler::b(int branch_offset, Condition cond, RelocInfo::Mode rmode) {
 }
 
 void Assembler::bl(int branch_offset, Condition cond, RelocInfo::Mode rmode) {
-  if (!RelocInfo::IsNoInfo(rmode)) RecordRelocInfo(rmode);
+  if (!RelocInfo::IsNone(rmode)) RecordRelocInfo(rmode);
   DCHECK_EQ(branch_offset & 3, 0);
   int imm24 = branch_offset >> 2;
   const bool bl_imm_check = is_int24(imm24);
   CHECK(bl_imm_check);
-
-  // Block the emission of the constant pool before the next instruction.
-  // Otherwise the passed-in branch offset would be off.
-  BlockConstPoolFor(1);
-
   emit(cond | B27 | B25 | B24 | (imm24 & kImm24Mask));
 }
 
@@ -1498,11 +1447,6 @@ void Assembler::blx(int branch_offset) {
   int imm24 = branch_offset >> 2;
   const bool blx_imm_check = is_int24(imm24);
   CHECK(blx_imm_check);
-
-  // Block the emission of the constant pool before the next instruction.
-  // Otherwise the passed-in branch offset would be off.
-  BlockConstPoolFor(1);
-
   emit(kSpecialCondition | B27 | B25 | h | (imm24 & kImm24Mask));
 }
 
@@ -1646,8 +1590,7 @@ void Assembler::mov(Register dst, Register src, SBit s, Condition cond) {
 
 void Assembler::mov_label_offset(Register dst, Label* label) {
   if (label->is_bound()) {
-    mov(dst, Operand(label->pos() +
-                     (InstructionStream::kHeaderSize - kHeapObjectTag)));
+    mov(dst, Operand(label->pos() + (Code::kHeaderSize - kHeapObjectTag)));
   } else {
     // Emit the link to the label in the code stream followed by extra nop
     // instructions.
@@ -2263,12 +2206,12 @@ void Assembler::pld(const MemOperand& address) {
 void Assembler::ldm(BlockAddrMode am, Register base, RegList dst,
                     Condition cond) {
   // ABI stack constraint: ldmxx base, {..sp..}  base != sp  is not restartable.
-  DCHECK(base == sp || !dst.has(sp));
+  DCHECK(base == sp || (dst & sp.bit()) == 0);
 
   AddrMode4(cond | B27 | am | L, base, dst);
 
   // Emit the constant pool after a function return implemented by ldm ..{..pc}.
-  if (cond == al && dst.has(pc)) {
+  if (cond == al && (dst & pc.bit()) != 0) {
     // There is a slight chance that the ldm instruction was actually a call,
     // in which case it would be wrong to return into the constant pool; we
     // recognize this case by checking if the emission of the pool was blocked
@@ -2315,7 +2258,7 @@ void Assembler::bkpt(uint32_t imm16) {
 }
 
 void Assembler::svc(uint32_t imm24, Condition cond) {
-  CHECK(is_uint24(imm24));
+  DCHECK(is_uint24(imm24));
   emit(cond | 15 * B24 | imm24);
 }
 
@@ -2689,7 +2632,7 @@ void Assembler::vstm(BlockAddrMode am, Register base, SwVfpRegister first,
        0xA * B8 | count);
 }
 
-static void DoubleAsTwoUInt32(base::Double d, uint32_t* lo, uint32_t* hi) {
+static void DoubleAsTwoUInt32(Double d, uint32_t* lo, uint32_t* hi) {
   uint64_t i = d.AsUint64();
 
   *lo = i & 0xFFFFFFFF;
@@ -2762,7 +2705,7 @@ void Assembler::vmov(const QwNeonRegister dst, uint64_t imm) {
 
 // Only works for little endian floating point formats.
 // We don't support VFP on the mixed endian floating point platform.
-static bool FitsVmovFPImmediate(base::Double d, uint32_t* encoding) {
+static bool FitsVmovFPImmediate(Double d, uint32_t* encoding) {
   // VMOV can accept an immediate of the form:
   //
   //  +/- m * 2^(-n) where 16 <= m <= 31 and 0 <= n <= 7
@@ -2811,7 +2754,7 @@ static bool FitsVmovFPImmediate(base::Double d, uint32_t* encoding) {
 void Assembler::vmov(const SwVfpRegister dst, Float32 imm) {
   uint32_t enc;
   if (CpuFeatures::IsSupported(VFPv3) &&
-      FitsVmovFPImmediate(base::Double(imm.get_scalar()), &enc)) {
+      FitsVmovFPImmediate(Double(imm.get_scalar()), &enc)) {
     CpuFeatureScope scope(this, VFPv3);
     // The float can be encoded in the instruction.
     //
@@ -2830,7 +2773,7 @@ void Assembler::vmov(const SwVfpRegister dst, Float32 imm) {
   }
 }
 
-void Assembler::vmov(const DwVfpRegister dst, base::Double imm,
+void Assembler::vmov(const DwVfpRegister dst, Double imm,
                      const Register extra_scratch) {
   DCHECK(VfpRegisterIsAvailable(dst));
   uint32_t enc;
@@ -4058,8 +4001,6 @@ enum UnaryOp {
   VTRN,
   VRECPE,
   VRSQRTE,
-  VPADAL_S,
-  VPADAL_U,
   VPADDL_S,
   VPADDL_U,
   VCEQ0,
@@ -4132,12 +4073,6 @@ static Instr EncodeNeonUnaryOp(UnaryOp op, NeonRegType reg_type, NeonSize size,
     case VRSQRTE:
       // Only support floating point.
       op_encoding = 0x3 * B16 | 0xB * B7;
-      break;
-    case VPADAL_S:
-      op_encoding = 0xC * B7;
-      break;
-    case VPADAL_U:
-      op_encoding = 0xD * B7;
       break;
     case VPADDL_S:
       op_encoding = 0x4 * B7;
@@ -4400,9 +4335,9 @@ enum IntegerBinOp {
   VQRDMULH
 };
 
-static Instr EncodeNeonDataTypeBinOp(IntegerBinOp op, NeonDataType dt,
-                                     QwNeonRegister dst, QwNeonRegister src1,
-                                     QwNeonRegister src2) {
+static Instr EncodeNeonBinOp(IntegerBinOp op, NeonDataType dt,
+                             QwNeonRegister dst, QwNeonRegister src1,
+                             QwNeonRegister src2) {
   int op_encoding = 0;
   switch (op) {
     case VADD:
@@ -4459,13 +4394,11 @@ static Instr EncodeNeonDataTypeBinOp(IntegerBinOp op, NeonDataType dt,
          n * B7 | B6 | m * B5 | vm | op_encoding;
 }
 
-static Instr EncodeNeonSizeBinOp(IntegerBinOp op, NeonSize size,
-                                 QwNeonRegister dst, QwNeonRegister src1,
-                                 QwNeonRegister src2) {
+static Instr EncodeNeonBinOp(IntegerBinOp op, NeonSize size, QwNeonRegister dst,
+                             QwNeonRegister src1, QwNeonRegister src2) {
   // Map NeonSize values to the signed values in NeonDataType, so the U bit
   // will be 0.
-  return EncodeNeonDataTypeBinOp(op, static_cast<NeonDataType>(size), dst, src1,
-                                 src2);
+  return EncodeNeonBinOp(op, static_cast<NeonDataType>(size), dst, src1, src2);
 }
 
 void Assembler::vadd(QwNeonRegister dst, QwNeonRegister src1,
@@ -4481,7 +4414,7 @@ void Assembler::vadd(NeonSize size, QwNeonRegister dst, QwNeonRegister src1,
   DCHECK(IsEnabled(NEON));
   // Qd = vadd(Qn, Qm) SIMD integer addition.
   // Instruction details available in ARM DDI 0406C.b, A8-828.
-  emit(EncodeNeonSizeBinOp(VADD, size, dst, src1, src2));
+  emit(EncodeNeonBinOp(VADD, size, dst, src1, src2));
 }
 
 void Assembler::vqadd(NeonDataType dt, QwNeonRegister dst, QwNeonRegister src1,
@@ -4489,7 +4422,7 @@ void Assembler::vqadd(NeonDataType dt, QwNeonRegister dst, QwNeonRegister src1,
   DCHECK(IsEnabled(NEON));
   // Qd = vqadd(Qn, Qm) SIMD integer saturating addition.
   // Instruction details available in ARM DDI 0406C.b, A8-996.
-  emit(EncodeNeonDataTypeBinOp(VQADD, dt, dst, src1, src2));
+  emit(EncodeNeonBinOp(VQADD, dt, dst, src1, src2));
 }
 
 void Assembler::vsub(QwNeonRegister dst, QwNeonRegister src1,
@@ -4505,7 +4438,7 @@ void Assembler::vsub(NeonSize size, QwNeonRegister dst, QwNeonRegister src1,
   DCHECK(IsEnabled(NEON));
   // Qd = vsub(Qn, Qm) SIMD integer subtraction.
   // Instruction details available in ARM DDI 0406C.b, A8-1084.
-  emit(EncodeNeonSizeBinOp(VSUB, size, dst, src1, src2));
+  emit(EncodeNeonBinOp(VSUB, size, dst, src1, src2));
 }
 
 void Assembler::vqsub(NeonDataType dt, QwNeonRegister dst, QwNeonRegister src1,
@@ -4513,7 +4446,7 @@ void Assembler::vqsub(NeonDataType dt, QwNeonRegister dst, QwNeonRegister src1,
   DCHECK(IsEnabled(NEON));
   // Qd = vqsub(Qn, Qm) SIMD integer saturating subtraction.
   // Instruction details available in ARM DDI 0406C.b, A8-1020.
-  emit(EncodeNeonDataTypeBinOp(VQSUB, dt, dst, src1, src2));
+  emit(EncodeNeonBinOp(VQSUB, dt, dst, src1, src2));
 }
 
 void Assembler::vmlal(NeonDataType dt, QwNeonRegister dst, DwVfpRegister src1,
@@ -4548,7 +4481,7 @@ void Assembler::vmul(NeonSize size, QwNeonRegister dst, QwNeonRegister src1,
   DCHECK(IsEnabled(NEON));
   // Qd = vadd(Qn, Qm) SIMD integer multiply.
   // Instruction details available in ARM DDI 0406C.b, A8-960.
-  emit(EncodeNeonSizeBinOp(VMUL, size, dst, src1, src2));
+  emit(EncodeNeonBinOp(VMUL, size, dst, src1, src2));
 }
 
 void Assembler::vmull(NeonDataType dt, QwNeonRegister dst, DwVfpRegister src1,
@@ -4581,7 +4514,7 @@ void Assembler::vmin(NeonDataType dt, QwNeonRegister dst, QwNeonRegister src1,
   DCHECK(IsEnabled(NEON));
   // Qd = vmin(Qn, Qm) SIMD integer MIN.
   // Instruction details available in ARM DDI 0406C.b, A8-926.
-  emit(EncodeNeonDataTypeBinOp(VMIN, dt, dst, src1, src2));
+  emit(EncodeNeonBinOp(VMIN, dt, dst, src1, src2));
 }
 
 void Assembler::vmax(QwNeonRegister dst, QwNeonRegister src1,
@@ -4597,7 +4530,7 @@ void Assembler::vmax(NeonDataType dt, QwNeonRegister dst, QwNeonRegister src1,
   DCHECK(IsEnabled(NEON));
   // Qd = vmax(Qn, Qm) SIMD integer MAX.
   // Instruction details available in ARM DDI 0406C.b, A8-926.
-  emit(EncodeNeonDataTypeBinOp(VMAX, dt, dst, src1, src2));
+  emit(EncodeNeonBinOp(VMAX, dt, dst, src1, src2));
 }
 
 enum NeonShiftOp { VSHL, VSHR, VSLI, VSRI, VSRA };
@@ -4800,7 +4733,7 @@ static Instr EncodeNeonPairwiseOp(NeonPairwiseOp op, NeonDataType dt,
 void Assembler::vpadd(DwVfpRegister dst, DwVfpRegister src1,
                       DwVfpRegister src2) {
   DCHECK(IsEnabled(NEON));
-  // Dd = vpadd(Dn, Dm) SIMD floating point pairwise ADD.
+  // Dd = vpadd(Dn, Dm) SIMD integer pairwise ADD.
   // Instruction details available in ARM DDI 0406C.b, A8-982.
   int vd, d;
   dst.split_code(&vd, &d);
@@ -4874,7 +4807,7 @@ void Assembler::vtst(NeonSize size, QwNeonRegister dst, QwNeonRegister src1,
   DCHECK(IsEnabled(NEON));
   // Qd = vtst(Qn, Qm) SIMD test integer operands.
   // Instruction details available in ARM DDI 0406C.b, A8-1098.
-  emit(EncodeNeonSizeBinOp(VTST, size, dst, src1, src2));
+  emit(EncodeNeonBinOp(VTST, size, dst, src1, src2));
 }
 
 void Assembler::vceq(QwNeonRegister dst, QwNeonRegister src1,
@@ -4890,7 +4823,7 @@ void Assembler::vceq(NeonSize size, QwNeonRegister dst, QwNeonRegister src1,
   DCHECK(IsEnabled(NEON));
   // Qd = vceq(Qn, Qm) SIMD integer compare equal.
   // Instruction details available in ARM DDI 0406C.b, A8-844.
-  emit(EncodeNeonSizeBinOp(VCEQ, size, dst, src1, src2));
+  emit(EncodeNeonBinOp(VCEQ, size, dst, src1, src2));
 }
 
 void Assembler::vceq(NeonSize size, QwNeonRegister dst, QwNeonRegister src1,
@@ -4915,7 +4848,7 @@ void Assembler::vcge(NeonDataType dt, QwNeonRegister dst, QwNeonRegister src1,
   DCHECK(IsEnabled(NEON));
   // Qd = vcge(Qn, Qm) SIMD integer compare greater or equal.
   // Instruction details available in ARM DDI 0406C.b, A8-848.
-  emit(EncodeNeonDataTypeBinOp(VCGE, dt, dst, src1, src2));
+  emit(EncodeNeonBinOp(VCGE, dt, dst, src1, src2));
 }
 
 void Assembler::vcgt(QwNeonRegister dst, QwNeonRegister src1,
@@ -4931,7 +4864,7 @@ void Assembler::vcgt(NeonDataType dt, QwNeonRegister dst, QwNeonRegister src1,
   DCHECK(IsEnabled(NEON));
   // Qd = vcgt(Qn, Qm) SIMD integer compare greater than.
   // Instruction details available in ARM DDI 0406C.b, A8-852.
-  emit(EncodeNeonDataTypeBinOp(VCGT, dt, dst, src1, src2));
+  emit(EncodeNeonBinOp(VCGT, dt, dst, src1, src2));
 }
 
 void Assembler::vclt(NeonSize size, QwNeonRegister dst, QwNeonRegister src,
@@ -4948,7 +4881,7 @@ void Assembler::vrhadd(NeonDataType dt, QwNeonRegister dst, QwNeonRegister src1,
   DCHECK(IsEnabled(NEON));
   // Qd = vrhadd(Qn, Qm) SIMD integer rounding halving add.
   // Instruction details available in ARM DDI 0406C.b, A8-1030.
-  emit(EncodeNeonDataTypeBinOp(VRHADD, dt, dst, src1, src2));
+  emit(EncodeNeonBinOp(VRHADD, dt, dst, src1, src2));
 }
 
 void Assembler::vext(QwNeonRegister dst, QwNeonRegister src1,
@@ -5038,14 +4971,6 @@ void Assembler::vtrn(NeonSize size, QwNeonRegister src1, QwNeonRegister src2) {
   emit(EncodeNeonUnaryOp(VTRN, NEON_Q, size, src1.code(), src2.code()));
 }
 
-void Assembler::vpadal(NeonDataType dt, QwNeonRegister dst,
-                       QwNeonRegister src) {
-  DCHECK(IsEnabled(NEON));
-  // vpadal.<dt>(Qd, Qm) SIMD Vector Pairwise Add and Accumulate Long
-  emit(EncodeNeonUnaryOp(NeonU(dt) ? VPADAL_U : VPADAL_S, NEON_Q,
-                         NeonDataTypeToSize(dt), dst.code(), src.code()));
-}
-
 void Assembler::vpaddl(NeonDataType dt, QwNeonRegister dst,
                        QwNeonRegister src) {
   DCHECK(IsEnabled(NEON));
@@ -5058,7 +4983,7 @@ void Assembler::vqrdmulh(NeonDataType dt, QwNeonRegister dst,
                          QwNeonRegister src1, QwNeonRegister src2) {
   DCHECK(IsEnabled(NEON));
   DCHECK(dt == NeonS16 || dt == NeonS32);
-  emit(EncodeNeonDataTypeBinOp(VQRDMULH, dt, dst, src1, src2));
+  emit(EncodeNeonBinOp(VQRDMULH, dt, dst, src1, src2));
 }
 
 void Assembler::vcnt(QwNeonRegister dst, QwNeonRegister src) {
@@ -5202,22 +5127,22 @@ void Assembler::GrowBuffer() {
   // Set up new buffer.
   std::unique_ptr<AssemblerBuffer> new_buffer = buffer_->Grow(new_size);
   DCHECK_EQ(new_size, new_buffer->size());
-  uint8_t* new_start = new_buffer->start();
+  byte* new_start = new_buffer->start();
 
   // Copy the data.
   int pc_delta = new_start - buffer_start_;
   int rc_delta = (new_start + new_size) - (buffer_start_ + old_size);
   size_t reloc_size = (buffer_start_ + old_size) - reloc_info_writer.pos();
   MemMove(new_start, buffer_start_, pc_offset());
-  uint8_t* new_reloc_start = reinterpret_cast<uint8_t*>(
+  byte* new_reloc_start = reinterpret_cast<byte*>(
       reinterpret_cast<Address>(reloc_info_writer.pos()) + rc_delta);
   MemMove(new_reloc_start, reloc_info_writer.pos(), reloc_size);
 
   // Switch buffers.
   buffer_ = std::move(new_buffer);
   buffer_start_ = new_start;
-  pc_ = reinterpret_cast<uint8_t*>(reinterpret_cast<Address>(pc_) + pc_delta);
-  uint8_t* new_last_pc = reinterpret_cast<uint8_t*>(
+  pc_ = reinterpret_cast<byte*>(reinterpret_cast<Address>(pc_) + pc_delta);
+  byte* new_last_pc = reinterpret_cast<byte*>(
       reinterpret_cast<Address>(reloc_info_writer.last_pc()) + pc_delta);
   reloc_info_writer.Reposition(new_reloc_start, new_last_pc);
 
@@ -5235,20 +5160,28 @@ void Assembler::db(uint8_t data) {
   pc_ += sizeof(uint8_t);
 }
 
-void Assembler::dd(uint32_t data) {
+void Assembler::dd(uint32_t data, RelocInfo::Mode rmode) {
   // dd is used to write raw data. The constant pool should be emitted or
   // blocked before using dd.
   DCHECK(is_const_pool_blocked() || pending_32_bit_constants_.empty());
   CheckBuffer();
+  if (!RelocInfo::IsNone(rmode)) {
+    DCHECK(RelocInfo::IsDataEmbeddedObject(rmode));
+    RecordRelocInfo(rmode);
+  }
   base::WriteUnalignedValue(reinterpret_cast<Address>(pc_), data);
   pc_ += sizeof(uint32_t);
 }
 
-void Assembler::dq(uint64_t value) {
+void Assembler::dq(uint64_t value, RelocInfo::Mode rmode) {
   // dq is used to write raw data. The constant pool should be emitted or
   // blocked before using dq.
   DCHECK(is_const_pool_blocked() || pending_32_bit_constants_.empty());
   CheckBuffer();
+  if (!RelocInfo::IsNone(rmode)) {
+    DCHECK(RelocInfo::IsDataEmbeddedObject(rmode));
+    RecordRelocInfo(rmode);
+  }
   base::WriteUnalignedValue(reinterpret_cast<Address>(pc_), value);
   pc_ += sizeof(uint64_t);
 }
@@ -5256,7 +5189,7 @@ void Assembler::dq(uint64_t value) {
 void Assembler::RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data) {
   if (!ShouldRecordRelocInfo(rmode)) return;
   DCHECK_GE(buffer_space(), kMaxRelocSize);  // too late to grow buffer here
-  RelocInfo rinfo(reinterpret_cast<Address>(pc_), rmode, data);
+  RelocInfo rinfo(reinterpret_cast<Address>(pc_), rmode, data, Code());
   reloc_info_writer.Write(&rinfo);
 }
 
@@ -5271,13 +5204,8 @@ void Assembler::ConstantPoolAddEntry(int position, RelocInfo::Mode rmode,
                     (rmode == RelocInfo::CODE_TARGET && value != 0) ||
                     (RelocInfo::IsEmbeddedObjectMode(rmode) && value != 0);
   DCHECK_LT(pending_32_bit_constants_.size(), kMaxNumPending32Constants);
-  if (first_const_pool_32_use_ < 0) {
-    DCHECK(pending_32_bit_constants_.empty());
-    DCHECK_EQ(constant_pool_deadline_, kMaxInt);
+  if (pending_32_bit_constants_.empty()) {
     first_const_pool_32_use_ = position;
-    constant_pool_deadline_ = position + kCheckPoolDeadline;
-  } else {
-    DCHECK(!pending_32_bit_constants_.empty());
   }
   ConstantPoolEntry entry(position, value, sharing_ok, rmode);
 
@@ -5296,7 +5224,7 @@ void Assembler::ConstantPoolAddEntry(int position, RelocInfo::Mode rmode,
     }
   }
 
-  pending_32_bit_constants_.emplace_back(entry);
+  pending_32_bit_constants_.push_back(entry);
 
   // Make sure the constant pool is not emitted in place of the next
   // instruction for which we just recorded relocation info.
@@ -5311,17 +5239,17 @@ void Assembler::ConstantPoolAddEntry(int position, RelocInfo::Mode rmode,
 void Assembler::BlockConstPoolFor(int instructions) {
   int pc_limit = pc_offset() + instructions * kInstrSize;
   if (no_const_pool_before_ < pc_limit) {
+    // Max pool start (if we need a jump and an alignment).
+#ifdef DEBUG
+    int start = pc_limit + kInstrSize + 2 * kPointerSize;
+    DCHECK(pending_32_bit_constants_.empty() ||
+           (start < first_const_pool_32_use_ + kMaxDistToIntPool));
+#endif
     no_const_pool_before_ = pc_limit;
   }
 
-  // If we're due a const pool check before the block finishes, move it to just
-  // after the block.
-  if (constant_pool_deadline_ < no_const_pool_before_) {
-    // Make sure that the new deadline isn't too late (including a jump and the
-    // constant pool marker).
-    DCHECK_LE(no_const_pool_before_,
-              first_const_pool_32_use_ + kMaxDistToIntPool);
-    constant_pool_deadline_ = no_const_pool_before_;
+  if (next_buffer_check_ < no_const_pool_before_) {
+    next_buffer_check_ = no_const_pool_before_;
   }
 }
 
@@ -5337,36 +5265,9 @@ void Assembler::CheckConstPool(bool force_emit, bool require_jump) {
 
   // There is nothing to do if there are no pending constant pool entries.
   if (pending_32_bit_constants_.empty()) {
-    // We should only fall into this case if we're either trying to forcing
-    // emission or opportunistically checking after a jump.
-    DCHECK(force_emit || !require_jump);
+    // Calculate the offset of the next check.
+    next_buffer_check_ = pc_offset() + kCheckPoolInterval;
     return;
-  }
-
-  // We emit a constant pool when:
-  //  * requested to do so by parameter force_emit (e.g. after each function).
-  //  * the distance from the first instruction accessing the constant pool to
-  //    the first constant pool entry will exceed its limit the next time the
-  //    pool is checked.
-  //  * the instruction doesn't require a jump after itself to jump over the
-  //    constant pool, and we're getting close to running out of range.
-  if (!force_emit) {
-    DCHECK_NE(first_const_pool_32_use_, -1);
-    int dist32 = pc_offset() - first_const_pool_32_use_;
-    if (require_jump) {
-      // We should only be on this path if we've exceeded our deadline.
-      DCHECK_GE(dist32, kCheckPoolDeadline);
-    } else if (dist32 < kCheckPoolDeadline / 2) {
-      return;
-    }
-  }
-
-  int size_after_marker = pending_32_bit_constants_.size() * kPointerSize;
-
-  // Deduplicate constants.
-  for (size_t i = 0; i < pending_32_bit_constants_.size(); i++) {
-    ConstantPoolEntry& entry = pending_32_bit_constants_[i];
-    if (entry.is_merged()) size_after_marker -= kPointerSize;
   }
 
   // Check that the code buffer is large enough before emitting the constant
@@ -5374,14 +5275,46 @@ void Assembler::CheckConstPool(bool force_emit, bool require_jump) {
   // the gap to the relocation information).
   int jump_instr = require_jump ? kInstrSize : 0;
   int size_up_to_marker = jump_instr + kInstrSize;
+  int estimated_size_after_marker =
+      pending_32_bit_constants_.size() * kPointerSize;
+  int estimated_size = size_up_to_marker + estimated_size_after_marker;
+
+  // We emit a constant pool when:
+  //  * requested to do so by parameter force_emit (e.g. after each function).
+  //  * the distance from the first instruction accessing the constant pool to
+  //    any of the constant pool entries will exceed its limit the next
+  //    time the pool is checked. This is overly restrictive, but we don't emit
+  //    constant pool entries in-order so it's conservatively correct.
+  //  * the instruction doesn't require a jump after itself to jump over the
+  //    constant pool, and we're getting close to running out of range.
+  if (!force_emit) {
+    DCHECK(!pending_32_bit_constants_.empty());
+    bool need_emit = false;
+    int dist32 = pc_offset() + estimated_size - first_const_pool_32_use_;
+    if ((dist32 >= kMaxDistToIntPool - kCheckPoolInterval) ||
+        (!require_jump && (dist32 >= kMaxDistToIntPool / 2))) {
+      need_emit = true;
+    }
+    if (!need_emit) return;
+  }
+
+  // Deduplicate constants.
+  int size_after_marker = estimated_size_after_marker;
+
+  for (size_t i = 0; i < pending_32_bit_constants_.size(); i++) {
+    ConstantPoolEntry& entry = pending_32_bit_constants_[i];
+    if (entry.is_merged()) size_after_marker -= kPointerSize;
+  }
+
   int size = size_up_to_marker + size_after_marker;
+
   int needed_space = size + kGap;
   while (buffer_space() <= needed_space) GrowBuffer();
 
   {
-    ASM_CODE_COMMENT_STRING(this, "Constant Pool");
     // Block recursive calls to CheckConstPool.
     BlockConstPoolScope block_const_pool(this);
+    RecordComment("[ Constant Pool");
     RecordConstPool(size);
 
     Label size_check;
@@ -5397,21 +5330,6 @@ void Assembler::CheckConstPool(bool force_emit, bool require_jump) {
     // The data size helps disassembly know what to print.
     emit(kConstantPoolMarker |
          EncodeConstantPoolLength(size_after_marker / kPointerSize));
-
-    // The first entry in the constant pool should also be the first
-    CHECK_EQ(first_const_pool_32_use_, pending_32_bit_constants_[0].position());
-    CHECK(!pending_32_bit_constants_[0].is_merged());
-
-    // Make sure we're not emitting the constant too late.
-    CHECK_LE(pc_offset(),
-             first_const_pool_32_use_ + kMaxDistToPcRelativeConstant);
-
-    // Check that the code buffer is large enough before emitting the constant
-    // pool (this includes the gap to the relocation information).
-    int needed_space = pending_32_bit_constants_.size() * kPointerSize + kGap;
-    while (buffer_space() <= needed_space) {
-      GrowBuffer();
-    }
 
     // Emit 32-bit constant pool entries.
     for (size_t i = 0; i < pending_32_bit_constants_.size(); i++) {
@@ -5436,7 +5354,6 @@ void Assembler::CheckConstPool(bool force_emit, bool require_jump) {
         ConstantPoolEntry& merged =
             pending_32_bit_constants_[entry.merged_index()];
         DCHECK(entry.value() == merged.value());
-        DCHECK_LT(merged.position(), entry.position());
         Instr merged_instr = instr_at(merged.position());
         DCHECK(IsLdrPcImmediateOffset(merged_instr));
         delta = GetLdrRegisterImmediateOffset(merged_instr);
@@ -5453,6 +5370,8 @@ void Assembler::CheckConstPool(bool force_emit, bool require_jump) {
 
     first_const_pool_32_use_ = -1;
 
+    RecordComment("]");
+
     DCHECK_EQ(size, SizeOfCodeGeneratedSince(&size_check));
 
     if (after_pool.is_linked()) {
@@ -5460,13 +5379,13 @@ void Assembler::CheckConstPool(bool force_emit, bool require_jump) {
     }
   }
 
-  // Since a constant pool was just emitted, we don't need another check until
-  // the next constant pool entry is added.
-  constant_pool_deadline_ = kMaxInt;
+  // Since a constant pool was just emitted, move the check offset forward by
+  // the standard interval.
+  next_buffer_check_ = pc_offset() + kCheckPoolInterval;
 }
 
 PatchingAssembler::PatchingAssembler(const AssemblerOptions& options,
-                                     uint8_t* address, int instructions)
+                                     byte* address, int instructions)
     : Assembler(options, ExternalAssemblerBuffer(
                              address, instructions * kInstrSize + kGap)) {
   DCHECK_EQ(reloc_info_writer.pos(), buffer_start_ + buffer_->size());
@@ -5488,6 +5407,26 @@ void PatchingAssembler::PadWithNops() {
   while (pc_ < buffer_start_ + buffer_->size() - kGap) {
     nop();
   }
+}
+
+UseScratchRegisterScope::UseScratchRegisterScope(Assembler* assembler)
+    : assembler_(assembler),
+      old_available_(*assembler->GetScratchRegisterList()),
+      old_available_vfp_(*assembler->GetScratchVfpRegisterList()) {}
+
+UseScratchRegisterScope::~UseScratchRegisterScope() {
+  *assembler_->GetScratchRegisterList() = old_available_;
+  *assembler_->GetScratchVfpRegisterList() = old_available_vfp_;
+}
+
+Register UseScratchRegisterScope::Acquire() {
+  RegList* available = assembler_->GetScratchRegisterList();
+  DCHECK_NOT_NULL(available);
+  DCHECK_NE(*available, 0);
+  int index = static_cast<int>(base::bits::CountTrailingZeros32(*available));
+  Register reg = Register::from_code(index);
+  *available &= ~reg.bit();
+  return reg;
 }
 
 LoadStoreLaneParams::LoadStoreLaneParams(MachineRepresentation rep,

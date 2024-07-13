@@ -1,7 +1,6 @@
-# Copyright 2014 The Chromium Authors
+# Copyright 2014 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 
 import datetime
 import functools
@@ -33,8 +32,6 @@ LOGCAT_FILTERS = [
   'DEBUG:I',
   'StrictMode:D',
 ]
-
-SYSTEM_USER_ID = 0
 
 
 def _DeviceCachePath(device):
@@ -86,7 +83,7 @@ def handle_shard_failures_with(on_failure):
   return decorator
 
 
-def place_nomedia_on_device(dev, device_root, run_as=None, as_root=False):
+def place_nomedia_on_device(dev, device_root):
   """Places .nomedia file in test data root.
 
   This helps to prevent system from scanning media files inside test data.
@@ -96,19 +93,10 @@ def place_nomedia_on_device(dev, device_root, run_as=None, as_root=False):
     device_root: Base path on device to place .nomedia file.
   """
 
-  dev.RunShellCommand(['mkdir', '-p', device_root],
-                      run_as=run_as,
-                      as_root=as_root,
-                      check_return=True)
-  dev.WriteFile('%s/.nomedia' % device_root,
-                'https://crbug.com/796640',
-                run_as=run_as,
-                as_root=as_root)
+  dev.RunShellCommand(['mkdir', '-p', device_root], check_return=True)
+  dev.WriteFile('%s/.nomedia' % device_root, 'https://crbug.com/796640')
 
 
-# TODO(1262303): After Telemetry is supported by python3 we can re-add
-# super without arguments in this script.
-# pylint: disable=super-with-arguments
 class LocalDeviceEnvironment(environment.Environment):
 
   def __init__(self, args, output_manager, _error_func):
@@ -130,23 +118,15 @@ class LocalDeviceEnvironment(environment.Environment):
     self._skip_clear_data = args.skip_clear_data
     self._tool_name = args.tool
     self._trace_output = None
-    # Must check if arg exist because this class is used by
-    # //third_party/catapult's browser_options.py
     if hasattr(args, 'trace_output'):
       self._trace_output = args.trace_output
     self._trace_all = None
     if hasattr(args, 'trace_all'):
       self._trace_all = args.trace_all
-    self._use_persistent_shell = args.use_persistent_shell
-    self._disable_test_server = args.disable_test_server
 
-    use_local_devil_tools = False
-    if hasattr(args, 'use_local_devil_tools'):
-      use_local_devil_tools = args.use_local_devil_tools
-
-    devil_chromium.Initialize(output_directory=constants.GetOutDirectory(),
-                              adb_path=args.adb_path,
-                              use_local_devil_tools=use_local_devil_tools)
+    devil_chromium.Initialize(
+        output_directory=constants.GetOutDirectory(),
+        adb_path=args.adb_path)
 
     # Some things such as Forwarder require ADB to be in the environment path,
     # while others like Devil's bundletool.py require Java on the path.
@@ -182,8 +162,7 @@ class LocalDeviceEnvironment(environment.Environment):
         enable_device_files_cache=self._enable_device_cache,
         default_retries=self._max_tries - 1,
         device_arg=device_arg,
-        abis=self._preferred_abis,
-        persistent_shell=self._use_persistent_shell)
+        abis=self._preferred_abis)
 
     if self._logcat_output_file:
       self._logcat_output_dir = tempfile.mkdtemp()
@@ -191,12 +170,6 @@ class LocalDeviceEnvironment(environment.Environment):
     @handle_shard_failures_with(on_failure=self.DenylistDevice)
     def prepare_device(d):
       d.WaitUntilFullyBooted()
-      if d.GetCurrentUser() != SYSTEM_USER_ID:
-        # Use system user to run tasks to avoid "/sdcard "accessing issue
-        # due to multiple-users. For details, see
-        # https://source.android.com/docs/devices/admin/multi-user-testing
-        logging.info('Switching to user with id %s', SYSTEM_USER_ID)
-        d.SwitchUser(SYSTEM_USER_ID)
 
       if self._enable_device_cache:
         cache_path = _DeviceCachePath(d)
@@ -212,10 +185,8 @@ class LocalDeviceEnvironment(environment.Environment):
             self._logcat_output_dir,
             '%s_%s' % (d.adb.GetDeviceSerial(),
                        datetime.datetime.utcnow().strftime('%Y%m%dT%H%M%S')))
-        monitor = logcat_monitor.LogcatMonitor(d.adb,
-                                               clear=True,
-                                               output_file=logcat_file,
-                                               check_error=False)
+        monitor = logcat_monitor.LogcatMonitor(
+            d.adb, clear=True, output_file=logcat_file)
         self._logcat_monitors.append(monitor)
         monitor.Start()
 
@@ -270,10 +241,6 @@ class LocalDeviceEnvironment(environment.Environment):
   @property
   def trace_output(self):
     return self._trace_output
-
-  @property
-  def disable_test_server(self):
-    return self._disable_test_server
 
   #override
   def TearDown(self):

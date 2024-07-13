@@ -56,7 +56,7 @@ class EmbedderDataArray
       (kMaxSize - kHeaderSize) / kEmbedderDataSlotSize;
 
  private:
-  static_assert(kHeaderSize == Internals::kFixedArrayHeaderSize);
+  STATIC_ASSERT(kHeaderSize == Internals::kFixedArrayHeaderSize);
 
   TQ_OBJECT_CONSTRUCTORS(EmbedderDataArray)
 };

@@ -1,4 +1,4 @@
-# Copyright 2020 The Chromium Authors
+# Copyright 2020 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Helpers related to multiprocessing.
@@ -27,7 +27,7 @@ _fork_params = None
 _fork_kwargs = None
 
 
-class _ImmediateResult:
+class _ImmediateResult(object):
   def __init__(self, value):
     self._value = value
 
@@ -44,7 +44,7 @@ class _ImmediateResult:
     return True
 
 
-class _ExceptionWrapper:
+class _ExceptionWrapper(object):
   """Used to marshal exception messages back to main process."""
 
   def __init__(self, msg, exception_type=None):
@@ -57,7 +57,7 @@ class _ExceptionWrapper:
                     self.exception_type)('Originally caused by: ' + self.msg)
 
 
-class _FuncWrapper:
+class _FuncWrapper(object):
   """Runs on the fork()'ed side to catch exceptions and spread *args."""
 
   def __init__(self, func):
@@ -66,10 +66,7 @@ class _FuncWrapper:
     self._func = func
 
   def __call__(self, index, _=None):
-    global _fork_kwargs
     try:
-      if _fork_kwargs is None:  # Clarifies _fork_kwargs is map for pylint.
-        _fork_kwargs = {}
       return self._func(*_fork_params[index], **_fork_kwargs)
     except Exception as e:
       # Only keep the exception type for builtin exception types or else risk
@@ -84,7 +81,7 @@ class _FuncWrapper:
       return _ExceptionWrapper(traceback.format_exc())
 
 
-class _WrappedResult:
+class _WrappedResult(object):
   """Allows for host-side logic to be run after child process has terminated.
 
   * Unregisters associated pool _all_pools.

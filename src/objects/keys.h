@@ -5,7 +5,6 @@
 #ifndef V8_OBJECTS_KEYS_H_
 #define V8_OBJECTS_KEYS_H_
 
-#include "include/v8-object.h"
 #include "src/objects/hash-table.h"
 #include "src/objects/js-objects.h"
 #include "src/objects/objects.h"
@@ -17,18 +16,6 @@ class JSProxy;
 class FastKeyAccumulator;
 
 enum AddKeyConversion { DO_NOT_CONVERT, CONVERT_TO_ARRAY_INDEX };
-
-enum class GetKeysConversion {
-  kKeepNumbers = static_cast<int>(v8::KeyConversionMode::kKeepNumbers),
-  kConvertToString = static_cast<int>(v8::KeyConversionMode::kConvertToString),
-  kNoNumbers = static_cast<int>(v8::KeyConversionMode::kNoNumbers)
-};
-
-enum class KeyCollectionMode {
-  kOwnOnly = static_cast<int>(v8::KeyCollectionMode::kOwnOnly),
-  kIncludePrototypes =
-      static_cast<int>(v8::KeyCollectionMode::kIncludePrototypes)
-};
 
 // This is a helper class for JSReceiver::GetKeys which collects and sorts keys.
 // GetKeys needs to sort keys per prototype level, first showing the integer
@@ -56,8 +43,7 @@ class KeyAccumulator final {
   KeyAccumulator& operator=(const KeyAccumulator&) = delete;
 
   static MaybeHandle<FixedArray> GetKeys(
-      Isolate* isolate, Handle<JSReceiver> object, KeyCollectionMode mode,
-      PropertyFilter filter,
+      Handle<JSReceiver> object, KeyCollectionMode mode, PropertyFilter filter,
       GetKeysConversion keys_conversion = GetKeysConversion::kKeepNumbers,
       bool is_for_in = false, bool skip_indices = false);
 
@@ -155,7 +141,10 @@ class KeyAccumulator final {
   void set_may_have_elements(bool value) { may_have_elements_ = value; }
 
   Isolate* isolate_;
-  Handle<OrderedHashSet> keys_;
+  // keys_ is either an Handle<OrderedHashSet> or in the case of own JSProxy
+  // keys a Handle<FixedArray>. The OrderedHashSet is in-place converted to the
+  // result list, a FixedArray containing all collected keys.
+  Handle<FixedArray> keys_;
   Handle<Map> first_prototype_map_;
   Handle<JSReceiver> receiver_;
   Handle<JSReceiver> last_non_empty_prototype_;
@@ -174,7 +163,7 @@ class KeyAccumulator final {
 };
 
 // The FastKeyAccumulator handles the cases where there are no elements on the
-// prototype chain and forwards the complex/slow cases to the normal
+// prototype chain and forwords the complex/slow cases to the normal
 // KeyAccumulator. This significantly speeds up the cases where the OWN_ONLY
 // case where we do not have to walk the prototype chain.
 class FastKeyAccumulator {
@@ -200,19 +189,6 @@ class FastKeyAccumulator {
   MaybeHandle<FixedArray> GetKeys(
       GetKeysConversion convert = GetKeysConversion::kKeepNumbers);
 
-  // Initialize the the enum cache for a map with all of the following:
-  //   - uninitialized enum length
-  //   - fast properties (i.e. !is_dictionary_map())
-  //   - has >0 enumerable own properties
-  //
-  // The number of enumerable properties is passed in as an optimization, for
-  // when the caller has already computed it.
-  //
-  // Returns the keys.
-  static Handle<FixedArray> InitializeFastPropertyEnumCache(
-      Isolate* isolate, Handle<Map> map, int enum_length,
-      AllocationType allocation = AllocationType::kOld);
-
  private:
   void Prepare();
   MaybeHandle<FixedArray> GetKeysFast(GetKeysConversion convert);
@@ -220,7 +196,7 @@ class FastKeyAccumulator {
   MaybeHandle<FixedArray> GetKeysWithPrototypeInfoCache(
       GetKeysConversion convert);
 
-  MaybeHandle<FixedArray> GetOwnKeysWithUninitializedEnumLength();
+  MaybeHandle<FixedArray> GetOwnKeysWithUninitializedEnumCache();
 
   bool MayHaveElements(JSReceiver receiver);
   bool TryPrototypeInfoCache(Handle<JSReceiver> receiver);

@@ -26,29 +26,17 @@ class V8_EXPORT_PRIVATE CombinedHeapObjectIterator final {
   HeapObject Next();
 
  private:
+  SafepointScope safepoint_scope_;
   HeapObjectIterator heap_iterator_;
   ReadOnlyHeapObjectIterator ro_heap_iterator_;
 };
 
 V8_WARN_UNUSED_RESULT inline bool IsValidHeapObject(Heap* heap,
                                                     HeapObject object) {
-  if (V8_ENABLE_THIRD_PARTY_HEAP_BOOL) {
+  if (V8_ENABLE_THIRD_PARTY_HEAP_BOOL)
     return third_party_heap::Heap::IsValidHeapObject(object);
-  }
-  return ReadOnlyHeap::Contains(object) || heap->Contains(object) ||
-         heap->SharedHeapContains(object);
-}
-
-V8_WARN_UNUSED_RESULT inline bool IsValidCodeObject(Heap* heap,
-                                                    HeapObject object) {
-  if (V8_ENABLE_THIRD_PARTY_HEAP_BOOL) {
-    return third_party_heap::Heap::IsValidCodeObject(object);
-  }
-  if (V8_EXTERNAL_CODE_SPACE_BOOL) {
-    return heap->ContainsCode(object);
-  } else {
-    return ReadOnlyHeap::Contains(object) || heap->ContainsCode(object);
-  }
+  else
+    return ReadOnlyHeap::Contains(object) || heap->Contains(object);
 }
 
 }  // namespace internal

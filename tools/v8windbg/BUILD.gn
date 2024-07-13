@@ -42,6 +42,8 @@ v8_shared_library("v8windbg") {
     "src/cur-isolate.h",
     "src/js-stack.cc",
     "src/js-stack.h",
+    "src/list-chunks.cc",
+    "src/list-chunks.h",
     "src/local-variables.cc",
     "src/local-variables.h",
     "src/object-inspection.cc",
@@ -54,9 +56,6 @@ v8_shared_library("v8windbg") {
 
   deps = [
     ":v8windbg_base",
-    "../../:v8_flags",
-    "../../:v8_libbase",
-    "../../:v8_shared_internal_headers",
     "../debug_helper:v8_debug_helper",
   ]
 }
@@ -75,8 +74,8 @@ action("copy_prereqs") {
   outputs = [ "$root_out_dir/dbgeng.dll" ]
 
   args = [
-    rebase_path("//build", root_build_dir),
-    rebase_path(root_out_dir, root_build_dir),
+    rebase_path("//build"),
+    rebase_path(root_out_dir),
     target_cpu,
   ]
 }

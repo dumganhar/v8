@@ -4,12 +4,10 @@
 
 #include <windows.h>
 
-#include "include/v8-initialization.h"
-#include "include/v8-platform.h"
+#include "include/v8.h"
 #include "src/base/page-allocator.h"
 #include "src/trap-handler/trap-handler.h"
 #include "src/utils/allocation.h"
-#include "test/unittests/test-utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -24,7 +22,7 @@ i::Address g_start_address;
 // on if V8 doesn't handle the exception. This allows tools like ASan to
 // register a handler early on during the process startup and still generate
 // stack traces on failures.
-class ExceptionHandlerFallbackTest : public v8::TestWithPlatform {
+class ExceptionHandlerFallbackTest : public ::testing::Test {
  protected:
   void SetUp() override {
     // Register this handler as the last handler.
@@ -75,8 +73,8 @@ class ExceptionHandlerFallbackTest : public v8::TestWithPlatform {
 };
 
 TEST_F(ExceptionHandlerFallbackTest, DoTest) {
-  constexpr bool kUseDefaultTrapHandler = true;
-  EXPECT_TRUE(v8::V8::EnableWebAssemblyTrapHandler(kUseDefaultTrapHandler));
+  constexpr bool use_default_handler = true;
+  EXPECT_TRUE(v8::V8::EnableWebAssemblyTrapHandler(use_default_handler));
   // In the original test setup the test memory is protected against any kind of
   // access. Therefore the access here causes an access violation exception,
   // which should be caught by the exception handler we install above. In the

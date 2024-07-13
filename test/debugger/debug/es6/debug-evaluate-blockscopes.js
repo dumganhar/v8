@@ -29,7 +29,7 @@
 // Test debug evaluation for functions without local context, but with
 // nested catch contexts.
 
-// Flags: --no-always-turbofan
+// Flags: --no-always-opt
 
 "use strict";
 

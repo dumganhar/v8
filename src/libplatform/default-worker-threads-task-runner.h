@@ -63,10 +63,8 @@ class V8_PLATFORM_EXPORT DefaultWorkerThreadsTaskRunner
 
   bool terminated_ = false;
   base::Mutex lock_;
-  std::vector<std::unique_ptr<WorkerThread>> thread_pool_;
-  // Worker threads access this queue, so we can only destroy it after all
-  // workers stopped.
   DelayedTaskQueue queue_;
+  std::vector<std::unique_ptr<WorkerThread>> thread_pool_;
   TimeFunction time_function_;
 };
 

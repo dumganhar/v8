@@ -34,20 +34,20 @@ void ExpectName(const char* expected, const ::wasm::Name& name) {
 
 TEST_F(WasmCapiTest, Reflect) {
   // Create a module exporting a function, a global, a table, and a memory.
-  uint8_t code[] = {WASM_UNREACHABLE};
+  byte code[] = {WASM_UNREACHABLE};
   ValueType types[] = {kWasmI32, kWasmExternRef, kWasmI32,
                        kWasmI64, kWasmF32,       kWasmF64};
   FunctionSig sig(2, 4, types);
-  AddExportedFunction(base::CStrVector(kFuncName), code, sizeof(code), &sig);
+  AddExportedFunction(CStrVector(kFuncName), code, sizeof(code), &sig);
 
   builder()->AddExportedGlobal(kWasmF64, false, WasmInitExpr(0.0),
-                               base::CStrVector(kGlobalName));
+                               CStrVector(kGlobalName));
 
-  builder()->AddTable(kWasmFuncRef, 12, 12);
-  builder()->AddExport(base::CStrVector(kTableName), kExternalTable, 0);
+  builder()->AllocateIndirectFunctions(12);
+  builder()->AddExport(CStrVector(kTableName), kExternalTable, 0);
 
   builder()->SetMinMemorySize(1);
-  builder()->AddExport(base::CStrVector(kMemoryName), kExternalMemory, 0);
+  builder()->AddExport(CStrVector(kMemoryName), kExternalMemory, 0);
 
   Instantiate(nullptr);
 

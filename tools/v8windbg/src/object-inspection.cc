@@ -277,17 +277,13 @@ HRESULT GetModelForStruct(const uint64_t address,
   for (const StructField& field : fields) {
     WRL::ComPtr<IModelObject> field_model;
     if (field.num_bits == 0) {
-      if (FAILED(GetModelForBasicField(address + field.offset, field.type_name,
-                                       field.uncompressed_type_name, sp_ctx,
-                                       &field_model))) {
-        continue;
-      }
+      RETURN_IF_FAIL(GetModelForBasicField(
+          address + field.offset, field.type_name, field.uncompressed_type_name,
+          sp_ctx, &field_model));
     } else {
-      if (FAILED(GetModelForBitField(address + field.offset, field.num_bits,
-                                     field.shift_bits, field.type_name, sp_ctx,
-                                     &field_model))) {
-        continue;
-      }
+      RETURN_IF_FAIL(GetModelForBitField(address + field.offset, field.num_bits,
+                                         field.shift_bits, field.type_name,
+                                         sp_ctx, &field_model));
     }
     RETURN_IF_FAIL(
         sp_value->SetKey(reinterpret_cast<const wchar_t*>(field.name.c_str()),

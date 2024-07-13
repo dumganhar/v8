@@ -11,6 +11,7 @@
 #include "include/v8-platform.h"
 #include "src/base/macros.h"
 #include "src/base/platform/condition-variable.h"
+#include "src/common/globals.h"
 
 namespace v8 {
 namespace internal {

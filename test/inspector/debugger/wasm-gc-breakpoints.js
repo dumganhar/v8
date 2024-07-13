@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --experimental-wasm-gc --experimental-wasm-stringref
+// Flags: --experimental-wasm-gc
 
 utils.load('test/inspector/wasm-inspector-test.js');
 
@@ -14,10 +14,8 @@ const module_bytes = [
   0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0,  // wasm magic
 
   0x01,  // type section
-  0x19,  // section length
-  0x01,  // number of type section entries
-  0x4f,  // recursive type group
-  0x04,  // number of types in the recursive group
+  0x16,  // section length
+  0x04,  // number of types
   // type 0: struct $StrA (field ($byte i8) ($word i16) ($pointer (ref $StrB)))
   0x5f,  // struct
   0x03,  // field count
@@ -33,7 +31,7 @@ const module_bytes = [
   0x6c, 0x00, 0x01,  // mut ref null $StrA
   // type 3: func
   0x60,  // signature
-  0x01, 0x64,  // 1 param: stringref
+  0x00,  // number of params
   0x00,  // number of results
 
   0x03,  // function section
@@ -59,35 +57,36 @@ const module_bytes = [
 
   /////////////////////////// CODE SECTION //////////////////////////
   0x0a,  // code section
-  0x2f,  // section length
+  0x35,  // section length
   0x01,  // number of functions
 
-  0x2d,  // function 0: size
+  0x33,  // function 0: size
   0x02,  // number of locals
   0x01, 0x6c, 0x00,  // (local $varA (ref null $StrA))
   0x01, 0x6c, 0x02,  // (local $varC (ref null $ArrC))
   // $varA := new $StrA(127, 32767, new $StrB(null))
   0x41, 0xFF, 0x00,  // i32.const 127
   0x41, 0xFF, 0xFF, 0x01,  // i32.const 32767
-  0xfb, 0x08, 0x01,  // struct.new_default $StrB
-  0xfb, 0x07, 0x00,  // struct.new $StrA
-  0x22, 0x01,  // local.tee $varA
+  0xfb, 0x30, 0x01,  // rtt.canon $StrB
+  0xfb, 0x02, 0x01,  // struct.new_default_with_rtt $StrB
+  0xfb, 0x30, 0x00,  // rtt.canon $StrA
+  0xfb, 0x01, 0x00,  // struct.new_with_rtt $StrA
+  0x22, 0x00,  // local.tee $varA
   // $varA.$pointer.$next = $varA
   0xfb, 0x03, 0x00, 0x02,  // struct.get $StrA $pointer
-  0x20, 0x01,  // local.get $varA
+  0x20, 0x00,  // local.get $varA
   0xfb, 0x06, 0x01, 0x00,  // struct.set $StrB $next
   // $varC := new $ArrC($varA)
-  0x20, 0x01,  // local.get $varA -- value
+  0x20, 0x00,  // local.get $varA -- value
   0x41, 0x01,  // i32.const 1 -- length
-  0xfb, 0x1b, 0x02,  // array.new $ArrC
-  0x20, 0x00,  // local.get 0
-  0x1a,  // drop
-  0x21, 0x02,  // local.set $varC
+  0xfb, 0x30, 0x02,  // rtt.canon $ArrC
+  0xfb, 0x11, 0x02,  // array.new_with_rtt $ArrC
+  0x21, 0x01,  // local.set $varC
   0x0b,  // end
 
   /////////////////////////// NAME SECTION //////////////////////////
   0x00,  // name section
-  0xd4, 0x01, // section length
+  0x4d,  // section length
   0x04,  // length of "name"
   0x6e, 0x61, 0x6d, 0x65,  // "name"
 
@@ -96,35 +95,22 @@ const module_bytes = [
   0x01,  // number of entries
   0x00,  // for function 0
   0x02,  // number of entries for function 0
-  0x01,  // local index
+  0x00,  // local index
   0x04,  // length of "varA"
   0x76, 0x61, 0x72, 0x41,  // "varA"
-  0x02,  // local index
+  0x01,  // local index
   0x04,  // length of "varB"
   0x76, 0x61, 0x72, 0x42,  // "varB"
 
   0x04,  // "type names" subsection
-  0x99, 0x01,  // length of subsection
+  0x13,  // length of subsection
   0x03,  // number of entries
   0x00,  // type index
   0x04,  // name length
   0x53, 0x74, 0x72, 0x41,  // "StrA"
   0x01,  // type index
-  0x89, 0x01,  // name length
-  // Called "$StrB" in other comments, actual name:
-  // "veryLongNameWithMoreThanOneHundredAndTwentyEightCharactersToTestThat
-  // WeAreHandlingStringBufferOverflowWithoutCrashing_ThisWontGetTruncated"
-  0x76, 0x65, 0x72, 0x79, 0x4c, 0x6f, 0x6e, 0x67, 0x4e, 0x61, 0x6d, 0x65, 0x57,
-  0x69, 0x74, 0x68, 0x4d, 0x6f, 0x72, 0x65, 0x54, 0x68, 0x61, 0x6e, 0x4f, 0x6e,
-  0x65, 0x48, 0x75, 0x6e, 0x64, 0x72, 0x65, 0x64, 0x41, 0x6e, 0x64, 0x54, 0x77,
-  0x65, 0x6e, 0x74, 0x79, 0x45, 0x69, 0x67, 0x68, 0x74, 0x43, 0x68, 0x61, 0x72,
-  0x61, 0x63, 0x74, 0x65, 0x72, 0x73, 0x54, 0x6f, 0x54, 0x65, 0x73, 0x74, 0x54,
-  0x68, 0x61, 0x74, 0x57, 0x65, 0x41, 0x72, 0x65, 0x48, 0x61, 0x6e, 0x64, 0x6c,
-  0x69, 0x6e, 0x67, 0x53, 0x74, 0x72, 0x69, 0x6e, 0x67, 0x42, 0x75, 0x66, 0x66,
-  0x65, 0x72, 0x4f, 0x76, 0x65, 0x72, 0x66, 0x6c, 0x6f, 0x77, 0x57, 0x69, 0x74,
-  0x68, 0x6f, 0x75, 0x74, 0x43, 0x72, 0x61, 0x73, 0x68, 0x69, 0x6e, 0x67, 0x5f,
-  0x54, 0x68, 0x69, 0x73, 0x57, 0x6f, 0x6e, 0x74, 0x47, 0x65, 0x74, 0x54, 0x72,
-  0x75, 0x6e, 0x63, 0x61, 0x74, 0x65, 0x64,
+  0x04,  // name length
+  0x53, 0x74, 0x72, 0x42,  // "StrB"
   0x02,  // type index
   0x04,  // name length
   0x41, 0x72, 0x72, 0x43,  // "ArrC"
@@ -173,7 +159,7 @@ Protocol.Debugger.onPaused(async msg => {
     var lineNumber = frame.location.lineNumber;
     var columnNumber = frame.location.columnNumber;
     InspectorTest.log(`at ${functionName} (${lineNumber}:${columnNumber}):`);
-    if (!/^wasm/.test(session.getCallFrameUrl(frame))) {
+    if (!/^wasm/.test(frame.url)) {
       InspectorTest.log('   -- skipped');
       continue;
     }
@@ -210,7 +196,6 @@ Protocol.Debugger.onPaused(async msg => {
 
 InspectorTest.runAsyncTestSuite([
   async function test() {
-    await Protocol.Runtime.enable();
     await Protocol.Debugger.enable();
     InspectorTest.log('Instantiating.');
     // Spawn asynchronously:
@@ -220,11 +205,10 @@ InspectorTest.runAsyncTestSuite([
     // Ignore javascript and full module wasm script, get scripts for functions.
     const [, {params: wasm_script}] =
         await Protocol.Debugger.onceScriptParsed(2);
-    let offset = 103;  // "drop" before "local.set $varC" at the end.
+    let offset = 107;  // "local.set $varC" at the end.
     await setBreakpoint(offset, wasm_script.scriptId, wasm_script.url);
     InspectorTest.log('Calling main()');
-    await WasmInspectorTest.evalWithUrl('instance.exports.main("hello world")',
-                                        'runWasm');
+    await WasmInspectorTest.evalWithUrl('instance.exports.main()', 'runWasm');
     InspectorTest.log('exports.main returned!');
   }
 ]);

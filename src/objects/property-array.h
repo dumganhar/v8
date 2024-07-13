@@ -6,6 +6,7 @@
 #define V8_OBJECTS_PROPERTY_ARRAY_H_
 
 #include "src/objects/heap-object.h"
+#include "torque-generated/field-offsets.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -13,14 +14,13 @@
 namespace v8 {
 namespace internal {
 
-#include "torque-generated/src/objects/property-array-tq.inc"
-
-class PropertyArray
-    : public TorqueGeneratedPropertyArray<PropertyArray, HeapObject> {
+class PropertyArray : public HeapObject {
  public:
   // [length]: length of the array.
   inline int length() const;
-  inline int length(AcquireLoadTag) const;
+
+  // Get the length using acquire loads.
+  inline int synchronized_length() const;
 
   // This is only used on a newly allocated PropertyArray which
   // doesn't have an existing hash.
@@ -31,18 +31,10 @@ class PropertyArray
 
   inline Object get(int index) const;
   inline Object get(PtrComprCageBase cage_base, int index) const;
-  inline Object get(int index, SeqCstAccessTag tag) const;
-  inline Object get(PtrComprCageBase cage_base, int index,
-                    SeqCstAccessTag tag) const;
 
   inline void set(int index, Object value);
-  inline void set(int index, Object value, SeqCstAccessTag tag);
   // Setter with explicit barrier mode.
   inline void set(int index, Object value, WriteBarrierMode mode);
-
-  inline Object Swap(int index, Object value, SeqCstAccessTag tag);
-  inline Object Swap(PtrComprCageBase cage_base, int index, Object value,
-                     SeqCstAccessTag tag);
 
   // Signature must be in sync with FixedArray::CopyElements().
   inline void CopyElements(Isolate* isolate, int dst_index, PropertyArray src,
@@ -57,8 +49,12 @@ class PropertyArray
   }
   static constexpr int OffsetOfElementAt(int index) { return SizeFor(index); }
 
+  DECL_CAST(PropertyArray)
   DECL_PRINTER(PropertyArray)
   DECL_VERIFIER(PropertyArray)
+
+  DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize,
+                                TORQUE_GENERATED_PROPERTY_ARRAY_FIELDS)
 
   // Garbage collection support.
   using BodyDescriptor = FlexibleBodyDescriptor<kHeaderSize>;
@@ -74,9 +70,9 @@ class PropertyArray
  private:
   DECL_INT_ACCESSORS(length_and_hash)
 
-  DECL_RELEASE_ACQUIRE_INT_ACCESSORS(length_and_hash)
+  DECL_SYNCHRONIZED_INT_ACCESSORS(length_and_hash)
 
-  TQ_OBJECT_CONSTRUCTORS(PropertyArray)
+  OBJECT_CONSTRUCTORS(PropertyArray, HeapObject);
 };
 
 }  // namespace internal

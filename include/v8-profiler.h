@@ -11,25 +11,18 @@
 #include <unordered_set>
 #include <vector>
 
-#include "cppgc/common.h"          // NOLINT(build/include_directory)
-#include "v8-local-handle.h"       // NOLINT(build/include_directory)
-#include "v8-message.h"            // NOLINT(build/include_directory)
-#include "v8-persistent-handle.h"  // NOLINT(build/include_directory)
+#include "v8.h"  // NOLINT(build/include_directory)
 
 /**
  * Profiler support for the V8 JavaScript engine.
  */
 namespace v8 {
 
-enum class EmbedderStateTag : uint8_t;
 class HeapGraphNode;
 struct HeapStatsUpdate;
-class Object;
-enum StateTag : uint16_t;
 
 using NativeObject = void*;
 using SnapshotObjectId = uint32_t;
-using ProfilerId = uint32_t;
 
 struct CpuProfileDeoptFrame {
   int script_id;
@@ -176,32 +169,6 @@ class V8_EXPORT CpuProfileNode {
   static const int kNoColumnNumberInfo = Message::kNoColumnInfo;
 };
 
-/**
- * An interface for exporting data from V8, using "push" model.
- */
-class V8_EXPORT OutputStream {
- public:
-  enum WriteResult { kContinue = 0, kAbort = 1 };
-  virtual ~OutputStream() = default;
-  /** Notify about the end of stream. */
-  virtual void EndOfStream() = 0;
-  /** Get preferred output chunk size. Called only once. */
-  virtual int GetChunkSize() { return 1024; }
-  /**
-   * Writes the next chunk of snapshot data into the stream. Writing
-   * can be stopped by returning kAbort as function result. EndOfStream
-   * will not be called in case writing was aborted.
-   */
-  virtual WriteResult WriteAsciiChunk(char* data, int size) = 0;
-  /**
-   * Writes the next chunk of heap stats data into the stream. Writing
-   * can be stopped by returning kAbort as function result. EndOfStream
-   * will not be called in case writing was aborted.
-   */
-  virtual WriteResult WriteHeapStatsChunk(HeapStatsUpdate* data, int count) {
-    return kAbort;
-  }
-};
 
 /**
  * CpuProfile contains a CPU profile in a form of top-down call tree
@@ -209,9 +176,6 @@ class V8_EXPORT OutputStream {
  */
 class V8_EXPORT CpuProfile {
  public:
-  enum SerializationFormat {
-    kJSON = 0  // See format description near 'Serialize' method.
-  };
   /** Returns CPU profile title. */
   Local<String> GetTitle() const;
 
@@ -244,16 +208,6 @@ class V8_EXPORT CpuProfile {
   int64_t GetStartTime() const;
 
   /**
-   * Returns state of the vm when sample was captured.
-   */
-  StateTag GetSampleState(int index) const;
-
-  /**
-   * Returns state of the embedder when sample was captured.
-   */
-  EmbedderStateTag GetSampleEmbedderState(int index) const;
-
-  /**
    * Returns time when the profile recording was stopped (in microseconds)
    * since some unspecified starting point.
    * The point is equal to the starting point used by GetStartTime.
@@ -265,25 +219,6 @@ class V8_EXPORT CpuProfile {
    * All pointers to nodes previously returned become invalid.
    */
   void Delete();
-
-  /**
-   * Prepare a serialized representation of the profile. The result
-   * is written into the stream provided in chunks of specified size.
-   *
-   * For the JSON format, heap contents are represented as an object
-   * with the following structure:
-   *
-   *  {
-   *    nodes: [nodes array],
-   *    startTime: number,
-   *    endTime: number
-   *    samples: [strings array]
-   *    timeDeltas: [numbers array]
-   *  }
-   *
-   */
-  void Serialize(OutputStream* stream,
-                 SerializationFormat format = kJSON) const;
 };
 
 enum CpuProfilingMode {
@@ -324,32 +259,14 @@ enum class CpuProfilingStatus {
 };
 
 /**
- * Result from StartProfiling returning the Profiling Status, and
- * id of the started profiler, or 0 if profiler is not started
- */
-struct CpuProfilingResult {
-  const ProfilerId id;
-  const CpuProfilingStatus status;
-};
-
-/**
  * Delegate for when max samples reached and samples are discarded.
  */
 class V8_EXPORT DiscardedSamplesDelegate {
  public:
-  DiscardedSamplesDelegate() = default;
+  DiscardedSamplesDelegate() {}
 
   virtual ~DiscardedSamplesDelegate() = default;
   virtual void Notify() = 0;
-
-  ProfilerId GetId() const { return profiler_id_; }
-
- private:
-  friend internal::CpuProfile;
-
-  void SetId(ProfilerId id) { profiler_id_ = id; }
-
-  ProfilerId profiler_id_;
 };
 
 /**
@@ -372,16 +289,13 @@ class V8_EXPORT CpuProfilingOptions {
    *                             interval, set via SetSamplingInterval(). If
    *                             zero, the sampling interval will be equal to
    *                             the profiler's sampling interval.
-   * \param filter_context If specified, profiles will only contain frames
-   *                       using this context. Other frames will be elided.
+   * \param filter_context Deprecated option to filter by context, currently a
+   *                       no-op.
    */
   CpuProfilingOptions(
       CpuProfilingMode mode = kLeafNodeLineNumbers,
       unsigned max_samples = kNoSampleLimit, int sampling_interval_us = 0,
       MaybeLocal<Context> filter_context = MaybeLocal<Context>());
-
-  CpuProfilingOptions(CpuProfilingOptions&&) = default;
-  CpuProfilingOptions& operator=(CpuProfilingOptions&&) = default;
 
   CpuProfilingMode mode() const { return mode_; }
   unsigned max_samples() const { return max_samples_; }
@@ -390,13 +304,9 @@ class V8_EXPORT CpuProfilingOptions {
  private:
   friend class internal::CpuProfile;
 
-  bool has_filter_context() const { return !filter_context_.IsEmpty(); }
-  void* raw_filter_context() const;
-
   CpuProfilingMode mode_;
   unsigned max_samples_;
   int sampling_interval_us_;
-  Global<Context> filter_context_;
 };
 
 /**
@@ -443,45 +353,6 @@ class V8_EXPORT CpuProfiler {
   void SetUsePreciseSampling(bool);
 
   /**
-   * Starts collecting a CPU profile. Several profiles may be collected at once.
-   * Generates an anonymous profiler, without a String identifier.
-   */
-  CpuProfilingResult Start(
-      CpuProfilingOptions options,
-      std::unique_ptr<DiscardedSamplesDelegate> delegate = nullptr);
-
-  /**
-   * Starts collecting a CPU profile. Title may be an empty string. Several
-   * profiles may be collected at once. Attempts to start collecting several
-   * profiles with the same title are silently ignored.
-   */
-  CpuProfilingResult Start(
-      Local<String> title, CpuProfilingOptions options,
-      std::unique_ptr<DiscardedSamplesDelegate> delegate = nullptr);
-
-  /**
-   * Starts profiling with the same semantics as above, except with expanded
-   * parameters.
-   *
-   * |record_samples| parameter controls whether individual samples should
-   * be recorded in addition to the aggregated tree.
-   *
-   * |max_samples| controls the maximum number of samples that should be
-   * recorded by the profiler. Samples obtained after this limit will be
-   * discarded.
-   */
-  CpuProfilingResult Start(
-      Local<String> title, CpuProfilingMode mode, bool record_samples = false,
-      unsigned max_samples = CpuProfilingOptions::kNoSampleLimit);
-
-  /**
-   * The same as StartProfiling above, but the CpuProfilingMode defaults to
-   * kLeafNodeLineNumbers mode, which was the previous default behavior of the
-   * profiler.
-   */
-  CpuProfilingResult Start(Local<String> title, bool record_samples = false);
-
-  /**
    * Starts collecting a CPU profile. Title may be an empty string. Several
    * profiles may be collected at once. Attempts to start collecting several
    * profiles with the same title are silently ignored.
@@ -504,7 +375,6 @@ class V8_EXPORT CpuProfiler {
   CpuProfilingStatus StartProfiling(
       Local<String> title, CpuProfilingMode mode, bool record_samples = false,
       unsigned max_samples = CpuProfilingOptions::kNoSampleLimit);
-
   /**
    * The same as StartProfiling above, but the CpuProfilingMode defaults to
    * kLeafNodeLineNumbers mode, which was the previous default behavior of the
@@ -512,11 +382,6 @@ class V8_EXPORT CpuProfiler {
    */
   CpuProfilingStatus StartProfiling(Local<String> title,
                                     bool record_samples = false);
-
-  /**
-   * Stops collecting CPU profile with a given id and returns it.
-   */
-  CpuProfile* Stop(ProfilerId id);
 
   /**
    * Stops collecting CPU profile with a given title and returns it.
@@ -594,10 +459,7 @@ class V8_EXPORT HeapGraphNode {
     kConsString = 10,    // Concatenated string. A pair of pointers to strings.
     kSlicedString = 11,  // Sliced string. A fragment of another string.
     kSymbol = 12,        // A Symbol (ES6).
-    kBigInt = 13,        // BigInt.
-    kObjectShape = 14,   // Internal data used for tracking the shapes (or
-                         // "hidden classes") of JS objects.
-    kWasmObject = 15,    // A WasmGC struct or array.
+    kBigInt = 13         // BigInt.
   };
 
   /** Returns node type (see HeapGraphNode::Type). */
@@ -625,6 +487,38 @@ class V8_EXPORT HeapGraphNode {
   /** Retrieves a child by index. */
   const HeapGraphEdge* GetChild(int index) const;
 };
+
+
+/**
+ * An interface for exporting data from V8, using "push" model.
+ */
+class V8_EXPORT OutputStream {  // NOLINT
+ public:
+  enum WriteResult {
+    kContinue = 0,
+    kAbort = 1
+  };
+  virtual ~OutputStream() = default;
+  /** Notify about the end of stream. */
+  virtual void EndOfStream() = 0;
+  /** Get preferred output chunk size. Called only once. */
+  virtual int GetChunkSize() { return 1024; }
+  /**
+   * Writes the next chunk of snapshot data into the stream. Writing
+   * can be stopped by returning kAbort as function result. EndOfStream
+   * will not be called in case writing was aborted.
+   */
+  virtual WriteResult WriteAsciiChunk(char* data, int size) = 0;
+  /**
+   * Writes the next chunk of heap stats data into the stream. Writing
+   * can be stopped by returning kAbort as function result. EndOfStream
+   * will not be called in case writing was aborted.
+   */
+  virtual WriteResult WriteHeapStatsChunk(HeapStatsUpdate* data, int count) {
+    return kAbort;
+  }
+};
+
 
 /**
  * HeapSnapshots record the state of the JS heap at some moment.
@@ -692,7 +586,7 @@ class V8_EXPORT HeapSnapshot {
  * An interface for reporting progress and controlling long-running
  * activities.
  */
-class V8_EXPORT ActivityControl {
+class V8_EXPORT ActivityControl {  // NOLINT
  public:
   enum ControlOption {
     kContinue = 0,
@@ -703,8 +597,9 @@ class V8_EXPORT ActivityControl {
    * Notify about current progress. The activity can be stopped by
    * returning kAbort as the callback result.
    */
-  virtual ControlOption ReportProgressValue(uint32_t done, uint32_t total) = 0;
+  virtual ControlOption ReportProgressValue(int done, int total) = 0;
 };
+
 
 /**
  * AllocationProfile is a sampled profile of allocations done by the program.
@@ -884,15 +779,6 @@ class V8_EXPORT EmbedderGraph {
      */
     virtual Detachedness GetDetachedness() { return Detachedness::kUnknown; }
 
-    /**
-     * Returns the address of the object in the embedder heap, or nullptr to not
-     * specify the address. If this address is provided, then V8 can generate
-     * consistent IDs for objects across subsequent heap snapshots, which allows
-     * devtools to determine which objects were retained from one snapshot to
-     * the next. This value is used only if GetNativeObject returns nullptr.
-     */
-    virtual const void* GetAddress() { return nullptr; }
-
     Node(const Node&) = delete;
     Node& operator=(const Node&) = delete;
   };
@@ -931,8 +817,6 @@ class V8_EXPORT HeapProfiler {
   enum SamplingFlags {
     kSamplingNoFlags = 0,
     kSamplingForceGC = 1 << 0,
-    kSamplingIncludeObjectsCollectedByMajorGC = 1 << 1,
-    kSamplingIncludeObjectsCollectedByMinorGC = 1 << 2,
   };
 
   /**
@@ -1010,76 +894,13 @@ class V8_EXPORT HeapProfiler {
     virtual ~ObjectNameResolver() = default;
   };
 
-  enum class HeapSnapshotMode {
-    /**
-     * Heap snapshot for regular developers.
-     */
-    kRegular,
-    /**
-     * Heap snapshot is exposing internals that may be useful for experts.
-     */
-    kExposeInternals,
-  };
-
-  enum class NumericsMode {
-    /**
-     * Numeric values are hidden as they are values of the corresponding
-     * objects.
-     */
-    kHideNumericValues,
-    /**
-     * Numeric values are exposed in artificial fields.
-     */
-    kExposeNumericValues
-  };
-
-  struct HeapSnapshotOptions final {
-    // Manually define default constructor here to be able to use it in
-    // `TakeSnapshot()` below.
-    // NOLINTNEXTLINE
-    HeapSnapshotOptions() {}
-
-    /**
-     * The control used to report intermediate progress to.
-     */
-    ActivityControl* control = nullptr;
-    /**
-     * The resolver used by the snapshot generator to get names for V8 objects.
-     */
-    ObjectNameResolver* global_object_name_resolver = nullptr;
-    /**
-     * Mode for taking the snapshot, see `HeapSnapshotMode`.
-     */
-    HeapSnapshotMode snapshot_mode = HeapSnapshotMode::kRegular;
-    /**
-     * Mode for dealing with numeric values, see `NumericsMode`.
-     */
-    NumericsMode numerics_mode = NumericsMode::kHideNumericValues;
-    /**
-     * Whether stack is considered as a root set.
-     */
-    cppgc::EmbedderStackState stack_state =
-        cppgc::EmbedderStackState::kMayContainHeapPointers;
-  };
-
   /**
-   * Takes a heap snapshot.
-   *
-   * \returns the snapshot.
+   * Takes a heap snapshot and returns it.
    */
   const HeapSnapshot* TakeHeapSnapshot(
-      const HeapSnapshotOptions& options = HeapSnapshotOptions());
-
-  /**
-   * Takes a heap snapshot. See `HeapSnapshotOptions` for details on the
-   * parameters.
-   *
-   * \returns the snapshot.
-   */
-  const HeapSnapshot* TakeHeapSnapshot(
-      ActivityControl* control,
+      ActivityControl* control = nullptr,
       ObjectNameResolver* global_object_name_resolver = nullptr,
-      bool hide_internals = true, bool capture_numeric_value = false);
+      bool treat_global_objects_as_roots = true);
 
   /**
    * Starts tracking of heap objects population statistics. After calling
@@ -1132,8 +953,10 @@ class V8_EXPORT HeapProfiler {
    * |stack_depth| parameter controls the maximum number of stack frames to be
    * captured on each allocation.
    *
-   * NOTE: Support for native allocations doesn't exist yet, but is anticipated
-   * in the future.
+   * NOTE: This is a proof-of-concept at this point. Right now we only sample
+   * newspace allocations. Support for paged space allocation (e.g. pre-tenured
+   * objects, large objects, code objects, etc.) and native allocations
+   * doesn't exist yet, but is anticipated in the future.
    *
    * Objects allocated before the sampling is started will not be included in
    * the profile.
@@ -1196,18 +1019,18 @@ struct HeapStatsUpdate {
   uint32_t size;  // New value of size field for the interval with this index.
 };
 
-#define CODE_EVENTS_LIST(V)                          \
-  V(Builtin)                                         \
-  V(Callback)                                        \
-  V(Eval)                                            \
-  V(Function)                                        \
-  V(InterpretedFunction)                             \
-  V(Handler)                                         \
-  V(BytecodeHandler)                                 \
-  V(LazyCompile) /* Unused, use kFunction instead */ \
-  V(RegExp)                                          \
-  V(Script)                                          \
-  V(Stub)                                            \
+#define CODE_EVENTS_LIST(V) \
+  V(Builtin)                \
+  V(Callback)               \
+  V(Eval)                   \
+  V(Function)               \
+  V(InterpretedFunction)    \
+  V(Handler)                \
+  V(BytecodeHandler)        \
+  V(LazyCompile)            \
+  V(RegExp)                 \
+  V(Script)                 \
+  V(Stub)                   \
   V(Relocation)
 
 /**

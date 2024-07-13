@@ -17,9 +17,7 @@ static int small_big_distr(base::RandomNumberGenerator* rand) {
   return rand->NextInt() / std::max(1, rand->NextInt() / 100);
 }
 
-class PersistentMapTest : public TestWithPlatform {};
-
-TEST_F(PersistentMapTest, RefTest) {
+TEST(PersistentMap, RefTest) {
   base::RandomNumberGenerator rand(92834738);
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);
@@ -78,7 +76,7 @@ TEST_F(PersistentMapTest, RefTest) {
   }
 }
 
-TEST_F(PersistentMapTest, Zip) {
+TEST(PersistentMap, Zip) {
   base::RandomNumberGenerator rand(92834738);
   AccountingAllocator allocator;
   Zone zone(&allocator, ZONE_NAME);

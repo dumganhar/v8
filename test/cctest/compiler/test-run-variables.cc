@@ -57,7 +57,7 @@ static const char* store_tests[] = {
     "'use strict'; let x = (a?4:5); x = a; r = x", "123", "0", nullptr};
 
 static void RunVariableTests(const char* source, const char* tests[]) {
-  base::EmbeddedVector<char, 512> buffer;
+  EmbeddedVector<char, 512> buffer;
 
   for (int i = 0; tests[i] != nullptr; i += 3) {
     SNPrintF(buffer, source, tests[i]);

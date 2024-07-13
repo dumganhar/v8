@@ -11,7 +11,7 @@
 namespace v8 {
 namespace internal {
 
-class InstructionStream;
+class Code;
 
 // Associates a body of code with an interface descriptor.
 class Callable final {

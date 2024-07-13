@@ -1,10 +1,11 @@
-#!/usr/bin/env python3
-# Copyright 2011 The Chromium Authors
+#!/usr/bin/env python
+# Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 """Rewrites paths in -I, -L and other option to be relative to a sysroot."""
 
+from __future__ import print_function
 
 import sys
 import os

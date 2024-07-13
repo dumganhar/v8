@@ -11,10 +11,20 @@ include(CheckCXXSymbolExists)
 check_include_file_cxx(clocale HAVE_CLOCALE)
 check_cxx_symbol_exists(localeconv clocale HAVE_LOCALECONV)
 
-set(CMAKE_EXTRA_INCLUDE_FILES clocale)
-check_type_size(lconv LCONV_SIZE LANGUAGE CXX)
-unset(CMAKE_EXTRA_INCLUDE_FILES)
-check_struct_has_member(lconv decimal_point clocale HAVE_DECIMAL_POINT LANGUAGE CXX)
+if(CMAKE_VERSION VERSION_LESS 3.0.0)
+    # The "LANGUAGE CXX" parameter is not supported in CMake versions below 3,
+    # so the C compiler and header has to be used.
+    check_include_file(locale.h HAVE_LOCALE_H)
+    set(CMAKE_EXTRA_INCLUDE_FILES locale.h)
+    check_type_size("struct lconv" LCONV_SIZE)
+    unset(CMAKE_EXTRA_INCLUDE_FILES)
+    check_struct_has_member("struct lconv" decimal_point locale.h HAVE_DECIMAL_POINT)
+else()
+    set(CMAKE_EXTRA_INCLUDE_FILES clocale)
+    check_type_size(lconv LCONV_SIZE LANGUAGE CXX)
+    unset(CMAKE_EXTRA_INCLUDE_FILES)
+    check_struct_has_member(lconv decimal_point clocale HAVE_DECIMAL_POINT LANGUAGE CXX)
+endif()
 
 if(NOT (HAVE_CLOCALE AND HAVE_LCONV_SIZE AND HAVE_DECIMAL_POINT AND HAVE_LOCALECONV))
     message(WARNING "Locale functionality is not supported")
@@ -119,7 +129,7 @@ if(BUILD_SHARED_LIBS)
         OUTPUT_NAME jsoncpp
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_SOVERSION}
-        POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
+        POSITION_INDEPENDENT_CODE ON
     )
 
     # Set library's runtime search path on OSX
@@ -129,11 +139,13 @@ if(BUILD_SHARED_LIBS)
 
     target_compile_features(${SHARED_LIB} PUBLIC ${REQUIRED_FEATURES})
 
-    target_include_directories(${SHARED_LIB} PUBLIC
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/${JSONCPP_INCLUDE_DIR}>
-        $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include/json>
-    )
+    if(NOT CMAKE_VERSION VERSION_LESS 2.8.11)
+        target_include_directories(${SHARED_LIB} PUBLIC
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/${JSONCPP_INCLUDE_DIR}>
+            $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include/json>
+        )
+    endif()
 
     list(APPEND CMAKE_TARGETS ${SHARED_LIB})
 endif()
@@ -142,13 +154,9 @@ if(BUILD_STATIC_LIBS)
     set(STATIC_LIB ${PROJECT_NAME}_static)
     add_library(${STATIC_LIB} STATIC ${PUBLIC_HEADERS} ${JSONCPP_SOURCES})
 
-    # avoid name clashes on windows as the shared import lib is also named jsoncpp.lib
+    # avoid name clashes on windows as the shared import lib is alse named jsoncpp.lib
     if(NOT DEFINED STATIC_SUFFIX AND BUILD_SHARED_LIBS)
-        if (MSVC)
-            set(STATIC_SUFFIX "_static")
-        else()
-            set(STATIC_SUFFIX "")
-        endif()
+        set(STATIC_SUFFIX "_static")
     endif()
 
     set_target_properties(${STATIC_LIB} PROPERTIES
@@ -163,11 +171,13 @@ if(BUILD_STATIC_LIBS)
 
     target_compile_features(${STATIC_LIB} PUBLIC ${REQUIRED_FEATURES})
 
-    target_include_directories(${STATIC_LIB} PUBLIC
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/${JSONCPP_INCLUDE_DIR}>
-        $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include/json>
-    )
+    if(NOT CMAKE_VERSION VERSION_LESS 2.8.11)
+        target_include_directories(${STATIC_LIB} PUBLIC
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/${JSONCPP_INCLUDE_DIR}>
+            $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include/json>
+        )
+    endif()
 
     list(APPEND CMAKE_TARGETS ${STATIC_LIB})
 endif()
@@ -180,7 +190,7 @@ if(BUILD_OBJECT_LIBS)
         OUTPUT_NAME jsoncpp
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_SOVERSION}
-        POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
+        POSITION_INDEPENDENT_CODE ON
     )
 
     # Set library's runtime search path on OSX
@@ -190,11 +200,13 @@ if(BUILD_OBJECT_LIBS)
 
     target_compile_features(${OBJECT_LIB} PUBLIC ${REQUIRED_FEATURES})
 
-    target_include_directories(${OBJECT_LIB} PUBLIC
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/${JSONCPP_INCLUDE_DIR}>
-        $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include/json>
-    )
+    if(NOT CMAKE_VERSION VERSION_LESS 2.8.11)
+        target_include_directories(${OBJECT_LIB} PUBLIC
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/${JSONCPP_INCLUDE_DIR}>
+            $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include/json>
+        )
+    endif()
 
     list(APPEND CMAKE_TARGETS ${OBJECT_LIB})
 endif()

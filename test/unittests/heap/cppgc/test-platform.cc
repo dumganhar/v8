@@ -24,8 +24,7 @@ std::unique_ptr<cppgc::JobHandle> TestPlatform::PostJob(
 }
 
 void TestPlatform::RunAllForegroundTasks() {
-  while (v8::platform::PumpMessageLoop(v8_platform_.get(), kNoIsolate)) {
-  }
+  v8::platform::PumpMessageLoop(v8_platform_.get(), kNoIsolate);
   if (GetForegroundTaskRunner()->IdleTasksEnabled()) {
     v8::platform::RunIdleTasks(v8_platform_.get(), kNoIsolate,
                                std::numeric_limits<double>::max());

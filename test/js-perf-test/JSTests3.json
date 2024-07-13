@@ -11,78 +11,6 @@
   "resources": ["base.js"],
   "tests": [
     {
-      "name": "ClassFields",
-      "path": ["ClassFields"],
-      "flags": ["--allow-natives-syntax"],
-      "resources": [ "evaluate-class.js", "initialize-instance.js", "classes.js" ],
-      "tests": [
-        {
-          "name": "EvaluateClassOpt",
-          "test_flags": [ "evaluate-class", "opt" ],
-          "main": "run.js",
-          "results_regexp": "^%s\\-ClassFields\\(Score\\): (.+)$",
-          "tests": [
-            {"name": "EvaluateSinglePublicFieldClassOpt"},
-            {"name": "EvaluateMultiPublicFieldClassOpt"},
-            {"name": "EvaluateSinglePrivateFieldClassOpt"},
-            {"name": "EvaluateMultiPrivateFieldClassOpt"},
-            {"name": "EvaluateSinglePrivateMethodClassOpt"},
-            {"name": "EvaluateMultiPrivateMethodClassOpt"},
-            {"name": "EvaluateSingleComputedFieldClassOpt"},
-            {"name": "EvaluateMultiComputedFieldClassOpt"}
-          ]
-        },
-        {
-          "name": "EvaluateClassNoOpt",
-          "test_flags": [ "evaluate-class", "noopt" ],
-          "main": "run.js",
-          "results_regexp": "^%s\\-ClassFields\\(Score\\): (.+)$",
-          "tests": [
-            {"name": "EvaluateSinglePublicFieldClassNoOpt"},
-            {"name": "EvaluateMultiPublicFieldClassNoOpt"},
-            {"name": "EvaluateSinglePrivateFieldClassNoOpt"},
-            {"name": "EvaluateMultiPrivateFieldClassNoOpt"},
-            {"name": "EvaluateSinglePrivateMethodClassNoOpt"},
-            {"name": "EvaluateMultiPrivateMethodClassNoOpt"},
-            {"name": "EvaluateSingleComputedFieldClassNoOpt"},
-            {"name": "EvaluateMultiComputedFieldClassNoOpt"}
-          ]
-        },
-        {
-          "name": "InitializeClassOpt",
-          "test_flags": [ "initialize-instance", "opt" ],
-          "main": "run.js",
-          "results_regexp": "^%s\\-ClassFields\\(Score\\): (.+)$",
-          "tests": [
-            {"name": "InitializeSinglePublicFieldClassOpt"},
-            {"name": "InitializeMultiPublicFieldClassOpt"},
-            {"name": "InitializeSinglePrivateFieldClassOpt"},
-            {"name": "InitializeMultiPrivateFieldClassOpt"},
-            {"name": "InitializeSinglePrivateMethodClassOpt"},
-            {"name": "InitializeMultiPrivateMethodClassOpt"},
-            {"name": "InitializeSingleComputedFieldClassOpt"},
-            {"name": "InitializeMultiComputedFieldClassOpt"}
-          ]
-        },
-        {
-          "name": "InitializeClassNoOpt",
-          "test_flags": [ "initialize-instance", "noopt" ],
-          "main": "run.js",
-          "results_regexp": "^%s\\-ClassFields\\(Score\\): (.+)$",
-          "tests": [
-            {"name": "InitializeSinglePublicFieldClassNoOpt"},
-            {"name": "InitializeMultiPublicFieldClassNoOpt"},
-            {"name": "InitializeSinglePrivateFieldClassNoOpt"},
-            {"name": "InitializeMultiPrivateFieldClassNoOpt"},
-            {"name": "InitializeSinglePrivateMethodClassNoOpt"},
-            {"name": "InitializeMultiPrivateMethodClassNoOpt"},
-            {"name": "InitializeSingleComputedFieldClassNoOpt"},
-            {"name": "InitializeMultiComputedFieldClassNoOpt"}
-          ]
-        }
-      ]
-    },
-    {
       "name": "ArrayLiteralInitialSpreadSmallDoubleHoley",
       "path": ["ArrayLiteralInitialSpreadSmallDoubleHoley"],
       "main": "run.js",
@@ -302,7 +230,7 @@
     {
       "name": "BytecodeHandlers",
       "path": ["BytecodeHandlers"],
-      "flags": [ "--no-turbofan" ],
+      "flags": [ "--no-opt" ],
       "tests": [
         {
           "name": "Compare",
@@ -318,7 +246,6 @@
             {"name": "String-StrictEquals-True"},
             {"name": "String-StrictEquals-False"},
             {"name": "SmiString-StrictEquals"},
-            {"name": "Boolean-StrictEquals"},
             {"name": "Smi-Equals-True"},
             {"name": "Smi-Equals-False"},
             {"name": "Number-Equals-True"},
@@ -423,10 +350,10 @@
           ]
         },
         {
-          "name": "GetNamedProperty",
+          "name": "LdaNamedProperty",
           "main": "run.js",
-          "resources": [ "GetNamedProperty.js" ],
-          "test_flags": [ "GetNamedProperty" ],
+          "resources": [ "LdaNamedProperty.js" ],
+          "test_flags": [ "LdaNamedProperty" ],
           "results_regexp": "^%s\\-BytecodeHandler\\(Score\\): (.+)$",
           "tests": [
             {"name": "Smi-Value"},
@@ -434,10 +361,10 @@
           ]
         },
         {
-          "name": "GetKeyedProperty",
+          "name": "LdaKeyedProperty",
           "main": "run.js",
-          "resources": [ "GetKeyedProperty.js" ],
-          "test_flags": [ "GetKeyedProperty" ],
+          "resources": [ "LdaKeyedProperty.js" ],
+          "test_flags": [ "LdaKeyedProperty" ],
           "results_regexp": "^%s\\-BytecodeHandler\\(Score\\): (.+)$",
           "tests": [
             {"name": "Object-Lookup-String-Constant"},
@@ -461,7 +388,7 @@
     {
       "name": "InterpreterEntryTrampoline",
       "path": ["InterpreterEntryTrampoline"],
-      "flags": ["--no-turbofan"],
+      "flags": ["--no-opt"],
       "tests": [
         {
           "name": "Arguments",

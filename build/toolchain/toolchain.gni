@@ -1,4 +1,4 @@
-# Copyright 2015 The Chromium Authors
+# Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -17,19 +17,19 @@ declare_args() {
   # `gclient runhooks` is run as well.
   llvm_force_head_revision = false
 
+  # Compile with Xcode version of clang instead of hermetic version shipped
+  # with the build. Used to be used iOS for official builds, but is now off by
+  # default for all configurations.
+  use_xcode_clang = false
+
   # Used for binary size analysis.
   generate_linker_map = is_android && is_official_build
-
-  # Whether this toolchain is to be used for building host tools that are
-  # consumed during the build process. That includes proc macros and Cargo build
-  # scripts.
-  toolchain_for_rust_host_build_tools = false
 }
 
 if (generate_linker_map) {
-  assert(is_official_build || is_castos || is_cast_android,
+  assert(is_official_build || is_chromecast,
          "Linker map files should only be generated when is_official_build = " +
-             "true or is_castos = true or is_cast_android = true")
+             "true or is_chromecast = true")
   assert(current_os == "android" || current_os == "linux" ||
              target_os == "android" || target_os == "linux" ||
              target_os == "chromeos",
@@ -38,8 +38,14 @@ if (generate_linker_map) {
 }
 
 declare_args() {
-  clang_version = "17"
+  clang_version = "13.0.0"
 }
+
+# Check target_os here instead of is_ios as this file is loaded for secondary
+# toolchain (host toolchain in particular) but the argument is the same for
+# all toolchains.
+assert(!use_xcode_clang || target_os == "ios",
+       "Using Xcode's clang is only supported in iOS builds")
 
 # Extension for shared library files (including leading dot).
 if (is_apple) {
@@ -54,18 +60,6 @@ if (is_apple) {
   shlib_extension = ".dll"
 } else {
   assert(false, "Platform not supported")
-}
-
-# Same extension but for the host platform. We have significantly fewer host
-# platforms.
-if (host_os == "mac") {
-  host_shlib_extension = ".dylib"
-} else if (host_os == "win") {
-  host_shlib_extension = ".dll"
-} else if (host_os == "linux") {
-  host_shlib_extension = ".so"
-} else {
-  assert(false, "Host platform not supported")
 }
 
 # Prefix for shared library files.
@@ -95,7 +89,8 @@ if (host_os == "win") {
       rebase_path("//build/toolchain/win/tool_wrapper.py", root_build_dir)
 
   stamp_command = "cmd /c type nul > \"{{output}}\""
-  copy_command = "\"$python_path\" $_tool_wrapper_path recursive-mirror {{source}} {{output}}"
+  copy_command =
+      "$python_path $_tool_wrapper_path recursive-mirror {{source}} {{output}}"
 } else {
   stamp_command = "touch {{output}}"
   copy_command = "ln -f {{source}} {{output}} 2>/dev/null || (rm -rf {{output}} && cp -af {{source}} {{output}})"

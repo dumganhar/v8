@@ -6,7 +6,7 @@
 #define V8_OBJECTS_SMI_H_
 
 #include "src/common/globals.h"
-#include "src/objects/objects.h"
+#include "src/objects/heap-object.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -26,28 +26,28 @@ class Smi : public Object {
   // in that we want them to be constexprs.
   constexpr Smi() : Object() {}
   explicit constexpr Smi(Address ptr) : Object(ptr) {
-    DCHECK(HAS_SMI_TAG(ptr));
+    CONSTEXPR_DCHECK(HAS_SMI_TAG(ptr));
   }
 
   // Returns the integer value.
-  inline constexpr int value() const { return Internals::SmiValue(ptr()); }
-  inline constexpr Smi ToUint32Smi() {
+  inline int value() const { return Internals::SmiValue(ptr()); }
+  inline Smi ToUint32Smi() {
     if (value() <= 0) return Smi::FromInt(0);
     return Smi::FromInt(static_cast<uint32_t>(value()));
   }
 
   // Convert a Smi object to an int.
-  static inline constexpr int ToInt(const Object object) {
-    return Smi(object.ptr()).value();
+  static inline int ToInt(const Object object) {
+    return Smi::cast(object).value();
   }
 
   // Convert a value to a Smi object.
   static inline constexpr Smi FromInt(int value) {
-    DCHECK(Smi::IsValid(value));
+    CONSTEXPR_DCHECK(Smi::IsValid(value));
     return Smi(Internals::IntToSmi(value));
   }
 
-  static inline constexpr Smi FromIntptr(intptr_t value) {
+  static inline Smi FromIntptr(intptr_t value) {
     DCHECK(Smi::IsValid(value));
     int smi_shift_bits = kSmiTagSize + kSmiShiftSize;
     return Smi((static_cast<Address>(value) << smi_shift_bits) | kSmiTag);
@@ -55,22 +55,22 @@ class Smi : public Object {
 
   // Given {value} in [0, 2^31-1], force it into Smi range by changing at most
   // the MSB (leaving the lower 31 bit unchanged).
-  static inline constexpr Smi From31BitPattern(int value) {
+  static inline Smi From31BitPattern(int value) {
     return Smi::FromInt((value << (32 - kSmiValueSize)) >>
                         (32 - kSmiValueSize));
   }
 
   template <typename E,
             typename = typename std::enable_if<std::is_enum<E>::value>::type>
-  static inline constexpr Smi FromEnum(E value) {
-    static_assert(sizeof(E) <= sizeof(int));
+  static inline Smi FromEnum(E value) {
+    STATIC_ASSERT(sizeof(E) <= sizeof(int));
     return FromInt(static_cast<int>(value));
   }
 
   // Returns whether value can be represented in a Smi.
   static inline bool constexpr IsValid(intptr_t value) {
-    DCHECK_EQ(Internals::IsValidSmi(value),
-              value >= kMinValue && value <= kMaxValue);
+    CONSTEXPR_DCHECK(Internals::IsValidSmi(value) ==
+                     (value >= kMinValue && value <= kMaxValue));
     return Internals::IsValidSmi(value);
   }
 
@@ -87,7 +87,7 @@ class Smi : public Object {
   DECL_CAST(Smi)
 
   // Dispatched behavior.
-  V8_EXPORT_PRIVATE void SmiPrint(std::ostream& os) const;
+  V8_EXPORT_PRIVATE void SmiPrint(std::ostream& os) const;  // NOLINT
   DECL_VERIFIER(Smi)
 
   // Since this is a constexpr, "calling" it is just as efficient
@@ -95,21 +95,6 @@ class Smi : public Object {
   static inline constexpr Smi zero() { return Smi::FromInt(0); }
   static constexpr int kMinValue = kSmiMinValue;
   static constexpr int kMaxValue = kSmiMaxValue;
-
-  // Smi value for filling in not-yet initialized tagged field values with a
-  // valid tagged pointer. A field value equal to this doesn't necessarily
-  // indicate that a field is uninitialized, but an uninitialized field should
-  // definitely equal this value.
-  //
-  // This _has_ to be kNullAddress, so that an uninitialized field value read as
-  // an embedded pointer field is interpreted as nullptr. This is so that
-  // uninitialised embedded pointers are not forwarded to the embedder as part
-  // of embedder tracing (and similar mechanisms), as nullptrs are skipped for
-  // those cases and otherwise the embedder would try to dereference the
-  // uninitialized pointer value.
-  static constexpr Smi uninitialized_deserialization_value() {
-    return Smi(kNullAddress);
-  }
 };
 
 CAST_ACCESSOR(Smi)

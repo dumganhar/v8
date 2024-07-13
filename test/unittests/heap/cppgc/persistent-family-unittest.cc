@@ -7,15 +7,11 @@
 #include "include/cppgc/allocation.h"
 #include "include/cppgc/cross-thread-persistent.h"
 #include "include/cppgc/garbage-collected.h"
-#include "include/cppgc/internal/persistent-node.h"
 #include "include/cppgc/internal/pointer-policies.h"
 #include "include/cppgc/member.h"
 #include "include/cppgc/persistent.h"
 #include "include/cppgc/source-location.h"
 #include "include/cppgc/type-traits.h"
-#include "src/base/logging.h"
-#include "src/base/platform/platform.h"
-#include "src/heap/cppgc/globals.h"
 #include "src/heap/cppgc/heap.h"
 #include "src/heap/cppgc/liveness-broker.h"
 #include "src/heap/cppgc/visitor.h"
@@ -77,16 +73,16 @@ template <typename T>
 using LocalizedPersistent =
     internal::BasicPersistent<T, internal::StrongPersistentPolicy,
                               internal::KeepLocationPolicy,
-                              internal::DefaultPersistentCheckingPolicy>;
+                              internal::DefaultCheckingPolicy>;
 
 template <typename T>
 using LocalizedCrossThreadPersistent = internal::BasicCrossThreadPersistent<
     T, internal::StrongCrossThreadPersistentPolicy,
-    internal::KeepLocationPolicy, internal::DisabledCheckingPolicy>;
+    internal::KeepLocationPolicy, internal::DefaultCheckingPolicy>;
 
-class TestRootVisitor final : public RootVisitorBase {
+class RootVisitor final : public VisitorBase {
  public:
-  TestRootVisitor() = default;
+  RootVisitor() = default;
 
   const auto& WeakCallbacks() const { return weak_callbacks_; }
 
@@ -101,7 +97,7 @@ class TestRootVisitor final : public RootVisitorBase {
  protected:
   void VisitRoot(const void* t, TraceDescriptor desc,
                  const SourceLocation&) final {
-    desc.callback(nullptr, desc.base_object_payload);
+    desc.callback(this, desc.base_object_payload);
   }
   void VisitWeakRoot(const void*, TraceDescriptor, WeakCallback callback,
                      const void* object, const SourceLocation&) final {
@@ -112,8 +108,7 @@ class TestRootVisitor final : public RootVisitorBase {
   std::vector<std::pair<WeakCallback, const void*>> weak_callbacks_;
 };
 
-class PersistentTest : public testing::TestWithHeap {};
-class PersistentDeathTest : public testing::TestWithHeap {};
+class PersistentTest : public testing::TestSupportingAllocationOnly {};
 
 }  // namespace
 
@@ -344,13 +339,13 @@ void NullStateAssignment(cppgc::Heap* heap) {
     PersistentType<GCed> p =
         MakeGarbageCollected<GCed>(heap->GetAllocationHandle());
     EXPECT_EQ(1u, GetRegion<PersistentType>(heap).NodesInUse());
-    p = static_cast<GCed*>(nullptr);
+    p = static_cast<GCed*>(0);
     EXPECT_EQ(nullptr, p.Get());
     EXPECT_EQ(0u, GetRegion<PersistentType>(heap).NodesInUse());
   }
 }
 
-TEST_F(PersistentTest, NullStateAssignment) {
+TEST_F(PersistentTest, NullStateAssignemnt) {
   auto* heap = GetHeap();
   NullStateAssignment<Persistent>(heap);
   NullStateAssignment<WeakPersistent>(heap);
@@ -688,55 +683,6 @@ TEST_F(PersistentTest, ExplicitDowncast) {
   ExplicitDowncast<subtle::WeakCrossThreadPersistent>(heap);
 }
 
-namespace {
-template <template <typename> class PersistentType1,
-          template <typename> class PersistentType2>
-void EqualityTest(cppgc::Heap* heap) {
-  {
-    GCed* gced = MakeGarbageCollected<GCed>(heap->GetAllocationHandle());
-    PersistentType1<GCed> persistent1 = gced;
-    PersistentType2<GCed> persistent2 = gced;
-    EXPECT_TRUE(persistent1 == persistent2);
-    EXPECT_FALSE(persistent1 != persistent2);
-    persistent2 = persistent1;
-    EXPECT_TRUE(persistent1 == persistent2);
-    EXPECT_FALSE(persistent1 != persistent2);
-  }
-  {
-    PersistentType1<GCed> persistent1 =
-        MakeGarbageCollected<GCed>(heap->GetAllocationHandle());
-    PersistentType2<GCed> persistent2 =
-        MakeGarbageCollected<GCed>(heap->GetAllocationHandle());
-    EXPECT_TRUE(persistent1 != persistent2);
-    EXPECT_FALSE(persistent1 == persistent2);
-  }
-}
-}  // namespace
-
-TEST_F(PersistentTest, EqualityTest) {
-  cppgc::Heap* heap = GetHeap();
-  EqualityTest<Persistent, Persistent>(heap);
-  EqualityTest<Persistent, WeakPersistent>(heap);
-  EqualityTest<Persistent, subtle::CrossThreadPersistent>(heap);
-  EqualityTest<Persistent, subtle::WeakCrossThreadPersistent>(heap);
-  EqualityTest<WeakPersistent, Persistent>(heap);
-  EqualityTest<WeakPersistent, WeakPersistent>(heap);
-  EqualityTest<WeakPersistent, subtle::CrossThreadPersistent>(heap);
-  EqualityTest<WeakPersistent, subtle::WeakCrossThreadPersistent>(heap);
-  EqualityTest<subtle::CrossThreadPersistent, Persistent>(heap);
-  EqualityTest<subtle::CrossThreadPersistent, WeakPersistent>(heap);
-  EqualityTest<subtle::CrossThreadPersistent, subtle::CrossThreadPersistent>(
-      heap);
-  EqualityTest<subtle::CrossThreadPersistent,
-               subtle::WeakCrossThreadPersistent>(heap);
-  EqualityTest<subtle::WeakCrossThreadPersistent, Persistent>(heap);
-  EqualityTest<subtle::WeakCrossThreadPersistent, WeakPersistent>(heap);
-  EqualityTest<subtle::WeakCrossThreadPersistent,
-               subtle::CrossThreadPersistent>(heap);
-  EqualityTest<subtle::WeakCrossThreadPersistent,
-               subtle::WeakCrossThreadPersistent>(heap);
-}
-
 TEST_F(PersistentTest, TraceStrong) {
   auto* heap = GetHeap();
   static constexpr size_t kItems = 512;
@@ -746,8 +692,8 @@ TEST_F(PersistentTest, TraceStrong) {
   }
   {
     GCed::trace_call_count = 0;
-    TestRootVisitor v;
-    GetRegion<Persistent>(heap).Iterate(v);
+    RootVisitor v;
+    GetRegion<Persistent>(heap).Trace(&v);
     EXPECT_EQ(kItems, GCed::trace_call_count);
     EXPECT_EQ(kItems, GetRegion<Persistent>(heap).NodesInUse());
   }
@@ -757,16 +703,16 @@ TEST_F(PersistentTest, TraceStrong) {
     vec[kItems / 2].Clear();
     vec[kItems / 4].Clear();
     vec[kItems - 1].Clear();
-    TestRootVisitor v;
-    GetRegion<Persistent>(heap).Iterate(v);
+    RootVisitor v;
+    GetRegion<Persistent>(heap).Trace(&v);
     EXPECT_EQ(kItems - 4, GCed::trace_call_count);
     EXPECT_EQ(kItems - 4, GetRegion<Persistent>(heap).NodesInUse());
   }
   {
     GCed::trace_call_count = 0;
     vec.clear();
-    TestRootVisitor v;
-    GetRegion<Persistent>(heap).Iterate(v);
+    RootVisitor v;
+    GetRegion<Persistent>(heap).Trace(&v);
     EXPECT_EQ(0u, GCed::trace_call_count);
     EXPECT_EQ(0u, GetRegion<Persistent>(heap).NodesInUse());
   }
@@ -780,8 +726,8 @@ TEST_F(PersistentTest, TraceWeak) {
     p = MakeGarbageCollected<GCed>(GetAllocationHandle());
   }
   GCed::trace_call_count = 0;
-  TestRootVisitor v;
-  GetRegion<WeakPersistent>(heap).Iterate(v);
+  RootVisitor v;
+  GetRegion<WeakPersistent>(heap).Trace(&v);
   const auto& callbacks = v.WeakCallbacks();
   EXPECT_EQ(kItems, callbacks.size());
   EXPECT_EQ(kItems, GetRegion<WeakPersistent>(heap).NodesInUse());
@@ -816,7 +762,7 @@ TEST_F(PersistentTest, ClearOnHeapDestruction) {
   EXPECT_EQ(kSentinelPointer, weak_persistent_sentinel);
 }
 
-#if V8_SUPPORTS_SOURCE_LOCATION
+#if CPPGC_SUPPORTS_SOURCE_LOCATION
 TEST_F(PersistentTest, LocalizedPersistent) {
   GCed* gced = MakeGarbageCollected<GCed>(GetAllocationHandle());
   {
@@ -927,7 +873,7 @@ TEST_F(PersistentTest, LocalizedPersistent) {
 
 namespace {
 
-class ExpectingLocationVisitor final : public RootVisitorBase {
+class ExpectingLocationVisitor final : public VisitorBase {
  public:
   explicit ExpectingLocationVisitor(const SourceLocation& expected_location)
       : expected_loc_(expected_location) {}
@@ -949,18 +895,18 @@ class ExpectingLocationVisitor final : public RootVisitorBase {
 TEST_F(PersistentTest, PersistentTraceLocation) {
   GCed* gced = MakeGarbageCollected<GCed>(GetAllocationHandle());
   {
-#if V8_SUPPORTS_SOURCE_LOCATION
+#if CPPGC_SUPPORTS_SOURCE_LOCATION
     // Baseline for creating expected location which has a different line
     // number.
     const auto loc = SourceLocation::Current();
     const auto expected_loc =
         SourceLocation::Current(loc.Function(), loc.FileName(), loc.Line() + 6);
-#else   // !V8_SUPPORTS_SOURCE_LOCATION
+#else   // !CCPPGC_SUPPORTS_SOURCE_LOCATION
     const SourceLocation expected_loc;
-#endif  // !V8_SUPPORTS_SOURCE_LOCATION
+#endif  // !CCPPGC_SUPPORTS_SOURCE_LOCATION
     LocalizedPersistent<GCed> p = gced;
     ExpectingLocationVisitor visitor(expected_loc);
-    visitor.Trace(p);
+    visitor.TraceRootForTesting(p, p.Location());
   }
 }
 
@@ -980,104 +926,6 @@ TEST_F(PersistentTest, EmptyPersistentConstructDestructWithoutCompleteType) {
 TEST_F(PersistentTest, Lock) {
   subtle::WeakCrossThreadPersistent<GCed> weak;
   auto strong = weak.Lock();
-}
-
-namespace {
-
-class TraceCounter final : public GarbageCollected<TraceCounter> {
- public:
-  void Trace(cppgc::Visitor* visitor) const {
-    trace_calls_++;
-  }
-
-  size_t trace_calls() const { return trace_calls_; }
-
- private:
-  mutable size_t trace_calls_ = 0;
-};
-
-class DestructionCounter final : public GarbageCollected<DestructionCounter> {
- public:
-  static size_t destructor_calls_;
-
-  ~DestructionCounter() { destructor_calls_++; }
-
-  void Trace(cppgc::Visitor*) const {}
-};
-size_t DestructionCounter::destructor_calls_;
-
-}  // namespace
-
-TEST_F(PersistentTest, PersistentRetainsObject) {
-  Persistent<TraceCounter> trace_counter =
-      MakeGarbageCollected<TraceCounter>(GetAllocationHandle());
-  WeakPersistent<TraceCounter> weak_trace_counter(trace_counter.Get());
-  EXPECT_EQ(0u, trace_counter->trace_calls());
-  PreciseGC();
-  size_t saved_trace_count = trace_counter->trace_calls();
-  EXPECT_LT(0u, saved_trace_count);
-  PreciseGC();
-  EXPECT_LT(saved_trace_count, trace_counter->trace_calls());
-  EXPECT_TRUE(weak_trace_counter);
-}
-
-TEST_F(PersistentTest, WeakPersistentDoesNotRetainObject) {
-  WeakPersistent<TraceCounter> weak_trace_counter =
-      MakeGarbageCollected<TraceCounter>(GetAllocationHandle());
-  PreciseGC();
-  EXPECT_FALSE(weak_trace_counter);
-}
-
-TEST_F(PersistentTest, ObjectReclaimedAfterClearedPersistent) {
-  WeakPersistent<DestructionCounter> weak_finalized;
-  {
-    DestructionCounter::destructor_calls_ = 0;
-    Persistent<DestructionCounter> finalized =
-        MakeGarbageCollected<DestructionCounter>(GetAllocationHandle());
-    weak_finalized = finalized.Get();
-    EXPECT_EQ(0u, DestructionCounter::destructor_calls_);
-    PreciseGC();
-    EXPECT_EQ(0u, DestructionCounter::destructor_calls_);
-    USE(finalized);
-    EXPECT_TRUE(weak_finalized);
-  }
-  PreciseGC();
-  EXPECT_EQ(1u, DestructionCounter::destructor_calls_);
-  EXPECT_FALSE(weak_finalized);
-}
-
-namespace {
-
-class PersistentAccessOnBackgroundThread : public v8::base::Thread {
- public:
-  explicit PersistentAccessOnBackgroundThread(GCed* raw_gced)
-      : v8::base::Thread(v8::base::Thread::Options(
-            "PersistentAccessOnBackgroundThread", 2 * kMB)),
-        raw_gced_(raw_gced) {}
-
-  void Run() override {
-    EXPECT_DEATH_IF_SUPPORTED(
-        Persistent<GCed> gced(static_cast<GCed*>(raw_gced_)), "");
-  }
-
- private:
-  void* raw_gced_;
-};
-
-}  // namespace
-
-TEST_F(PersistentDeathTest, CheckCreationThread) {
-#ifdef DEBUG
-  // In DEBUG mode, every Persistent creation should check whether the handle
-  // is created on the right thread. In release mode, this check is only
-  // performed on slow path allocations.
-  Persistent<GCed> first_persistent_triggers_slow_path(
-      MakeGarbageCollected<GCed>(GetAllocationHandle()));
-#endif  // DEBUG
-  PersistentAccessOnBackgroundThread thread(
-      MakeGarbageCollected<GCed>(GetAllocationHandle()));
-  CHECK(thread.StartSynchronously());
-  thread.Join();
 }
 
 }  // namespace internal

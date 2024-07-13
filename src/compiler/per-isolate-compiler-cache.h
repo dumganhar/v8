@@ -7,6 +7,7 @@
 
 #include "src/compiler/refs-map.h"
 #include "src/execution/isolate.h"
+#include "src/zone/zone-containers.h"
 
 namespace v8 {
 namespace internal {

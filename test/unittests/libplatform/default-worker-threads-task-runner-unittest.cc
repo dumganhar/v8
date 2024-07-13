@@ -27,7 +27,7 @@ class TestTask : public v8::Task {
 };
 
 double RealTime() {
-  return base::TimeTicks::Now().ToInternalValue() /
+  return base::TimeTicks::HighResolutionNow().ToInternalValue() /
          static_cast<double>(base::Time::kMicrosecondsPerSecond);
 }
 

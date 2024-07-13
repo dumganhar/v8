@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "include/v8-initialization.h"
+#include "include/v8.h"
 #include "src/trap-handler/trap-handler.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -52,8 +52,9 @@ sigjmp_buf SignalHandlerFallbackTest::continuation_;
 TEST_F(SignalHandlerFallbackTest, DoTest) {
   const int save_sigs = 1;
   if (!sigsetjmp(continuation_, save_sigs)) {
-    constexpr bool kUseDefaultTrapHandler = true;
-    EXPECT_TRUE(v8::V8::EnableWebAssemblyTrapHandler(kUseDefaultTrapHandler));
+    constexpr bool use_default_signal_handler = true;
+    EXPECT_TRUE(
+        v8::V8::EnableWebAssemblyTrapHandler(use_default_signal_handler));
     CrashOnPurpose();
     FAIL();
   } else {

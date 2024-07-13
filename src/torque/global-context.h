@@ -8,17 +8,16 @@
 #include <map>
 #include <memory>
 
-#include "src/base/contextual.h"
 #include "src/common/globals.h"
 #include "src/torque/ast.h"
-#include "src/torque/cpp-builder.h"
+#include "src/torque/contextual.h"
 #include "src/torque/declarable.h"
 
 namespace v8 {
 namespace internal {
 namespace torque {
 
-class GlobalContext : public base::ContextualClass<GlobalContext> {
+class GlobalContext : public ContextualClass<GlobalContext> {
  public:
   GlobalContext(GlobalContext&&) V8_NOEXCEPT = default;
   GlobalContext& operator=(GlobalContext&&) V8_NOEXCEPT = default;
@@ -49,8 +48,6 @@ class GlobalContext : public base::ContextualClass<GlobalContext> {
   static bool collect_language_server_data() {
     return Get().collect_language_server_data_;
   }
-  static void SetCollectKytheData() { Get().collect_kythe_data_ = true; }
-  static bool collect_kythe_data() { return Get().collect_kythe_data_; }
   static void SetForceAssertStatements() {
     Get().force_assert_statements_ = true;
   }
@@ -65,17 +62,10 @@ class GlobalContext : public base::ContextualClass<GlobalContext> {
   }
 
   struct PerFileStreams {
-    PerFileStreams()
-        : file(SourceId::Invalid()),
-          csa_header(csa_headerfile),
-          csa_cc(csa_ccfile),
-          class_definition_cc(class_definition_ccfile) {}
+    PerFileStreams() : file(SourceId::Invalid()) {}
     SourceId file;
     std::stringstream csa_headerfile;
-    cpp::File csa_header;
     std::stringstream csa_ccfile;
-    cpp::File csa_cc;
-
     std::stringstream class_definition_headerfile;
 
     // The beginning of the generated -inl.inc file, which includes declarations
@@ -89,9 +79,6 @@ class GlobalContext : public base::ContextualClass<GlobalContext> {
     std::stringstream class_definition_inline_headerfile;
 
     std::stringstream class_definition_ccfile;
-    cpp::File class_definition_cc;
-
-    std::set<SourceId> required_builtin_includes;
   };
   static PerFileStreams& GeneratedPerFile(SourceId file) {
     PerFileStreams& result = Get().generated_per_file_[file];
@@ -120,7 +107,6 @@ class GlobalContext : public base::ContextualClass<GlobalContext> {
 
  private:
   bool collect_language_server_data_;
-  bool collect_kythe_data_;
   bool force_assert_statements_;
   bool annotate_ir_;
   Namespace* default_namespace_;
@@ -141,7 +127,7 @@ T* RegisterDeclarable(std::unique_ptr<T> d) {
   return GlobalContext::Get().RegisterDeclarable(std::move(d));
 }
 
-class TargetArchitecture : public base::ContextualClass<TargetArchitecture> {
+class TargetArchitecture : public ContextualClass<TargetArchitecture> {
  public:
   explicit TargetArchitecture(bool force_32bit);
 

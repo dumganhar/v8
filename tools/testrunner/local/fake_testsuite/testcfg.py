@@ -1,10 +1,12 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # Copyright 2019 the V8 project authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import sys
+
 from testrunner.local import testsuite, statusfile
-from testrunner.objects.testcase import TestCase
+
 
 class TestLoader(testsuite.TestLoader):
   def _list_test_filenames(self):
@@ -25,4 +27,7 @@ class TestSuite(testsuite.TestSuite):
     return TestLoader
 
   def _test_class(self):
-    return TestCase
+    return testsuite.TestCase
+
+def GetSuite(*args, **kwargs):
+  return TestSuite(*args, **kwargs)

@@ -4,12 +4,16 @@
 
 #include "src/compiler/js-typed-lowering.h"
 
+#include "src/codegen/code-factory.h"
 #include "src/compiler/access-builder.h"
-#include "src/compiler/compilation-dependencies.h"
 #include "src/compiler/js-graph.h"
+#include "src/compiler/js-heap-copy-reducer.h"
 #include "src/compiler/js-operator.h"
 #include "src/compiler/machine-operator.h"
+#include "src/compiler/node-properties.h"
+#include "src/compiler/operator-properties.h"
 #include "src/execution/isolate-inl.h"
+#include "test/unittests/compiler/compiler-test-utils.h"
 #include "test/unittests/compiler/graph-unittest.h"
 #include "test/unittests/compiler/node-test-utils.h"
 #include "testing/gmock-support.h"
@@ -35,12 +39,13 @@ Type const kJSTypes[] = {Type::Undefined(), Type::Null(),   Type::Boolean(),
 
 class JSTypedLoweringTest : public TypedGraphTest {
  public:
-  JSTypedLoweringTest()
-      : TypedGraphTest(3), javascript_(zone()), deps_(broker(), zone()) {}
+  JSTypedLoweringTest() : TypedGraphTest(3), javascript_(zone()) {}
   ~JSTypedLoweringTest() override = default;
 
  protected:
   Reduction Reduce(Node* node) {
+    JSHeapCopyReducer heap_copy_reducer(broker());
+    CHECK(!heap_copy_reducer.Reduce(node).Changed());
     MachineOperatorBuilder machine(zone());
     SimplifiedOperatorBuilder simplified(zone());
     JSGraph jsgraph(isolate(), graph(), common(), javascript(), &simplified,
@@ -54,7 +59,6 @@ class JSTypedLoweringTest : public TypedGraphTest {
 
  private:
   JSOperatorBuilder javascript_;
-  CompilationDependencies deps_;
 };
 
 
@@ -393,7 +397,7 @@ TEST_F(JSTypedLoweringTest, JSStoreContext) {
 
 
 TEST_F(JSTypedLoweringTest, JSLoadNamedStringLength) {
-  NameRef name = broker()->length_string();
+  Handle<Name> name = factory()->length_string();
   Node* const receiver = Parameter(Type::String(), 0);
   Node* const feedback = UndefinedConstant();
   Node* const context = UndefinedConstant();

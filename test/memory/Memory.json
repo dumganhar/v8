@@ -6,13 +6,8 @@
   "resources": ["run.js"],
   "main": "run.js",
   "path": ["."],
-  "flags": ["--allow-natives-syntax", "--profile-deserialization",
-            "--serialization-statistics"],
+  "flags": ["--allow-natives-syntax", "--profile-deserialization"],
   "tests": [
-    {
-      "name": "ReservedMemoryProcess",
-      "results_regexp": "(\\d+) bytes per process$"
-    },
     {
       "name": "ReservedMemoryIsolate",
       "results_regexp": "(\\d+) bytes per isolate$"
@@ -24,10 +19,6 @@
     {
       "name": "SnapshotSizeStartup",
       "results_regexp": "(\\d+) bytes for startup$"
-    },
-    {
-      "name": "SnapshotSizeSharedHeap",
-      "results_regexp": "(\\d+) bytes for shared heap$"
     },
     {
       "name": "SnapshotSizeReadOnly",

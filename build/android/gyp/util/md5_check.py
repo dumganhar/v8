@@ -1,7 +1,8 @@
-# Copyright 2013 The Chromium Authors
+# Copyright 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
 
 import difflib
 import hashlib
@@ -12,7 +13,8 @@ import sys
 import zipfile
 
 from util import build_utils
-import action_helpers  # build_utils adds //build to sys.path.
+
+sys.path.insert(1, os.path.join(build_utils.DIR_SOURCE_ROOT, 'build'))
 import print_python_deps
 
 # When set and a difference is detected, a diff of what changed is printed.
@@ -65,7 +67,7 @@ def CallAndWriteDepfileIfStale(on_stale_md5,
   # on bots that build with & without patch, and the patch changes the depfile
   # location.
   if hasattr(options, 'depfile') and options.depfile:
-    action_helpers.write_depfile(options.depfile, output_paths[0], depfile_deps)
+    build_utils.WriteDepfile(options.depfile, output_paths[0], depfile_deps)
 
 
 def CallAndRecordIfStale(function,
@@ -156,7 +158,7 @@ def CallAndRecordIfStale(function,
     new_metadata.ToFile(f)
 
 
-class Changes:
+class Changes(object):
   """Provides and API for querying what changed between runs."""
 
   def __init__(self, old_metadata, new_metadata, force, missing_outputs,
@@ -260,11 +262,11 @@ class Changes:
     """Returns a human-readable description of what changed."""
     if self.force:
       return 'force=True'
-    if self.missing_outputs:
+    elif self.missing_outputs:
       return 'Outputs do not exist:\n  ' + '\n  '.join(self.missing_outputs)
-    if self.too_new:
+    elif self.too_new:
       return 'Outputs newer than stamp file:\n  ' + '\n  '.join(self.too_new)
-    if self.old_metadata is None:
+    elif self.old_metadata is None:
       return 'Previous stamp file not found.'
 
     if self.old_metadata.StringsMd5() != self.new_metadata.StringsMd5():
@@ -292,7 +294,7 @@ class Changes:
     return 'I have no idea what changed (there is a bug).'
 
 
-class _Metadata:
+class _Metadata(object):
   """Data model for tracking change metadata.
 
   Args:

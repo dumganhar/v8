@@ -120,7 +120,7 @@ inline constexpr bool CanBeKeywordCharacter(char c) {
 }
 
 // Make sure tokens are stored as a single byte.
-static_assert(sizeof(Token::Value) == 1);
+STATIC_ASSERT(sizeof(Token::Value) == 1);
 
 // Get the shortest token that this character starts, the token may change
 // depending on subsequent characters.
@@ -251,7 +251,7 @@ static constexpr const uint8_t character_scan_flags[128] = {
 #undef CALL_GET_SCAN_FLAGS
 };
 
-inline bool CharCanBeKeyword(base::uc32 c) {
+inline bool CharCanBeKeyword(uc32 c) {
   return static_cast<uint32_t>(c) < arraysize(character_scan_flags) &&
          CanBeKeyword(character_scan_flags[c]);
 }
@@ -261,19 +261,19 @@ V8_INLINE Token::Value Scanner::ScanIdentifierOrKeywordInner() {
   bool escaped = false;
   bool can_be_keyword = true;
 
-  static_assert(arraysize(character_scan_flags) == kMaxAscii + 1);
+  STATIC_ASSERT(arraysize(character_scan_flags) == kMaxAscii + 1);
   if (V8_LIKELY(static_cast<uint32_t>(c0_) <= kMaxAscii)) {
     if (V8_LIKELY(c0_ != '\\')) {
       uint8_t scan_flags = character_scan_flags[c0_];
       DCHECK(!TerminatesLiteral(scan_flags));
-      static_assert(static_cast<uint8_t>(ScanFlags::kCannotBeKeywordStart) ==
+      STATIC_ASSERT(static_cast<uint8_t>(ScanFlags::kCannotBeKeywordStart) ==
                     static_cast<uint8_t>(ScanFlags::kCannotBeKeyword) << 1);
       scan_flags >>= 1;
       // Make sure the shifting above doesn't set IdentifierNeedsSlowPath.
       // Otherwise we'll fall into the slow path after scanning the identifier.
       DCHECK(!IdentifierNeedsSlowPath(scan_flags));
       AddLiteralChar(static_cast<char>(c0_));
-      AdvanceUntil([this, &scan_flags](base::uc32 c0) {
+      AdvanceUntil([this, &scan_flags](uc32 c0) {
         if (V8_UNLIKELY(static_cast<uint32_t>(c0) > kMaxAscii)) {
           // A non-ascii character means we need to drop through to the slow
           // path.
@@ -296,8 +296,7 @@ V8_INLINE Token::Value Scanner::ScanIdentifierOrKeywordInner() {
       if (V8_LIKELY(!IdentifierNeedsSlowPath(scan_flags))) {
         if (!CanBeKeyword(scan_flags)) return Token::IDENTIFIER;
         // Could be a keyword or identifier.
-        base::Vector<const uint8_t> chars =
-            next().literal_chars.one_byte_literal();
+        Vector<const uint8_t> chars = next().literal_chars.one_byte_literal();
         return KeywordOrIdentifierToken(chars.begin(), chars.length());
       }
 
@@ -305,7 +304,7 @@ V8_INLINE Token::Value Scanner::ScanIdentifierOrKeywordInner() {
     } else {
       // Special case for escapes at the start of an identifier.
       escaped = true;
-      base::uc32 c = ScanIdentifierUnicodeEscape();
+      uc32 c = ScanIdentifierUnicodeEscape();
       DCHECK(!IsIdentifierStart(Invalid()));
       if (c == '\\' || !IsIdentifierStart(c)) {
         return Token::ILLEGAL;
@@ -319,25 +318,24 @@ V8_INLINE Token::Value Scanner::ScanIdentifierOrKeywordInner() {
 }
 
 V8_INLINE Token::Value Scanner::SkipWhiteSpace() {
-  if (!IsWhiteSpaceOrLineTerminator(c0_)) return Token::ILLEGAL;
+  int start_position = source_pos();
 
-  if (!next().after_line_terminator && unibrow::IsLineTerminator(c0_)) {
-    next().after_line_terminator = true;
-  }
+  // We won't skip behind the end of input.
+  DCHECK(!IsWhiteSpaceOrLineTerminator(kEndOfInput));
 
   // Advance as long as character is a WhiteSpace or LineTerminator.
-  base::uc32 hint = ' ';
-  AdvanceUntil([this, &hint](base::uc32 c0) {
-    if (V8_LIKELY(c0 == hint)) return false;
-    if (IsWhiteSpaceOrLineTerminator(c0)) {
-      if (!next().after_line_terminator && unibrow::IsLineTerminator(c0)) {
-        next().after_line_terminator = true;
-      }
-      hint = c0;
-      return false;
+  while (IsWhiteSpaceOrLineTerminator(c0_)) {
+    if (!next().after_line_terminator && unibrow::IsLineTerminator(c0_)) {
+      next().after_line_terminator = true;
     }
-    return true;
-  });
+    Advance();
+  }
+
+  // Return whether or not we skipped any characters.
+  if (source_pos() == start_position) {
+    DCHECK_NE('0', c0_);
+    return Token::ILLEGAL;
+  }
 
   return Token::WHITESPACE;
 }
@@ -455,11 +453,11 @@ V8_INLINE Token::Value Scanner::ScanSingleToken() {
           // /  // /* /=
           Advance();
           if (c0_ == '/') {
-            base::uc32 c = Peek();
+            uc32 c = Peek();
             if (c == '#' || c == '@') {
               Advance();
               Advance();
-              token = SkipMagicComment();
+              token = SkipSourceURLComment();
               continue;
             }
             token = SkipSingleLineComment();

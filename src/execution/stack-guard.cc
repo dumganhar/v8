@@ -4,20 +4,15 @@
 
 #include "src/execution/stack-guard.h"
 
-#include "src/baseline/baseline-batch-compiler.h"
 #include "src/compiler-dispatcher/optimizing-compile-dispatcher.h"
 #include "src/execution/interrupts-scope.h"
 #include "src/execution/isolate.h"
+#include "src/execution/runtime-profiler.h"
 #include "src/execution/simulator.h"
 #include "src/logging/counters.h"
 #include "src/objects/backing-store.h"
 #include "src/roots/roots-inl.h"
-#include "src/tracing/trace-event.h"
 #include "src/utils/memcopy.h"
-
-#ifdef V8_ENABLE_MAGLEV
-#include "src/maglev/maglev-concurrent-dispatcher.h"
-#endif  // V8_ENABLE_MAGLEV
 
 #if V8_ENABLE_WEBASSEMBLY
 #include "src/wasm/wasm-engine.h"
@@ -26,22 +21,16 @@
 namespace v8 {
 namespace internal {
 
-void StackGuard::update_interrupt_requests_and_stack_limits(
-    const ExecutionAccess& lock) {
+void StackGuard::set_interrupt_limits(const ExecutionAccess& lock) {
   DCHECK_NOT_NULL(isolate_);
-  if (has_pending_interrupts(lock)) {
-    thread_local_.set_jslimit(kInterruptLimit);
-    thread_local_.set_climit(kInterruptLimit);
-  } else {
-    thread_local_.set_jslimit(thread_local_.real_jslimit_);
-    thread_local_.set_climit(thread_local_.real_climit_);
-  }
-  for (InterruptLevel level :
-       std::array{InterruptLevel::kNoGC, InterruptLevel::kNoHeapWrites,
-                  InterruptLevel::kAnyEffect}) {
-    thread_local_.set_interrupt_requested(
-        level, InterruptLevelMask(level) & thread_local_.interrupt_flags_);
-  }
+  thread_local_.set_jslimit(kInterruptLimit);
+  thread_local_.set_climit(kInterruptLimit);
+}
+
+void StackGuard::reset_limits(const ExecutionAccess& lock) {
+  DCHECK_NOT_NULL(isolate_);
+  thread_local_.set_jslimit(thread_local_.real_jslimit_);
+  thread_local_.set_climit(thread_local_.real_climit_);
 }
 
 void StackGuard::SetStackLimit(uintptr_t limit) {
@@ -70,27 +59,41 @@ void StackGuard::AdjustStackLimitForSimulator() {
   }
 }
 
+void StackGuard::EnableInterrupts() {
+  ExecutionAccess access(isolate_);
+  if (has_pending_interrupts(access)) {
+    set_interrupt_limits(access);
+  }
+}
+
+void StackGuard::DisableInterrupts() {
+  ExecutionAccess access(isolate_);
+  reset_limits(access);
+}
+
 void StackGuard::PushInterruptsScope(InterruptsScope* scope) {
   ExecutionAccess access(isolate_);
   DCHECK_NE(scope->mode_, InterruptsScope::kNoop);
   if (scope->mode_ == InterruptsScope::kPostponeInterrupts) {
     // Intercept already requested interrupts.
-    uint32_t intercepted =
+    intptr_t intercepted =
         thread_local_.interrupt_flags_ & scope->intercept_mask_;
     scope->intercepted_flags_ = intercepted;
     thread_local_.interrupt_flags_ &= ~intercepted;
   } else {
     DCHECK_EQ(scope->mode_, InterruptsScope::kRunInterrupts);
     // Restore postponed interrupts.
-    uint32_t restored_flags = 0;
+    int restored_flags = 0;
     for (InterruptsScope* current = thread_local_.interrupt_scopes_;
          current != nullptr; current = current->prev_) {
       restored_flags |= (current->intercepted_flags_ & scope->intercept_mask_);
       current->intercepted_flags_ &= ~scope->intercept_mask_;
     }
     thread_local_.interrupt_flags_ |= restored_flags;
+
+    if (has_pending_interrupts(access)) set_interrupt_limits(access);
   }
-  update_interrupt_requests_and_stack_limits(access);
+  if (!has_pending_interrupts(access)) reset_limits(access);
   // Add scope to the chain.
   scope->prev_ = thread_local_.interrupt_scopes_;
   thread_local_.interrupt_scopes_ = scope;
@@ -108,7 +111,7 @@ void StackGuard::PopInterruptsScope() {
     DCHECK_EQ(top->mode_, InterruptsScope::kRunInterrupts);
     // Postpone existing interupts if needed.
     if (top->prev_) {
-      for (uint32_t interrupt = 1; interrupt < ALL_INTERRUPTS;
+      for (int interrupt = 1; interrupt < ALL_INTERRUPTS;
            interrupt = interrupt << 1) {
         InterruptFlag flag = static_cast<InterruptFlag>(interrupt);
         if ((thread_local_.interrupt_flags_ & flag) &&
@@ -118,7 +121,7 @@ void StackGuard::PopInterruptsScope() {
       }
     }
   }
-  update_interrupt_requests_and_stack_limits(access);
+  if (has_pending_interrupts(access)) set_interrupt_limits(access);
   // Remove scope from chain.
   thread_local_.interrupt_scopes_ = top->prev_;
 }
@@ -138,7 +141,7 @@ void StackGuard::RequestInterrupt(InterruptFlag flag) {
 
   // Not intercepted.  Set as active interrupt flag.
   thread_local_.interrupt_flags_ |= flag;
-  update_interrupt_requests_and_stack_limits(access);
+  set_interrupt_limits(access);
 
   // If this isolate is waiting in a futex, notify it to wake up.
   isolate_->futex_wait_list_node()->NotifyWake();
@@ -154,36 +157,37 @@ void StackGuard::ClearInterrupt(InterruptFlag flag) {
 
   // Clear the interrupt flag from the active interrupt flags.
   thread_local_.interrupt_flags_ &= ~flag;
-  update_interrupt_requests_and_stack_limits(access);
+  if (!has_pending_interrupts(access)) reset_limits(access);
 }
 
 bool StackGuard::HasTerminationRequest() {
-  if (!thread_local_.has_interrupt_requested(InterruptLevel::kNoGC)) {
-    return false;
-  }
   ExecutionAccess access(isolate_);
   if ((thread_local_.interrupt_flags_ & TERMINATE_EXECUTION) != 0) {
     thread_local_.interrupt_flags_ &= ~TERMINATE_EXECUTION;
-    update_interrupt_requests_and_stack_limits(access);
+    if (!has_pending_interrupts(access)) reset_limits(access);
     return true;
   }
   return false;
 }
 
-int StackGuard::FetchAndClearInterrupts(InterruptLevel level) {
+int StackGuard::FetchAndClearInterrupts() {
   ExecutionAccess access(isolate_);
-  InterruptFlag mask = InterruptLevelMask(level);
+
+  int result = 0;
   if ((thread_local_.interrupt_flags_ & TERMINATE_EXECUTION) != 0) {
     // The TERMINATE_EXECUTION interrupt is special, since it terminates
     // execution but should leave V8 in a resumable state. If it exists, we only
     // fetch and clear that bit. On resume, V8 can continue processing other
     // interrupts.
-    mask = TERMINATE_EXECUTION;
+    result = TERMINATE_EXECUTION;
+    thread_local_.interrupt_flags_ &= ~TERMINATE_EXECUTION;
+    if (!has_pending_interrupts(access)) reset_limits(access);
+  } else {
+    result = static_cast<int>(thread_local_.interrupt_flags_);
+    thread_local_.interrupt_flags_ = 0;
+    reset_limits(access);
   }
 
-  int result = static_cast<int>(thread_local_.interrupt_flags_ & mask);
-  thread_local_.interrupt_flags_ &= ~mask;
-  update_interrupt_requests_and_stack_limits(access);
   return result;
 }
 
@@ -208,7 +212,7 @@ void StackGuard::FreeThreadResources() {
 
 void StackGuard::ThreadLocal::Initialize(Isolate* isolate,
                                          const ExecutionAccess& lock) {
-  const uintptr_t kLimitSize = v8_flags.stack_size * KB;
+  const uintptr_t kLimitSize = FLAG_stack_size * KB;
   DCHECK_GT(GetCurrentStackPosition(), kLimitSize);
   uintptr_t limit = GetCurrentStackPosition() - kLimitSize;
   real_jslimit_ = SimulatorStack::JsLimitFromCLimit(isolate, limit);
@@ -255,21 +259,21 @@ class V8_NODISCARD ShouldBeZeroOnReturnScope final {
 
 }  // namespace
 
-Object StackGuard::HandleInterrupts(InterruptLevel level) {
+Object StackGuard::HandleInterrupts() {
   TRACE_EVENT0("v8.execute", "V8.HandleInterrupts");
 
 #if DEBUG
   isolate_->heap()->VerifyNewSpaceTop();
 #endif
 
-  if (v8_flags.verify_predictable) {
+  if (FLAG_verify_predictable) {
     // Advance synthetic time by making a time request.
     isolate_->heap()->MonotonicallyIncreasingTimeInMs();
   }
 
   // Fetch and clear interrupt bits in one go. See comments inside the method
   // for special handling of TERMINATE_EXECUTION.
-  int interrupt_flags = FetchAndClearInterrupts(level);
+  int interrupt_flags = FetchAndClearInterrupts();
 
   // All interrupts should be fully processed when returning from this method.
   ShouldBeZeroOnReturnScope should_be_zero_on_return(&interrupt_flags);
@@ -284,11 +288,6 @@ Object StackGuard::HandleInterrupts(InterruptLevel level) {
     isolate_->heap()->HandleGCRequest();
   }
 
-  if (TestAndClear(&interrupt_flags, GLOBAL_SAFEPOINT)) {
-    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.gc"), "V8.GlobalSafepoint");
-    isolate_->main_thread_local_heap()->Safepoint();
-  }
-
 #if V8_ENABLE_WEBASSEMBLY
   if (TestAndClear(&interrupt_flags, GROW_SHARED_MEMORY)) {
     TRACE_EVENT0("v8.wasm", "V8.WasmGrowSharedMemory");
@@ -297,12 +296,12 @@ Object StackGuard::HandleInterrupts(InterruptLevel level) {
 
   if (TestAndClear(&interrupt_flags, LOG_WASM_CODE)) {
     TRACE_EVENT0("v8.wasm", "V8.LogCode");
-    wasm::GetWasmEngine()->LogOutstandingCodesForIsolate(isolate_);
+    isolate_->wasm_engine()->LogOutstandingCodesForIsolate(isolate_);
   }
 
   if (TestAndClear(&interrupt_flags, WASM_CODE_GC)) {
     TRACE_EVENT0("v8.wasm", "V8.WasmCodeGC");
-    wasm::GetWasmEngine()->ReportLiveCodeFromStackForGC(isolate_);
+    isolate_->wasm_engine()->ReportLiveCodeFromStackForGC(isolate_);
   }
 #endif  // V8_ENABLE_WEBASSEMBLY
 
@@ -318,20 +317,6 @@ Object StackGuard::HandleInterrupts(InterruptLevel level) {
     DCHECK(isolate_->concurrent_recompilation_enabled());
     isolate_->optimizing_compile_dispatcher()->InstallOptimizedFunctions();
   }
-
-  if (TestAndClear(&interrupt_flags, INSTALL_BASELINE_CODE)) {
-    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.compile"),
-                 "V8.FinalizeBaselineConcurrentCompilation");
-    isolate_->baseline_batch_compiler()->InstallBatch();
-  }
-
-#ifdef V8_ENABLE_MAGLEV
-  if (TestAndClear(&interrupt_flags, INSTALL_MAGLEV_CODE)) {
-    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.compile"),
-                 "V8.FinalizeMaglevConcurrentCompilation");
-    isolate_->maglev_concurrent_dispatcher()->FinalizeFinishedJobs();
-  }
-#endif  // V8_ENABLE_MAGLEV
 
   if (TestAndClear(&interrupt_flags, API_INTERRUPT)) {
     TRACE_EVENT0("v8.execute", "V8.InvokeApiInterruptCallbacks");

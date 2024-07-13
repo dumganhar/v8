@@ -23,8 +23,7 @@
 #pragma warning(disable : 4251)
 #endif // if defined(JSONCPP_DISABLE_DLL_INTERFACE_WARNING)
 
-#pragma pack(push)
-#pragma pack()
+#pragma pack(push, 8)
 
 namespace Json {
 
@@ -34,7 +33,8 @@ namespace Json {
  * \deprecated Use CharReader and CharReaderBuilder.
  */
 
-class JSON_API Reader {
+class JSONCPP_DEPRECATED(
+    "Use CharReader and CharReaderBuilder instead.") JSON_API Reader {
 public:
   using Char = char;
   using Location = const Char*;
@@ -51,13 +51,13 @@ public:
   };
 
   /** \brief Constructs a Reader allowing all features for parsing.
-    * \deprecated Use CharReader and CharReaderBuilder.
    */
+  JSONCPP_DEPRECATED("Use CharReader and CharReaderBuilder instead")
   Reader();
 
   /** \brief Constructs a Reader allowing the specified feature set for parsing.
-    * \deprecated Use CharReader and CharReaderBuilder.
    */
+  JSONCPP_DEPRECATED("Use CharReader and CharReaderBuilder instead")
   Reader(const Features& features);
 
   /** \brief Read a Value from a <a HREF="http://www.json.org">JSON</a>
@@ -324,9 +324,6 @@ public:
    * - `"allowSpecialFloats": false or true`
    *   - If true, special float values (NaNs and infinities) are allowed and
    *     their values are lossfree restorable.
-   * - `"skipBom": false or true`
-   *   - If true, if the input starts with the Unicode byte order mark (BOM),
-   *     it is skipped.
    *
    * You can examine 'settings_` yourself to see the defaults. You can also
    * write and read them just like any JSON Value.

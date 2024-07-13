@@ -1,8 +1,7 @@
 Test static private class methods
 
 Running test: testScopesPaused
-private members on the base class
-privateProperties from Runtime.getProperties()
+privateProperties on the base class
 [
     [0] : {
         name : #writeOnly
@@ -38,6 +37,15 @@ privateProperties from Runtime.getProperties()
         }
     }
     [3] : {
+        name : #inc
+        value : {
+            className : Function
+            description : #inc() { return ++A.#accessor; }
+            objectId : <objectId>
+            type : function
+        }
+    }
+    [4] : {
         name : #field
         value : {
             description : 2
@@ -46,35 +54,6 @@ privateProperties from Runtime.getProperties()
         }
     }
 ]
-[[PrivateMethods]] in internalProperties from Runtime.getProperties()
-{
-    name : [[PrivateMethods]]
-    value : {
-        className : Array
-        description : PrivateMethods[1]
-        objectId : <objectId>
-        subtype : internal#privateMethodList
-        type : object
-    }
-}
-{
-    result : [
-        [0] : {
-            configurable : true
-            enumerable : true
-            isOwn : true
-            name : 0
-            value : {
-                className : Object
-                description : #inc() { return ++A.#accessor; }
-                objectId : <objectId>
-                subtype : internal#privateMethod
-                type : object
-            }
-            writable : true
-        }
-    ]
-}
 Evaluating A.#inc();
 {
     result : {
@@ -115,8 +94,7 @@ Evaluating this.#writeOnly = 0; this.#field;
         value : 0
     }
 }
-private members on the subclass
-privateProperties from Runtime.getProperties()
+privateProperties on the subclass
 [
     [0] : {
         get : {
@@ -127,43 +105,23 @@ privateProperties from Runtime.getProperties()
         }
         name : #accessor
     }
-]
-[[PrivateMethods]] in internalProperties from Runtime.getProperties()
-{
-    name : [[PrivateMethods]]
-    value : {
-        className : Array
-        description : PrivateMethods[1]
-        objectId : <objectId>
-        subtype : internal#privateMethodList
-        type : object
-    }
-}
-{
-    result : [
-        [0] : {
-            configurable : true
-            enumerable : true
-            isOwn : true
-            name : 0
-            value : {
-                className : Object
-                description : #subclassMethod() { return B.#accessor; }
-                objectId : <objectId>
-                subtype : internal#privateMethod
-                type : object
-            }
-            writable : true
+    [1] : {
+        name : #subclassMethod
+        value : {
+            className : Function
+            description : #subclassMethod() { return B.#accessor; }
+            objectId : <objectId>
+            type : function
         }
-    ]
-}
+    }
+]
 Evaluating this.#inc(); from the base class
 {
     exceptionDetails : {
         columnNumber : 4
         exception : {
             className : SyntaxError
-            description : SyntaxError: Private field '#inc' must be declared in an enclosing class     at B.test (<anonymous>:24:7)     at run (<anonymous>:28:5)     at <anonymous>:1:1
+            description : SyntaxError: Private field '#inc' must be declared in an enclosing class     at Function.test (<anonymous>:24:7)     at run (<anonymous>:28:5)     at <anonymous>:1:1
             objectId : <objectId>
             subtype : error
             type : object
@@ -175,7 +133,7 @@ Evaluating this.#inc(); from the base class
     }
     result : {
         className : SyntaxError
-        description : SyntaxError: Private field '#inc' must be declared in an enclosing class     at B.test (<anonymous>:24:7)     at run (<anonymous>:28:5)     at <anonymous>:1:1
+        description : SyntaxError: Private field '#inc' must be declared in an enclosing class     at Function.test (<anonymous>:24:7)     at run (<anonymous>:28:5)     at <anonymous>:1:1
         objectId : <objectId>
         subtype : error
         type : object

@@ -50,16 +50,6 @@ class IteratorBuiltinsAssembler : public CodeStubAssembler {
       TNode<Context> context, TNode<JSReceiver> result,
       base::Optional<TNode<Map>> fast_iterator_result_map = base::nullopt);
 
-  void Iterate(TNode<Context> context, TNode<Object> iterable,
-               std::function<void(TNode<Object>)> func,
-               std::initializer_list<compiler::CodeAssemblerVariable*>
-                   merged_variables = {});
-  void Iterate(TNode<Context> context, TNode<Object> iterable,
-               TNode<Object> iterable_fn,
-               std::function<void(TNode<Object>)> func,
-               std::initializer_list<compiler::CodeAssemblerVariable*>
-                   merged_variables = {});
-
   // #sec-iterabletolist
   // Build a JSArray by iterating over {iterable} using {iterator_fn},
   // following the ECMAscript operation with the same name.
@@ -77,8 +67,8 @@ class IteratorBuiltinsAssembler : public CodeStubAssembler {
 
   // Currently at https://tc39.github.io/proposal-intl-list-format/
   // #sec-createstringlistfromiterable
-  TNode<FixedArray> StringListFromIterable(TNode<Context> context,
-                                           TNode<Object> iterable);
+  TNode<JSArray> StringListFromIterable(TNode<Context> context,
+                                        TNode<Object> iterable);
 
   void FastIterableToList(TNode<Context> context, TNode<Object> iterable,
                           TVariable<JSArray>* var_result, Label* slow);

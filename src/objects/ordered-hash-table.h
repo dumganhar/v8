@@ -10,7 +10,6 @@
 #include "src/objects/fixed-array.h"
 #include "src/objects/internal-index.h"
 #include "src/objects/js-objects.h"
-#include "src/objects/keys.h"
 #include "src/objects/smi.h"
 #include "src/roots/roots.h"
 
@@ -68,7 +67,8 @@ class OrderedHashTable : public FixedArray {
  public:
   // Returns an OrderedHashTable (possibly |table|) with enough space
   // to add at least one new element.
-  static MaybeHandle<Derived> EnsureGrowable(Isolate* isolate,
+  template <typename LocalIsolate>
+  static MaybeHandle<Derived> EnsureGrowable(LocalIsolate* isolate,
                                              Handle<Derived> table);
 
   // Returns an OrderedHashTable (possibly |table|) that's shrunken
@@ -200,17 +200,21 @@ class OrderedHashTable : public FixedArray {
 
  protected:
   // Returns an OrderedHashTable with a capacity of at least |capacity|.
+  template <typename LocalIsolate>
   static MaybeHandle<Derived> Allocate(
-      Isolate* isolate, int capacity,
+      LocalIsolate* isolate, int capacity,
       AllocationType allocation = AllocationType::kYoung);
 
   static MaybeHandle<Derived> AllocateEmpty(Isolate* isolate,
                                             AllocationType allocation,
                                             RootIndex root_ndex);
 
-  static MaybeHandle<Derived> Rehash(Isolate* isolate, Handle<Derived> table);
-  static MaybeHandle<Derived> Rehash(Isolate* isolate, Handle<Derived> table,
-                                     int new_capacity);
+  template <typename LocalIsolate>
+  static MaybeHandle<Derived> Rehash(LocalIsolate* isolate,
+                                     Handle<Derived> table);
+  template <typename LocalIsolate>
+  static MaybeHandle<Derived> Rehash(LocalIsolate* isolate,
+                                     Handle<Derived> table, int new_capacity);
 
   int HashToEntryRaw(int hash) {
     int bucket = HashToBucket(hash);
@@ -283,9 +287,9 @@ class V8_EXPORT_PRIVATE OrderedHashSet
                                             int new_capacity);
   static MaybeHandle<OrderedHashSet> Rehash(Isolate* isolate,
                                             Handle<OrderedHashSet> table);
-  template <typename IsolateT>
+  template <typename LocalIsolate>
   static MaybeHandle<OrderedHashSet> Allocate(
-      IsolateT* isolate, int capacity,
+      LocalIsolate* isolate, int capacity,
       AllocationType allocation = AllocationType::kYoung);
 
   static MaybeHandle<OrderedHashSet> AllocateEmpty(
@@ -314,9 +318,9 @@ class V8_EXPORT_PRIVATE OrderedHashMap
                                          Handle<Object> key,
                                          Handle<Object> value);
 
-  template <typename IsolateT>
+  template <typename LocalIsolate>
   static MaybeHandle<OrderedHashMap> Allocate(
-      IsolateT* isolate, int capacity,
+      LocalIsolate* isolate, int capacity,
       AllocationType allocation = AllocationType::kYoung);
 
   static MaybeHandle<OrderedHashMap> AllocateEmpty(
@@ -327,9 +331,6 @@ class V8_EXPORT_PRIVATE OrderedHashMap
                                             int new_capacity);
   static MaybeHandle<OrderedHashMap> Rehash(Isolate* isolate,
                                             Handle<OrderedHashMap> table);
-
-  void SetEntry(InternalIndex entry, Object key, Object value);
-
   Object ValueAt(InternalIndex entry);
 
   // This takes and returns raw Address values containing tagged Object
@@ -474,17 +475,16 @@ class SmallOrderedHashTable : public HeapObject {
     return InternalIndex::Range(UsedCapacity());
   }
 
-  DECL_CAST(SmallOrderedHashTable)
   DECL_VERIFIER(SmallOrderedHashTable)
 
   static const int kMinCapacity = 4;
-  static const uint8_t kNotFound = 0xFF;
+  static const byte kNotFound = 0xFF;
 
   // We use the value 255 to indicate kNotFound for chain and bucket
   // values, which means that this value can't be used a valid
   // index.
   static const int kMaxCapacity = 254;
-  static_assert(kMaxCapacity < kNotFound);
+  STATIC_ASSERT(kMaxCapacity < kNotFound);
 
   // The load factor is used to derive the number of buckets from
   // capacity during Allocation. We also depend on this to calaculate
@@ -518,7 +518,7 @@ class SmallOrderedHashTable : public HeapObject {
     return field_address(DataTableStartOffset() + DataTableSizeFor(capacity));
   }
 
-  void SetFirstEntry(int bucket, uint8_t value) {
+  void SetFirstEntry(int bucket, byte value) {
     DCHECK_LE(static_cast<unsigned>(bucket), NumberOfBuckets());
     setByte(GetBucketsStartOffset(), bucket, value);
   }
@@ -607,16 +607,16 @@ class SmallOrderedHashTable : public HeapObject {
 
   // This is used for accessing the non |DataTable| part of the
   // structure.
-  uint8_t getByte(Offset offset, ByteIndex index) const {
+  byte getByte(Offset offset, ByteIndex index) const {
     DCHECK(offset < DataTableStartOffset() ||
            offset >= GetBucketsStartOffset());
-    return ReadField<uint8_t>(offset + (index * kOneByteSize));
+    return ReadField<byte>(offset + (index * kOneByteSize));
   }
 
-  void setByte(Offset offset, ByteIndex index, uint8_t value) {
+  void setByte(Offset offset, ByteIndex index, byte value) {
     DCHECK(offset < DataTableStartOffset() ||
            offset >= GetBucketsStartOffset());
-    WriteField<uint8_t>(offset + (index * kOneByteSize), value);
+    WriteField<byte>(offset + (index * kOneByteSize), value);
   }
 
   Offset GetDataEntryOffset(int entry, int relative_index) const {
@@ -671,7 +671,7 @@ class SmallOrderedHashSet : public SmallOrderedHashTable<SmallOrderedHashSet> {
                       SmallOrderedHashTable<SmallOrderedHashSet>);
 };
 
-static_assert(kSmallOrderedHashSetMinCapacity ==
+STATIC_ASSERT(kSmallOrderedHashSetMinCapacity ==
               SmallOrderedHashSet::kMinCapacity);
 
 class SmallOrderedHashMap : public SmallOrderedHashTable<SmallOrderedHashMap> {
@@ -706,7 +706,7 @@ class SmallOrderedHashMap : public SmallOrderedHashTable<SmallOrderedHashMap> {
                       SmallOrderedHashTable<SmallOrderedHashMap>);
 };
 
-static_assert(kSmallOrderedHashMapMinCapacity ==
+STATIC_ASSERT(kSmallOrderedHashMapMinCapacity ==
               SmallOrderedHashMap::kMinCapacity);
 
 // TODO(gsathya): Rename this to OrderedHashTable, after we rename
@@ -761,23 +761,24 @@ class V8_EXPORT_PRIVATE OrderedNameDictionary
   DECL_CAST(OrderedNameDictionary)
   DECL_PRINTER(OrderedNameDictionary)
 
+  template <typename LocalIsolate>
   static MaybeHandle<OrderedNameDictionary> Add(
-      Isolate* isolate, Handle<OrderedNameDictionary> table, Handle<Name> key,
-      Handle<Object> value, PropertyDetails details);
+      LocalIsolate* isolate, Handle<OrderedNameDictionary> table,
+      Handle<Name> key, Handle<Object> value, PropertyDetails details);
 
   void SetEntry(InternalIndex entry, Object key, Object value,
                 PropertyDetails details);
 
-  template <typename IsolateT>
-  InternalIndex FindEntry(IsolateT* isolate, Object key);
+  template <typename LocalIsolate>
+  InternalIndex FindEntry(LocalIsolate* isolate, Object key);
 
   // This is to make the interfaces of NameDictionary::FindEntry and
   // OrderedNameDictionary::FindEntry compatible.
   // TODO(emrich) clean this up: NameDictionary uses Handle<Object>
   // for FindEntry keys due to its Key typedef, but that's also used
   // for adding, where we do need handles.
-  template <typename IsolateT>
-  InternalIndex FindEntry(IsolateT* isolate, Handle<Object> key) {
+  template <typename LocalIsolate>
+  InternalIndex FindEntry(LocalIsolate* isolate, Handle<Object> key) {
     return FindEntry(isolate, *key);
   }
 
@@ -785,15 +786,18 @@ class V8_EXPORT_PRIVATE OrderedNameDictionary
       Isolate* isolate, Handle<OrderedNameDictionary> table,
       InternalIndex entry);
 
+  template <typename LocalIsolate>
   static MaybeHandle<OrderedNameDictionary> Allocate(
-      Isolate* isolate, int capacity,
+      LocalIsolate* isolate, int capacity,
       AllocationType allocation = AllocationType::kYoung);
 
   static MaybeHandle<OrderedNameDictionary> AllocateEmpty(
       Isolate* isolate, AllocationType allocation = AllocationType::kReadOnly);
 
+  template <typename LocalIsolate>
   static MaybeHandle<OrderedNameDictionary> Rehash(
-      Isolate* isolate, Handle<OrderedNameDictionary> table, int new_capacity);
+      LocalIsolate* isolate, Handle<OrderedNameDictionary> table,
+      int new_capacity);
 
   // Returns the value for entry.
   inline Object ValueAt(InternalIndex entry);

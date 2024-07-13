@@ -30,22 +30,20 @@
 // Type utilities needed for implementing typed and type-parameterized
 // tests.
 
-// IWYU pragma: private, include "gtest/gtest.h"
-// IWYU pragma: friend gtest/.*
-// IWYU pragma: friend gmock/.*
+// GOOGLETEST_CM0001 DO NOT DELETE
 
-#ifndef GOOGLETEST_INCLUDE_GTEST_INTERNAL_GTEST_TYPE_UTIL_H_
-#define GOOGLETEST_INCLUDE_GTEST_INTERNAL_GTEST_TYPE_UTIL_H_
+#ifndef GTEST_INCLUDE_GTEST_INTERNAL_GTEST_TYPE_UTIL_H_
+#define GTEST_INCLUDE_GTEST_INTERNAL_GTEST_TYPE_UTIL_H_
 
 #include "gtest/internal/gtest-port.h"
 
 // #ifdef __GNUC__ is too general here.  It is possible to use gcc without using
 // libstdc++ (which is where cxxabi.h comes from).
-#if GTEST_HAS_CXXABI_H_
-#include <cxxabi.h>
-#elif defined(__HP_aCC)
-#include <acxx_demangle.h>
-#endif  // GTEST_HASH_CXXABI_H_
+# if GTEST_HAS_CXXABI_H_
+#  include <cxxabi.h>
+# elif defined(__HP_aCC)
+#  include <acxx_demangle.h>
+# endif  // GTEST_HASH_CXXABI_H_
 
 namespace testing {
 namespace internal {
@@ -100,12 +98,12 @@ std::string GetTypeName() {
 #endif  // GTEST_HAS_RTTI
 }
 
+#if GTEST_HAS_TYPED_TEST || GTEST_HAS_TYPED_TEST_P
+
 // A unique type indicating an empty node
 struct None {};
 
-#define GTEST_TEMPLATE_ \
-  template <typename T> \
-  class
+# define GTEST_TEMPLATE_ template <typename T> class
 
 // The template "selector" struct TemplateSel<Tmpl> is used to
 // represent Tmpl, which must be a class template with one type
@@ -123,7 +121,8 @@ struct TemplateSel {
   };
 };
 
-#define GTEST_BIND_(TmplSel, T) TmplSel::template Bind<T>::type
+# define GTEST_BIND_(TmplSel, T) \
+  TmplSel::template Bind<T>::type
 
 template <GTEST_TEMPLATE_ Head_, GTEST_TEMPLATE_... Tail_>
 struct Templates {
@@ -176,6 +175,8 @@ struct GenerateTypeList {
   using type = typename proxy::type;
 };
 
+#endif  // GTEST_HAS_TYPED_TEST || GTEST_HAS_TYPED_TEST_P
+
 }  // namespace internal
 
 template <typename... Ts>
@@ -183,4 +184,4 @@ using Types = internal::ProxyTypeList<Ts...>;
 
 }  // namespace testing
 
-#endif  // GOOGLETEST_INCLUDE_GTEST_INTERNAL_GTEST_TYPE_UTIL_H_
+#endif  // GTEST_INCLUDE_GTEST_INTERNAL_GTEST_TYPE_UTIL_H_

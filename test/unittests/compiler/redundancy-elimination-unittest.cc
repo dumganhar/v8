@@ -3,13 +3,13 @@
 // found in the LICENSE file.
 
 #include "src/compiler/redundancy-elimination.h"
-
 #include "src/codegen/tick-counter.h"
+#include "src/compiler/common-operator.h"
 #include "src/compiler/feedback-source.h"
-#include "src/compiler/js-graph.h"
 #include "test/unittests/compiler/graph-reducer-unittest.h"
 #include "test/unittests/compiler/graph-unittest.h"
 #include "test/unittests/compiler/node-test-utils.h"
+#include "testing/gmock-support.h"
 
 using testing::_;
 using testing::NiceMock;
@@ -23,12 +23,8 @@ class RedundancyEliminationTest : public GraphTest {
  public:
   explicit RedundancyEliminationTest(int num_parameters = 4)
       : GraphTest(num_parameters),
-        javascript_(zone()),
-        simplified_(zone()),
-        machine_(zone()),
-        jsgraph_(isolate(), graph(), common(), &javascript_, &simplified_,
-                 &machine_),
-        reducer_(&editor_, &jsgraph_, zone()) {
+        reducer_(&editor_, zone()),
+        simplified_(zone()) {
     // Initialize the {reducer_} state for the Start node.
     reducer_.Reduce(graph()->start());
 
@@ -36,8 +32,16 @@ class RedundancyEliminationTest : public GraphTest {
     FeedbackVectorSpec spec(zone());
     FeedbackSlot slot1 = spec.AddCallICSlot();
     FeedbackSlot slot2 = spec.AddCallICSlot();
-    Handle<FeedbackVector> feedback_vector =
-        FeedbackVector::NewForTesting(isolate(), &spec);
+    Handle<FeedbackMetadata> metadata = FeedbackMetadata::New(isolate(), &spec);
+    Handle<SharedFunctionInfo> shared =
+        isolate()->factory()->NewSharedFunctionInfoForBuiltin(
+            isolate()->factory()->empty_string(), Builtins::kIllegal);
+    shared->set_raw_outer_scope_info_or_feedback_metadata(*metadata);
+    Handle<ClosureFeedbackCellArray> closure_feedback_cell_array =
+        ClosureFeedbackCellArray::New(isolate(), shared);
+    IsCompiledScope is_compiled_scope(shared->is_compiled_scope(isolate()));
+    Handle<FeedbackVector> feedback_vector = FeedbackVector::New(
+        isolate(), shared, closure_feedback_cell_array, &is_compiled_scope);
     vector_slot_pairs_.push_back(FeedbackSource());
     vector_slot_pairs_.push_back(FeedbackSource(feedback_vector, slot1));
     vector_slot_pairs_.push_back(FeedbackSource(feedback_vector, slot2));
@@ -56,11 +60,8 @@ class RedundancyEliminationTest : public GraphTest {
   NiceMock<MockAdvancedReducerEditor> editor_;
   std::vector<FeedbackSource> vector_slot_pairs_;
   FeedbackSource feedback2_;
-  JSOperatorBuilder javascript_;
-  SimplifiedOperatorBuilder simplified_;
-  MachineOperatorBuilder machine_;
-  JSGraph jsgraph_;
   RedundancyElimination reducer_;
+  SimplifiedOperatorBuilder simplified_;
 };
 
 namespace {

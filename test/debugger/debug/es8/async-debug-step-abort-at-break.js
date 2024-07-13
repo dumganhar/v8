@@ -33,10 +33,10 @@ function g() {
 
 async function f() {
   var a = 1;
-  debugger;          // B0 StepOver
+  debugger;          // B0 StepNext
   a +=
-       await         // B1 StepInto
-             g();    // B2 StepInto
+       await         // B1 StepIn
+             g();    // B2 StepIn
   return a;
 }
 
@@ -44,7 +44,7 @@ f();
 
 // Starting a new step action at an intermediate break point
 // means that we will abort the current async step.
-debugger;            // B3 StepOver
+debugger;            // B3 StepNext
 
 late_resolve(3);     // B4 Continue
 

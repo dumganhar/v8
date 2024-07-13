@@ -10,7 +10,6 @@
 #include "src/codegen/source-position-table.h"
 #include "src/flags/flags.h"  // For ENABLE_CONTROL_FLOW_INTEGRITY_BOOL
 #include "src/objects/code-inl.h"
-#include "src/snapshot/embedded/embedded-data-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -49,17 +48,17 @@ int WriteLineEndIfNeeded(PlatformEmbeddedFileWriterBase* w,
 
 void EmbeddedFileWriter::WriteBuiltin(PlatformEmbeddedFileWriterBase* w,
                                       const i::EmbeddedData* blob,
-                                      const Builtin builtin) const {
+                                      const int builtin_id) const {
   const bool is_default_variant =
       std::strcmp(embedded_variant_, kDefaultEmbeddedVariant) == 0;
 
-  base::EmbeddedVector<char, kTemporaryStringLength> builtin_symbol;
+  i::EmbeddedVector<char, kTemporaryStringLength> builtin_symbol;
   if (is_default_variant) {
     // Create nicer symbol names for the default mode.
-    base::SNPrintF(builtin_symbol, "Builtins_%s", i::Builtins::name(builtin));
+    i::SNPrintF(builtin_symbol, "Builtins_%s", i::Builtins::name(builtin_id));
   } else {
-    base::SNPrintF(builtin_symbol, "%s_Builtins_%s", embedded_variant_,
-                   i::Builtins::name(builtin));
+    i::SNPrintF(builtin_symbol, "%s_Builtins_%s", embedded_variant_,
+                i::Builtins::name(builtin_id));
   }
 
   // Labels created here will show up in backtraces. We check in
@@ -67,13 +66,11 @@ void EmbeddedFileWriter::WriteBuiltin(PlatformEmbeddedFileWriterBase* w,
   // that labels do not insert bytes into the middle of the blob byte
   // stream.
   w->DeclareFunctionBegin(builtin_symbol.begin(),
-                          blob->InstructionSizeOf(builtin));
-  const int builtin_id = static_cast<int>(builtin);
-  const std::vector<uint8_t>& current_positions = source_positions_[builtin_id];
+                          blob->InstructionSizeOfBuiltin(builtin_id));
+  const std::vector<byte>& current_positions = source_positions_[builtin_id];
   // The code below interleaves bytes of assembly code for the builtin
   // function with source positions at the appropriate offsets.
-  base::Vector<const uint8_t> vpos(current_positions.data(),
-                                   current_positions.size());
+  Vector<const byte> vpos(current_positions.data(), current_positions.size());
   v8::internal::SourcePositionTableIterator positions(
       vpos, SourcePositionTableIterator::kExternalOnly);
 
@@ -87,9 +84,9 @@ void EmbeddedFileWriter::WriteBuiltin(PlatformEmbeddedFileWriterBase* w,
   const std::vector<LabelInfo>& current_labels = label_info_[builtin_id];
   auto label = current_labels.begin();
 
-  const uint8_t* data =
-      reinterpret_cast<const uint8_t*>(blob->InstructionStartOf(builtin));
-  uint32_t size = blob->PaddedInstructionSizeOf(builtin);
+  const uint8_t* data = reinterpret_cast<const uint8_t*>(
+      blob->InstructionStartOfBuiltin(builtin_id));
+  uint32_t size = blob->PaddedInstructionSizeOfBuiltin(builtin_id);
   uint32_t i = 0;
   uint32_t next_source_pos_offset =
       static_cast<uint32_t>(positions.done() ? size : positions.code_offset());
@@ -157,31 +154,45 @@ void EmbeddedFileWriter::WriteCodeSection(PlatformEmbeddedFileWriterBase* w,
 #endif
 
   w->AlignToCodeAlignment();
-  w->DeclareSymbolGlobal(EmbeddedBlobCodeSymbol().c_str());
-  w->DeclareLabel(EmbeddedBlobCodeSymbol().c_str());
+  w->DeclareLabel(EmbeddedBlobCodeDataSymbol().c_str());
 
-  static_assert(Builtins::kAllBuiltinsAreIsolateIndependent);
-  // We will traversal builtins in embedded snapshot order instead of builtin id
-  // order.
-  for (ReorderedBuiltinIndex embedded_index = 0;
-       embedded_index < Builtins::kBuiltinCount; embedded_index++) {
-    // TODO(v8:13938): Update the static_cast later when we introduce reordering
-    // builtins. At current stage builtin id equals to i in the loop, if we
-    // introduce reordering builtin, we may have to map them in another method.
-    Builtin builtin = static_cast<Builtin>(embedded_index);
-    WriteBuiltin(w, blob, builtin);
+  STATIC_ASSERT(Builtins::kAllBuiltinsAreIsolateIndependent);
+  for (int i = 0; i < i::Builtins::builtin_count; i++) {
+    WriteBuiltin(w, blob, i);
   }
-  w->AlignToPageSizeIfNeeded();
   w->Newline();
 }
 
 void EmbeddedFileWriter::WriteFileEpilogue(PlatformEmbeddedFileWriterBase* w,
                                            const i::EmbeddedData* blob) const {
   {
-    base::EmbeddedVector<char, kTemporaryStringLength>
+    i::EmbeddedVector<char, kTemporaryStringLength> embedded_blob_code_symbol;
+    i::SNPrintF(embedded_blob_code_symbol, "v8_%s_embedded_blob_code_",
+                embedded_variant_);
+
+    w->Comment("Pointer to the beginning of the embedded blob code.");
+    w->SectionData();
+    w->AlignToDataAlignment();
+    w->DeclarePointerToSymbol(embedded_blob_code_symbol.begin(),
+                              EmbeddedBlobCodeDataSymbol().c_str());
+    w->Newline();
+
+    i::EmbeddedVector<char, kTemporaryStringLength> embedded_blob_data_symbol;
+    i::SNPrintF(embedded_blob_data_symbol, "v8_%s_embedded_blob_data_",
+                embedded_variant_);
+
+    w->Comment("Pointer to the beginning of the embedded blob data section.");
+    w->AlignToDataAlignment();
+    w->DeclarePointerToSymbol(embedded_blob_data_symbol.begin(),
+                              EmbeddedBlobDataDataSymbol().c_str());
+    w->Newline();
+  }
+
+  {
+    i::EmbeddedVector<char, kTemporaryStringLength>
         embedded_blob_code_size_symbol;
-    base::SNPrintF(embedded_blob_code_size_symbol,
-                   "v8_%s_embedded_blob_code_size_", embedded_variant_);
+    i::SNPrintF(embedded_blob_code_size_symbol,
+                "v8_%s_embedded_blob_code_size_", embedded_variant_);
 
     w->Comment("The size of the embedded blob code in bytes.");
     w->SectionRoData();
@@ -189,10 +200,10 @@ void EmbeddedFileWriter::WriteFileEpilogue(PlatformEmbeddedFileWriterBase* w,
     w->DeclareUint32(embedded_blob_code_size_symbol.begin(), blob->code_size());
     w->Newline();
 
-    base::EmbeddedVector<char, kTemporaryStringLength>
+    i::EmbeddedVector<char, kTemporaryStringLength>
         embedded_blob_data_size_symbol;
-    base::SNPrintF(embedded_blob_data_size_symbol,
-                   "v8_%s_embedded_blob_data_size_", embedded_variant_);
+    i::SNPrintF(embedded_blob_data_size_symbol,
+                "v8_%s_embedded_blob_data_size_", embedded_variant_);
 
     w->Comment("The size of the embedded blob data section in bytes.");
     w->DeclareUint32(embedded_blob_data_size_symbol.begin(), blob->data_size());
@@ -201,12 +212,12 @@ void EmbeddedFileWriter::WriteFileEpilogue(PlatformEmbeddedFileWriterBase* w,
 
 #if defined(V8_OS_WIN64)
   {
-    base::EmbeddedVector<char, kTemporaryStringLength> unwind_info_symbol;
-    base::SNPrintF(unwind_info_symbol, "%s_Builtins_UnwindInfo",
-                   embedded_variant_);
+    i::EmbeddedVector<char, kTemporaryStringLength> unwind_info_symbol;
+    i::SNPrintF(unwind_info_symbol, "%s_Builtins_UnwindInfo",
+                embedded_variant_);
 
     w->MaybeEmitUnwindData(unwind_info_symbol.begin(),
-                           EmbeddedBlobCodeSymbol().c_str(), blob,
+                           EmbeddedBlobCodeDataSymbol().c_str(), blob,
                            reinterpret_cast<const void*>(&unwind_infos_[0]));
   }
 #endif  // V8_OS_WIN64
@@ -272,22 +283,24 @@ int EmbeddedFileWriter::GetExternallyCompiledFilenameCount() const {
 }
 
 void EmbeddedFileWriter::PrepareBuiltinSourcePositionMap(Builtins* builtins) {
-  for (Builtin builtin = Builtins::kFirst; builtin <= Builtins::kLast;
-       ++builtin) {
+  for (int i = 0; i < Builtins::builtin_count; i++) {
     // Retrieve the SourcePositionTable and copy it.
-    Code code = builtins->code(builtin);
+    Code code = builtins->builtin(i);
+    // Verify that the code object is still the "real code" and not a
+    // trampoline (which wouldn't have source positions).
+    DCHECK(!code.is_off_heap_trampoline());
     ByteArray source_position_table = code.source_position_table();
     std::vector<unsigned char> data(source_position_table.GetDataStartAddress(),
                                     source_position_table.GetDataEndAddress());
-    source_positions_[static_cast<int>(builtin)] = data;
+    source_positions_[i] = data;
   }
 }
 
 void EmbeddedFileWriter::PrepareBuiltinLabelInfoMap(int create_offset,
                                                     int invoke_offset) {
-  label_info_[static_cast<int>(Builtin::kJSConstructStubGeneric)].push_back(
+  label_info_[Builtins::kJSConstructStubGeneric].push_back(
       {create_offset, "construct_stub_create_deopt_addr"});
-  label_info_[static_cast<int>(Builtin::kJSConstructStubGeneric)].push_back(
+  label_info_[Builtins::kJSConstructStubGeneric].push_back(
       {invoke_offset, "construct_stub_invoke_deopt_addr"});
 }
 

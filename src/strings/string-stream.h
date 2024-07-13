@@ -8,11 +8,10 @@
 #include <memory>
 
 #include "src/base/small-vector.h"
-#include "src/base/strings.h"
-#include "src/base/vector.h"
 #include "src/handles/handles.h"
 #include "src/objects/heap-object.h"
 #include "src/utils/allocation.h"
+#include "src/utils/vector.h"
 
 namespace v8 {
 namespace internal {
@@ -99,8 +98,7 @@ class StringStream final {
     FmtElm(const char* value) : FmtElm(C_STR) {  // NOLINT
       data_.u_c_str_ = value;
     }
-    FmtElm(const base::Vector<const base::uc16>& value)  // NOLINT
-        : FmtElm(LC_STR) {
+    FmtElm(const Vector<const uc16>& value) : FmtElm(LC_STR) {  // NOLINT
       data_.u_lc_str_ = &value;
     }
     FmtElm(Object value) : FmtElm(OBJ) {  // NOLINT
@@ -128,7 +126,7 @@ class StringStream final {
       int u_int_;
       double u_double_;
       const char* u_c_str_;
-      const base::Vector<const base::uc16>* u_lc_str_;
+      const Vector<const uc16>* u_lc_str_;
       Address u_obj_;
       Address* u_handle_;
       void* u_pointer_;
@@ -150,20 +148,18 @@ class StringStream final {
   bool Put(char c);
   bool Put(String str);
   bool Put(String str, int start, int end);
-  void Add(const char* format) { Add(base::CStrVector(format)); }
-  void Add(base::Vector<const char> format) {
-    Add(format, base::Vector<FmtElm>());
-  }
+  void Add(const char* format) { Add(CStrVector(format)); }
+  void Add(Vector<const char> format) { Add(format, Vector<FmtElm>()); }
 
   template <typename... Args>
   void Add(const char* format, Args... args) {
-    Add(base::CStrVector(format), args...);
+    Add(CStrVector(format), args...);
   }
 
   template <typename... Args>
-  void Add(base::Vector<const char> format, Args... args) {
+  void Add(Vector<const char> format, Args... args) {
     FmtElm elems[]{args...};
-    Add(format, base::ArrayVector(elems));
+    Add(format, ArrayVector(elems));
   }
 
   // Getting the message out.
@@ -181,7 +177,8 @@ class StringStream final {
   void PrintUsingMap(JSObject js_object);
   void PrintPrototype(JSFunction fun, Object receiver);
   void PrintSecurityTokenIfChanged(JSFunction function);
-  void PrintFunction(JSFunction function, Object receiver);
+  // NOTE: Returns the code in the output parameter.
+  void PrintFunction(JSFunction function, Object receiver, Code* code);
 
   // Reset the stream.
   void Reset() {
@@ -199,7 +196,7 @@ class StringStream final {
   static const int kInitialCapacity = 16;
 
  private:
-  void Add(base::Vector<const char> format, base::Vector<FmtElm> elms);
+  void Add(Vector<const char> format, Vector<FmtElm> elms);
   void PrintObject(Object obj);
 
   StringAllocator* allocator_;

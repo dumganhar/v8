@@ -7,6 +7,7 @@
 
 #include "src/base/compiler-specific.h"
 #include "src/common/globals.h"
+#include "src/compiler/access-builder.h"
 #include "src/compiler/escape-analysis.h"
 #include "src/compiler/graph-reducer.h"
 
@@ -82,7 +83,7 @@ class NodeHashCache {
 class V8_EXPORT_PRIVATE EscapeAnalysisReducer final
     : public NON_EXPORTED_BASE(AdvancedReducer) {
  public:
-  EscapeAnalysisReducer(Editor* editor, JSGraph* jsgraph, JSHeapBroker* broker,
+  EscapeAnalysisReducer(Editor* editor, JSGraph* jsgraph,
                         EscapeAnalysisResult analysis_result, Zone* zone);
   EscapeAnalysisReducer(const EscapeAnalysisReducer&) = delete;
   EscapeAnalysisReducer& operator=(const EscapeAnalysisReducer&) = delete;
@@ -107,7 +108,6 @@ class V8_EXPORT_PRIVATE EscapeAnalysisReducer final
   Zone* zone() const { return zone_; }
 
   JSGraph* const jsgraph_;
-  JSHeapBroker* const broker_;
   EscapeAnalysisResult analysis_result_;
   ZoneVector<Node*> object_id_cache_;
   NodeHashCache node_cache_;

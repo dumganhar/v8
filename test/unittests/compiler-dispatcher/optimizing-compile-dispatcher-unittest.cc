@@ -26,10 +26,11 @@ using OptimizingCompileDispatcherTest = TestWithNativeContext;
 
 namespace {
 
-class BlockingCompilationJob : public TurbofanCompilationJob {
+class BlockingCompilationJob : public OptimizedCompilationJob {
  public:
   BlockingCompilationJob(Isolate* isolate, Handle<JSFunction> function)
-      : TurbofanCompilationJob(&info_, State::kReadyToExecute),
+      : OptimizedCompilationJob(&info_, "BlockingCompilationJob",
+                                State::kReadyToExecute),
         shared_(function->shared(), isolate),
         zone_(isolate->allocator(), ZONE_NAME),
         info_(&zone_, isolate, shared_, function, CodeKind::TURBOFAN),

@@ -9,15 +9,14 @@
 
 namespace v8 {
 namespace internal {
-
-// The actual value of the kRootRegister is offset from the IsolateData's start
+// Actual value of root register is offset from the root array's start
 // to take advantage of negative displacement values.
-constexpr int kRootRegisterBias = 128;
+// For x86, this value is provided for uniformity with other platforms, although
+// currently no root register is present.
+constexpr int kRootRegisterBias = 0;
 
-// The maximum size of the code range s.t. pc-relative calls are possible
-// between all Code objects in the range.
+// TODO(sigurds): Change this value once we use relative jumps.
 constexpr size_t kMaxPCRelativeCodeRangeInMB = 0;
-
 }  // namespace internal
 }  // namespace v8
 

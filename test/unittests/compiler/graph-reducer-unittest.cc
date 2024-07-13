@@ -413,14 +413,14 @@ class GraphReducerTest : public TestWithZone {
  public:
   GraphReducerTest() : TestWithZone(kCompressGraphZone), graph_(zone()) {}
 
-  static void SetUpTestSuite() {
-    TestWithZone::SetUpTestSuite();
+  static void SetUpTestCase() {
+    TestWithZone::SetUpTestCase();
     DefaultValue<Reduction>::Set(Reducer::NoChange());
   }
 
-  static void TearDownTestSuite() {
+  static void TearDownTestCase() {
     DefaultValue<Reduction>::Clear();
-    TestWithZone::TearDownTestSuite();
+    TestWithZone::TearDownTestCase();
   }
 
  protected:
@@ -712,7 +712,7 @@ TEST_F(GraphReducerTest, Forwarding3) {
 
     A1Forwarder r;
 
-    for (size_t j = 0; j < 3; j++) {
+    for (size_t i = 0; i < 3; i++) {
       size_t before = graph()->NodeCount();
       ReduceGraph(&r);
       EXPECT_EQ(before, graph()->NodeCount());

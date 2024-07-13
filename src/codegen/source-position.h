@@ -5,7 +5,7 @@
 #ifndef V8_CODEGEN_SOURCE_POSITION_H_
 #define V8_CODEGEN_SOURCE_POSITION_H_
 
-#include <iosfwd>
+#include <ostream>
 
 #include "src/base/bit-field.h"
 #include "src/common/globals.h"
@@ -15,7 +15,7 @@
 namespace v8 {
 namespace internal {
 
-class InstructionStream;
+class Code;
 class OptimizedCompilationInfo;
 class Script;
 class SharedFunctionInfo;
@@ -44,8 +44,7 @@ struct SourcePositionInfo;
 // DeoptimizationData::InliningPositions, depending on the compilation stage.
 class SourcePosition final {
  public:
-  explicit SourcePosition(int script_offset = kNoSourcePosition,
-                          int inlining_id = kNotInlined)
+  explicit SourcePosition(int script_offset, int inlining_id = kNotInlined)
       : value_(0) {
     SetIsExternal(false);
     SetScriptOffset(script_offset);
@@ -58,8 +57,11 @@ class SourcePosition final {
     return SourcePosition(line, file_id, kNotInlined);
   }
 
-  static SourcePosition Unknown() { return SourcePosition(); }
-  bool IsKnown() const { return raw() != SourcePosition::Unknown().raw(); }
+  static SourcePosition Unknown() { return SourcePosition(kNoSourcePosition); }
+  bool IsKnown() const {
+    if (IsExternal()) return true;
+    return ScriptOffset() != kNoSourcePosition || InliningId() != kNotInlined;
+  }
   bool isInlined() const {
     if (IsExternal()) return false;
     return InliningId() != kNotInlined;
@@ -78,12 +80,10 @@ class SourcePosition final {
     return ExternalFileIdField::decode(value_);
   }
 
-  // Assumes that the code object is optimized.
-  std::vector<SourcePositionInfo> InliningStack(Isolate* isolate,
-                                                Code code) const;
+  // Assumes that the code object is optimized
+  std::vector<SourcePositionInfo> InliningStack(Handle<Code> code) const;
   std::vector<SourcePositionInfo> InliningStack(
-      Isolate* isolate, OptimizedCompilationInfo* cinfo) const;
-  SourcePositionInfo FirstInfo(Isolate* isolate, Code code) const;
+      OptimizedCompilationInfo* cinfo) const;
 
   void Print(std::ostream& out, Code code) const;
   void PrintJson(std::ostream& out) const;
@@ -121,7 +121,7 @@ class SourcePosition final {
   }
 
   static const int kNotInlined = -1;
-  static_assert(kNoSourcePosition == -1);
+  STATIC_ASSERT(kNoSourcePosition == -1);
 
   int64_t raw() const { return static_cast<int64_t>(value_); }
   static SourcePosition FromRaw(int64_t raw) {
@@ -175,16 +175,8 @@ struct InliningPosition {
   int inlined_function_id;
 };
 
-struct WasmInliningPosition {
-  // Non-canonicalized (module-specific) index of the inlined function.
-  int inlinee_func_index;
-  // Source location of the caller.
-  SourcePosition caller_pos;
-};
-
 struct SourcePositionInfo {
-  SourcePositionInfo(Isolate* isolate, SourcePosition pos,
-                     Handle<SharedFunctionInfo> f);
+  SourcePositionInfo(SourcePosition pos, Handle<SharedFunctionInfo> f);
 
   SourcePosition position;
   Handle<SharedFunctionInfo> shared;

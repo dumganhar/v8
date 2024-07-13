@@ -1,4 +1,4 @@
-# Copyright 2017 The Chromium Authors
+# Copyright 2017 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -13,10 +13,7 @@ import logging
 import os
 import sys
 import time
-try:
-  from urllib.parse import urlparse
-except ImportError:
-  from urlparse import urlparse
+import urlparse
 
 from pylib.constants import host_paths
 from pylib.utils import decorators
@@ -25,8 +22,9 @@ if host_paths.DEVIL_PATH not in sys.path:
   sys.path.append(host_paths.DEVIL_PATH)
 from devil.utils import cmd_helper
 
-_GSUTIL_PATH = os.path.join(host_paths.DIR_SOURCE_ROOT, 'third_party',
-                            'catapult', 'third_party', 'gsutil', 'gsutil')
+_GSUTIL_PATH = os.path.join(
+    host_paths.DIR_SOURCE_ROOT, 'third_party', 'catapult',
+    'third_party', 'gsutil', 'gsutil.py')
 _PUBLIC_URL = 'https://storage.googleapis.com/%s/'
 _AUTHENTICATED_URL = 'https://storage.cloud.google.com/%s/'
 
@@ -69,7 +67,7 @@ def upload(name, filepath, bucket, gs_args=None, command_args=None,
 def read_from_link(link):
   # Note that urlparse returns the path with an initial '/', so we only need to
   # add one more after the 'gs;'
-  gs_path = 'gs:/%s' % urlparse(link).path
+  gs_path = 'gs:/%s' % urlparse.urlparse(link).path
   cmd = [_GSUTIL_PATH, '-q', 'cat', gs_path]
   return cmd_helper.GetCmdOutput(cmd)
 

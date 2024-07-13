@@ -5,6 +5,8 @@
 #ifndef V8_TORQUE_TYPE_VISITOR_H_
 #define V8_TORQUE_TYPE_VISITOR_H_
 
+#include <string>
+
 #include "src/torque/ast.h"
 #include "src/torque/types.h"
 

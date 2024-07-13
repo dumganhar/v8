@@ -5,11 +5,11 @@
 #ifndef V8_OBJECTS_TEMPLATES_INL_H_
 #define V8_OBJECTS_TEMPLATES_INL_H_
 
-#include "src/heap/heap-write-barrier-inl.h"
-#include "src/objects/objects-inl.h"
-#include "src/objects/oddball.h"
-#include "src/objects/shared-function-info.h"
 #include "src/objects/templates.h"
+
+#include "src/heap/heap-write-barrier-inl.h"
+#include "src/objects/oddball.h"
+#include "src/objects/shared-function-info-inl.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -26,33 +26,40 @@ TQ_OBJECT_CONSTRUCTORS_IMPL(FunctionTemplateRareData)
 
 NEVER_READ_ONLY_SPACE_IMPL(TemplateInfo)
 
-BOOL_ACCESSORS(FunctionTemplateInfo, relaxed_flag, undetectable,
+BOOL_ACCESSORS(FunctionTemplateInfo, flag, undetectable,
                UndetectableBit::kShift)
-BOOL_ACCESSORS(FunctionTemplateInfo, relaxed_flag, needs_access_check,
+BOOL_ACCESSORS(FunctionTemplateInfo, flag, needs_access_check,
                NeedsAccessCheckBit::kShift)
-BOOL_ACCESSORS(FunctionTemplateInfo, relaxed_flag, read_only_prototype,
+BOOL_ACCESSORS(FunctionTemplateInfo, flag, read_only_prototype,
                ReadOnlyPrototypeBit::kShift)
-BOOL_ACCESSORS(FunctionTemplateInfo, relaxed_flag, remove_prototype,
+BOOL_ACCESSORS(FunctionTemplateInfo, flag, remove_prototype,
                RemovePrototypeBit::kShift)
-BOOL_ACCESSORS(FunctionTemplateInfo, relaxed_flag, accept_any_receiver,
+BOOL_ACCESSORS(FunctionTemplateInfo, flag, do_not_cache, DoNotCacheBit::kShift)
+BOOL_ACCESSORS(FunctionTemplateInfo, flag, accept_any_receiver,
                AcceptAnyReceiverBit::kShift)
-BOOL_ACCESSORS(FunctionTemplateInfo, relaxed_flag, published,
-               PublishedBit::kShift)
+BOOL_ACCESSORS(FunctionTemplateInfo, flag, published, PublishedBit::kShift)
 
-BIT_FIELD_ACCESSORS(
-    FunctionTemplateInfo, relaxed_flag,
-    allowed_receiver_instance_type_range_start,
-    FunctionTemplateInfo::AllowedReceiverInstanceTypeRangeStartBits)
-BIT_FIELD_ACCESSORS(
-    FunctionTemplateInfo, relaxed_flag,
-    allowed_receiver_instance_type_range_end,
-    FunctionTemplateInfo::AllowedReceiverInstanceTypeRangeEndBits)
+// TODO(nicohartmann@, v8:11122): Let Torque generate this accessor.
+RELEASE_ACQUIRE_ACCESSORS(FunctionTemplateInfo, call_code, HeapObject,
+                          kCallCodeOffset)
 
-int32_t FunctionTemplateInfo::relaxed_flag() const {
-  return flag(kRelaxedLoad);
+// TODO(nicohartmann@, v8:11122): Let Torque generate this accessor.
+HeapObject FunctionTemplateInfo::rare_data(AcquireLoadTag) const {
+  PtrComprCageBase cage_base = GetPtrComprCageBase(*this);
+  return rare_data(cage_base, kAcquireLoad);
 }
-void FunctionTemplateInfo::set_relaxed_flag(int32_t flags) {
-  return set_flag(flags, kRelaxedStore);
+HeapObject FunctionTemplateInfo::rare_data(PtrComprCageBase cage_base,
+                                           AcquireLoadTag) const {
+  HeapObject value =
+      TaggedField<HeapObject>::Acquire_Load(cage_base, *this, kRareDataOffset);
+  DCHECK(value.IsUndefined() || value.IsFunctionTemplateRareData());
+  return value;
+}
+void FunctionTemplateInfo::set_rare_data(HeapObject value, ReleaseStoreTag,
+                                         WriteBarrierMode mode) {
+  DCHECK(value.IsUndefined() || value.IsFunctionTemplateRareData());
+  RELEASE_WRITE_FIELD(*this, kRareDataOffset, value);
+  CONDITIONAL_WRITE_BARRIER(*this, kRareDataOffset, value, mode);
 }
 
 // static
@@ -93,39 +100,15 @@ RARE_ACCESSORS(instance_template, InstanceTemplate, HeapObject, undefined)
 RARE_ACCESSORS(instance_call_handler, InstanceCallHandler, HeapObject,
                undefined)
 RARE_ACCESSORS(access_check_info, AccessCheckInfo, HeapObject, undefined)
-RARE_ACCESSORS(c_function_overloads, CFunctionOverloads, FixedArray,
-               *GetReadOnlyRoots(cage_base).empty_fixed_array())
+RARE_ACCESSORS(c_function, CFunction, Object, Smi(0))
+RARE_ACCESSORS(c_signature, CSignature, Object, Smi(0))
 #undef RARE_ACCESSORS
-
-int FunctionTemplateInfo::InstanceType() const {
-  int type = instance_type();
-  DCHECK(type == kNoJSApiObjectType ||
-         (type >= Internals::kFirstJSApiObjectType &&
-          type <= Internals::kLastJSApiObjectType));
-  return type;
-}
-
-void FunctionTemplateInfo::SetInstanceType(int instance_type) {
-  if (instance_type == 0) {
-    set_instance_type(kNoJSApiObjectType);
-  } else {
-    DCHECK_GT(instance_type, 0);
-    DCHECK_LT(Internals::kFirstJSApiObjectType + instance_type,
-              Internals::kLastJSApiObjectType);
-    set_instance_type(Internals::kFirstJSApiObjectType + instance_type);
-  }
-}
-
-bool TemplateInfo::should_cache() const {
-  return serial_number() != kDoNotCache;
-}
-bool TemplateInfo::is_cached() const { return serial_number() > kUncached; }
 
 bool FunctionTemplateInfo::instantiated() {
   return shared_function_info().IsSharedFunctionInfo();
 }
 
-inline bool FunctionTemplateInfo::BreakAtEntry() {
+bool FunctionTemplateInfo::BreakAtEntry() {
   Object maybe_shared = shared_function_info();
   if (maybe_shared.IsSharedFunctionInfo()) {
     SharedFunctionInfo shared = SharedFunctionInfo::cast(maybe_shared);

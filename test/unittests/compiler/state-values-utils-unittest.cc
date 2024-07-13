@@ -3,8 +3,7 @@
 // found in the LICENSE file.
 
 #include "src/compiler/state-values-utils.h"
-
-#include "src/compiler/bytecode-liveness-map.h"
+#include "src/utils/bit-vector.h"
 #include "test/unittests/compiler/graph-unittest.h"
 #include "test/unittests/compiler/node-test-utils.h"
 #include "test/unittests/test-utils.h"
@@ -139,10 +138,10 @@ TEST_F(StateValuesIteratorTest, TreeFromVectorWithLiveness) {
       inputs.push_back(Int32Constant(i));
     }
     // Generate the input liveness.
-    BytecodeLivenessState liveness(count, zone());
+    BitVector liveness(count, zone());
     for (int i = 0; i < count; i++) {
       if (i % 3 == 0) {
-        liveness.MarkRegisterLive(i);
+        liveness.Add(i);
       }
     }
 
@@ -157,7 +156,7 @@ TEST_F(StateValuesIteratorTest, TreeFromVectorWithLiveness) {
     for (StateValuesAccess::iterator it =
              StateValuesAccess(values_node).begin();
          !it.done(); ++it) {
-      if (liveness.RegisterIsLive(i)) {
+      if (liveness.Contains(i)) {
         EXPECT_THAT(it.node(), IsInt32Constant(i));
       } else {
         EXPECT_EQ(it.node(), nullptr);
@@ -210,10 +209,10 @@ TEST_F(StateValuesIteratorTest, BuildTreeWithLivenessIdentical) {
       inputs.push_back(Int32Constant(i));
     }
     // Generate the input liveness.
-    BytecodeLivenessState liveness(count, zone());
+    BitVector liveness(count, zone());
     for (int i = 0; i < count; i++) {
       if (i % 3 == 0) {
-        liveness.MarkRegisterLive(i);
+        liveness.Add(i);
       }
     }
 

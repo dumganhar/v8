@@ -72,7 +72,6 @@ bool OperatorProperties::NeedsExactContext(const Operator* op) {
     case IrOpcode::kJSCreateCatchContext:
     case IrOpcode::kJSCreateWithContext:
     case IrOpcode::kJSDebugger:
-    case IrOpcode::kJSDefineKeyedOwnProperty:
     case IrOpcode::kJSDeleteProperty:
     case IrOpcode::kJSGeneratorStore:
     case IrOpcode::kJSGetImportMeta:
@@ -84,14 +83,13 @@ bool OperatorProperties::NeedsExactContext(const Operator* op) {
     case IrOpcode::kJSLoadNamedFromSuper:
     case IrOpcode::kJSLoadProperty:
     case IrOpcode::kJSStoreContext:
-    case IrOpcode::kJSDefineKeyedOwnPropertyInLiteral:
+    case IrOpcode::kJSStoreDataPropertyInLiteral:
     case IrOpcode::kJSStoreGlobal:
     case IrOpcode::kJSStoreInArrayLiteral:
     case IrOpcode::kJSStoreModule:
-    case IrOpcode::kJSSetNamedProperty:
-    case IrOpcode::kJSDefineNamedOwnProperty:
-    case IrOpcode::kJSSetKeyedProperty:
-    case IrOpcode::kJSFindNonDefaultConstructorOrConstruct:
+    case IrOpcode::kJSStoreNamed:
+    case IrOpcode::kJSStoreNamedOwn:
+    case IrOpcode::kJSStoreProperty:
       return true;
 
     case IrOpcode::kJSAsyncFunctionEnter:
@@ -126,8 +124,7 @@ bool OperatorProperties::NeedsExactContext(const Operator* op) {
       COMMON_OP_LIST(CASE)
       CONTROL_OP_LIST(CASE)
       MACHINE_OP_LIST(CASE)
-      MACHINE_SIMD128_OP_LIST(CASE)
-      MACHINE_SIMD256_OP_LIST(CASE)
+      MACHINE_SIMD_OP_LIST(CASE)
       SIMPLIFIED_OP_LIST(CASE)
       break;
 #undef CASE
@@ -201,21 +198,18 @@ bool OperatorProperties::HasFrameStateInput(const Operator* op) {
     case IrOpcode::kJSLoadNamed:
     case IrOpcode::kJSLoadNamedFromSuper:
     case IrOpcode::kJSLoadProperty:
-    case IrOpcode::kJSDefineKeyedOwnPropertyInLiteral:
+    case IrOpcode::kJSStoreDataPropertyInLiteral:
     case IrOpcode::kJSStoreInArrayLiteral:
     case IrOpcode::kJSStoreGlobal:
-    case IrOpcode::kJSSetNamedProperty:
-    case IrOpcode::kJSDefineNamedOwnProperty:
-    case IrOpcode::kJSSetKeyedProperty:
-    case IrOpcode::kJSDefineKeyedOwnProperty:
+    case IrOpcode::kJSStoreNamed:
+    case IrOpcode::kJSStoreNamedOwn:
+    case IrOpcode::kJSStoreProperty:
 
     // Conversions
     case IrOpcode::kJSToLength:
     case IrOpcode::kJSToName:
     case IrOpcode::kJSToNumber:
     case IrOpcode::kJSToNumberConvertBigInt:
-    case IrOpcode::kJSToBigInt:
-    case IrOpcode::kJSToBigIntConvertNumber:
     case IrOpcode::kJSToNumeric:
     case IrOpcode::kJSToObject:
     case IrOpcode::kJSToString:
@@ -243,7 +237,6 @@ bool OperatorProperties::HasFrameStateInput(const Operator* op) {
     case IrOpcode::kJSStackCheck:
     case IrOpcode::kJSDebugger:
     case IrOpcode::kJSGetSuperConstructor:
-    case IrOpcode::kJSFindNonDefaultConstructorOrConstruct:
     case IrOpcode::kJSBitwiseNot:
     case IrOpcode::kJSDecrement:
     case IrOpcode::kJSIncrement:

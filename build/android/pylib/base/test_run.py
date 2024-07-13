@@ -1,9 +1,9 @@
-# Copyright 2014 The Chromium Authors
+# Copyright 2014 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 
-class TestRun:
+class TestRun(object):
   """An execution of a particular test on a particular device.
 
   This is expected to handle all logic that is specific to the combination of
@@ -27,18 +27,13 @@ class TestRun:
   def SetUp(self):
     raise NotImplementedError
 
-  def RunTests(self, results, raw_logs_fh=None):
+  def RunTests(self, results):
     """Runs Tests and populates |results|.
 
     Args:
       results: An array that should be populated with
                |base_test_result.TestRunResults| objects.
-      raw_logs_fh: An optional file handle to write raw logs to.
     """
-    raise NotImplementedError
-
-  def GetTestsForListing(self):
-    """Returns a list of test names."""
     raise NotImplementedError
 
   def TearDown(self):

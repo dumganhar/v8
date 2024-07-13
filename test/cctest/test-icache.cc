@@ -56,10 +56,6 @@ static void FloodWithInc(Isolate* isolate, TestingAssemblerBuffer* buffer) {
   for (int i = 0; i < kNumInstr; ++i) {
     __ Addu(v0, v0, Operand(1));
   }
-#elif V8_TARGET_ARCH_LOONG64
-  for (int i = 0; i < kNumInstr; ++i) {
-    __ Add_w(a0, a0, Operand(1));
-  }
 #elif V8_TARGET_ARCH_PPC || V8_TARGET_ARCH_PPC64
   for (int i = 0; i < kNumInstr; ++i) {
     __ addi(r3, r3, Operand(1));
@@ -67,10 +63,6 @@ static void FloodWithInc(Isolate* isolate, TestingAssemblerBuffer* buffer) {
 #elif V8_TARGET_ARCH_S390
   for (int i = 0; i < kNumInstr; ++i) {
     __ agfi(r2, Operand(1));
-  }
-#elif V8_TARGET_ARCH_RISCV32
-  for (int i = 0; i < kNumInstr; ++i) {
-    __ Add32(a0, a0, Operand(1));
   }
 #elif V8_TARGET_ARCH_RISCV64
   for (int i = 0; i < kNumInstr; ++i) {
@@ -117,18 +109,19 @@ TEST(TestFlushICacheOfWritable) {
     // Allow calling the function from C++.
     auto f = GeneratedCode<F0>::FromBuffer(isolate, buffer->start());
 
-    {
-      AssemblerBufferWriteScope rw_buffer_scope(*buffer);
-      FloodWithInc(isolate, buffer.get());
-      FlushInstructionCache(buffer->start(), buffer->size());
-    }
+    CHECK(SetPermissions(GetPlatformPageAllocator(), buffer->start(),
+                         buffer->size(), v8::PageAllocator::kReadWrite));
+    FloodWithInc(isolate, buffer.get());
+    FlushInstructionCache(buffer->start(), buffer->size());
+    CHECK(SetPermissions(GetPlatformPageAllocator(), buffer->start(),
+                         buffer->size(), v8::PageAllocator::kReadExecute));
     CHECK_EQ(23 + kNumInstr, f.Call(23));  // Call into generated code.
-
-    {
-      AssemblerBufferWriteScope rw_buffer_scope(*buffer);
-      FloodWithNop(isolate, buffer.get());
-      FlushInstructionCache(buffer->start(), buffer->size());
-    }
+    CHECK(SetPermissions(GetPlatformPageAllocator(), buffer->start(),
+                         buffer->size(), v8::PageAllocator::kReadWrite));
+    FloodWithNop(isolate, buffer.get());
+    FlushInstructionCache(buffer->start(), buffer->size());
+    CHECK(SetPermissions(GetPlatformPageAllocator(), buffer->start(),
+                         buffer->size(), v8::PageAllocator::kReadExecute));
     CHECK_EQ(23, f.Call(23));  // Call into generated code.
   }
 }
@@ -189,24 +182,22 @@ TEST(TestFlushICacheOfWritableAndExecutable) {
 
   for (int i = 0; i < kNumIterations; ++i) {
     auto buffer = AllocateAssemblerBuffer(kBufferSize, nullptr,
-                                          JitPermission::kMapAsJittable);
+                                          VirtualMemory::kMapAsJittable);
 
     // Allow calling the function from C++.
     auto f = GeneratedCode<F0>::FromBuffer(isolate, buffer->start());
 
-    buffer->MakeWritableAndExecutable();
-
-    {
-      RwxMemoryWriteScopeForTesting rw_scope;
-      FloodWithInc(isolate, buffer.get());
-      FlushInstructionCache(buffer->start(), buffer->size());
-    }
+    CHECK(SetPermissions(GetPlatformPageAllocator(), buffer->start(),
+                         buffer->size(), v8::PageAllocator::kReadWriteExecute));
+    SwitchMemoryPermissionsToWritable();
+    FloodWithInc(isolate, buffer.get());
+    FlushInstructionCache(buffer->start(), buffer->size());
+    SwitchMemoryPermissionsToExecutable();
     CHECK_EQ(23 + kNumInstr, f.Call(23));  // Call into generated code.
-    {
-      RwxMemoryWriteScopeForTesting rw_scope;
-      FloodWithNop(isolate, buffer.get());
-      FlushInstructionCache(buffer->start(), buffer->size());
-    }
+    SwitchMemoryPermissionsToWritable();
+    FloodWithNop(isolate, buffer.get());
+    FlushInstructionCache(buffer->start(), buffer->size());
+    SwitchMemoryPermissionsToExecutable();
     CHECK_EQ(23, f.Call(23));  // Call into generated code.
   }
 }

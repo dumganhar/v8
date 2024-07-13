@@ -3,14 +3,14 @@
 // found in the LICENSE file.
 
 
-d8.file.execute("../base.js");
+load("../base.js");
 
 const iterations = 100;
 let code;
 
-d8.file.execute("comments.js");
-d8.file.execute("strings.js");
-d8.file.execute("arrowfunctions.js")
+load("comments.js");
+load("strings.js");
+load("arrowfunctions.js")
 
 var success = true;
 

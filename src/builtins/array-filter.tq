@@ -97,7 +97,7 @@ transitioning builtin ArrayFilterLoopContinuation(implicit context: Context)(
 
 transitioning macro FastArrayFilter(implicit context: Context)(
     fastO: FastJSArray, len: Smi, callbackfn: Callable, thisArg: JSAny,
-    output: FastJSArray): void labels
+    output: FastJSArray) labels
 Bailout(Number, Number) {
   let k: Smi = 0;
   let to: Smi = 0;
@@ -193,7 +193,7 @@ ArrayFilter(
     return ArrayFilterLoopContinuation(
         o, callbackfn, thisArg, output, o, k, len, to);
   } label TypeError deferred {
-    ThrowCalledNonCallable(arguments[0]);
+    ThrowTypeError(MessageTemplate::kCalledNonCallable, arguments[0]);
   }
 }
 }

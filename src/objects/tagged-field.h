@@ -6,19 +6,19 @@
 #define V8_OBJECTS_TAGGED_FIELD_H_
 
 #include "src/common/globals.h"
-#include "src/common/ptr-compr.h"
+
 #include "src/objects/objects.h"
 #include "src/objects/tagged-value.h"
 
-namespace v8::internal {
+namespace v8 {
+namespace internal {
 
 // This helper static class represents a tagged field of type T at offset
 // kFieldOffset inside some host HeapObject.
 // For full-pointer mode this type adds no overhead but when pointer
 // compression is enabled such class allows us to use proper decompression
 // function depending on the field type.
-template <typename T, int kFieldOffset = 0,
-          typename CompressionScheme = V8HeapCompressionScheme>
+template <typename T, int kFieldOffset = 0>
 class TaggedField : public AllStatic {
  public:
   static_assert(std::is_base_of<Object, T>::value ||
@@ -52,34 +52,14 @@ class TaggedField : public AllStatic {
   static inline void Relaxed_Store(HeapObject host, int offset, T value);
 
   static inline T Acquire_Load(HeapObject host, int offset = 0);
-  static inline T Acquire_Load_No_Unpack(PtrComprCageBase cage_base,
-                                         HeapObject host, int offset = 0);
   static inline T Acquire_Load(PtrComprCageBase cage_base, HeapObject host,
                                int offset = 0);
-
-  static inline T SeqCst_Load(HeapObject host, int offset = 0);
-  static inline T SeqCst_Load(PtrComprCageBase cage_base, HeapObject host,
-                              int offset = 0);
 
   static inline void Release_Store(HeapObject host, T value);
   static inline void Release_Store(HeapObject host, int offset, T value);
 
-  static inline void SeqCst_Store(HeapObject host, T value);
-  static inline void SeqCst_Store(HeapObject host, int offset, T value);
-
-  static inline T SeqCst_Swap(HeapObject host, int offset, T value);
-  static inline T SeqCst_Swap(PtrComprCageBase cage_base, HeapObject host,
-                              int offset, T value);
-
   static inline Tagged_t Release_CompareAndSwap(HeapObject host, T old,
                                                 T value);
-
-  // Note: Use these *_Map_Word methods only when loading a MapWord from a
-  // MapField.
-  static inline T Relaxed_Load_Map_Word(PtrComprCageBase cage_base,
-                                        HeapObject host);
-  static inline void Relaxed_Store_Map_Word(HeapObject host, T value);
-  static inline void Release_Store_Map_Word(HeapObject host, T value);
 
  private:
   static inline Tagged_t* location(HeapObject host, int offset = 0);
@@ -91,6 +71,7 @@ class TaggedField : public AllStatic {
   static inline Tagged_t full_to_tagged(Address value);
 };
 
-}  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_OBJECTS_TAGGED_FIELD_H_

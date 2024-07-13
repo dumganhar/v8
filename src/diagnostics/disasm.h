@@ -5,9 +5,11 @@
 #ifndef V8_DIAGNOSTICS_DISASM_H_
 #define V8_DIAGNOSTICS_DISASM_H_
 
-#include "src/base/vector.h"
+#include "src/utils/vector.h"
 
 namespace disasm {
+
+using byte = unsigned char;
 
 // Interface and default implementation for converting addresses and
 // register-numbers to text.  The default implementation is machine
@@ -18,9 +20,9 @@ class V8_EXPORT_PRIVATE NameConverter {
   virtual const char* NameOfCPURegister(int reg) const;
   virtual const char* NameOfByteCPURegister(int reg) const;
   virtual const char* NameOfXMMRegister(int reg) const;
-  virtual const char* NameOfAddress(uint8_t* addr) const;
-  virtual const char* NameOfConstant(uint8_t* addr) const;
-  virtual const char* NameInCode(uint8_t* addr) const;
+  virtual const char* NameOfAddress(byte* addr) const;
+  virtual const char* NameOfConstant(byte* addr) const;
+  virtual const char* NameInCode(byte* addr) const;
 
   // Given a root-register-relative offset, returns either a name or nullptr if
   // none is found.
@@ -29,7 +31,7 @@ class V8_EXPORT_PRIVATE NameConverter {
   virtual const char* RootRelativeName(int offset) const { UNREACHABLE(); }
 
  protected:
-  v8::base::EmbeddedVector<char, 128> tmp_buffer_;
+  v8::internal::EmbeddedVector<char, 128> tmp_buffer_;
 };
 
 // A generic Disassembler interface
@@ -53,17 +55,17 @@ class Disassembler {
 
   // Writes one disassembled instruction into 'buffer' (0-terminated).
   // Returns the length of the disassembled machine instruction in bytes.
-  V8_EXPORT_PRIVATE int InstructionDecode(v8::base::Vector<char> buffer,
-                                          uint8_t* instruction);
+  V8_EXPORT_PRIVATE int InstructionDecode(v8::internal::Vector<char> buffer,
+                                          byte* instruction);
 
   // Returns -1 if instruction does not mark the beginning of a constant pool,
   // or the number of entries in the constant pool beginning here.
-  int ConstantPoolSizeAt(uint8_t* instruction);
+  int ConstantPoolSizeAt(byte* instruction);
 
   // Write disassembly into specified file 'f' using specified NameConverter
   // (see constructor).
   V8_EXPORT_PRIVATE static void Disassemble(
-      FILE* f, uint8_t* begin, uint8_t* end,
+      FILE* f, byte* begin, byte* end,
       UnimplementedOpcodeAction unimplemented_action =
           kAbortOnUnimplementedOpcode);
 

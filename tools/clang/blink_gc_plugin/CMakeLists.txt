@@ -7,7 +7,6 @@ set(plugin_sources
   CheckDispatchVisitor.cpp
   CheckFieldsVisitor.cpp
   CheckFinalizerVisitor.cpp
-  CheckForbiddenFieldsVisitor.cpp
   CheckGCRootsVisitor.cpp
   CheckTraceVisitor.cpp
   CollectVisitor.cpp
@@ -32,6 +31,6 @@ endforeach()
 set_property(TARGET clang APPEND PROPERTY SOURCES ${absolute_sources})
 
 cr_add_test(blink_gc_plugin_test
-  python3 tests/test.py
+  python tests/test.py
   ${CMAKE_BINARY_DIR}/bin/clang
   )

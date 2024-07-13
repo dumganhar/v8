@@ -50,7 +50,7 @@ class V8_EXPORT_PRIVATE Node final {
 
   const Operator* op() const { return op_; }
 
-  constexpr IrOpcode::Value opcode() const {
+  IrOpcode::Value opcode() const {
     DCHECK_GE(IrOpcode::kLast, op_->opcode());
     return static_cast<IrOpcode::Value>(op_->opcode());
   }
@@ -98,7 +98,6 @@ class V8_EXPORT_PRIVATE Node final {
   void EnsureInputCount(Zone* zone, int new_input_count);
 
   int UseCount() const;
-  int BranchUseCount() const;
   void ReplaceUses(Node* replace_to);
 
   class InputEdges;
@@ -694,13 +693,6 @@ Node::Uses::const_iterator Node::Uses::begin() const {
 
 
 Node::Uses::const_iterator Node::Uses::end() const { return const_iterator(); }
-
-inline Node::Uses::const_iterator begin(const Node::Uses& uses) {
-  return uses.begin();
-}
-inline Node::Uses::const_iterator end(const Node::Uses& uses) {
-  return uses.end();
-}
 
 }  // namespace compiler
 }  // namespace internal

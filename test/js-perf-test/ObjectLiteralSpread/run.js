@@ -37,11 +37,6 @@ function BabelAndOverwrite() {
   if (Object.keys(result).length != 5) throw 666;
 }
 
-function BabelAndExtend() {
-  const result = _extends({}, input, {x: 6, y: 7});
-  if (Object.keys(result).length != 7) throw 666;
-}
-
 // ----------------------------------------------------------------------------
 // Benchmark: Object.assign
 // ----------------------------------------------------------------------------
@@ -55,11 +50,6 @@ function ObjectAssign() {
 function ObjectAssignAndOverwrite() {
   const result = Object.assign({}, input, {a : 6});
   if (Object.keys(result).length != 5) throw 666;
-}
-
-function ObjectAssignAndExtend() {
-  const result = Object.assign({}, input, {x: 6, y: 7});
-  if (Object.keys(result).length != 7) throw 666;
 }
 
 
@@ -78,16 +68,11 @@ function ObjectSpreadAndOverwrite() {
   if (Object.keys(result).length != 5) throw 666;
 }
 
-function ObjectSpreadAndExtend() {
-  const result = { ...input, x: 6, y: 7 };
-  if (Object.keys(result).length != 7) throw 666;
-}
-
 // ----------------------------------------------------------------------------
 // Setup and Run
 // ----------------------------------------------------------------------------
 
-d8.file.execute('../base.js');
+load('../base.js');
 
 var success = true;
 
@@ -106,13 +91,10 @@ function CreateBenchmark(name, f) {
 
 CreateBenchmark('Babel', Babel);
 CreateBenchmark('BabelAndOverwrite', BabelAndOverwrite);
-CreateBenchmark('BabelAndExtend', BabelAndExtend);
 CreateBenchmark('ObjectAssign', ObjectAssign);
 CreateBenchmark('ObjectAssignAndOverwrite', ObjectAssignAndOverwrite);
-CreateBenchmark('ObjectAssignAndExtend', ObjectAssignAndExtend);
 CreateBenchmark('ObjectSpread', ObjectSpread);
 CreateBenchmark('ObjectSpreadAndOverwrite', ObjectSpreadAndOverwrite);
-CreateBenchmark('ObjectSpreadAndExtend', ObjectSpreadAndExtend);
 
 BenchmarkSuite.config.doWarmup = undefined;
 BenchmarkSuite.config.doDeterministic = undefined;

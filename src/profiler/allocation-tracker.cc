@@ -5,7 +5,7 @@
 #include "src/profiler/allocation-tracker.h"
 
 #include "src/execution/frames-inl.h"
-#include "src/handles/global-handles-inl.h"
+#include "src/handles/global-handles.h"
 #include "src/objects/objects-inl.h"
 #include "src/profiler/heap-snapshot-generator-inl.h"
 
@@ -76,14 +76,15 @@ AllocationTraceTree::AllocationTraceTree()
 }
 
 AllocationTraceNode* AllocationTraceTree::AddPathFromEnd(
-    base::Vector<const unsigned> path) {
+    const Vector<unsigned>& path) {
   AllocationTraceNode* node = root();
-  for (const unsigned* entry = path.begin() + path.length() - 1;
+  for (unsigned* entry = path.begin() + path.length() - 1;
        entry != path.begin() - 1; --entry) {
     node = node->FindOrAddChild(*entry);
   }
   return node;
 }
+
 
 void AllocationTraceTree::Print(AllocationTracker* tracker) {
   base::OS::Print("[AllocationTraceTree:]\n");
@@ -204,17 +205,16 @@ void AllocationTracker::AllocationEvent(Address addr, int size) {
 
   // Mark the new block as FreeSpace to make sure the heap is iterable
   // while we are capturing stack trace.
-  heap->CreateFillerObjectAt(addr, size);
+  heap->CreateFillerObjectAt(addr, size, ClearRecordedSlots::kNo);
 
   Isolate* isolate = Isolate::FromHeap(heap);
   int length = 0;
-  JavaScriptStackFrameIterator it(isolate);
+  JavaScriptFrameIterator it(isolate);
   while (!it.done() && length < kMaxAllocationTraceLength) {
     JavaScriptFrame* frame = it.frame();
     SharedFunctionInfo shared = frame->function().shared();
     SnapshotObjectId id =
-        ids_->FindOrAddEntry(shared.address(), shared.Size(),
-                             HeapObjectsMap::MarkEntryAccessed::kNo);
+        ids_->FindOrAddEntry(shared.address(), shared.Size(), false);
     allocation_trace_buffer_[length++] = AddFunctionInfo(shared, id);
     it.Advance();
   }
@@ -225,7 +225,7 @@ void AllocationTracker::AllocationEvent(Address addr, int size) {
     }
   }
   AllocationTraceNode* top_node = trace_tree_.AddPathFromEnd(
-      base::Vector<unsigned>(allocation_trace_buffer_, length));
+      Vector<unsigned>(allocation_trace_buffer_, length));
   top_node->AddAllocation(size);
 
   address_to_trace_.AddRange(addr, size, top_node->id());
@@ -293,10 +293,8 @@ AllocationTracker::UnresolvedLocation::~UnresolvedLocation() {
 void AllocationTracker::UnresolvedLocation::Resolve() {
   if (script_.is_null()) return;
   HandleScope scope(script_->GetIsolate());
-  Script::PositionInfo pos_info;
-  Script::GetPositionInfo(script_, start_position_, &pos_info);
-  info_->line = pos_info.line;
-  info_->column = pos_info.column;
+  info_->line = Script::GetLineNumber(script_, start_position_);
+  info_->column = Script::GetColumnNumber(script_, start_position_);
 }
 
 void AllocationTracker::UnresolvedLocation::HandleWeakScript(

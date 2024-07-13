@@ -15,9 +15,9 @@ function listener(event, exec_state, event_data, data) {
     if (/step out/.test(source)) {
       exec_state.prepareStep(Debug.StepAction.StepOut);
     } else if (/step in/.test(source)) {
-      exec_state.prepareStep(Debug.StepAction.StepInto);
+      exec_state.prepareStep(Debug.StepAction.StepIn);
     } else {
-      exec_state.prepareStep(Debug.StepAction.StepOver);
+      exec_state.prepareStep(Debug.StepAction.StepNext);
     }
   } catch (e) {
     print(e, e.stack);

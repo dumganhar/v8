@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-d8.file.execute('../base.js');
+load('../base.js');
 
-d8.file.execute('loadconstantfromprototype.js');
+load('loadconstantfromprototype.js');
 
 function PrintResult(name, result) {
   print(name + '-IC(Score): ' + result);

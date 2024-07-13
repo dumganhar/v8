@@ -4,8 +4,8 @@
 
 "use strict";
 
-d8.file.execute('../base.js');
-d8.file.execute(arguments[0] + '.js');
+load('../base.js');
+load(arguments[0] + '.js');
 
 var success = true;
 

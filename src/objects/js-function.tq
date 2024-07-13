@@ -3,11 +3,12 @@
 // found in the LICENSE file.
 
 @abstract
-extern class JSFunctionOrBoundFunctionOrWrappedFunction extends JSObject {
+@generateCppClass
+extern class JSFunctionOrBoundFunction extends JSObject {
 }
 
-extern class JSBoundFunction extends
-    JSFunctionOrBoundFunctionOrWrappedFunction {
+@generateCppClass
+extern class JSBoundFunction extends JSFunctionOrBoundFunction {
   // The wrapped function object.
   bound_target_function: Callable;
   // The value that is always passed as the this value when calling the wrapped
@@ -18,32 +19,15 @@ extern class JSBoundFunction extends
   bound_arguments: FixedArray;
 }
 
-extern class JSWrappedFunction extends
-    JSFunctionOrBoundFunctionOrWrappedFunction {
-  // The wrapped function object.
-  wrapped_target_function: Callable;
-  // The creation context.
-  context: NativeContext;
-}
-
-// This class does not use the generated verifier, so if you change anything
-// here, please also update JSFunctionVerify in objects-debug.cc.
 @highestInstanceTypeWithinParentClassRange
-extern class JSFunction extends JSFunctionOrBoundFunctionOrWrappedFunction {
+extern class JSFunction extends JSFunctionOrBoundFunction {
   shared_function_info: SharedFunctionInfo;
   context: Context;
   feedback_cell: FeedbackCell;
-  code: Code;
-  // Space for the following field may or may not be allocated.
-  prototype_or_initial_map: JSReceiver|Map;
-}
+  weak code: Code;
 
-// Class constructors are special, because they are callable, but [[Call]] will
-// raise an exception.
-// See ES6 section 9.2.1 [[Call]] ( thisArgument, argumentsList ).
-@doNotGenerateCast
-@highestInstanceTypeWithinParentClassRange
-extern class JSClassConstructor extends JSFunction
-    generates 'TNode<JSFunction>';
+  // Space for the following field may or may not be allocated.
+  @noVerifier weak prototype_or_initial_map: JSReceiver|Map;
+}
 
 type JSFunctionWithPrototypeSlot extends JSFunction;

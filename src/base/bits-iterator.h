@@ -16,7 +16,7 @@ namespace bits {
 
 template <typename T, bool kMSBFirst = false>
 class BitsIterator : public iterator<std::forward_iterator_tag, int> {
-  static_assert(std::is_integral<T>::value);
+  STATIC_ASSERT(std::is_integral<T>::value);
 
  public:
   explicit BitsIterator(T bits) : bits_(bits) {}

@@ -37,12 +37,12 @@
   'fail/modules-skip*': [SKIP],
 }],  # ALWAYS
 
-# Skip Liftoff tests on platforms that don't support Liftoff.
-['arch != x64 and arch != ia32 and arch != arm64 and arch != arm and arch != s390x', {
+# Liftoff is currently only sufficiently implemented on x64, ia32, arm, arm64.
+# TODO(clemensb): Implement on all other platforms (crbug.com/v8/6600).
+['arch != x64 and arch != ia32 and arch != arm64 and arch != arm', {
   'wasm-trace-memory-liftoff': [SKIP],
-  'wasm-trace-memory64-liftoff': [SKIP],
   'wasm-trace-liftoff': [SKIP],
-}], # arch != x64 and arch != ia32 and arch != arm64 and arch != arm and arch != s390x
+}], # arch != x64 and arch != ia32 and arch != arm64 and arch != arm
 
 ['variant == code_serializer', {
   # Code serializer output is incompatible with all message tests
@@ -50,18 +50,9 @@
   '*': [SKIP],
 }],  # variant == code_serializer
 
-['not i18n', {
+['no_i18n == True', {
   'fail/list-format*': [SKIP],
-  # Needs the StringPrototypeToLowerCaseIntl builtin.
-  'wasm-recognize-imports': [SKIP],
-}],  # not i18n
-
-################################################################################
-['mode == release', {
-  # Slow tests in release mode.
-  'fail/map-grow-failed': [PASS, SLOW],
-  'fail/set-grow-failed': [PASS, SLOW],
-}],
+}],  # no_i18n == True
 
 ##############################################################################
 # TODO(v8:7777): Change this once wasm is supported in jitless mode.
@@ -79,44 +70,13 @@
 }],
 
 ################################################################################
-['arch == mips64el or arch == riscv64 or arch == loong64', {
+['arch == mips64el or arch == mipsel', {
   # Tests that require Simd enabled.
   'wasm-trace-memory': [SKIP],
-  'wasm-trace-memory64': [SKIP],
-}], # arch == mips64el or arch == riscv64 or arch == loong64
+}], # arch == mips64el or arch == mipsel
 
-##############################################################################
-['no_simd_hardware == True', {
+['arch == riscv64', {
+  # Tests that require Simd enabled.
   'wasm-trace-memory': [SKIP],
-  'wasm-trace-memory-liftoff': [SKIP],
-  'wasm-trace-memory64': [SKIP],
-  'wasm-trace-memory64-liftoff': [SKIP],
-}],  # no_simd_hardware == True
-
-################################################################################
-['third_party_heap', {
-  # Performs GC
-  'weakref-finalizationregistry-error': [SKIP],
-}], # third_party_heap
-
-##############################################################################
-['not (arch == x64 and mode == release)', {
-  # Only run these known slow tests on bots that we think to be reasonably
-  # fast.
-  'fail/map-grow-failed': [SKIP],
-  'fail/set-grow-failed': [SKIP],
-}],  # not (arch == x64 and mode == release)
-
-##############################################################################
-['arch == riscv32', {
-  'wasm-trace-turbofan':[SKIP],
-}],  # (arch == riscv32)
-
-##############################################################################
-# 32-bit platforms
-['arch in (ia32, arm, riscv32)', {
-  # Needs >4GB of available contiguous memory.
-  'wasm-trace-memory64': [SKIP],
-  'wasm-trace-memory64-liftoff': [SKIP],
-}],  # 'arch in (ia32, arm, riscv32)'
+}],
 ]

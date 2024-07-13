@@ -66,6 +66,7 @@ int AlignedSlotAllocator::Allocate(int n) {
     }
     default:
       UNREACHABLE();
+      break;
   }
   DCHECK(IsValid(result));
   size_ = std::max(size_, result + n);

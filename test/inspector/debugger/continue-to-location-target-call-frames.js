@@ -4,8 +4,7 @@
 
 let {session, contextGroup, Protocol} = InspectorTest.start('Check that continue-to-location works with different strategies.');
 
-contextGroup.addInlineScript(
-    `
+contextGroup.addScript(`
 async function asyncFact(n) {
   if (n == 0) return 1;
   let r = n * await asyncFact(n - 1);
@@ -21,18 +20,15 @@ function fact(n) {
 }
 
 function topLevel() {
-  eval(` +
-        '`' +
-        `
+  eval(` + '`' + `
   var a = 1;
   var b = 2;
   fact(3);
   console.log(a + b);
-  ` +
-        '`' +
-        `);
-}`,
-    'test.js');
+  ` + '`' + `);
+}
+
+//# sourceURL=test.js`, 7, 26);
 
 session.setupScriptMap();
 InspectorTest.runAsyncTestSuite([

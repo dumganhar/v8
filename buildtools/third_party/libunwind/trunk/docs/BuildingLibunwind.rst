@@ -32,7 +32,7 @@ The basic steps needed to build libc++ are:
    * ``cd where you want to build llvm``
    * ``mkdir build``
    * ``cd build``
-   * ``cmake -G <generator> -DLLVM_ENABLE_RUNTIMES=libunwind [options] <llvm-monorepo>/runtimes``
+   * ``cmake -G <generator> -DLLVM_ENABLE_PROJECTS=libunwind [options] <path to llvm sources>``
 
    For more information about configuring libunwind see :ref:`CMake Options`.
 
@@ -94,6 +94,12 @@ CMake docs or execute ``cmake --help-variable VARIABLE_NAME``.
 libunwind specific options
 --------------------------
 
+.. option:: LIBUNWIND_BUILD_32_BITS:BOOL
+
+  **Default**: Same as LLVM_BUILD_32_BITS
+
+  Toggle whether libunwind should be built with -m32.
+
 .. option:: LIBUNWIND_ENABLE_ASSERTIONS:BOOL
 
   **Default**: ``ON``
@@ -142,9 +148,14 @@ libunwind specific options
 
   Build libunwind with threading support.
 
-.. option:: LIBUNWIND_INSTALL_LIBRARY_DIR:PATH
+.. option:: LIBUNWIND_TARGET_TRIPLE:STRING
 
-  **Default**: ``lib${LIBUNWIND_LIBDIR_SUFFIX}``
+  Target triple for cross compiling
 
-  Path where built libunwind libraries should be installed. If a relative path,
-  relative to ``CMAKE_INSTALL_PREFIX``.
+.. option:: LIBUNWIND_GCC_TOOLCHAIN:PATH
+
+  GCC toolchain for cross compiling
+
+.. option:: LIBUNWIND_SYSROOT
+
+  Sysroot for cross compiling

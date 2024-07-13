@@ -7,15 +7,13 @@
 
 // TODO(v8:11421): Remove #if once baseline compiler is ported to other
 // architectures.
-#include "src/flags/flags.h"
-#if ENABLE_SPARKPLUG
+#if V8_TARGET_ARCH_IA32 || V8_TARGET_ARCH_X64 || V8_TARGET_ARCH_ARM64 || \
+    V8_TARGET_ARCH_ARM
 
 #include "src/base/logging.h"
-#include "src/base/pointer-with-payload.h"
 #include "src/base/threaded-list.h"
 #include "src/base/vlq.h"
 #include "src/baseline/baseline-assembler.h"
-#include "src/execution/local-isolate.h"
 #include "src/handles/handles.h"
 #include "src/interpreter/bytecode-array-iterator.h"
 #include "src/interpreter/bytecode-register.h"
@@ -41,25 +39,22 @@ class BytecodeOffsetTableBuilder {
     previous_pc_ = pc_offset;
   }
 
-  template <typename IsolateT>
-  Handle<ByteArray> ToBytecodeOffsetTable(IsolateT* isolate);
-
-  void Reserve(size_t size) { bytes_.reserve(size); }
+  template <typename LocalIsolate>
+  Handle<ByteArray> ToBytecodeOffsetTable(LocalIsolate* isolate);
 
  private:
   size_t previous_pc_ = 0;
-  std::vector<uint8_t> bytes_;
+  std::vector<byte> bytes_;
 };
 
 class BaselineCompiler {
  public:
-  explicit BaselineCompiler(LocalIsolate* local_isolate,
+  explicit BaselineCompiler(Isolate* isolate,
                             Handle<SharedFunctionInfo> shared_function_info,
                             Handle<BytecodeArray> bytecode);
 
   void GenerateCode();
-  MaybeHandle<Code> Build(LocalIsolate* local_isolate);
-  static int EstimateInstructionSize(BytecodeArray bytecode);
+  MaybeHandle<Code> Build(Isolate* isolate);
 
  private:
   void Prologue();
@@ -89,28 +84,22 @@ class BaselineCompiler {
   uint32_t Uint(int operand_index);
   int32_t Int(int operand_index);
   uint32_t Index(int operand_index);
-  uint32_t Flag8(int operand_index);
-  uint32_t Flag16(int operand_index);
+  uint32_t Flag(int operand_index);
   uint32_t RegisterCount(int operand_index);
   TaggedIndex IndexAsTagged(int operand_index);
   TaggedIndex UintAsTagged(int operand_index);
   Smi IndexAsSmi(int operand_index);
   Smi IntAsSmi(int operand_index);
-  Smi Flag8AsSmi(int operand_index);
-  Smi Flag16AsSmi(int operand_index);
+  Smi FlagAsSmi(int operand_index);
 
   // Jump helpers.
   Label* NewLabel();
   Label* BuildForwardJumpLabel();
-  enum StackCheckBehavior {
-    kEnableStackCheck,
-    kDisableStackCheck,
-  };
-  void UpdateInterruptBudgetAndJumpToLabel(
-      int weight, Label* label, Label* skip_interrupt_label,
-      StackCheckBehavior stack_check_behavior);
-  void JumpIfRoot(RootIndex root);
-  void JumpIfNotRoot(RootIndex root);
+  void UpdateInterruptBudgetAndJumpToLabel(int weight, Label* label,
+                                           Label* skip_interrupt_label);
+  void UpdateInterruptBudgetAndDoInterpreterJump();
+  void UpdateInterruptBudgetAndDoInterpreterJumpIfRoot(RootIndex root);
+  void UpdateInterruptBudgetAndDoInterpreterJumpIfNotRoot(RootIndex root);
 
   // Feedback vector.
   MemOperand FeedbackVector();
@@ -132,21 +121,31 @@ class BaselineCompiler {
   void SelectBooleanConstant(
       Register output, std::function<void(Label*, Label::Distance)> jump_func);
 
-  // Jumps based on calling ToBoolean on kInterpreterAccumulatorRegister.
-  void JumpIfToBoolean(bool do_jump_if_true, Label* label,
+  // Returns ToBoolean result into kInterpreterAccumulatorRegister.
+  void JumpIfToBoolean(bool do_jump_if_true, Register reg, Label* label,
                        Label::Distance distance = Label::kFar);
 
   // Call helpers.
-  template <Builtin kBuiltin, typename... Args>
-  void CallBuiltin(Args... args);
+  template <typename... Args>
+  void CallBuiltin(Builtins::Name builtin, Args... args);
   template <typename... Args>
   void CallRuntime(Runtime::FunctionId function, Args... args);
 
-  template <Builtin kBuiltin, typename... Args>
-  void TailCallBuiltin(Args... args);
+  template <typename... Args>
+  void TailCallBuiltin(Builtins::Name builtin, Args... args);
 
-  template <ConvertReceiverMode kMode, typename... Args>
-  void BuildCall(uint32_t slot, uint32_t arg_count, Args... args);
+  void BuildBinop(
+      Builtins::Name builtin_name, bool fast_path = false,
+      bool check_overflow = false,
+      std::function<void(Register, Register)> instruction = [](Register,
+                                                               Register) {});
+  void BuildUnop(Builtins::Name builtin_name);
+  void BuildCompare(Builtins::Name builtin_name);
+  void BuildBinopWithConstant(Builtins::Name builtin_name);
+
+  template <typename... Args>
+  void BuildCall(ConvertReceiverMode mode, uint32_t slot, uint32_t arg_count,
+                 Args... args);
 
 #ifdef V8_TRACE_UNOPTIMIZED
   void TraceBytecode(Runtime::FunctionId function_id);
@@ -165,10 +164,9 @@ class BaselineCompiler {
 
   const interpreter::BytecodeArrayIterator& iterator() { return iterator_; }
 
-  LocalIsolate* local_isolate_;
+  Isolate* isolate_;
   RuntimeCallStats* stats_;
   Handle<SharedFunctionInfo> shared_function_info_;
-  Handle<HeapObject> interpreter_data_;
   Handle<BytecodeArray> bytecode_;
   MacroAssembler masm_;
   BaselineAssembler basm_;
@@ -178,33 +176,31 @@ class BaselineCompiler {
 
   int max_call_args_ = 0;
 
-  // Mark location as a jump target reachable via indirect branches, required
-  // for CFI.
-  enum class MarkAsIndirectJumpTarget { kNo, kYes };
-
-  struct BaselineLabelPointer : base::PointerWithPayload<Label, bool, 1> {
-    void MarkAsIndirectJumpTarget() { SetPayload(true); }
-    bool IsIndirectJumpTarget() const { return GetPayload(); }
+  struct ThreadedLabel {
+    Label label;
+    ThreadedLabel* ptr;
+    ThreadedLabel** next() { return &ptr; }
   };
 
-  Label* EnsureLabel(
-      int i, MarkAsIndirectJumpTarget mark = MarkAsIndirectJumpTarget::kNo) {
-    if (labels_[i].GetPointer() == nullptr) {
-      labels_[i].SetPointer(zone_.New<Label>());
+  struct BaselineLabels {
+    base::ThreadedList<ThreadedLabel> linked;
+    Label unlinked;
+  };
+
+  BaselineLabels* EnsureLabels(int i) {
+    if (labels_[i] == nullptr) {
+      labels_[i] = zone_.New<BaselineLabels>();
     }
-    if (mark == MarkAsIndirectJumpTarget::kYes) {
-      labels_[i].MarkAsIndirectJumpTarget();
-    }
-    return labels_[i].GetPointer();
+    return labels_[i];
   }
 
-  BaselineLabelPointer* labels_;
+  BaselineLabels** labels_;
 };
 
 }  // namespace baseline
 }  // namespace internal
 }  // namespace v8
 
-#endif  // ENABLE_SPARKPLUG
+#endif
 
 #endif  // V8_BASELINE_BASELINE_COMPILER_H_

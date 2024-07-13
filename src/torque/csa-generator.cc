@@ -115,7 +115,7 @@ void CSAGenerator::EmitInstruction(
     const PushBuiltinPointerInstruction& instruction,
     Stack<std::string>* stack) {
   const std::string str =
-      "ca_.UncheckedCast<BuiltinPtr>(ca_.SmiConstant(Builtin::k" +
+      "ca_.UncheckedCast<BuiltinPtr>(ca_.SmiConstant(Builtins::k" +
       instruction.external_name + "))";
   stack->Push(str);
   SetDefinitionVariable(instruction.GetValueDefinition(), str);
@@ -157,6 +157,7 @@ std::vector<std::string> CSAGenerator::ProcessArgumentsCommon(
   std::vector<std::string> args;
   for (auto it = parameter_types.rbegin(); it != parameter_types.rend(); ++it) {
     const Type* type = *it;
+    VisitResult arg;
     if (type->IsConstexpr()) {
       args.push_back(std::move(constexpr_arguments.back()));
       constexpr_arguments.pop_back();
@@ -523,7 +524,7 @@ void CSAGenerator::EmitInstruction(const CallBuiltinInstruction& instruction,
   std::vector<const Type*> result_types =
       LowerType(instruction.builtin->signature().return_type);
   if (instruction.is_tailcall) {
-    out() << "   CodeStubAssembler(state_).TailCallBuiltin(Builtin::k"
+    out() << "   CodeStubAssembler(state_).TailCallBuiltin(Builtins::k"
           << instruction.builtin->ExternalName();
     if (!instruction.builtin->signature().HasContextParameter()) {
       // Add dummy context parameter to satisfy the TailCallBuiltin signature.
@@ -544,10 +545,6 @@ void CSAGenerator::EmitInstruction(const CallBuiltinInstruction& instruction,
     std::string lhs_name;
     std::string lhs_type;
     switch (result_types.size()) {
-      case 0:
-        // If a builtin call is annotated to never return, it has 0 return
-        // types (defining true void builtins is not allowed).
-        break;
       case 1:
         lhs_name = result_names[0];
         lhs_type = result_types[0]->GetGeneratedTNodeTypeName();
@@ -571,19 +568,14 @@ void CSAGenerator::EmitInstruction(const CallBuiltinInstruction& instruction,
         PreCallableExceptionPreparation(instruction.catch_block);
     Stack<std::string> pre_call_stack = *stack;
 
+    std::string generated_type = result_types[0]->GetGeneratedTNodeTypeName();
     for (const std::string& name : result_names) {
       stack->Push(name);
     }
-    if (result_types.empty()) {
-      out() << "ca_.CallStubVoid("
-               "Builtins::CallableFor(ca_.isolate(), Builtin::k"
-            << instruction.builtin->ExternalName() << ")";
-    } else {
-      out() << "    " << lhs_name << " = ";
-      out() << "ca_.CallStub<" << lhs_type
-            << ">(Builtins::CallableFor(ca_.isolate(), Builtin::k"
-            << instruction.builtin->ExternalName() << ")";
-    }
+    out() << "    " << lhs_name << " = ";
+    out() << "ca_.CallStub<" << lhs_type
+          << ">(Builtins::CallableFor(ca_.isolate(), Builtins::k"
+          << instruction.builtin->ExternalName() << ")";
     if (!instruction.builtin->signature().HasContextParameter()) {
       // Add dummy context parameter to satisfy the CallBuiltin signature.
       out() << ", TNode<Object>()";
@@ -854,9 +846,10 @@ void CSAGenerator::EmitInstruction(const ReturnInstruction& instruction,
   out() << ");\n";
 }
 
-void CSAGenerator::EmitInstruction(const PrintErrorInstruction& instruction,
-                                   Stack<std::string>* stack) {
-  out() << "    CodeStubAssembler(state_).PrintErr("
+void CSAGenerator::EmitInstruction(
+    const PrintConstantStringInstruction& instruction,
+    Stack<std::string>* stack) {
+  out() << "    CodeStubAssembler(state_).Print("
         << StringLiteralQuote(instruction.message) << ");\n";
 }
 

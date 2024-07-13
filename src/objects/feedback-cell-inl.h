@@ -5,10 +5,9 @@
 #ifndef V8_OBJECTS_FEEDBACK_CELL_INL_H_
 #define V8_OBJECTS_FEEDBACK_CELL_INL_H_
 
-#include "src/execution/tiering-manager.h"
-#include "src/heap/heap-write-barrier-inl.h"
 #include "src/objects/feedback-cell.h"
-#include "src/objects/feedback-vector-inl.h"
+
+#include "src/heap/heap-write-barrier-inl.h"
 #include "src/objects/objects-inl.h"
 #include "src/objects/struct-inl.h"
 
@@ -27,31 +26,35 @@ RELEASE_ACQUIRE_ACCESSORS(FeedbackCell, value, HeapObject, kValueOffset)
 void FeedbackCell::clear_padding() {
   if (FeedbackCell::kAlignedSize == FeedbackCell::kUnalignedSize) return;
   DCHECK_GE(FeedbackCell::kAlignedSize, FeedbackCell::kUnalignedSize);
-  memset(reinterpret_cast<uint8_t*>(address() + FeedbackCell::kUnalignedSize),
-         0, FeedbackCell::kAlignedSize - FeedbackCell::kUnalignedSize);
+  memset(reinterpret_cast<byte*>(address() + FeedbackCell::kUnalignedSize), 0,
+         FeedbackCell::kAlignedSize - FeedbackCell::kUnalignedSize);
 }
 
 void FeedbackCell::reset_feedback_vector(
     base::Optional<std::function<void(HeapObject object, ObjectSlot slot,
                                       HeapObject target)>>
         gc_notify_updated_slot) {
-  clear_interrupt_budget();
+  SetInitialInterruptBudget();
   if (value().IsUndefined() || value().IsClosureFeedbackCellArray()) return;
 
   CHECK(value().IsFeedbackVector());
   ClosureFeedbackCellArray closure_feedback_cell_array =
       FeedbackVector::cast(value()).closure_feedback_cell_array();
-  set_value(closure_feedback_cell_array, kReleaseStore);
+  set_value(closure_feedback_cell_array);
   if (gc_notify_updated_slot) {
     (*gc_notify_updated_slot)(*this, RawField(FeedbackCell::kValueOffset),
                               closure_feedback_cell_array);
   }
 }
 
-void FeedbackCell::clear_interrupt_budget() {
-  // This value is always reset to a proper budget before it's used.
-  set_interrupt_budget(0);
+void FeedbackCell::SetInitialInterruptBudget() {
+  if (FLAG_lazy_feedback_allocation) {
+    set_interrupt_budget(FLAG_budget_for_feedback_vector_allocation);
+  } else {
+    set_interrupt_budget(FLAG_interrupt_budget);
+  }
 }
+
 
 void FeedbackCell::IncrementClosureCount(Isolate* isolate) {
   ReadOnlyRoots r(isolate);

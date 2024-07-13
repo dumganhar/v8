@@ -1,4 +1,4 @@
-// Copyright 2011 The Chromium Authors
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -40,11 +40,8 @@ struct TestStruct {};
 
 class VirtualMethodsInHeadersTesting : public VirtualMethodsInHeaders {
  public:
-  // Complain about missing 'override' in testing classes.
+  // Don't complain about no virtual testing methods.
   void MethodHasNoArguments();
-
-  // Don't complain about non-empty inline definition in testing classes.
-  bool ComplainAboutThis() override { return true; }
 
  private:
   testing::TestStruct tester_;

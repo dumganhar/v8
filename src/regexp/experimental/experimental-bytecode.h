@@ -7,9 +7,8 @@
 
 #include <ios>
 
-#include "src/base/strings.h"
-#include "src/base/vector.h"
 #include "src/regexp/regexp-ast.h"
+#include "src/utils/vector.h"
 
 // ----------------------------------------------------------------------------
 // Definition and semantics of the EXPERIMENTAL bytecode.
@@ -103,11 +102,11 @@ struct RegExpInstruction {
   };
 
   struct Uc16Range {
-    base::uc16 min;  // Inclusive.
-    base::uc16 max;  // Inclusive.
+    uc16 min;  // Inclusive.
+    uc16 max;  // Inclusive.
   };
 
-  static RegExpInstruction ConsumeRange(base::uc16 min, base::uc16 max) {
+  static RegExpInstruction ConsumeRange(uc16 min, uc16 max) {
     RegExpInstruction result;
     result.opcode = CONSUME_RANGE;
     result.payload.consume_range = Uc16Range{min, max};
@@ -158,7 +157,7 @@ struct RegExpInstruction {
     return result;
   }
 
-  static RegExpInstruction Assertion(RegExpAssertion::Type t) {
+  static RegExpInstruction Assertion(RegExpAssertion::AssertionType t) {
     RegExpInstruction result;
     result.opcode = ASSERTION;
     result.payload.assertion_type = t;
@@ -174,11 +173,11 @@ struct RegExpInstruction {
     // Payload of SET_REGISTER_TO_CP and CLEAR_REGISTER:
     int32_t register_index;
     // Payload of ASSERTION:
-    RegExpAssertion::Type assertion_type;
+    RegExpAssertion::AssertionType assertion_type;
   } payload;
-  static_assert(sizeof(payload) == 4);
+  STATIC_ASSERT(sizeof(payload) == 4);
 };
-static_assert(sizeof(RegExpInstruction) == 8);
+STATIC_ASSERT(sizeof(RegExpInstruction) == 8);
 // TODO(mbid,v8:10765): This is rather wasteful.  We can fit the opcode in 2-3
 // bits, so the remaining 29/30 bits can be used as payload.  Problem: The
 // payload of CONSUME_RANGE consists of two 16-bit values `min` and `max`, so
@@ -203,7 +202,7 @@ static_assert(sizeof(RegExpInstruction) == 8);
 
 std::ostream& operator<<(std::ostream& os, const RegExpInstruction& inst);
 std::ostream& operator<<(std::ostream& os,
-                         base::Vector<const RegExpInstruction> insts);
+                         Vector<const RegExpInstruction> insts);
 
 }  // namespace internal
 }  // namespace v8

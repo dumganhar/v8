@@ -13,8 +13,9 @@
 #include "include/libplatform/v8-tracing.h"
 #include "include/v8-platform.h"
 #include "src/base/compiler-specific.h"
+#include "src/base/macros.h"
 #include "src/base/platform/mutex.h"
-#include "src/libplatform/default-thread-isolated-allocator.h"
+#include "src/base/platform/time.h"
 
 namespace v8 {
 namespace platform {
@@ -60,14 +61,13 @@ class V8_PLATFORM_EXPORT DefaultPlatform : public NON_EXPORTED_BASE(Platform) {
   void CallDelayedOnWorkerThread(std::unique_ptr<Task> task,
                                  double delay_in_seconds) override;
   bool IdleTasksEnabled(Isolate* isolate) override;
-  std::unique_ptr<JobHandle> CreateJob(
+  std::unique_ptr<JobHandle> PostJob(
       TaskPriority priority, std::unique_ptr<JobTask> job_state) override;
   double MonotonicallyIncreasingTime() override;
   double CurrentClockTimeMillis() override;
   v8::TracingController* GetTracingController() override;
   StackTracePrinter GetStackTracePrinter() override;
   v8::PageAllocator* GetPageAllocator() override;
-  v8::ThreadIsolatedAllocator* GetThreadIsolatedAllocator() override;
 
   void NotifyIsolateShutdown(Isolate* isolate);
 
@@ -81,7 +81,6 @@ class V8_PLATFORM_EXPORT DefaultPlatform : public NON_EXPORTED_BASE(Platform) {
 
   std::unique_ptr<TracingController> tracing_controller_;
   std::unique_ptr<PageAllocator> page_allocator_;
-  DefaultThreadIsolatedAllocator thread_isolated_allocator_;
 
   TimeFunction time_function_for_testing_ = nullptr;
 };

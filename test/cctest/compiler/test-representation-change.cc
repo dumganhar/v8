@@ -13,31 +13,30 @@
 #include "test/cctest/cctest.h"
 #include "test/cctest/compiler/codegen-tester.h"
 #include "test/cctest/compiler/graph-and-builders.h"
-#include "test/cctest/compiler/js-heap-broker-base.h"
-#include "test/common/value-helper.h"
+#include "test/cctest/compiler/value-helper.h"
 
 namespace v8 {
 namespace internal {
 namespace compiler {
 
 class RepresentationChangerTester : public HandleAndZoneScope,
-                                    public GraphAndBuilders,
-                                    public JSHeapBrokerTestBase {
+                                    public GraphAndBuilders {
  public:
   explicit RepresentationChangerTester(int num_parameters = 0)
       : HandleAndZoneScope(kCompressGraphZone),
         GraphAndBuilders(main_zone()),
-        JSHeapBrokerTestBase(main_isolate(), main_zone()),
         javascript_(main_zone()),
         jsgraph_(main_isolate(), main_graph_, &main_common_, &javascript_,
                  &main_simplified_, &main_machine_),
-        changer_(&jsgraph_, broker(), nullptr) {
+        broker_(main_isolate(), main_zone()),
+        changer_(&jsgraph_, &broker_) {
     Node* s = graph()->NewNode(common()->Start(num_parameters));
     graph()->SetStart(s);
   }
 
   JSOperatorBuilder javascript_;
   JSGraph jsgraph_;
+  JSHeapBroker broker_;
   RepresentationChanger changer_;
 
   Isolate* isolate() { return main_isolate(); }
@@ -265,9 +264,7 @@ TEST(ToInt32_constant) {
   RepresentationChangerTester r;
   {
     FOR_INT32_INPUTS(i) {
-      const double value = static_cast<double>(i);
-      Node* n = r.jsgraph()->Constant(value);
-      NodeProperties::SetType(n, Type::Constant(value, r.zone()));
+      Node* n = r.jsgraph()->Constant(i);
       Node* use = r.Return(n);
       Node* c = r.changer()->GetRepresentationFor(
           n, MachineRepresentation::kTagged, Type::Signed32(), use,
@@ -280,9 +277,7 @@ TEST(ToInt32_constant) {
 TEST(ToUint32_constant) {
   RepresentationChangerTester r;
   FOR_UINT32_INPUTS(i) {
-    const double value = static_cast<double>(i);
-    Node* n = r.jsgraph()->Constant(value);
-    NodeProperties::SetType(n, Type::Constant(value, r.zone()));
+    Node* n = r.jsgraph()->Constant(static_cast<double>(i));
     Node* use = r.Return(n);
     Node* c = r.changer()->GetRepresentationFor(
         n, MachineRepresentation::kTagged, Type::Unsigned32(), use,
@@ -294,9 +289,7 @@ TEST(ToUint32_constant) {
 TEST(ToInt64_constant) {
   RepresentationChangerTester r;
   FOR_INT32_INPUTS(i) {
-    const double value = static_cast<double>(i);
-    Node* n = r.jsgraph()->Constant(value);
-    NodeProperties::SetType(n, Type::Constant(value, r.zone()));
+    Node* n = r.jsgraph()->Constant(i);
     Node* use = r.Return(n);
     Node* c = r.changer()->GetRepresentationFor(
         n, MachineRepresentation::kTagged, TypeCache::Get()->kSafeInteger, use,
@@ -420,11 +413,9 @@ TEST(Word64) {
   CheckChange(IrOpcode::kChangeFloat64ToInt64, MachineRepresentation::kFloat64,
               TypeCache::Get()->kSafeInteger, MachineRepresentation::kWord64);
   CheckChange(IrOpcode::kChangeFloat64ToInt64, MachineRepresentation::kFloat64,
-              TypeCache::Get()->kDoubleRepresentableInt64,
-              MachineRepresentation::kWord64);
+              TypeCache::Get()->kInt64, MachineRepresentation::kWord64);
   CheckChange(IrOpcode::kChangeFloat64ToUint64, MachineRepresentation::kFloat64,
-              TypeCache::Get()->kDoubleRepresentableUint64,
-              MachineRepresentation::kWord64);
+              TypeCache::Get()->kUint64, MachineRepresentation::kWord64);
   CheckChange(
       IrOpcode::kCheckedFloat64ToInt64, MachineRepresentation::kFloat64,
       Type::Number(), MachineRepresentation::kWord64,
@@ -447,13 +438,11 @@ TEST(Word64) {
                   MachineRepresentation::kWord64);
   CheckTwoChanges(IrOpcode::kChangeFloat32ToFloat64,
                   IrOpcode::kChangeFloat64ToInt64,
-                  MachineRepresentation::kFloat32,
-                  TypeCache::Get()->kDoubleRepresentableInt64,
+                  MachineRepresentation::kFloat32, TypeCache::Get()->kInt64,
                   MachineRepresentation::kWord64);
   CheckTwoChanges(IrOpcode::kChangeFloat32ToFloat64,
                   IrOpcode::kChangeFloat64ToUint64,
-                  MachineRepresentation::kFloat32,
-                  TypeCache::Get()->kDoubleRepresentableUint64,
+                  MachineRepresentation::kFloat32, TypeCache::Get()->kUint64,
                   MachineRepresentation::kWord64);
   CheckTwoChanges(
       IrOpcode::kChangeFloat32ToFloat64, IrOpcode::kCheckedFloat64ToInt64,
@@ -473,8 +462,7 @@ TEST(Word64) {
   CheckChange(IrOpcode::kChangeTaggedToInt64, MachineRepresentation::kTagged,
               TypeCache::Get()->kSafeInteger, MachineRepresentation::kWord64);
   CheckChange(IrOpcode::kChangeTaggedToInt64, MachineRepresentation::kTagged,
-              TypeCache::Get()->kDoubleRepresentableInt64,
-              MachineRepresentation::kWord64);
+              TypeCache::Get()->kInt64, MachineRepresentation::kWord64);
   CheckChange(IrOpcode::kChangeTaggedSignedToInt64,
               MachineRepresentation::kTaggedSigned, Type::SignedSmall(),
               MachineRepresentation::kWord64);

@@ -20,10 +20,6 @@
 namespace v8 {
 namespace internal {
 
-namespace third_party_heap {
-class Impl;
-}
-
 // HashTable is a subclass of FixedArray that implements a hash table
 // that uses open addressing and quadratic probing.
 //
@@ -101,10 +97,6 @@ class V8_EXPORT_PRIVATE HashTableBase : public NON_EXPORTED_BASE(FixedArray) {
   // Minimum capacity for newly created hash tables.
   static const int kMinCapacity = 4;
 
-  // Set the number of elements in the hash table after a bulk of elements was
-  // added.
-  inline void SetInitialNumberOfElements(int nof);
-
  protected:
   // Update the number of elements in the hash table.
   inline void SetNumberOfElements(int nof);
@@ -133,9 +125,9 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) HashTable
   using Key = typename Shape::Key;
 
   // Returns a new HashTable object.
-  template <typename IsolateT>
+  template <typename LocalIsolate>
   V8_WARN_UNUSED_RESULT static Handle<Derived> New(
-      IsolateT* isolate, int at_least_space_for,
+      LocalIsolate* isolate, int at_least_space_for,
       AllocationType allocation = AllocationType::kYoung,
       MinimumCapacity capacity_option = USE_DEFAULT_MINIMUM_CAPACITY);
 
@@ -148,8 +140,8 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) HashTable
   // Find entry for key otherwise return kNotFound.
   inline InternalIndex FindEntry(PtrComprCageBase cage_base,
                                  ReadOnlyRoots roots, Key key, int32_t hash);
-  template <typename IsolateT>
-  inline InternalIndex FindEntry(IsolateT* isolate, Key key);
+  template <typename LocalIsolate>
+  inline InternalIndex FindEntry(LocalIsolate* isolate, Key key);
 
   // Rehashes the table in-place.
   void Rehash(PtrComprCageBase cage_base);
@@ -165,16 +157,10 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) HashTable
   // Returns the key at entry.
   inline Object KeyAt(InternalIndex entry);
   inline Object KeyAt(PtrComprCageBase cage_base, InternalIndex entry);
-  inline Object KeyAt(InternalIndex entry, RelaxedLoadTag tag);
-  inline Object KeyAt(PtrComprCageBase cage_base, InternalIndex entry,
-                      RelaxedLoadTag tag);
-
-  inline void SetKeyAt(InternalIndex entry, Object value,
-                       WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
   static const int kElementsStartIndex = kPrefixStartIndex + Shape::kPrefixSize;
   static const int kEntrySize = Shape::kEntrySize;
-  static_assert(kEntrySize > 0);
+  STATIC_ASSERT(kEntrySize > 0);
   static const int kEntryKeyIndex = 0;
   static const int kElementsStartOffset =
       kHeaderSize + kElementsStartIndex * kTaggedSize;
@@ -208,9 +194,9 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) HashTable
   }
 
   // Ensure enough space for n additional elements.
-  template <typename IsolateT>
+  template <typename LocalIsolate>
   V8_WARN_UNUSED_RESULT static Handle<Derived> EnsureCapacity(
-      IsolateT* isolate, Handle<Derived> table, int n = 1,
+      LocalIsolate* isolate, Handle<Derived> table, int n = 1,
       AllocationType allocation = AllocationType::kYoung);
 
   // Returns true if this table has sufficient capacity for adding n elements.
@@ -226,16 +212,15 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) HashTable
  protected:
   friend class ObjectHashTable;
 
-  template <typename IsolateT>
+  template <typename LocalIsolate>
   V8_WARN_UNUSED_RESULT static Handle<Derived> NewInternal(
-      IsolateT* isolate, int capacity, AllocationType allocation);
+      LocalIsolate* isolate, int capacity, AllocationType allocation);
 
   // Find the entry at which to insert element with the given key that
   // has the given hash value.
   InternalIndex FindInsertionEntry(PtrComprCageBase cage_base,
                                    ReadOnlyRoots roots, uint32_t hash);
-  template <typename IsolateT>
-  InternalIndex FindInsertionEntry(IsolateT* isolate, uint32_t hash);
+  InternalIndex FindInsertionEntry(Isolate* isolate, uint32_t hash);
 
   // Computes the capacity a table with the given capacity would need to have
   // room for the given number of elements, also allowing it to shrink.
@@ -254,13 +239,13 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) HashTable
 
  private:
   // Ensure that kMaxRegularCapacity yields a non-large object dictionary.
-  static_assert(EntryToIndex(InternalIndex(kMaxRegularCapacity)) <
+  STATIC_ASSERT(EntryToIndex(InternalIndex(kMaxRegularCapacity)) <
                 kMaxRegularLength);
-  static_assert(v8::base::bits::IsPowerOfTwo(kMaxRegularCapacity));
+  STATIC_ASSERT(v8::base::bits::IsPowerOfTwo(kMaxRegularCapacity));
   static const int kMaxRegularEntry = kMaxRegularCapacity / kEntrySize;
   static const int kMaxRegularIndex =
       EntryToIndex(InternalIndex(kMaxRegularEntry));
-  static_assert(OffsetOfElementAt(kMaxRegularIndex) <
+  STATIC_ASSERT(OffsetOfElementAt(kMaxRegularIndex) <
                 kMaxRegularHeapObjectSize);
 
   // Sets the capacity of the hash table.
@@ -410,9 +395,7 @@ class V8_EXPORT_PRIVATE EphemeronHashTable
 
  protected:
   friend class MarkCompactCollector;
-  friend class MinorMarkCompactCollector;
   friend class ScavengerCollector;
-  friend class third_party_heap::Impl;
   friend class HashTable<EphemeronHashTable, ObjectHashTableShape>;
   friend class ObjectHashTableBase<EphemeronHashTable, ObjectHashTableShape>;
   inline void set_key(int index, Object value);
@@ -421,56 +404,6 @@ class V8_EXPORT_PRIVATE EphemeronHashTable
   OBJECT_CONSTRUCTORS(
       EphemeronHashTable,
       ObjectHashTableBase<EphemeronHashTable, ObjectHashTableShape>);
-};
-
-// ObjectMultihashTable is a hash table that maps Object keys to N Object
-// values. The Object values are stored inline in the underlying FixedArray.
-//
-// This is not a generic multimap where each key can map to a variable number of
-// values. Each key always maps to exactly N values.
-template <int N>
-class ObjectMultiHashTableShape : public ObjectHashTableShape {
- public:
-  static const int kEntrySize = 1 + N;
-};
-
-template <typename Derived, int N>
-class ObjectMultiHashTableBase
-    : public HashTable<Derived, ObjectMultiHashTableShape<N>> {
- public:
-  static_assert(N > 1, "use ObjectHashTable instead if N = 1");
-
-  // Returns the values associated with the given key. Return an std::array of
-  // holes if not found.
-  std::array<Object, N> Lookup(Handle<Object> key);
-  std::array<Object, N> Lookup(PtrComprCageBase cage_base, Handle<Object> key);
-
-  // Adds or overwrites the values associated with the given key.
-  static Handle<Derived> Put(Isolate* isolate, Handle<Derived> table,
-                             Handle<Object> key,
-                             const std::array<Handle<Object>, N>& values);
-
- private:
-  void SetEntryValues(InternalIndex entry,
-                      const std::array<Handle<Object>, N>& values);
-
-  static constexpr inline int EntryToValueIndexStart(InternalIndex entry) {
-    return HashTable<Derived, ObjectMultiHashTableShape<N>>::EntryToIndex(
-               entry) +
-           ObjectMultiHashTableShape<N>::kEntryValueIndex;
-  }
-
-  OBJECT_CONSTRUCTORS(ObjectMultiHashTableBase,
-                      HashTable<Derived, ObjectMultiHashTableShape<N>>);
-};
-
-class ObjectTwoHashTable
-    : public ObjectMultiHashTableBase<ObjectTwoHashTable, 2> {
- public:
-  DECL_CAST(ObjectTwoHashTable)
-
-  OBJECT_CONSTRUCTORS(ObjectTwoHashTable,
-                      ObjectMultiHashTableBase<ObjectTwoHashTable, 2>);
 };
 
 class ObjectHashSetShape : public ObjectHashTableShape {
@@ -494,88 +427,6 @@ class V8_EXPORT_PRIVATE ObjectHashSet
 
   OBJECT_CONSTRUCTORS(ObjectHashSet,
                       HashTable<ObjectHashSet, ObjectHashSetShape>);
-};
-
-class NameToIndexShape : public BaseShape<Handle<Name>> {
- public:
-  static inline bool IsMatch(Handle<Name> key, Object other);
-  static inline uint32_t Hash(ReadOnlyRoots roots, Handle<Name> key);
-  static inline uint32_t HashForObject(ReadOnlyRoots roots, Object object);
-  static inline Handle<Object> AsHandle(Handle<Name> key);
-  static const int kPrefixSize = 0;
-  static const int kEntryValueIndex = 1;
-  static const int kEntrySize = 2;
-  static const bool kMatchNeedsHoleCheck = false;
-};
-
-class V8_EXPORT_PRIVATE NameToIndexHashTable
-    : public HashTable<NameToIndexHashTable, NameToIndexShape> {
- public:
-  static const int kEntryValueIndex = NameToIndexShape::kEntryValueIndex;
-
-  inline static Handle<Map> GetMap(ReadOnlyRoots roots);
-  int Lookup(Handle<Name> key);
-
-  // Returns the value at entry.
-  Object ValueAt(InternalIndex entry);
-  int IndexAt(InternalIndex entry);
-
-  template <typename IsolateT>
-  static Handle<NameToIndexHashTable> Add(IsolateT* isolate,
-                                          Handle<NameToIndexHashTable> table,
-                                          Handle<Name> key, int32_t value);
-
-  // Exposed for NameDictionaryLookupForwardedString slow path for forwarded
-  // strings.
-  using HashTable<NameToIndexHashTable, NameToIndexShape>::FindInsertionEntry;
-
-  DECL_CAST(NameToIndexHashTable)
-  DECL_PRINTER(NameToIndexHashTable)
-
-  OBJECT_CONSTRUCTORS(NameToIndexHashTable,
-                      HashTable<NameToIndexHashTable, NameToIndexShape>);
-
- private:
-  static inline int EntryToValueIndex(InternalIndex entry) {
-    return EntryToIndex(entry) + NameToIndexShape::kEntryValueIndex;
-  }
-};
-
-class RegisteredSymbolTableShape : public BaseShape<Handle<String>> {
- public:
-  static inline bool IsMatch(Handle<String> key, Object other);
-  static inline uint32_t Hash(ReadOnlyRoots roots, Handle<String> key);
-  static inline uint32_t HashForObject(ReadOnlyRoots roots, Object object);
-  static const int kPrefixSize = 0;
-  static const int kEntryValueIndex = 1;
-  static const int kEntrySize = 2;
-  static const bool kMatchNeedsHoleCheck = false;
-};
-
-class RegisteredSymbolTable
-    : public HashTable<RegisteredSymbolTable, RegisteredSymbolTableShape> {
- public:
-  Object SlowReverseLookup(Object value);
-
-  // Returns the value at entry.
-  Object ValueAt(InternalIndex entry);
-
-  inline static Handle<Map> GetMap(ReadOnlyRoots roots);
-
-  static Handle<RegisteredSymbolTable> Add(Isolate* isolate,
-                                           Handle<RegisteredSymbolTable> table,
-                                           Handle<String> key, Handle<Symbol>);
-
-  DECL_CAST(RegisteredSymbolTable)
-  DECL_PRINTER(RegisteredSymbolTable)
-  OBJECT_CONSTRUCTORS(
-      RegisteredSymbolTable,
-      HashTable<RegisteredSymbolTable, RegisteredSymbolTableShape>);
-
- private:
-  static inline int EntryToValueIndex(InternalIndex entry) {
-    return EntryToIndex(entry) + RegisteredSymbolTableShape::kEntryValueIndex;
-  }
 };
 
 }  // namespace internal

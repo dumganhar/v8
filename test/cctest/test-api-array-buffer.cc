@@ -3,11 +3,8 @@
 // found in the LICENSE file.
 
 #include "src/api/api-inl.h"
-#include "src/base/strings.h"
 #include "src/objects/js-array-buffer-inl.h"
-#include "test/cctest/heap/heap-utils.h"
 #include "test/cctest/test-api.h"
-#include "test/common/flag-utils.h"
 
 using ::v8::Array;
 using ::v8::Context;
@@ -28,10 +25,10 @@ void CheckIsDetached(v8::Local<v8::TypedArray> ta) {
 }
 
 void CheckIsTypedArrayVarDetached(const char* name) {
-  v8::base::ScopedVector<char> source(1024);
-  v8::base::SNPrintF(
-      source, "%s.byteLength == 0 && %s.byteOffset == 0 && %s.length == 0",
-      name, name, name);
+  i::ScopedVector<char> source(1024);
+  i::SNPrintF(source,
+              "%s.byteLength == 0 && %s.byteOffset == 0 && %s.length == 0",
+              name, name, name);
   CHECK(CompileRun(source.begin())->IsTrue());
   v8::Local<v8::TypedArray> ta = CompileRun(name).As<v8::TypedArray>();
   CheckIsDetached(ta);
@@ -68,7 +65,7 @@ THREADED_TEST(ArrayBuffer_ApiInternalToExternal) {
   Local<v8::ArrayBuffer> ab = v8::ArrayBuffer::New(isolate, 1024);
   CheckInternalFieldsAreZero(ab);
   CHECK_EQ(1024, ab->ByteLength());
-  i::heap::InvokeMajorGC(CcTest::heap());
+  CcTest::CollectAllGarbage();
 
   std::shared_ptr<v8::BackingStore> backing_store = Externalize(ab);
   CHECK_EQ(1024, backing_store->ByteLength());
@@ -182,7 +179,7 @@ THREADED_TEST(ArrayBuffer_DetachingApi) {
   CHECK_EQ(1023, dv->ByteLength());
 
   Externalize(buffer);
-  buffer->Detach(v8::Local<v8::Value>()).Check();
+  buffer->Detach();
   CHECK_EQ(0, buffer->ByteLength());
   CheckIsDetached(u8a);
   CheckIsDetached(u8c);
@@ -218,7 +215,7 @@ THREADED_TEST(ArrayBuffer_DetachingScript) {
   v8::Local<v8::DataView> dv = CompileRun("dv").As<v8::DataView>();
 
   Externalize(ab);
-  ab->Detach(v8::Local<v8::Value>()).Check();
+  ab->Detach();
   CHECK_EQ(0, ab->ByteLength());
   CHECK_EQ(0, v8_run_int32value(v8_compile("ab.byteLength")));
 
@@ -232,50 +229,8 @@ THREADED_TEST(ArrayBuffer_DetachingScript) {
   CheckIsTypedArrayVarDetached("f32a");
   CheckIsTypedArrayVarDetached("f64a");
 
-  {
-    v8::TryCatch try_catch(isolate);
-    CompileRun("dv.byteLength == 0 ");
-    CHECK(try_catch.HasCaught());
-  }
-
-  {
-    v8::TryCatch try_catch(isolate);
-    CompileRun("dv.byteOffset == 0");
-    CHECK(try_catch.HasCaught());
-  }
-
+  CHECK(CompileRun("dv.byteLength == 0 && dv.byteOffset == 0")->IsTrue());
   CheckDataViewIsDetached(dv);
-}
-
-THREADED_TEST(ArrayBuffer_WasDetached) {
-  LocalContext env;
-  v8::Isolate* isolate = env->GetIsolate();
-  v8::HandleScope handle_scope(isolate);
-
-  Local<v8::ArrayBuffer> ab = v8::ArrayBuffer::New(isolate, 0);
-  CHECK(!ab->WasDetached());
-
-  ab->Detach(v8::Local<v8::Value>()).Check();
-  CHECK(ab->WasDetached());
-}
-
-THREADED_TEST(ArrayBuffer_NonDetachableWasDetached) {
-  LocalContext env;
-  v8::Isolate* isolate = env->GetIsolate();
-  v8::HandleScope handle_scope(isolate);
-
-  CompileRun(R"JS(
-    var wasmMemory = new WebAssembly.Memory({initial: 1, maximum: 2});
-  )JS");
-
-  Local<v8::ArrayBuffer> non_detachable =
-      CompileRun("wasmMemory.buffer").As<v8::ArrayBuffer>();
-  CHECK(!non_detachable->IsDetachable());
-  CHECK(!non_detachable->WasDetached());
-
-  CompileRun("wasmMemory.grow(1)");
-  CHECK(!non_detachable->IsDetachable());
-  CHECK(non_detachable->WasDetached());
 }
 
 THREADED_TEST(ArrayBuffer_ExternalizeEmpty) {
@@ -300,6 +255,7 @@ THREADED_TEST(ArrayBuffer_ExternalizeEmpty) {
 }
 
 THREADED_TEST(SharedArrayBuffer_ApiInternalToExternal) {
+  i::FLAG_harmony_sharedarraybuffer = true;
   LocalContext env;
   v8::Isolate* isolate = env->GetIsolate();
   v8::HandleScope handle_scope(isolate);
@@ -307,7 +263,7 @@ THREADED_TEST(SharedArrayBuffer_ApiInternalToExternal) {
   Local<v8::SharedArrayBuffer> ab = v8::SharedArrayBuffer::New(isolate, 1024);
   CheckInternalFieldsAreZero(ab);
   CHECK_EQ(1024, ab->ByteLength());
-  i::heap::InvokeMajorGC(CcTest::heap());
+  CcTest::CollectAllGarbage();
 
   std::shared_ptr<v8::BackingStore> backing_store = Externalize(ab);
 
@@ -334,6 +290,7 @@ THREADED_TEST(SharedArrayBuffer_ApiInternalToExternal) {
 }
 
 THREADED_TEST(SharedArrayBuffer_JSInternalToExternal) {
+  i::FLAG_harmony_sharedarraybuffer = true;
   LocalContext env;
   v8::Isolate* isolate = env->GetIsolate();
   v8::HandleScope handle_scope(isolate);
@@ -378,10 +335,8 @@ THREADED_TEST(SkipArrayBufferBackingStoreDuringGC) {
   v8::Isolate* isolate = env->GetIsolate();
   v8::HandleScope handle_scope(isolate);
 
-  void* buffer = CcTest::array_buffer_allocator()->Allocate(100);
   // Make sure the pointer looks like a heap object
-  uintptr_t address = reinterpret_cast<uintptr_t>(buffer) | i::kHeapObjectTag;
-  void* store_ptr = reinterpret_cast<void*>(address);
+  uint8_t* store_ptr = reinterpret_cast<uint8_t*>(i::kHeapObjectTag);
   auto backing_store = v8::ArrayBuffer::NewBackingStore(
       store_ptr, 8, [](void*, size_t, void*) {}, nullptr);
 
@@ -390,15 +345,13 @@ THREADED_TEST(SkipArrayBufferBackingStoreDuringGC) {
       v8::ArrayBuffer::New(isolate, std::move(backing_store));
 
   // Should not crash
-  i::heap::EmptyNewSpaceUsingGC(CcTest::heap());
-  i::heap::InvokeMajorGC(CcTest::heap());
-  i::heap::InvokeMajorGC(CcTest::heap());
+  CcTest::CollectGarbage(i::NEW_SPACE);  // in survivor space now
+  CcTest::CollectGarbage(i::NEW_SPACE);  // in old gen now
+  CcTest::CollectAllGarbage();
+  CcTest::CollectAllGarbage();
 
   // Should not move the pointer
   CHECK_EQ(ab->GetBackingStore()->Data(), store_ptr);
-  CHECK_EQ(ab->Data(), store_ptr);
-
-  CcTest::array_buffer_allocator()->Free(buffer, 100);
 }
 
 THREADED_TEST(SkipArrayBufferDuringScavenge) {
@@ -413,7 +366,8 @@ THREADED_TEST(SkipArrayBufferDuringScavenge) {
   auto backing_store = v8::ArrayBuffer::NewBackingStore(
       store_ptr, 8, [](void*, size_t, void*) {}, nullptr);
 
-  i::heap::InvokeMinorGC(CcTest::heap());
+  // Make `store_ptr` point to from space
+  CcTest::CollectGarbage(i::NEW_SPACE);
 
   // Create ArrayBuffer with pointer-that-cannot-be-visited in the backing store
   Local<v8::ArrayBuffer> ab =
@@ -421,10 +375,11 @@ THREADED_TEST(SkipArrayBufferDuringScavenge) {
 
   // Should not crash,
   // i.e. backing store pointer should not be treated as a heap object pointer
-  i::heap::EmptyNewSpaceUsingGC(CcTest::heap());
+  CcTest::CollectGarbage(i::NEW_SPACE);  // in survivor space now
+  CcTest::CollectGarbage(i::NEW_SPACE);  // in old gen now
 
+  // Use `ab` to silence compiler warning
   CHECK_EQ(ab->GetBackingStore()->Data(), store_ptr);
-  CHECK_EQ(ab->Data(), store_ptr);
 }
 
 THREADED_TEST(Regress1006600) {
@@ -445,27 +400,8 @@ THREADED_TEST(ArrayBuffer_NewBackingStore) {
   std::shared_ptr<v8::BackingStore> backing_store =
       v8::ArrayBuffer::NewBackingStore(isolate, 100);
   CHECK(!backing_store->IsShared());
-  CHECK(!backing_store->IsResizableByUserJavaScript());
   Local<v8::ArrayBuffer> ab = v8::ArrayBuffer::New(isolate, backing_store);
   CHECK_EQ(backing_store.get(), ab->GetBackingStore().get());
-  CHECK_EQ(backing_store->Data(), ab->Data());
-}
-
-THREADED_TEST(ArrayBuffer_NewResizableBackingStore) {
-  FLAG_SCOPE(harmony_rab_gsab);
-
-  LocalContext env;
-  v8::Isolate* isolate = env->GetIsolate();
-  v8::HandleScope handle_scope(isolate);
-  std::shared_ptr<v8::BackingStore> backing_store =
-      v8::ArrayBuffer::NewResizableBackingStore(32, 1024);
-  CHECK(!backing_store->IsShared());
-  CHECK(backing_store->IsResizableByUserJavaScript());
-  CHECK_EQ(1024, backing_store->MaxByteLength());
-  Local<v8::ArrayBuffer> ab = v8::ArrayBuffer::New(isolate, backing_store);
-  CHECK_EQ(backing_store.get(), ab->GetBackingStore().get());
-  CHECK_EQ(backing_store->Data(), ab->Data());
-  CHECK_EQ(backing_store->MaxByteLength(), ab->MaxByteLength());
 }
 
 THREADED_TEST(SharedArrayBuffer_NewBackingStore) {
@@ -475,11 +411,9 @@ THREADED_TEST(SharedArrayBuffer_NewBackingStore) {
   std::shared_ptr<v8::BackingStore> backing_store =
       v8::SharedArrayBuffer::NewBackingStore(isolate, 100);
   CHECK(backing_store->IsShared());
-  CHECK(!backing_store->IsResizableByUserJavaScript());
   Local<v8::SharedArrayBuffer> ab =
       v8::SharedArrayBuffer::New(isolate, backing_store);
   CHECK_EQ(backing_store.get(), ab->GetBackingStore().get());
-  CHECK_EQ(backing_store->Data(), ab->Data());
 }
 
 static void* backing_store_custom_data = nullptr;
@@ -494,7 +428,7 @@ static void BackingStoreCustomDeleter(void* data, size_t length,
   CHECK_EQ(backing_store_custom_length, length);
   CHECK_EQ(backing_store_custom_deleter_data,
            reinterpret_cast<intptr_t>(deleter_data));
-  CcTest::array_buffer_allocator()->Free(data, length);
+  free(data);
   backing_store_custom_called = true;
 }
 
@@ -502,7 +436,7 @@ TEST(ArrayBuffer_NewBackingStore_CustomDeleter) {
   {
     // Create and destroy a backing store.
     backing_store_custom_called = false;
-    backing_store_custom_data = CcTest::array_buffer_allocator()->Allocate(100);
+    backing_store_custom_data = malloc(100);
     backing_store_custom_length = 100;
     v8::ArrayBuffer::NewBackingStore(
         backing_store_custom_data, backing_store_custom_length,
@@ -516,7 +450,7 @@ TEST(SharedArrayBuffer_NewBackingStore_CustomDeleter) {
   {
     // Create and destroy a backing store.
     backing_store_custom_called = false;
-    backing_store_custom_data = CcTest::array_buffer_allocator()->Allocate(100);
+    backing_store_custom_data = malloc(100);
     backing_store_custom_length = 100;
     v8::SharedArrayBuffer::NewBackingStore(
         backing_store_custom_data, backing_store_custom_length,
@@ -530,10 +464,9 @@ TEST(ArrayBuffer_NewBackingStore_EmptyDeleter) {
   LocalContext env;
   v8::Isolate* isolate = env->GetIsolate();
   v8::HandleScope handle_scope(isolate);
-  size_t size = 100;
-  void* buffer = CcTest::array_buffer_allocator()->Allocate(size);
+  char static_buffer[100];
   std::unique_ptr<v8::BackingStore> backing_store =
-      v8::ArrayBuffer::NewBackingStore(buffer, size,
+      v8::ArrayBuffer::NewBackingStore(static_buffer, sizeof(static_buffer),
                                        v8::BackingStore::EmptyDeleter, nullptr);
   uint64_t external_memory_before =
       isolate->AdjustAmountOfExternalAllocatedMemory(0);
@@ -543,18 +476,17 @@ TEST(ArrayBuffer_NewBackingStore_EmptyDeleter) {
   // The ArrayBuffer constructor does not increase the external memory counter.
   // The counter may decrease however if the allocation triggers GC.
   CHECK_GE(external_memory_before, external_memory_after);
-  CcTest::array_buffer_allocator()->Free(buffer, size);
 }
 
 TEST(SharedArrayBuffer_NewBackingStore_EmptyDeleter) {
   LocalContext env;
   v8::Isolate* isolate = env->GetIsolate();
   v8::HandleScope handle_scope(isolate);
-  size_t size = 100;
-  void* buffer = CcTest::array_buffer_allocator()->Allocate(size);
+  char static_buffer[100];
   std::unique_ptr<v8::BackingStore> backing_store =
       v8::SharedArrayBuffer::NewBackingStore(
-          buffer, size, v8::BackingStore::EmptyDeleter, nullptr);
+          static_buffer, sizeof(static_buffer), v8::BackingStore::EmptyDeleter,
+          nullptr);
   uint64_t external_memory_before =
       isolate->AdjustAmountOfExternalAllocatedMemory(0);
   v8::SharedArrayBuffer::New(isolate, std::move(backing_store));
@@ -563,7 +495,6 @@ TEST(SharedArrayBuffer_NewBackingStore_EmptyDeleter) {
   // The SharedArrayBuffer constructor does not increase the external memory
   // counter. The counter may decrease however if the allocation triggers GC.
   CHECK_GE(external_memory_before, external_memory_after);
-  CcTest::array_buffer_allocator()->Free(buffer, size);
 }
 
 THREADED_TEST(BackingStore_NotShared) {
@@ -574,7 +505,7 @@ THREADED_TEST(BackingStore_NotShared) {
   CHECK(!ab->GetBackingStore()->IsShared());
   CHECK(!v8::ArrayBuffer::NewBackingStore(isolate, 8)->IsShared());
   backing_store_custom_called = false;
-  backing_store_custom_data = CcTest::array_buffer_allocator()->Allocate(100);
+  backing_store_custom_data = malloc(100);
   backing_store_custom_length = 100;
   CHECK(!v8::ArrayBuffer::NewBackingStore(
              backing_store_custom_data, backing_store_custom_length,
@@ -591,7 +522,7 @@ THREADED_TEST(BackingStore_Shared) {
   CHECK(ab->GetBackingStore()->IsShared());
   CHECK(v8::SharedArrayBuffer::NewBackingStore(isolate, 8)->IsShared());
   backing_store_custom_called = false;
-  backing_store_custom_data = CcTest::array_buffer_allocator()->Allocate(100);
+  backing_store_custom_data = malloc(100);
   backing_store_custom_length = 100;
   CHECK(v8::SharedArrayBuffer::NewBackingStore(
             backing_store_custom_data, backing_store_custom_length,
@@ -825,49 +756,4 @@ TEST(BackingStore_ReallocateShared) {
   std::unique_ptr<v8::BackingStore> new_backing_store =
       v8::BackingStore::Reallocate(isolate, std::move(backing_store), 10);
   CHECK(new_backing_store->IsShared());
-}
-
-TEST(ArrayBuffer_Resizable) {
-  FLAG_SCOPE(harmony_rab_gsab);
-
-  LocalContext env;
-  v8::Isolate* isolate = env->GetIsolate();
-  v8::HandleScope handle_scope(isolate);
-
-  const char rab_source[] = "new ArrayBuffer(32, { maxByteLength: 1024 });";
-  v8::Local<v8::ArrayBuffer> rab = CompileRun(rab_source).As<v8::ArrayBuffer>();
-  CHECK(rab->GetBackingStore()->IsResizableByUserJavaScript());
-  CHECK_EQ(32, rab->ByteLength());
-  CHECK_EQ(1024, rab->MaxByteLength());
-
-  const char gsab_source[] =
-      "new SharedArrayBuffer(32, { maxByteLength: 1024 });";
-  v8::Local<v8::SharedArrayBuffer> gsab =
-      CompileRun(gsab_source).As<v8::SharedArrayBuffer>();
-  CHECK(gsab->GetBackingStore()->IsResizableByUserJavaScript());
-  CHECK_EQ(32, gsab->ByteLength());
-  CHECK_EQ(1024, gsab->MaxByteLength());
-  CHECK_EQ(gsab->MaxByteLength(), gsab->GetBackingStore()->MaxByteLength());
-}
-
-TEST(ArrayBuffer_FixedLength) {
-  FLAG_SCOPE(harmony_rab_gsab);
-
-  LocalContext env;
-  v8::Isolate* isolate = env->GetIsolate();
-  v8::HandleScope handle_scope(isolate);
-
-  // Fixed-length ArrayBuffers' byte length are equal to their max byte length.
-  v8::Local<v8::ArrayBuffer> ab =
-      CompileRun("new ArrayBuffer(32);").As<v8::ArrayBuffer>();
-  CHECK(!ab->GetBackingStore()->IsResizableByUserJavaScript());
-  CHECK_EQ(32, ab->ByteLength());
-  CHECK_EQ(32, ab->MaxByteLength());
-  CHECK_EQ(ab->MaxByteLength(), ab->GetBackingStore()->MaxByteLength());
-  v8::Local<v8::SharedArrayBuffer> sab =
-      CompileRun("new SharedArrayBuffer(32);").As<v8::SharedArrayBuffer>();
-  CHECK(!sab->GetBackingStore()->IsResizableByUserJavaScript());
-  CHECK_EQ(32, sab->ByteLength());
-  CHECK_EQ(32, sab->MaxByteLength());
-  CHECK_EQ(sab->MaxByteLength(), sab->GetBackingStore()->MaxByteLength());
 }

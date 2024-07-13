@@ -16,6 +16,8 @@ namespace v8 {
 namespace internal {
 namespace torque {
 
+DEFINE_CONTEXTUAL_VARIABLE(CurrentScope)
+
 QualifiedName QualifiedName::Parse(std::string qualified_name) {
   std::vector<std::string> qualifications;
   while (true) {
@@ -80,12 +82,13 @@ std::ostream& operator<<(std::ostream& os, const GenericCallable& g) {
 }
 
 SpecializationRequester::SpecializationRequester(SourcePosition position,
-                                                 Scope* s, std::string name)
+                                                 Scope* scope, std::string name)
     : position(position), name(std::move(name)) {
   // Skip scopes that are not related to template specializations, they might be
   // stack-allocated and not live for long enough.
-  while (s && s->GetSpecializationRequester().IsNone()) s = s->ParentScope();
-  this->scope = s;
+  while (scope && scope->GetSpecializationRequester().IsNone())
+    scope = scope->ParentScope();
+  this->scope = scope;
 }
 
 std::vector<Declarable*> Scope::Lookup(const QualifiedName& name) {
@@ -162,11 +165,11 @@ TypeArgumentInference GenericCallable::InferSpecializationTypes(
 }
 
 base::Optional<Statement*> GenericCallable::CallableBody() {
-  if (auto* macro_decl = TorqueMacroDeclaration::DynamicCast(declaration())) {
-    return macro_decl->body;
-  } else if (auto* builtin_decl =
+  if (auto* decl = TorqueMacroDeclaration::DynamicCast(declaration())) {
+    return decl->body;
+  } else if (auto* decl =
                  TorqueBuiltinDeclaration::DynamicCast(declaration())) {
-    return builtin_decl->body;
+    return decl->body;
   } else {
     return base::nullopt;
   }

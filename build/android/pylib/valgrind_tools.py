@@ -1,11 +1,10 @@
-# Copyright 2012 The Chromium Authors
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 # pylint: disable=R0201
 
-
-
+from __future__ import print_function
 
 import logging
 import sys
@@ -35,7 +34,7 @@ class AddressSanitizerTool(base_tool.BaseTool):
   EXTRA_OPTIONS = 'strict_memcmp=0,use_sigaltstack=1'
 
   def __init__(self, device):
-    super().__init__()
+    super(AddressSanitizerTool, self).__init__()
     self._device = device
 
   @classmethod
@@ -92,10 +91,10 @@ def CreateTool(tool_name, device):
   ctor = TOOL_REGISTRY.get(tool_name)
   if ctor:
     return ctor(device)
-  print('Unknown tool %s, available tools: %s' %
-        (tool_name, ', '.join(sorted(TOOL_REGISTRY.keys()))))
-  sys.exit(1)
-
+  else:
+    print('Unknown tool %s, available tools: %s' % (tool_name, ', '.join(
+        sorted(TOOL_REGISTRY.keys()))))
+    sys.exit(1)
 
 def PushFilesForTool(tool_name, device):
   """Pushes the files required for |tool_name| to |device|.

@@ -6,7 +6,7 @@
 #define V8_HEAP_WEAK_OBJECT_WORKLISTS_H_
 
 #include "src/common/globals.h"
-#include "src/heap/base/worklist.h"
+#include "src/heap/worklist.h"
 #include "src/objects/heap-object.h"
 #include "src/objects/js-weak-refs.h"
 
@@ -42,7 +42,7 @@ class TransitionArray;
   /* Keep track of all ephemerons for concurrent marking tasks. Only store   \
      ephemerons in these worklists if both (key, value) are unreachable at   \
      the moment.                                                             \
-     MarkCompactCollector::MarkTransitiveClosureUntilFixpoint drains/fills   \
+     MarkCompactCollector::ProcessEphemeronsUntilFixpoint drains/fills       \
      these worklists. current_ephemerons is used as draining worklist in     \
      the current fixpoint iteration. */                                      \
   F(Ephemeron, current_ephemerons, CurrentEphemerons)                        \
@@ -57,46 +57,30 @@ class TransitionArray;
   F(HeapObjectAndCode, weak_objects_in_code, WeakObjectsInCode)              \
   F(JSWeakRef, js_weak_refs, JSWeakRefs)                                     \
   F(WeakCell, weak_cells, WeakCells)                                         \
-  F(SharedFunctionInfo, code_flushing_candidates, CodeFlushingCandidates)    \
-  F(JSFunction, baseline_flushing_candidates, BaselineFlushingCandidates)    \
+  F(SharedFunctionInfo, bytecode_flushing_candidates,                        \
+    BytecodeFlushingCandidates)                                              \
   F(JSFunction, flushed_js_functions, FlushedJSFunctions)
 
-class WeakObjects final {
- private:
-  class UnusedBase {};  // Base class to allow using macro in initializer list.
-
+class WeakObjects {
  public:
   template <typename Type>
-  using WeakObjectWorklist = ::heap::base::Worklist<Type, 64>;
-
-  class Local final : public UnusedBase {
-   public:
-    explicit Local(WeakObjects* weak_objects);
-
-    V8_EXPORT_PRIVATE void Publish();
-
-#define DECLARE_WORKLIST(Type, name, _) \
-  WeakObjectWorklist<Type>::Local name##_local;
-    WEAK_OBJECT_WORKLISTS(DECLARE_WORKLIST)
-#undef DECLARE_WORKLIST
-  };
+  using WeakObjectWorklist = Worklist<Type, 64>;
 
 #define DECLARE_WORKLIST(Type, name, _) WeakObjectWorklist<Type> name;
   WEAK_OBJECT_WORKLISTS(DECLARE_WORKLIST)
 #undef DECLARE_WORKLIST
 
   void UpdateAfterScavenge();
-  void Clear();
 
  private:
 #define DECLARE_UPDATE_METHODS(Type, _, Name) \
-  static void Update##Name(WeakObjectWorklist<Type>&);
+  void Update##Name(WeakObjectWorklist<Type>&);
   WEAK_OBJECT_WORKLISTS(DECLARE_UPDATE_METHODS)
 #undef DECLARE_UPDATE_METHODS
 
 #ifdef DEBUG
   template <typename Type>
-  static bool ContainsYoungObjects(WeakObjectWorklist<Type>& worklist);
+  bool ContainsYoungObjects(WeakObjectWorklist<Type>& worklist);
 #endif
 };
 

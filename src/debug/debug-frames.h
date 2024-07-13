@@ -19,7 +19,7 @@ class JavaScriptFrame;
 class CommonFrame;
 class WasmFrame;
 
-class V8_EXPORT_PRIVATE FrameInspector {
+class FrameInspector {
  public:
   FrameInspector(CommonFrame* frame, int inlined_frame_index, Isolate* isolate);
   FrameInspector(const FrameInspector&) = delete;
@@ -36,7 +36,7 @@ class V8_EXPORT_PRIVATE FrameInspector {
   Handle<Object> GetContext();
   Handle<Object> GetReceiver() { return receiver_; }
 
-  Handle<String> GetFunctionName();
+  Handle<String> GetFunctionName() { return function_name_; }
 
 #if V8_ENABLE_WEBASSEMBLY
   bool IsWasm();
@@ -58,6 +58,7 @@ class V8_EXPORT_PRIVATE FrameInspector {
   Handle<Script> script_;
   Handle<Object> receiver_;
   Handle<JSFunction> function_;
+  Handle<String> function_name_;
   int source_position_ = -1;
   bool is_optimized_ = false;
   bool is_constructor_ = false;

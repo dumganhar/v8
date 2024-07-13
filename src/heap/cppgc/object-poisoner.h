@@ -5,11 +5,10 @@
 #ifndef V8_HEAP_CPPGC_OBJECT_POISONER_H_
 #define V8_HEAP_CPPGC_OBJECT_POISONER_H_
 
-#include "src/base/sanitizer/asan.h"
 #include "src/heap/cppgc/heap-object-header.h"
 #include "src/heap/cppgc/heap-page.h"
 #include "src/heap/cppgc/heap-visitor.h"
-#include "src/heap/cppgc/object-view.h"
+#include "src/heap/cppgc/sanitizers.h"
 
 namespace cppgc {
 namespace internal {
@@ -21,11 +20,14 @@ class UnmarkedObjectsPoisoner : public HeapVisitor<UnmarkedObjectsPoisoner> {
   friend class HeapVisitor<UnmarkedObjectsPoisoner>;
 
  private:
-  bool VisitHeapObjectHeader(HeapObjectHeader& header) {
-    if (header.IsFree() || header.IsMarked()) return true;
+  bool VisitHeapObjectHeader(HeapObjectHeader* header) {
+    if (header->IsFree() || header->IsMarked()) return true;
 
-    ASAN_POISON_MEMORY_REGION(header.ObjectStart(),
-                              ObjectView<>(header).Size());
+    const size_t size =
+        header->IsLargeObject()
+            ? LargePage::From(BasePage::FromPayload(header))->ObjectSize()
+            : header->ObjectSize();
+    ASAN_POISON_MEMORY_REGION(header->Payload(), size);
     return true;
   }
 };

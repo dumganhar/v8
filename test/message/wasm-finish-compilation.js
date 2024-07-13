@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-d8.file.execute('test/mjsunit/wasm/wasm-module-builder.js');
+// Flags: --no-stress-opt
+
+load('test/mjsunit/wasm/wasm-module-builder.js');
 
 // Test that d8 does not terminate until wasm compilation has finished and the
 // promise was resolved.

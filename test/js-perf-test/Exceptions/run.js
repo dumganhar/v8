@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 
-d8.file.execute('../base.js');
-d8.file.execute('try-catch.js');
+load('../base.js');
+load('try-catch.js');
 
 var success = true;
 

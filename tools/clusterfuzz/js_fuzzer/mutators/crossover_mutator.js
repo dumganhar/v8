@@ -36,9 +36,12 @@ class CrossOverMutator extends mutator.Mutator {
             {canHaveSuper: canHaveSuper});
 
         // Insert the statement.
+        var templateOptions = Object.assign({}, sourceHelpers.BABYLON_OPTIONS);
+        templateOptions['placeholderPattern'] = /^VAR_[0-9]+$/;
+
         let toInsert = babelTemplate(
             randomExpression.source,
-            sourceHelpers.BABYLON_REPLACE_VAR_OPTIONS);
+            templateOptions);
         const dependencies = {};
 
         if (randomExpression.dependencies) {

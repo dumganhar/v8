@@ -30,6 +30,7 @@
 #
 #   Bazel Build for Google C++ Testing Framework(Google Test)-googlemock
 
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_test")
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
 
 licenses(["notice"])
@@ -38,9 +39,8 @@ licenses(["notice"])
 cc_test(
     name = "gmock_all_test",
     size = "small",
-    srcs = glob(include = ["gmock-*.cc"]) + ["gmock-matchers_test.h"],
+    srcs = glob(include = ["gmock-*.cc"]),
     linkopts = select({
-        "//:qnx": [],
         "//:windows": [],
         "//conditions:default": ["-pthread"],
     }),
@@ -52,9 +52,6 @@ py_library(
     name = "gmock_test_utils",
     testonly = 1,
     srcs = ["gmock_test_utils.py"],
-    deps = [
-        "//googletest/test:gtest_test_utils",
-    ],
 )
 
 cc_binary(
@@ -71,10 +68,6 @@ py_test(
     data = [
         ":gmock_leak_test_",
         ":gmock_test_utils",
-    ],
-    tags = [
-        "no_test_msvc2015",
-        "no_test_msvc2017",
     ],
 )
 
@@ -103,10 +96,7 @@ py_test(
         ":gmock_output_test_",
         ":gmock_output_test_golden.txt",
     ],
-    tags = [
-        "no_test_msvc2015",
-        "no_test_msvc2017",
-    ],
+    python_version = "PY2",
     deps = [":gmock_test_utils"],
 )
 

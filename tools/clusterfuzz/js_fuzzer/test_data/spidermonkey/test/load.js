@@ -10,6 +10,3 @@ if (!ok)
   throw new Error(`Assertion failed: Some text`);
 
 print("Assertion failed: Some text");
-
-// Check that we can load template literals with null cooked value.
-check()`\01`;

@@ -50,11 +50,10 @@
 // be used by...
 #if defined(JSONCPP_DISABLE_DLL_INTERFACE_WARNING)
 #pragma warning(push)
-#pragma warning(disable : 4251 4275)
+#pragma warning(disable : 4251)
 #endif // if defined(JSONCPP_DISABLE_DLL_INTERFACE_WARNING)
 
-#pragma pack(push)
-#pragma pack()
+#pragma pack(push, 8)
 
 /** \brief JSON (JavaScript Object Notation).
  */
@@ -264,10 +263,10 @@ private:
     CZString(ArrayIndex index);
     CZString(char const* str, unsigned length, DuplicationPolicy allocate);
     CZString(CZString const& other);
-    CZString(CZString&& other) noexcept;
+    CZString(CZString&& other);
     ~CZString();
     CZString& operator=(const CZString& other);
-    CZString& operator=(CZString&& other) noexcept;
+    CZString& operator=(CZString&& other);
 
     bool operator<(CZString const& other) const;
     bool operator==(CZString const& other) const;
@@ -345,13 +344,13 @@ public:
   Value(bool value);
   Value(std::nullptr_t ptr) = delete;
   Value(const Value& other);
-  Value(Value&& other) noexcept;
+  Value(Value&& other);
   ~Value();
 
   /// \note Overwrite existing comments. To preserve comments, use
   /// #swapPayload().
   Value& operator=(const Value& other);
-  Value& operator=(Value&& other) noexcept;
+  Value& operator=(Value&& other);
 
   /// Swap everything.
   void swap(Value& other);
@@ -636,9 +635,9 @@ private:
   public:
     Comments() = default;
     Comments(const Comments& that);
-    Comments(Comments&& that) noexcept;
+    Comments(Comments&& that);
     Comments& operator=(const Comments& that);
-    Comments& operator=(Comments&& that) noexcept;
+    Comments& operator=(Comments&& that);
     bool has(CommentPlacement slot) const;
     String get(CommentPlacement slot) const;
     void set(CommentPlacement slot, String comment);
@@ -919,8 +918,8 @@ public:
    *  because the returned references/pointers can be used
    *  to change state of the base class.
    */
-  reference operator*() const { return const_cast<reference>(deref()); }
-  pointer operator->() const { return const_cast<pointer>(&deref()); }
+  reference operator*() { return deref(); }
+  pointer operator->() { return &deref(); }
 };
 
 inline void swap(Value& a, Value& b) { a.swap(b); }

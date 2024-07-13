@@ -7,7 +7,8 @@ asyncFact (test.js:9:2)
 (anonymous) (expr.js:0:0)
 
 asyncFact (test.js:11:2)
--- await --
+-- async function --
+asyncFact (test.js:10:20)
 asyncFact (test.js:10:20)
 asyncFact (test.js:10:20)
 asyncFact (test.js:10:20)
@@ -21,7 +22,8 @@ asyncFact (test.js:9:2)
 (anonymous) (expr.js:0:0)
 
 asyncFact (test.js:11:2)
--- await --
+-- async function --
+asyncFact (test.js:10:20)
 (anonymous) (expr.js:0:0)
 
 

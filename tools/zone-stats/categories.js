@@ -48,7 +48,6 @@ export const CATEGORIES = new Map([
       'V8.TFAllocateGeneralRegisters',
       'V8.TFAssembleCode',
       'V8.TFAssignSpillSlots',
-      'V8.TFBitcastElision',
       'V8.TFBuildLiveRangeBundles',
       'V8.TFBuildLiveRanges',
       'V8.TFBytecodeGraphBuilder',

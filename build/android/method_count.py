@@ -1,8 +1,9 @@
-#! /usr/bin/env python3
-# Copyright 2015 The Chromium Authors
+#! /usr/bin/env python
+# Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
 
 import argparse
 import os
@@ -12,7 +13,7 @@ import zipfile
 from pylib.dex import dex_parser
 
 
-class DexStatsCollector:
+class DexStatsCollector(object):
   """Tracks count of method/field/string/type as well as unique methods."""
 
   def __init__(self):

@@ -3,9 +3,9 @@
 // found in the LICENSE file.
 
 
-d8.file.execute('../base.js');
+load('../base.js');
 
-d8.file.execute(arguments[0] + '.js');
+load(arguments[0] + '.js');
 
 var success = true;
 

@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors
+# Copyright 2014 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -47,13 +47,16 @@ class JSONGeneratorTest(unittest.TestCase):
   def _TestJSONGeneration(self, passed_tests_list, failed_tests_list):
     tests_set = set(passed_tests_list) | set(failed_tests_list)
 
-    DISABLED_tests = set(t for t in tests_set if t.startswith('DISABLED_'))
-    FLAKY_tests = set(t for t in tests_set if t.startswith('FLAKY_'))
-    FAILS_tests = set(t for t in tests_set if t.startswith('FAILS_'))
+    DISABLED_tests = set([t for t in tests_set
+                          if t.startswith('DISABLED_')])
+    FLAKY_tests = set([t for t in tests_set
+                       if t.startswith('FLAKY_')])
+    FAILS_tests = set([t for t in tests_set
+                       if t.startswith('FAILS_')])
     PASS_tests = tests_set - (DISABLED_tests | FLAKY_tests | FAILS_tests)
 
     failed_tests = set(failed_tests_list) - DISABLED_tests
-    failed_count_map = dict((t, 1) for t in failed_tests)
+    failed_count_map = dict([(t, 1) for t in failed_tests])
 
     test_timings = {}
     i = 0
@@ -61,7 +64,7 @@ class JSONGeneratorTest(unittest.TestCase):
       test_timings[test] = float(self._num_runs * 100 + i)
       i += 1
 
-    test_results_map = {}
+    test_results_map = dict()
     for test in tests_set:
       test_results_map[test] = json_results_generator.TestResult(
           test, failed=(test in failed_tests),
@@ -73,7 +76,7 @@ class JSONGeneratorTest(unittest.TestCase):
         None,   # don't fetch past json results archive
         test_results_map)
 
-    failed_count_map = dict((t, 1) for t in failed_tests)
+    failed_count_map = dict([(t, 1) for t in failed_tests])
 
     # Test incremental json results
     incremental_json = generator.GetJSON()
@@ -111,7 +114,7 @@ class JSONGeneratorTest(unittest.TestCase):
     if tests_set or DISABLED_count:
       fixable = {}
       for fixable_items in buildinfo[JRG.FIXABLE]:
-        for (result_type, count) in fixable_items.items():
+        for (result_type, count) in fixable_items.iteritems():
           if result_type in fixable:
             fixable[result_type] = fixable[result_type] + count
           else:
@@ -135,7 +138,7 @@ class JSONGeneratorTest(unittest.TestCase):
 
     if failed_count_map:
       tests = buildinfo[JRG.TESTS]
-      for test_name in failed_count_map.keys():
+      for test_name in failed_count_map.iterkeys():
         test = self._FindTestInTrie(test_name, tests)
 
         failed = 0

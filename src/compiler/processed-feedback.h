@@ -5,6 +5,7 @@
 #ifndef V8_COMPILER_PROCESSED_FEEDBACK_H_
 #define V8_COMPILER_PROCESSED_FEEDBACK_H_
 
+#include "src/compiler/feedback-source.h"
 #include "src/compiler/heap-refs.h"
 
 namespace v8 {
@@ -19,7 +20,7 @@ class ForInFeedback;
 class GlobalAccessFeedback;
 class InstanceOfFeedback;
 class LiteralFeedback;
-class MegaDOMPropertyAccessFeedback;
+class MinimorphicLoadPropertyAccessFeedback;
 class NamedAccessFeedback;
 class RegExpLiteralFeedback;
 class TemplateObjectFeedback;
@@ -36,7 +37,7 @@ class ProcessedFeedback : public ZoneObject {
     kGlobalAccess,
     kInstanceOf,
     kLiteral,
-    kMegaDOMPropertyAccess,
+    kMinimorphicPropertyAccess,
     kNamedAccess,
     kRegExpLiteral,
     kTemplateObject,
@@ -54,7 +55,8 @@ class ProcessedFeedback : public ZoneObject {
   GlobalAccessFeedback const& AsGlobalAccess() const;
   InstanceOfFeedback const& AsInstanceOf() const;
   NamedAccessFeedback const& AsNamedAccess() const;
-  MegaDOMPropertyAccessFeedback const& AsMegaDOMPropertyAccess() const;
+  MinimorphicLoadPropertyAccessFeedback const& AsMinimorphicPropertyAccess()
+      const;
   LiteralFeedback const& AsLiteral() const;
   RegExpLiteralFeedback const& AsRegExpLiteral() const;
   TemplateObjectFeedback const& AsTemplateObject() const;
@@ -89,10 +91,10 @@ class GlobalAccessFeedback : public ProcessedFeedback {
   int slot_index() const;
   bool immutable() const;
 
-  OptionalObjectRef GetConstantHint(JSHeapBroker* broker) const;
+  base::Optional<ObjectRef> GetConstantHint() const;
 
  private:
-  OptionalObjectRef const cell_or_context_;
+  base::Optional<ObjectRef> const cell_or_context_;
   int const index_and_immutable_;
 };
 
@@ -129,7 +131,7 @@ class ElementAccessFeedback : public ProcessedFeedback {
   // A transition group is a target and a possibly empty set of sources that can
   // transition to the target. It is represented as a non-empty vector with the
   // target at index 0.
-  using TransitionGroup = ZoneVector<MapRef>;
+  using TransitionGroup = ZoneVector<Handle<Map>>;
   ZoneVector<TransitionGroup> const& transition_groups() const;
 
   bool HasOnlyStringMaps(JSHeapBroker* broker) const;
@@ -151,7 +153,7 @@ class ElementAccessFeedback : public ProcessedFeedback {
   // [e0, e1]                           [e0, e1]
   //
   ElementAccessFeedback const& Refine(
-      JSHeapBroker* broker, ZoneVector<MapRef> const& inferred_maps) const;
+      ZoneVector<Handle<Map>> const& inferred_maps, Zone* zone) const;
 
  private:
   KeyedAccessMode const keyed_mode_;
@@ -160,49 +162,55 @@ class ElementAccessFeedback : public ProcessedFeedback {
 
 class NamedAccessFeedback : public ProcessedFeedback {
  public:
-  NamedAccessFeedback(NameRef name, ZoneVector<MapRef> const& maps,
+  NamedAccessFeedback(NameRef const& name, ZoneVector<Handle<Map>> const& maps,
                       FeedbackSlotKind slot_kind);
 
-  NameRef name() const { return name_; }
-  ZoneVector<MapRef> const& maps() const { return maps_; }
+  NameRef const& name() const { return name_; }
+  ZoneVector<Handle<Map>> const& maps() const { return maps_; }
 
  private:
   NameRef const name_;
-  ZoneVector<MapRef> const maps_;
+  ZoneVector<Handle<Map>> const maps_;
 };
 
-class MegaDOMPropertyAccessFeedback : public ProcessedFeedback {
+class MinimorphicLoadPropertyAccessFeedback : public ProcessedFeedback {
  public:
-  MegaDOMPropertyAccessFeedback(FunctionTemplateInfoRef info_ref,
-                                FeedbackSlotKind slot_kind);
+  MinimorphicLoadPropertyAccessFeedback(NameRef const& name,
+                                        FeedbackSlotKind slot_kind,
+                                        Handle<Object> handler,
+                                        ZoneVector<Handle<Map>> const& maps,
+                                        bool has_migration_target_maps);
 
-  FunctionTemplateInfoRef info() const { return info_; }
+  NameRef const& name() const { return name_; }
+  bool is_monomorphic() const { return maps_.size() == 1; }
+  Handle<Object> handler() const { return handler_; }
+  ZoneVector<Handle<Map>> const& maps() const { return maps_; }
+  bool has_migration_target_maps() const { return has_migration_target_maps_; }
 
  private:
-  FunctionTemplateInfoRef const info_;
+  NameRef const name_;
+  Handle<Object> const handler_;
+  ZoneVector<Handle<Map>> const maps_;
+  bool const has_migration_target_maps_;
 };
 
 class CallFeedback : public ProcessedFeedback {
  public:
-  CallFeedback(OptionalHeapObjectRef target, float frequency,
-               SpeculationMode mode, CallFeedbackContent call_feedback_content,
-               FeedbackSlotKind slot_kind)
+  CallFeedback(base::Optional<HeapObjectRef> target, float frequency,
+               SpeculationMode mode, FeedbackSlotKind slot_kind)
       : ProcessedFeedback(kCall, slot_kind),
         target_(target),
         frequency_(frequency),
-        mode_(mode),
-        content_(call_feedback_content) {}
+        mode_(mode) {}
 
-  OptionalHeapObjectRef target() const { return target_; }
+  base::Optional<HeapObjectRef> target() const { return target_; }
   float frequency() const { return frequency_; }
   SpeculationMode speculation_mode() const { return mode_; }
-  CallFeedbackContent call_feedback_content() const { return content_; }
 
  private:
-  OptionalHeapObjectRef const target_;
+  base::Optional<HeapObjectRef> const target_;
   float const frequency_;
   SpeculationMode const mode_;
-  CallFeedbackContent const content_;
 };
 
 template <class T, ProcessedFeedback::Kind K>
@@ -226,7 +234,7 @@ class SingleValueFeedback : public ProcessedFeedback {
 };
 
 class InstanceOfFeedback
-    : public SingleValueFeedback<OptionalJSObjectRef,
+    : public SingleValueFeedback<base::Optional<JSObjectRef>,
                                  ProcessedFeedback::kInstanceOf> {
   using SingleValueFeedback::SingleValueFeedback;
 };

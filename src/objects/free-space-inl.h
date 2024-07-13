@@ -23,57 +23,37 @@ TQ_OBJECT_CONSTRUCTORS_IMPL(FreeSpace)
 
 RELAXED_SMI_ACCESSORS(FreeSpace, size, kSizeOffset)
 
-int FreeSpace::Size() { return size(kRelaxedLoad); }
+int FreeSpace::Size() { return size(); }
 
-FreeSpace FreeSpace::next() const {
+FreeSpace FreeSpace::next() {
   DCHECK(IsValid());
-#ifdef V8_EXTERNAL_CODE_SPACE
-  intptr_t diff_to_next =
-      static_cast<intptr_t>(TaggedField<Smi, kNextOffset>::load(*this).value());
-  if (diff_to_next == 0) {
-    return FreeSpace();
-  }
-  Address next_ptr = ptr() + diff_to_next * kObjectAlignment;
-  return FreeSpace::unchecked_cast(Object(next_ptr));
-#else
   return FreeSpace::unchecked_cast(
       TaggedField<Object, kNextOffset>::load(*this));
-#endif  // V8_EXTERNAL_CODE_SPACE
 }
 
 void FreeSpace::set_next(FreeSpace next) {
   DCHECK(IsValid());
-#ifdef V8_EXTERNAL_CODE_SPACE
-  if (next.is_null()) {
-    TaggedField<Smi, kNextOffset>::Relaxed_Store(*this, Smi::zero());
-    return;
-  }
-  intptr_t diff_to_next = next.ptr() - ptr();
-  DCHECK(IsAligned(diff_to_next, kObjectAlignment));
-  TaggedField<Smi, kNextOffset>::Relaxed_Store(
-      *this, Smi::FromIntptr(diff_to_next / kObjectAlignment));
-#else
-  TaggedField<Object, kNextOffset>::Relaxed_Store(*this, next);
-#endif  // V8_EXTERNAL_CODE_SPACE
+  RELAXED_WRITE_FIELD(*this, kNextOffset, next);
 }
 
 FreeSpace FreeSpace::cast(HeapObject o) {
   SLOW_DCHECK((!GetHeapFromWritableObject(o)->deserialization_complete()) ||
               o.IsFreeSpace());
-  return base::bit_cast<FreeSpace>(o);
+  return bit_cast<FreeSpace>(o);
 }
 
 FreeSpace FreeSpace::unchecked_cast(const Object o) {
-  return base::bit_cast<FreeSpace>(o);
+  return bit_cast<FreeSpace>(o);
 }
 
-bool FreeSpace::IsValid() const {
+bool FreeSpace::IsValid() {
   Heap* heap = GetHeapFromWritableObject(*this);
   Object free_space_map =
       Isolate::FromHeap(heap)->root(RootIndex::kFreeSpaceMap);
-  CHECK(!heap->deserialization_complete() ||
-        map_slot().contains_map_value(free_space_map.ptr()));
-  CHECK_LE(kNextOffset + kTaggedSize, size(kRelaxedLoad));
+  CHECK_IMPLIES(!map_slot().contains_value(free_space_map.ptr()),
+                !heap->deserialization_complete() &&
+                    map_slot().contains_value(kNullAddress));
+  CHECK_LE(kNextOffset + kTaggedSize, relaxed_read_size());
   return true;
 }
 

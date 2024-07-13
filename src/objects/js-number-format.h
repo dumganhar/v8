@@ -23,16 +23,11 @@
 #include "src/objects/object-macros.h"
 
 namespace U_ICU_NAMESPACE {
-class Formattable;
 class UnicodeString;
 namespace number {
-class FormattedNumber;
-class FormattedNumberRange;
 class LocalizedNumberFormatter;
-class LocalizedNumberRangeFormatter;
-class UnlocalizedNumberFormatter;
-}  //  namespace number
-}  //  namespace U_ICU_NAMESPACE
+}  // namespace number
+}  // namespace U_ICU_NAMESPACE
 
 namespace v8 {
 namespace internal {
@@ -51,11 +46,6 @@ class JSNumberFormat
   V8_WARN_UNUSED_RESULT static MaybeHandle<JSNumberFormat> UnwrapNumberFormat(
       Isolate* isolate, Handle<JSReceiver> format_holder);
 
-  // #sec-number-format-functions
-  V8_WARN_UNUSED_RESULT static MaybeHandle<String> NumberFormatFunction(
-      Isolate* isolate, Handle<JSNumberFormat> number_format,
-      Handle<Object> numeric_obj);
-
   // ecma402/#sec-intl.numberformat.prototype.resolvedoptions
   static Handle<JSObject> ResolvedOptions(Isolate* isolate,
                                           Handle<JSNumberFormat> number_format);
@@ -63,16 +53,6 @@ class JSNumberFormat
   V8_WARN_UNUSED_RESULT static MaybeHandle<JSArray> FormatToParts(
       Isolate* isolate, Handle<JSNumberFormat> number_format,
       Handle<Object> numeric_obj);
-
-  // ecma402/#sec-formatnumericrange
-  V8_WARN_UNUSED_RESULT static MaybeHandle<String> FormatNumericRange(
-      Isolate* isolate, Handle<JSNumberFormat> number_format, Handle<Object> x,
-      Handle<Object> y);
-
-  // ecma402/#sec-formatnumericrangetoparts
-  V8_WARN_UNUSED_RESULT static MaybeHandle<JSArray> FormatNumericRangeToParts(
-      Isolate* isolate, Handle<JSNumberFormat> number_format, Handle<Object> x,
-      Handle<Object> y);
 
   V8_WARN_UNUSED_RESULT static MaybeHandle<String> FormatNumeric(
       Isolate* isolate,
@@ -88,21 +68,9 @@ class JSNumberFormat
                                          int32_t* minimum, int32_t* maximum);
   static bool SignificantDigitsFromSkeleton(const icu::UnicodeString& skeleton,
                                             int32_t* minimum, int32_t* maximum);
-
-  enum class ShowTrailingZeros { kShow, kHide };
-
-  static icu::number::UnlocalizedNumberFormatter SetDigitOptionsToFormatter(
-      const icu::number::UnlocalizedNumberFormatter& settings,
-      const Intl::NumberFormatDigitOptions& digit_options,
-      int rounding_increment, ShowTrailingZeros show);
-
-  static const icu::UnicodeString NumberingSystemFromSkeleton(
-      const icu::UnicodeString& skeleton);
-
-  V8_WARN_UNUSED_RESULT static Maybe<icu::number::LocalizedNumberRangeFormatter>
-  GetRangeFormatter(
-      Isolate* isolate, String locale,
-      const icu::number::LocalizedNumberFormatter& number_formatter);
+  static icu::number::LocalizedNumberFormatter SetDigitOptionsToFormatter(
+      const icu::number::LocalizedNumberFormatter& icu_number_formatter,
+      const Intl::NumberFormatDigitOptions& digit_options);
 
   DECL_PRINTER(JSNumberFormat)
 
@@ -112,34 +80,18 @@ class JSNumberFormat
   TQ_OBJECT_CONSTRUCTORS(JSNumberFormat)
 };
 
-// IntlMathematicalValue is designed only to be used as part of
-// JSNumberFormat and can only be allocate on the stack. We place this class in
-// the header so we can write unit test code for it. Please do NOT use this
-// class outside JSNumberFormat implementation.
-class V8_NODISCARD IntlMathematicalValue {
- public:
-  IntlMathematicalValue() : approx_(0) {}
-  V8_EXPORT_PRIVATE bool IsNaN() const;
+struct NumberFormatSpan {
+  int32_t field_id;
+  int32_t begin_pos;
+  int32_t end_pos;
 
-  V8_EXPORT_PRIVATE static Maybe<IntlMathematicalValue> From(
-      Isolate* isolate, Handle<Object> value);
-
-  static Maybe<icu::number::FormattedNumber> FormatNumeric(
-      Isolate* isolate,
-      const icu::number::LocalizedNumberFormatter& number_format,
-      const IntlMathematicalValue& x);
-
-  static Maybe<icu::number::FormattedNumberRange> FormatRange(
-      Isolate* isolate,
-      const icu::number::LocalizedNumberRangeFormatter& number_range_format,
-      const IntlMathematicalValue& x, const IntlMathematicalValue& y);
-
- private:
-  double approx_;
-  Handle<Object> value_;  // Number, BigInt or String
-  Maybe<icu::Formattable> ToFormattable(Isolate* isolate) const;
-  MaybeHandle<String> ToString(Isolate* isolate) const;
+  NumberFormatSpan() = default;
+  NumberFormatSpan(int32_t field_id, int32_t begin_pos, int32_t end_pos)
+      : field_id(field_id), begin_pos(begin_pos), end_pos(end_pos) {}
 };
+
+V8_EXPORT_PRIVATE std::vector<NumberFormatSpan> FlattenRegionsToParts(
+    std::vector<NumberFormatSpan>* regions);
 
 }  // namespace internal
 }  // namespace v8

@@ -50,12 +50,10 @@ export class SelectTimeEvent extends AppEvent {
     return 'timerangeselect';
   }
 
-  constructor(start = 0, end = Infinity, focus = false, zoom = false) {
+  constructor(start = 0, end = Infinity) {
     super(SelectTimeEvent.name);
     this.start = start;
     this.end = end;
-    this.focus = focus;
-    this.zoom = zoom;
   }
 }
 
@@ -76,14 +74,13 @@ export class ToolTipEvent extends AppEvent {
     return 'showtooltip';
   }
 
-  constructor(content, positionOrTargetNode, immediate) {
+  constructor(content, positionOrTargetNode) {
     super(ToolTipEvent.name);
-    if (!positionOrTargetNode) {
+    this._content = content;
+    if (!positionOrTargetNode && !node) {
       throw Error('Either provide a valid position or targetNode');
     }
-    this._content = content;
     this._positionOrTargetNode = positionOrTargetNode;
-    this._immediate = immediate;
   }
 
   get content() {
@@ -92,9 +89,5 @@ export class ToolTipEvent extends AppEvent {
 
   get positionOrTargetNode() {
     return this._positionOrTargetNode;
-  }
-
-  get immediate() {
-    return this._immediate;
   }
 }

@@ -6,6 +6,7 @@
 
 #include "src/codegen/macro-assembler.h"
 #include "src/execution/isolate-inl.h"
+#include "src/init/v8.h"
 #include "test/cctest/cctest.h"
 
 namespace v8 {
@@ -23,11 +24,12 @@ int64_t GenAndRunTest(Func test_generator) {
   assm.GetCode(isolate, &desc);
   Handle<Code> code =
       Factory::CodeBuilder(isolate, desc, CodeKind::FOR_TESTING).Build();
-  auto f = GeneratedCode<int64_t()>::FromCode(isolate, *code);
+  auto f = GeneratedCode<int64_t()>::FromCode(*code);
   return f.Call();
 }
 
-Handle<Code> AssembleCodeImpl(Isolate* isolate, Func assemble) {
+Handle<Code> AssembleCodeImpl(Func assemble) {
+  Isolate* isolate = CcTest::i_isolate();
   MacroAssembler assm(isolate, CodeObjectRequired::kYes);
 
   assemble(assm);
@@ -37,7 +39,7 @@ Handle<Code> AssembleCodeImpl(Isolate* isolate, Func assemble) {
   assm.GetCode(isolate, &desc);
   Handle<Code> code =
       Factory::CodeBuilder(isolate, desc, CodeKind::FOR_TESTING).Build();
-  if (v8_flags.print_code) {
+  if (FLAG_print_code) {
     code->Print();
   }
   return code;

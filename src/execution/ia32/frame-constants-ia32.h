@@ -7,7 +7,7 @@
 
 #include "src/base/bits.h"
 #include "src/base/macros.h"
-#include "src/codegen/register.h"
+#include "src/codegen/ia32/register-ia32.h"
 #include "src/execution/frame-constants.h"
 
 namespace v8 {
@@ -17,7 +17,7 @@ class EntryFrameConstants : public AllStatic {
  public:
   // This is the offset to where JSEntry pushes the current value of
   // Isolate::c_entry_fp onto the stack.
-  static constexpr int kNextExitFrameFPOffset = -6 * kSystemPointerSize;
+  static constexpr int kCallerFPOffset = -6 * kSystemPointerSize;
 
   // EntryFrame is used by JSEntry, JSConstructEntry and JSRunMicrotasksEntry.
   // All of them take |root_register_value| as the first parameter.
@@ -34,24 +34,17 @@ class EntryFrameConstants : public AllStatic {
   static constexpr int kMicrotaskQueueArgOffset = +3 * kSystemPointerSize;
 };
 
-class WasmLiftoffSetupFrameConstants : public TypedFrameConstants {
+class WasmCompileLazyFrameConstants : public TypedFrameConstants {
  public:
-  // Number of gp parameters, without the instance.
-  static constexpr int kNumberOfSavedGpParamRegs = 3;
+  static constexpr int kNumberOfSavedGpParamRegs = 4;
   static constexpr int kNumberOfSavedFpParamRegs = 6;
 
-  // There's one spilled value (which doesn't need visiting) below the instance.
-  static constexpr int kInstanceSpillOffset =
-      TYPED_FRAME_PUSHED_VALUE_OFFSET(1);
-
-  static constexpr int kParameterSpillsOffset[] = {
-      TYPED_FRAME_PUSHED_VALUE_OFFSET(2), TYPED_FRAME_PUSHED_VALUE_OFFSET(3),
-      TYPED_FRAME_PUSHED_VALUE_OFFSET(4)};
-
-  // SP-relative.
-  static constexpr int kWasmInstanceOffset = 2 * kSystemPointerSize;
-  static constexpr int kDeclaredFunctionIndexOffset = 1 * kSystemPointerSize;
-  static constexpr int kNativeModuleOffset = 0;
+  // FP-relative.
+  static constexpr int kWasmInstanceOffset = TYPED_FRAME_PUSHED_VALUE_OFFSET(0);
+  static constexpr int kFixedFrameSizeFromFp =
+      TypedFrameConstants::kFixedFrameSizeFromFp +
+      kNumberOfSavedGpParamRegs * kSystemPointerSize +
+      kNumberOfSavedFpParamRegs * kSimd128Size;
 };
 
 // Frame constructed by the {WasmDebugBreak} builtin.
@@ -60,14 +53,17 @@ class WasmLiftoffSetupFrameConstants : public TypedFrameConstants {
 class WasmDebugBreakFrameConstants : public TypedFrameConstants {
  public:
   // Omit ebx, which is the root register.
-  static constexpr RegList kPushedGpRegs = {eax, ecx, edx, esi, edi};
+  static constexpr RegList kPushedGpRegs =
+      Register::ListOf(eax, ecx, edx, esi, edi);
 
   // Omit xmm7, which is the kScratchDoubleReg.
-  static constexpr DoubleRegList kPushedFpRegs = {xmm0, xmm1, xmm2, xmm3,
-                                                  xmm4, xmm5, xmm6};
+  static constexpr RegList kPushedFpRegs =
+      DoubleRegister::ListOf(xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6);
 
-  static constexpr int kNumPushedGpRegisters = kPushedGpRegs.Count();
-  static constexpr int kNumPushedFpRegisters = kPushedFpRegs.Count();
+  static constexpr int kNumPushedGpRegisters =
+      base::bits::CountPopulation(kPushedGpRegs);
+  static constexpr int kNumPushedFpRegisters =
+      base::bits::CountPopulation(kPushedFpRegs);
 
   static constexpr int kLastPushedGpRegisterOffset =
       -kFixedFrameSizeFromFp - kNumPushedGpRegisters * kSystemPointerSize;
@@ -76,17 +72,15 @@ class WasmDebugBreakFrameConstants : public TypedFrameConstants {
 
   // Offsets are fp-relative.
   static int GetPushedGpRegisterOffset(int reg_code) {
-    DCHECK_NE(0, kPushedGpRegs.bits() & (1 << reg_code));
-    uint32_t lower_regs =
-        kPushedGpRegs.bits() & ((uint32_t{1} << reg_code) - 1);
+    DCHECK_NE(0, kPushedGpRegs & (1 << reg_code));
+    uint32_t lower_regs = kPushedGpRegs & ((uint32_t{1} << reg_code) - 1);
     return kLastPushedGpRegisterOffset +
            base::bits::CountPopulation(lower_regs) * kSystemPointerSize;
   }
 
   static int GetPushedFpRegisterOffset(int reg_code) {
-    DCHECK_NE(0, kPushedFpRegs.bits() & (1 << reg_code));
-    uint32_t lower_regs =
-        kPushedFpRegs.bits() & ((uint32_t{1} << reg_code) - 1);
+    DCHECK_NE(0, kPushedFpRegs & (1 << reg_code));
+    uint32_t lower_regs = kPushedFpRegs & ((uint32_t{1} << reg_code) - 1);
     return kLastPushedFpRegisterOffset +
            base::bits::CountPopulation(lower_regs) * kSimd128Size;
   }

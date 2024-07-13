@@ -16,30 +16,21 @@ namespace compiler {
 class Node;
 
 template <class T>
-T DefaultConstruct(Zone* zone) {
+T DefaultConstruct() {
   return T();
 }
 
-template <class T>
-T ZoneConstruct(Zone* zone) {
-  return T(zone);
-}
-
-template <class T, T def(Zone*) = DefaultConstruct<T>>
+template <class T, T def() = DefaultConstruct<T>>
 class NodeAuxData {
  public:
-  explicit NodeAuxData(Zone* zone) : zone_(zone), aux_data_(zone) {}
+  explicit NodeAuxData(Zone* zone) : aux_data_(zone) {}
   explicit NodeAuxData(size_t initial_size, Zone* zone)
-      : zone_(zone), aux_data_(initial_size, def(zone), zone) {}
+      : aux_data_(initial_size, zone) {}
 
   // Update entry. Returns true iff entry was changed.
   bool Set(Node* node, T const& data) {
-    NodeId const id = node->id();
-    return Set(id, data);
-  }
-
-  bool Set(NodeId id, T const& data) {
-    if (id >= aux_data_.size()) aux_data_.resize(id + 1, def(zone_));
+    size_t const id = node->id();
+    if (id >= aux_data_.size()) aux_data_.resize(id + 1, def());
     if (aux_data_[id] != data) {
       aux_data_[id] = data;
       return true;
@@ -47,10 +38,9 @@ class NodeAuxData {
     return false;
   }
 
-  T Get(Node* node) const { return Get(node->id()); }
-
-  T Get(NodeId id) const {
-    return (id < aux_data_.size()) ? aux_data_[id] : def(zone_);
+  T Get(Node* node) const {
+    size_t const id = node->id();
+    return (id < aux_data_.size()) ? aux_data_[id] : def();
   }
 
   class const_iterator;
@@ -60,11 +50,10 @@ class NodeAuxData {
   const_iterator end() const;
 
  private:
-  Zone* zone_;
   ZoneVector<T> aux_data_;
 };
 
-template <class T, T def(Zone*)>
+template <class T, T def()>
 class NodeAuxData<T, def>::const_iterator {
  public:
   using iterator_category = std::forward_iterator_tag;
@@ -98,39 +87,17 @@ class NodeAuxData<T, def>::const_iterator {
   size_t current_;
 };
 
-template <class T, T def(Zone*)>
+template <class T, T def()>
 typename NodeAuxData<T, def>::const_iterator NodeAuxData<T, def>::begin()
     const {
   return typename NodeAuxData<T, def>::const_iterator(&aux_data_, 0);
 }
 
-template <class T, T def(Zone*)>
+template <class T, T def()>
 typename NodeAuxData<T, def>::const_iterator NodeAuxData<T, def>::end() const {
   return typename NodeAuxData<T, def>::const_iterator(&aux_data_,
                                                       aux_data_.size());
 }
-
-template <class T, T kNonExistent>
-class NodeAuxDataMap {
- public:
-  explicit NodeAuxDataMap(Zone* zone) : map_(zone) {}
-
-  void Put(NodeId key, T value) { map_[key] = value; }
-
-  T Get(NodeId key) const {
-    auto entry = map_.find(key);
-    if (entry == map_.end()) return kNonExistent;
-    return entry->second;
-  }
-
-  void Reserve(size_t count) {
-    size_t new_capacity = map_.size() + count;
-    map_.reserve(new_capacity);
-  }
-
- private:
-  ZoneUnorderedMap<NodeId, T> map_;
-};
 
 }  // namespace compiler
 }  // namespace internal

@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 
-d8.file.execute('../base.js');
-d8.file.execute('spreadcalls.js');
+load('../base.js');
+load('spreadcalls.js');
 
 
 var success = true;

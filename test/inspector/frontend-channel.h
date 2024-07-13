@@ -7,11 +7,8 @@
 
 #include <vector>
 
-#include "include/v8-context.h"
-#include "include/v8-function.h"
 #include "include/v8-inspector.h"
-#include "include/v8-microtask-queue.h"
-#include "include/v8-persistent-handle.h"
+#include "include/v8.h"
 #include "test/inspector/task-runner.h"
 #include "test/inspector/utils.h"
 
@@ -35,43 +32,38 @@ class FrontendChannelImpl : public v8_inspector::V8Inspector::Channel {
   void sendResponse(
       int callId,
       std::unique_ptr<v8_inspector::StringBuffer> message) override {
-    task_runner_->Append(std::make_unique<SendMessageTask>(
-        session_id_, ToVector(message->string())));
+    task_runner_->Append(
+        std::make_unique<SendMessageTask>(this, ToVector(message->string())));
   }
   void sendNotification(
       std::unique_ptr<v8_inspector::StringBuffer> message) override {
-    task_runner_->Append(std::make_unique<SendMessageTask>(
-        session_id_, ToVector(message->string())));
+    task_runner_->Append(
+        std::make_unique<SendMessageTask>(this, ToVector(message->string())));
   }
   void flushProtocolNotifications() override {}
 
   class SendMessageTask : public TaskRunner::Task {
    public:
-    SendMessageTask(int session_id, const std::vector<uint16_t>& message)
-        : session_id_(session_id), message_(message) {}
+    SendMessageTask(FrontendChannelImpl* channel,
+                    const std::vector<uint16_t>& message)
+        : channel_(channel), message_(message) {}
     ~SendMessageTask() override = default;
     bool is_priority_task() final { return false; }
 
    private:
-    void Run(InspectorIsolateData* data) override {
-      v8::HandleScope handle_scope(data->isolate());
-      auto* channel = ChannelHolder::GetChannel(session_id_);
-      if (!channel) {
-        // Session got disconnected. Ignore this message.
-        return;
-      }
-
-      v8::Local<v8::Context> context =
-          data->GetDefaultContext(channel->context_group_id_);
-      v8::MicrotasksScope microtasks_scope(context,
+    void Run(IsolateData* data) override {
+      v8::MicrotasksScope microtasks_scope(data->isolate(),
                                            v8::MicrotasksScope::kRunMicrotasks);
+      v8::HandleScope handle_scope(data->isolate());
+      v8::Local<v8::Context> context =
+          data->GetDefaultContext(channel_->context_group_id_);
       v8::Context::Scope context_scope(context);
       v8::Local<v8::Value> message = ToV8String(data->isolate(), message_);
       v8::MaybeLocal<v8::Value> result;
-      result = channel->function_.Get(data->isolate())
+      result = channel_->function_.Get(data->isolate())
                    ->Call(context, context->Global(), 1, &message);
     }
-    int session_id_;
+    FrontendChannelImpl* channel_;
     std::vector<uint16_t> message_;
   };
 

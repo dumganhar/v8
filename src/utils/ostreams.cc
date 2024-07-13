@@ -7,6 +7,7 @@
 #include <cinttypes>
 
 #include "src/base/lazy-instance.h"
+#include "src/objects/objects.h"
 #include "src/objects/string.h"
 
 #if V8_OS_WIN
@@ -18,7 +19,7 @@
 
 #if defined(ANDROID) && !defined(V8_ANDROID_LOG_STDOUT)
 #define LOG_TAG "v8"
-#include <android/log.h>
+#include <android/log.h>  // NOLINT
 #endif
 
 namespace v8 {

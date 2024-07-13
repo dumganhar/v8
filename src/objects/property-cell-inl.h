@@ -5,10 +5,10 @@
 #ifndef V8_OBJECTS_PROPERTY_CELL_INL_H_
 #define V8_OBJECTS_PROPERTY_CELL_INL_H_
 
-#include "src/heap/heap-write-barrier-inl.h"
-#include "src/objects/dependent-code-inl.h"
-#include "src/objects/objects-inl.h"
 #include "src/objects/property-cell.h"
+
+#include "src/heap/heap-write-barrier-inl.h"
+#include "src/objects/code-inl.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -16,9 +16,9 @@
 namespace v8 {
 namespace internal {
 
-#include "torque-generated/src/objects/property-cell-tq-inl.inc"
+OBJECT_CONSTRUCTORS_IMPL(PropertyCell, HeapObject)
 
-TQ_OBJECT_CONSTRUCTORS_IMPL(PropertyCell)
+CAST_ACCESSOR(PropertyCell)
 
 ACCESSORS(PropertyCell, dependent_code, DependentCode, kDependentCodeOffset)
 ACCESSORS(PropertyCell, name, Name, kNameOffset)
@@ -47,10 +47,8 @@ void PropertyCell::UpdatePropertyDetailsExceptCellType(
   // unless the property is also configurable, in which case it will stay
   // read-only forever.
   if (!old_details.IsReadOnly() && details.IsReadOnly()) {
-    // TODO(11527): pass Isolate as an argument.
-    Isolate* isolate = GetIsolateFromWritableObject(*this);
-    DependentCode::DeoptimizeDependencyGroups(
-        isolate, *this, DependentCode::kPropertyCellChangedGroup);
+    dependent_code().DeoptimizeDependentCodeGroup(
+        DependentCode::kPropertyCellChangedGroup);
   }
 }
 
@@ -59,9 +57,6 @@ void PropertyCell::Transition(PropertyDetails new_details,
   DCHECK(CanTransitionTo(new_details, *new_value));
   // This code must be in sync with its counterpart in
   // PropertyCellData::Serialize.
-  PropertyDetails transition_marker = new_details;
-  transition_marker.set_cell_type(PropertyCellType::kInTransition);
-  set_property_details_raw(transition_marker.AsSmi(), kReleaseStore);
   set_value(*new_value, kReleaseStore);
   set_property_details_raw(new_details.AsSmi(), kReleaseStore);
 }

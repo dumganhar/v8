@@ -106,7 +106,6 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kArmVmovF64U32U32:
     case kArmVmovU32U32F64:
     case kArmVcnt:
-    case kArmVpadal:
     case kArmVpaddl:
     case kArmFloat32Max:
     case kArmFloat64Max:
@@ -129,8 +128,6 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kArmF64x2Ne:
     case kArmF64x2Lt:
     case kArmF64x2Le:
-    case kArmF64x2Qfma:
-    case kArmF64x2Qfms:
     case kArmF64x2Pmin:
     case kArmF64x2Pmax:
     case kArmF64x2Ceil:
@@ -148,6 +145,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kArmF32x4Abs:
     case kArmF32x4Neg:
     case kArmF32x4Sqrt:
+    case kArmF32x4RecipApprox:
+    case kArmF32x4RecipSqrtApprox:
     case kArmF32x4Add:
     case kArmF32x4Sub:
     case kArmF32x4Mul:
@@ -158,8 +157,6 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kArmF32x4Ne:
     case kArmF32x4Lt:
     case kArmF32x4Le:
-    case kArmF32x4Qfma:
-    case kArmF32x4Qfms:
     case kArmF32x4Pmin:
     case kArmF32x4Pmax:
     case kArmF32x4DemoteF64x2Zero:
@@ -211,8 +208,6 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kArmI32x4Abs:
     case kArmI32x4BitMask:
     case kArmI32x4DotI16x8S:
-    case kArmI16x8DotI8x16S:
-    case kArmI32x4DotI8x16AddS:
     case kArmI32x4TruncSatF64x2SZero:
     case kArmI32x4TruncSatF64x2UZero:
     case kArmI16x8Splat:

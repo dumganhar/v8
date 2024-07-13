@@ -1,4 +1,4 @@
-# Copyright 2013 The Chromium Authors
+# Copyright 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -12,14 +12,13 @@ import fnmatch
 import json
 import logging
 import os
+import pipes
 import re
-import shlex
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
-import textwrap
 import zipfile
 
 sys.path.append(os.path.join(os.path.dirname(__file__),
@@ -36,15 +35,26 @@ DIR_SOURCE_ROOT = os.path.relpath(
 JAVA_HOME = os.path.join(DIR_SOURCE_ROOT, 'third_party', 'jdk', 'current')
 JAVAC_PATH = os.path.join(JAVA_HOME, 'bin', 'javac')
 JAVAP_PATH = os.path.join(JAVA_HOME, 'bin', 'javap')
-KOTLIN_HOME = os.path.join(DIR_SOURCE_ROOT, 'third_party', 'kotlinc', 'current')
-KOTLINC_PATH = os.path.join(KOTLIN_HOME, 'bin', 'kotlinc')
+RT_JAR_PATH = os.path.join(DIR_SOURCE_ROOT, 'third_party', 'jdk', 'extras',
+                           'java_8', 'jre', 'lib', 'rt.jar')
 
-def JavaCmd(xmx='1G'):
+try:
+  string_types = basestring
+except NameError:
+  string_types = (str, bytes)
+
+
+def JavaCmd(verify=True, xmx='1G'):
   ret = [os.path.join(JAVA_HOME, 'bin', 'java')]
   # Limit heap to avoid Java not GC'ing when it should, and causing
   # bots to OOM when many java commands are runnig at the same time
   # https://crbug.com/1098333
   ret += ['-Xmx' + xmx]
+
+  # Disable bytecode verification for local builds gives a ~2% speed-up.
+  if not verify:
+    ret += ['-noverify']
+
   return ret
 
 
@@ -86,6 +96,35 @@ def FindInDirectory(directory, filename_filter='*'):
   return files
 
 
+def ParseGnList(value):
+  """Converts a "GN-list" command-line parameter into a list.
+
+  Conversions handled:
+    * None -> []
+    * '' -> []
+    * 'asdf' -> ['asdf']
+    * '["a", "b"]' -> ['a', 'b']
+    * ['["a", "b"]', 'c'] -> ['a', 'b', 'c']  (flattened list)
+
+  The common use for this behavior is in the Android build where things can
+  take lists of @FileArg references that are expanded via ExpandFileArgs.
+  """
+  # Convert None to [].
+  if not value:
+    return []
+  # Convert a list of GN lists to a flattened list.
+  if isinstance(value, list):
+    ret = []
+    for arg in value:
+      ret.extend(ParseGnList(arg))
+    return ret
+  # Convert normal GN list.
+  if value.startswith('['):
+    return gn_helpers.GNValueParser(value).ParseList()
+  # Convert a single string value to a list.
+  return [value]
+
+
 def CheckOptions(options, parser, required=None):
   if not required:
     return
@@ -108,7 +147,24 @@ def WriteJson(obj, path, only_if_changed=False):
 
 
 @contextlib.contextmanager
-def _AtomicOutput(path, only_if_changed=True, mode='w+b'):
+def AtomicOutput(path, only_if_changed=True, mode='w+b'):
+  """Helper to prevent half-written outputs.
+
+  Args:
+    path: Path to the final output file, which will be written atomically.
+    only_if_changed: If True (the default), do not touch the filesystem
+      if the content has not changed.
+    mode: The mode to open the file in (str).
+  Returns:
+    A python context manager that yelds a NamedTemporaryFile instance
+    that must be used by clients to write the data to. On exit, the
+    manager will try to replace the final output file with the
+    temporary one if necessary. The temporary file is always destroyed
+    on exit.
+  Example:
+    with build_utils.AtomicOutput(output_path) as tmp_file:
+      subprocess.check_call(['prog', '--output', tmp_file.name])
+  """
   # Create in same directory to ensure same filesystem when moving.
   dirname = os.path.dirname(path)
   if not os.path.exists(dirname):
@@ -133,21 +189,16 @@ class CalledProcessError(Exception):
   exits with a non-zero exit code."""
 
   def __init__(self, cwd, args, output):
-    super().__init__()
+    super(CalledProcessError, self).__init__()
     self.cwd = cwd
     self.args = args
     self.output = output
 
   def __str__(self):
     # A user should be able to simply copy and paste the command that failed
-    # into their shell (unless it is more than 200 chars).
-    # User can set PRINT_FULL_COMMAND=1 to always print the full command.
-    print_full = os.environ.get('PRINT_FULL_COMMAND', '0') != '0'
-    full_cmd = shlex.join(self.args)
-    short_cmd = textwrap.shorten(full_cmd, width=200)
-    printed_cmd = full_cmd if print_full else short_cmd
+    # into their shell.
     copyable_command = '( cd {}; {} )'.format(os.path.abspath(self.cwd),
-                                              printed_cmd)
+        ' '.join(map(pipes.quote, self.args)))
     return 'Command failed: {}\n{}'.format(copyable_command, self.output)
 
 
@@ -187,18 +238,6 @@ def FilterReflectiveAccessJavaWarnings(output):
       'All illegal access operations)')
 
 
-# This filter applies globally to all CheckOutput calls. We use this to prevent
-# messages from failing the build, without actually removing them.
-def _FailureFilter(output):
-  # This is a message that comes from the JDK which can't be disabled, which as
-  # far as we can tell, doesn't cause any real issues. It only happens
-  # occasionally on the bots. See crbug.com/1441023 for details.
-  jdk_filter = (r'.*warning.*Cannot use file \S+ because'
-                r' it is locked by another process')
-  output = FilterLines(output, jdk_filter)
-  return output
-
-
 # This can be used in most cases like subprocess.check_output(). The output,
 # particularly when the command fails, better highlights the command's failure.
 # If the command fails, raises a build_utils.CalledProcessError.
@@ -214,7 +253,6 @@ def CheckOutput(args,
   if not cwd:
     cwd = os.getcwd()
 
-  logging.info('CheckOutput: %s', ' '.join(args))
   child = subprocess.Popen(args,
       stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd, env=env)
   stdout, stderr = child.communicate()
@@ -240,25 +278,18 @@ def CheckOutput(args,
 
   has_stdout = print_stdout and stdout
   has_stderr = print_stderr and stderr
-  if has_stdout or has_stderr:
-    if has_stdout and has_stderr:
-      stream_name = 'stdout and stderr'
-    elif has_stdout:
-      stream_name = 'stdout'
-    else:
-      stream_name = 'stderr'
-
-    if fail_on_output and _FailureFilter(stdout + stderr):
-      MSG = """
+  if fail_on_output and (has_stdout or has_stderr):
+    MSG = """\
 Command failed because it wrote to {}.
 You can often set treat_warnings_as_errors=false to not treat output as \
-failure (useful when developing locally).
-"""
-      raise CalledProcessError(cwd, args, MSG.format(stream_name))
-
-    short_cmd = textwrap.shorten(shlex.join(args), width=200)
-    sys.stderr.write(
-        f'\nThe above {stream_name} output was from: {short_cmd}\n')
+failure (useful when developing locally)."""
+    if has_stdout and has_stderr:
+      stream_string = 'stdout and stderr'
+    elif has_stdout:
+      stream_string = 'stdout'
+    else:
+      stream_string = 'stderr'
+    raise CalledProcessError(cwd, args, MSG.format(stream_string))
 
   return stdout
 
@@ -335,6 +366,136 @@ def ExtractAll(zip_path, path=None, no_clobber=True, pattern=None,
   return extracted
 
 
+def HermeticZipInfo(*args, **kwargs):
+  """Creates a ZipInfo with a constant timestamp and external_attr."""
+  ret = zipfile.ZipInfo(*args, **kwargs)
+  ret.date_time = (2001, 1, 1, 0, 0, 0)
+  ret.external_attr = (0o644 << 16)
+  return ret
+
+
+def AddToZipHermetic(zip_file,
+                     zip_path,
+                     src_path=None,
+                     data=None,
+                     compress=None):
+  """Adds a file to the given ZipFile with a hard-coded modified time.
+
+  Args:
+    zip_file: ZipFile instance to add the file to.
+    zip_path: Destination path within the zip file (or ZipInfo instance).
+    src_path: Path of the source file. Mutually exclusive with |data|.
+    data: File data as a string.
+    compress: Whether to enable compression. Default is taken from ZipFile
+        constructor.
+  """
+  assert (src_path is None) != (data is None), (
+      '|src_path| and |data| are mutually exclusive.')
+  if isinstance(zip_path, zipfile.ZipInfo):
+    zipinfo = zip_path
+    zip_path = zipinfo.filename
+  else:
+    zipinfo = HermeticZipInfo(filename=zip_path)
+
+  _CheckZipPath(zip_path)
+
+  if src_path and os.path.islink(src_path):
+    zipinfo.filename = zip_path
+    zipinfo.external_attr |= stat.S_IFLNK << 16  # mark as a symlink
+    zip_file.writestr(zipinfo, os.readlink(src_path))
+    return
+
+  # zipfile.write() does
+  #     external_attr = (os.stat(src_path)[0] & 0xFFFF) << 16
+  # but we want to use _HERMETIC_FILE_ATTR, so manually set
+  # the few attr bits we care about.
+  if src_path:
+    st = os.stat(src_path)
+    for mode in (stat.S_IXUSR, stat.S_IXGRP, stat.S_IXOTH):
+      if st.st_mode & mode:
+        zipinfo.external_attr |= mode << 16
+
+  if src_path:
+    with open(src_path, 'rb') as f:
+      data = f.read()
+
+  # zipfile will deflate even when it makes the file bigger. To avoid
+  # growing files, disable compression at an arbitrary cut off point.
+  if len(data) < 16:
+    compress = False
+
+  # None converts to ZIP_STORED, when passed explicitly rather than the
+  # default passed to the ZipFile constructor.
+  compress_type = zip_file.compression
+  if compress is not None:
+    compress_type = zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED
+  zip_file.writestr(zipinfo, data, compress_type)
+
+
+def DoZip(inputs, output, base_dir=None, compress_fn=None,
+          zip_prefix_path=None):
+  """Creates a zip file from a list of files.
+
+  Args:
+    inputs: A list of paths to zip, or a list of (zip_path, fs_path) tuples.
+    output: Path, fileobj, or ZipFile instance to add files to.
+    base_dir: Prefix to strip from inputs.
+    compress_fn: Applied to each input to determine whether or not to compress.
+        By default, items will be |zipfile.ZIP_STORED|.
+    zip_prefix_path: Path prepended to file path in zip file.
+  """
+  if base_dir is None:
+    base_dir = '.'
+  input_tuples = []
+  for tup in inputs:
+    if isinstance(tup, string_types):
+      tup = (os.path.relpath(tup, base_dir), tup)
+      if tup[0].startswith('..'):
+        raise Exception('Invalid zip_path: ' + tup[0])
+    input_tuples.append(tup)
+
+  # Sort by zip path to ensure stable zip ordering.
+  input_tuples.sort(key=lambda tup: tup[0])
+
+  out_zip = output
+  if not isinstance(output, zipfile.ZipFile):
+    out_zip = zipfile.ZipFile(output, 'w')
+
+  try:
+    for zip_path, fs_path in input_tuples:
+      if zip_prefix_path:
+        zip_path = os.path.join(zip_prefix_path, zip_path)
+      compress = compress_fn(zip_path) if compress_fn else None
+      AddToZipHermetic(out_zip, zip_path, src_path=fs_path, compress=compress)
+  finally:
+    if output is not out_zip:
+      out_zip.close()
+
+
+def ZipDir(output, base_dir, compress_fn=None, zip_prefix_path=None):
+  """Creates a zip file from a directory."""
+  inputs = []
+  for root, _, files in os.walk(base_dir):
+    for f in files:
+      inputs.append(os.path.join(root, f))
+
+  if isinstance(output, zipfile.ZipFile):
+    DoZip(
+        inputs,
+        output,
+        base_dir,
+        compress_fn=compress_fn,
+        zip_prefix_path=zip_prefix_path)
+  else:
+    with AtomicOutput(output) as f:
+      DoZip(
+          inputs,
+          f,
+          base_dir,
+          compress_fn=compress_fn,
+          zip_prefix_path=zip_prefix_path)
+
+
 def MatchesGlob(path, filters):
   """Returns whether the given path matches any of the given glob patterns."""
   return filters and any(fnmatch.fnmatch(path, f) for f in filters)
@@ -351,13 +512,11 @@ def MergeZips(output, input_zips, path_transform=None, compress=None):
     compress: Overrides compression setting from origin zip entries.
   """
   path_transform = path_transform or (lambda p: p)
+  added_names = set()
 
   out_zip = output
   if not isinstance(output, zipfile.ZipFile):
     out_zip = zipfile.ZipFile(output, 'w')
-
-  # Include paths in the existing zip here to avoid adding duplicate files.
-  added_names = set(out_zip.namelist())
 
   try:
     for in_file in input_zips:
@@ -430,6 +589,29 @@ def InitLogging(enabling_env):
   atexit.register(log_exit)
 
 
+def AddDepfileOption(parser):
+  # TODO(agrieve): Get rid of this once we've moved to argparse.
+  if hasattr(parser, 'add_option'):
+    func = parser.add_option
+  else:
+    func = parser.add_argument
+  func('--depfile',
+       help='Path to depfile (refer to `gn help depfile`)')
+
+
+def WriteDepfile(depfile_path, first_gn_output, inputs=None):
+  assert depfile_path != first_gn_output  # http://crbug.com/646165
+  assert not isinstance(inputs, string_types)  # Easy mistake to make
+  inputs = inputs or []
+  MakeDirectory(os.path.dirname(depfile_path))
+  # Ninja does not support multiple outputs in depfiles.
+  with open(depfile_path, 'w') as depfile:
+    depfile.write(first_gn_output.replace(' ', '\\ '))
+    depfile.write(': ')
+    depfile.write(' '.join(i.replace(' ', '\\ ') for i in inputs))
+    depfile.write('\n')
+
+
 def ExpandFileArgs(args):
   """Replaces file-arg placeholders in args.
 
@@ -474,7 +656,7 @@ def ExpandFileArgs(args):
           raise Exception('Expected single item list but got %s' % expansion)
         expansion = expansion[0]
 
-    # This should match parse_gn_list. The output is either a GN-formatted list
+    # This should match ParseGnList. The output is either a GN-formatted list
     # or a literal (with no quotes).
     if isinstance(expansion, list):
       new_args[i] = (arg[:match.start()] + gn_helpers.ToGNString(expansion) +

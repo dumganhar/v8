@@ -2,14 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "test/cctest/cctest.h"
+
 #include "src/base/utils/random-number-generator.h"
 #include "src/ic/accessor-assembler.h"
 #include "src/ic/stub-cache.h"
 #include "src/objects/objects-inl.h"
 #include "src/objects/smi.h"
-#include "test/cctest/cctest.h"
+#include "test/cctest/compiler/code-assembler-tester.h"
 #include "test/cctest/compiler/function-tester.h"
-#include "test/common/code-assembler-tester.h"
 
 namespace v8 {
 namespace internal {
@@ -23,7 +24,7 @@ namespace {
 void TestStubCacheOffsetCalculation(StubCache::Table table) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 2;
-  CodeAssemblerTester data(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester data(isolate, kNumParams + 1);  // Include receiver.
   AccessorAssembler m(data.state());
 
   {
@@ -36,7 +37,7 @@ void TestStubCacheOffsetCalculation(StubCache::Table table) {
       result = primary_offset;
     } else {
       CHECK_EQ(StubCache::kSecondary, table);
-      result = m.StubCacheSecondaryOffsetForTesting(name, map);
+      result = m.StubCacheSecondaryOffsetForTesting(name, primary_offset);
     }
     m.Return(m.SmiTag(result));
   }
@@ -59,11 +60,16 @@ void TestStubCacheOffsetCalculation(StubCache::Table table) {
   };
 
   Handle<Map> maps[] = {
-      factory->cell_map(),     Map::Create(isolate, 0),
-      factory->meta_map(),     factory->instruction_stream_map(),
-      Map::Create(isolate, 0), factory->hash_table_map(),
-      factory->symbol_map(),   factory->string_map(),
-      Map::Create(isolate, 0), factory->sloppy_arguments_elements_map(),
+      factory->cell_map(),
+      Map::Create(isolate, 0),
+      factory->meta_map(),
+      factory->code_map(),
+      Map::Create(isolate, 0),
+      factory->hash_table_map(),
+      factory->symbol_map(),
+      factory->string_map(),
+      Map::Create(isolate, 0),
+      factory->sloppy_arguments_elements_map(),
   };
 
   for (size_t name_index = 0; name_index < arraysize(names); name_index++) {
@@ -77,7 +83,8 @@ void TestStubCacheOffsetCalculation(StubCache::Table table) {
         if (table == StubCache::kPrimary) {
           expected_result = primary_offset;
         } else {
-          expected_result = StubCache::SecondaryOffsetForTesting(*name, *map);
+          expected_result =
+              StubCache::SecondaryOffsetForTesting(*name, primary_offset);
         }
       }
       Handle<Object> result = ft.Call(name, map).ToHandleChecked();
@@ -114,7 +121,7 @@ TEST(TryProbeStubCache) {
   using Label = CodeStubAssembler::Label;
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 3;
-  CodeAssemblerTester data(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester data(isolate, kNumParams + 1);  // Include receiver.
   AccessorAssembler m(data.state());
 
   StubCache stub_cache(isolate);
@@ -154,7 +161,7 @@ TEST(TryProbeStubCache) {
   std::vector<Handle<JSObject>> receivers;
   std::vector<Handle<Code>> handlers;
 
-  base::RandomNumberGenerator rand_gen(v8_flags.random_seed);
+  base::RandomNumberGenerator rand_gen(FLAG_random_seed);
 
   Factory* factory = isolate->factory();
 

@@ -30,7 +30,6 @@ uint32_t BuiltinsConstantsTableBuilder::AddObject(Handle<Object> object) {
   // accessibly from the root list.
   RootIndex root_list_index;
   DCHECK(!isolate_->roots_table().IsRootHandle(object, &root_list_index));
-  DCHECK_IMPLIES(object->IsMap(), !HeapObject::cast(*object).InReadOnlySpace());
 
   // Not yet finalized.
   DCHECK_EQ(ReadOnlyRoots(isolate_).empty_fixed_array(),
@@ -44,7 +43,7 @@ uint32_t BuiltinsConstantsTableBuilder::AddObject(Handle<Object> object) {
 
   // All code objects should be loaded through the root register or use
   // pc-relative addressing.
-  DCHECK(!object->IsInstructionStream());
+  DCHECK(!object->IsCode());
 #endif
 
   auto find_result = map_.FindOrInsert(object);
@@ -74,7 +73,7 @@ void CheckPreconditionsForPatching(Isolate* isolate,
 }  // namespace
 
 void BuiltinsConstantsTableBuilder::PatchSelfReference(
-    Handle<Object> self_reference, Handle<InstructionStream> code_object) {
+    Handle<Object> self_reference, Handle<Code> code_object) {
   CheckPreconditionsForPatching(isolate_, code_object);
   DCHECK(self_reference->IsOddball());
   DCHECK(Oddball::cast(*self_reference).kind() ==
@@ -82,7 +81,7 @@ void BuiltinsConstantsTableBuilder::PatchSelfReference(
 
   uint32_t key;
   if (map_.Delete(self_reference, &key)) {
-    DCHECK(code_object->IsInstructionStream());
+    DCHECK(code_object->IsCode());
     map_.Insert(code_object, key);
   }
 }
@@ -121,7 +120,7 @@ void BuiltinsConstantsTableBuilder::Finalize() {
       // See also: SetupIsolateDelegate::PopulateWithPlaceholders.
       // TODO(jgruber): Deduplicate placeholders and their corresponding
       // builtin.
-      value = builtins->code(Code::cast(value).builtin_id());
+      value = builtins->builtin(Code::cast(value).builtin_index());
     }
     DCHECK(value.IsHeapObject());
     table->set(index, value);

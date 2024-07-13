@@ -40,10 +40,25 @@ class ZoneChunkList : public ZoneObject {
   using reverse_iterator = ZoneChunkListIterator<T, true, true>;
   using const_reverse_iterator = ZoneChunkListIterator<T, true, false>;
 
-  static constexpr uint32_t kInitialChunkCapacity = 8;
-  static constexpr uint32_t kMaxChunkCapacity = 256;
+  enum class StartMode {
+    // The list will not allocate a starting chunk. Use if you expect your
+    // list to remain empty in many cases.
+    kEmpty = 0,
+    // The list will start with a small initial chunk. Subsequent chunks will
+    // get bigger over time.
+    kSmall = 8,
+    // The list will start with one chunk at maximum size. Use this if you
+    // expect your list to contain many items to avoid growing chunks.
+    kBig = 256
+  };
 
-  explicit ZoneChunkList(Zone* zone) : zone_(zone) {}
+  explicit ZoneChunkList(Zone* zone, StartMode start_mode = StartMode::kEmpty)
+      : zone_(zone) {
+    if (start_mode != StartMode::kEmpty) {
+      front_ = NewChunk(static_cast<uint32_t>(start_mode));
+      back_ = front_;
+    }
+  }
 
   ZoneChunkList(const ZoneChunkList&) = delete;
   ZoneChunkList& operator=(const ZoneChunkList&) = delete;
@@ -55,6 +70,7 @@ class ZoneChunkList : public ZoneObject {
   T& back() const;
 
   void push_back(const T& item);
+  void pop_back();
 
   // Will push a separate chunk to the front of the chunk-list.
   // Very memory-inefficient. Do only use sparsely! If you have many items to
@@ -91,6 +107,10 @@ class ZoneChunkList : public ZoneObject {
  private:
   template <typename S, bool backwards, bool modifiable>
   friend class ZoneChunkListIterator;
+
+  static constexpr uint32_t kMaxChunkCapacity = 256u;
+
+  STATIC_ASSERT(kMaxChunkCapacity == static_cast<uint32_t>(StartMode::kBig));
 
   struct Chunk {
     uint32_t capacity_ = 0;
@@ -275,7 +295,7 @@ T& ZoneChunkList<T>::back() const {
 template <typename T>
 void ZoneChunkList<T>::push_back(const T& item) {
   if (back_ == nullptr) {
-    front_ = NewChunk(kInitialChunkCapacity);
+    front_ = NewChunk(static_cast<uint32_t>(StartMode::kSmall));
     back_ = front_;
   }
 
@@ -293,6 +313,16 @@ void ZoneChunkList<T>::push_back(const T& item) {
   ++back_->position_;
   ++size_;
   DCHECK_LE(back_->position_, back_->capacity_);
+}
+
+template <typename T>
+void ZoneChunkList<T>::pop_back() {
+  DCHECK_LT(size_t(0), size());
+  if (back_->position_ == 0) {
+    back_ = back_->previous_;
+  }
+  --back_->position_;
+  --size_;
 }
 
 template <typename T>

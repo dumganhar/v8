@@ -119,6 +119,7 @@ class LoopFinderTester : HandleAndZoneScope {
   }
 
   Node* Return(Node* val, Node* effect, Node* control) {
+    Node* zero = graph.NewNode(common.Int32Constant(0));
     Node* ret = graph.NewNode(common.Return(), zero, val, effect, control);
     end->ReplaceInput(0, ret);
     return ret;
@@ -126,7 +127,7 @@ class LoopFinderTester : HandleAndZoneScope {
 
   LoopTree* GetLoopTree() {
     if (loop_tree == nullptr) {
-      if (v8_flags.trace_turbo_graph) {
+      if (FLAG_trace_turbo_graph) {
         StdoutStream{} << AsRPO(graph);
       }
       Zone zone(main_isolate()->allocator(), ZONE_NAME);

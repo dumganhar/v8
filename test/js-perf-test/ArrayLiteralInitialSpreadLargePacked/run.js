@@ -119,7 +119,7 @@ function MapIdLarge() {
 // Setup and Run
 // ----------------------------------------------------------------------------
 
-d8.file.execute('../base.js');
+load('../base.js');
 
 var success = true;
 

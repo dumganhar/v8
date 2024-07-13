@@ -118,7 +118,7 @@ class JSWeakMap : public TorqueGeneratedJSWeakMap<JSWeakMap, JSWeakCollection> {
   DECL_PRINTER(JSWeakMap)
   DECL_VERIFIER(JSWeakMap)
 
-  static_assert(kHeaderSize == kHeaderSizeOfAllWeakCollections);
+  STATIC_ASSERT(kHeaderSize == kHeaderSizeOfAllWeakCollections);
   TQ_OBJECT_CONSTRUCTORS(JSWeakMap)
 };
 
@@ -129,7 +129,7 @@ class JSWeakSet : public TorqueGeneratedJSWeakSet<JSWeakSet, JSWeakCollection> {
   DECL_PRINTER(JSWeakSet)
   DECL_VERIFIER(JSWeakSet)
 
-  static_assert(kHeaderSize == kHeaderSizeOfAllWeakCollections);
+  STATIC_ASSERT(kHeaderSize == kHeaderSizeOfAllWeakCollections);
   TQ_OBJECT_CONSTRUCTORS(JSWeakSet)
 };
 

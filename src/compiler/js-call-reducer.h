@@ -6,6 +6,7 @@
 #define V8_COMPILER_JS_CALL_REDUCER_H_
 
 #include "src/base/flags.h"
+#include "src/compiler/frame-states.h"
 #include "src/compiler/globals.h"
 #include "src/compiler/graph-reducer.h"
 #include "src/compiler/node-properties.h"
@@ -47,16 +48,14 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
   using Flags = base::Flags<Flag>;
 
   JSCallReducer(Editor* editor, JSGraph* jsgraph, JSHeapBroker* broker,
-                Zone* temp_zone, Flags flags)
+                Zone* temp_zone, Flags flags,
+                CompilationDependencies* dependencies)
       : AdvancedReducer(editor),
         jsgraph_(jsgraph),
         broker_(broker),
         temp_zone_(temp_zone),
-        flags_(flags) {}
-
-  // Max string length for inlining entire match sequence for
-  // String.prototype.startsWith in JSCallReducer.
-  static constexpr int kMaxInlineMatchSequence = 3;
+        flags_(flags),
+        dependencies_(dependencies) {}
 
   const char* reducer_name() const override { return "JSCallReducer"; }
 
@@ -72,17 +71,13 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
   JSGraph* JSGraphForGraphAssembler() const { return jsgraph(); }
 
   bool has_wasm_calls() const { return has_wasm_calls_; }
-  const wasm::WasmModule* wasm_module_for_inlining() const {
-    return wasm_module_for_inlining_;
-  }
-
-  CompilationDependencies* dependencies() const;
-  JSHeapBroker* broker() const { return broker_; }
 
  private:
   Reduction ReduceBooleanConstructor(Node* node);
-  Reduction ReduceCallApiFunction(Node* node, SharedFunctionInfoRef shared);
-  Reduction ReduceCallWasmFunction(Node* node, SharedFunctionInfoRef shared);
+  Reduction ReduceCallApiFunction(Node* node,
+                                  const SharedFunctionInfoRef& shared);
+  Reduction ReduceCallWasmFunction(Node* node,
+                                   const SharedFunctionInfoRef& shared);
   Reduction ReduceFunctionPrototypeApply(Node* node);
   Reduction ReduceFunctionPrototypeBind(Node* node);
   Reduction ReduceFunctionPrototypeCall(Node* node);
@@ -102,23 +97,24 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
   Reduction ReduceReflectHas(Node* node);
 
   Reduction ReduceArrayConstructor(Node* node);
-  Reduction ReduceArrayEvery(Node* node, SharedFunctionInfoRef shared);
-  Reduction ReduceArrayFilter(Node* node, SharedFunctionInfoRef shared);
-  Reduction ReduceArrayFindIndex(Node* node, SharedFunctionInfoRef shared);
-  Reduction ReduceArrayFind(Node* node, SharedFunctionInfoRef shared);
-  Reduction ReduceArrayForEach(Node* node, SharedFunctionInfoRef shared);
+  Reduction ReduceArrayEvery(Node* node, const SharedFunctionInfoRef& shared);
+  Reduction ReduceArrayFilter(Node* node, const SharedFunctionInfoRef& shared);
+  Reduction ReduceArrayFindIndex(Node* node,
+                                 const SharedFunctionInfoRef& shared);
+  Reduction ReduceArrayFind(Node* node, const SharedFunctionInfoRef& shared);
+  Reduction ReduceArrayForEach(Node* node, const SharedFunctionInfoRef& shared);
   Reduction ReduceArrayIncludes(Node* node);
   Reduction ReduceArrayIndexOf(Node* node);
   Reduction ReduceArrayIsArray(Node* node);
-  Reduction ReduceArrayMap(Node* node, SharedFunctionInfoRef shared);
-  Reduction ReduceArrayPrototypeAt(Node* node);
+  Reduction ReduceArrayMap(Node* node, const SharedFunctionInfoRef& shared);
   Reduction ReduceArrayPrototypePop(Node* node);
   Reduction ReduceArrayPrototypePush(Node* node);
   Reduction ReduceArrayPrototypeShift(Node* node);
   Reduction ReduceArrayPrototypeSlice(Node* node);
-  Reduction ReduceArrayReduce(Node* node, SharedFunctionInfoRef shared);
-  Reduction ReduceArrayReduceRight(Node* node, SharedFunctionInfoRef shared);
-  Reduction ReduceArraySome(Node* node, SharedFunctionInfoRef shared);
+  Reduction ReduceArrayReduce(Node* node, const SharedFunctionInfoRef& shared);
+  Reduction ReduceArrayReduceRight(Node* node,
+                                   const SharedFunctionInfoRef& shared);
+  Reduction ReduceArraySome(Node* node, const SharedFunctionInfoRef& shared);
 
   enum class ArrayIteratorKind { kArrayLike, kTypedArray };
   Reduction ReduceArrayIterator(Node* node, ArrayIteratorKind array_kind,
@@ -127,28 +123,20 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
   Reduction ReduceFastArrayIteratorNext(InstanceType type, Node* node,
                                         IterationKind kind);
 
-  Reduction ReduceCallOrConstructWithArrayLikeOrSpreadOfCreateArguments(
-      Node* node, Node* arguments_list, int arraylike_or_spread_index,
-      CallFrequency const& frequency, FeedbackSource const& feedback,
-      SpeculationMode speculation_mode, CallFeedbackRelation feedback_relation);
   Reduction ReduceCallOrConstructWithArrayLikeOrSpread(
-      Node* node, int argument_count, int arraylike_or_spread_index,
-      CallFrequency const& frequency, FeedbackSource const& feedback_source,
-      SpeculationMode speculation_mode, CallFeedbackRelation feedback_relation,
-      Node* target, Effect effect, Control control);
+      Node* node, int arraylike_or_spread_index, CallFrequency const& frequency,
+      FeedbackSource const& feedback, SpeculationMode speculation_mode,
+      CallFeedbackRelation feedback_relation);
   Reduction ReduceJSConstruct(Node* node);
   Reduction ReduceJSConstructWithArrayLike(Node* node);
   Reduction ReduceJSConstructWithSpread(Node* node);
   Reduction ReduceJSCall(Node* node);
-  Reduction ReduceJSCall(Node* node, SharedFunctionInfoRef shared);
+  Reduction ReduceJSCall(Node* node, const SharedFunctionInfoRef& shared);
   Reduction ReduceJSCallWithArrayLike(Node* node);
   Reduction ReduceJSCallWithSpread(Node* node);
   Reduction ReduceRegExpPrototypeTest(Node* node);
   Reduction ReduceReturnReceiver(Node* node);
-
-  enum class StringIndexOfIncludesVariant { kIncludes, kIndexOf };
-  Reduction ReduceStringPrototypeIndexOfIncludes(
-      Node* node, StringIndexOfIncludesVariant variant);
+  Reduction ReduceStringPrototypeIndexOf(Node* node);
   Reduction ReduceStringPrototypeSubstring(Node* node);
   Reduction ReduceStringPrototypeSlice(Node* node);
   Reduction ReduceStringPrototypeSubstr(Node* node);
@@ -156,7 +144,6 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
       const Operator* string_access_operator, Node* node);
   Reduction ReduceStringPrototypeCharAt(Node* node);
   Reduction ReduceStringPrototypeStartsWith(Node* node);
-  Reduction ReduceStringPrototypeEndsWith(Node* node);
 
 #ifdef V8_INTL_SUPPORT
   Reduction ReduceStringPrototypeToLowerCaseIntl(Node* node);
@@ -166,7 +153,6 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
   Reduction ReduceStringFromCharCode(Node* node);
   Reduction ReduceStringFromCodePoint(Node* node);
   Reduction ReduceStringPrototypeIterator(Node* node);
-  Reduction ReduceStringPrototypeLocaleCompare(Node* node);
   Reduction ReduceStringIteratorPrototypeNext(Node* node);
   Reduction ReduceStringPrototypeConcat(Node* node);
 
@@ -180,11 +166,8 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
   Reduction ReducePromiseResolveTrampoline(Node* node);
 
   Reduction ReduceTypedArrayConstructor(Node* node,
-                                        SharedFunctionInfoRef shared);
+                                        const SharedFunctionInfoRef& shared);
   Reduction ReduceTypedArrayPrototypeToStringTag(Node* node);
-  Reduction ReduceArrayBufferViewByteLengthAccessor(Node* node,
-                                                    InstanceType instance_type);
-  Reduction ReduceTypedArrayPrototypeLength(Node* node);
 
   Reduction ReduceForInsufficientFeedback(Node* node, DeoptimizeReason reason);
 
@@ -204,9 +187,6 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
 
   Reduction ReduceMapPrototypeHas(Node* node);
   Reduction ReduceMapPrototypeGet(Node* node);
-  Reduction ReduceSetPrototypeHas(Node* node);
-  Reduction ReduceCollectionPrototypeHas(Node* node,
-                                         CollectionKind collection_kind);
   Reduction ReduceCollectionIteration(Node* node,
                                       CollectionKind collection_kind,
                                       IterationKind iteration_kind);
@@ -220,8 +200,7 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
   Reduction ReduceArrayBufferIsView(Node* node);
   Reduction ReduceArrayBufferViewAccessor(Node* node,
                                           InstanceType instance_type,
-                                          FieldAccess const& access,
-                                          Builtin builtin);
+                                          FieldAccess const& access);
 
   enum class DataViewAccess { kGet, kSet };
   Reduction ReduceDataViewAccess(Node* node, DataViewAccess access,
@@ -232,16 +211,10 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
   Reduction ReduceNumberParseInt(Node* node);
 
   Reduction ReduceNumberConstructor(Node* node);
-  Reduction ReduceBigIntConstructor(Node* node);
-  Reduction ReduceBigIntAsN(Node* node, Builtin builtin);
-
-  base::Optional<Reduction> TryReduceJSCallMathMinMaxWithArrayLike(Node* node);
-  Reduction ReduceJSCallMathMinMaxWithArrayLike(Node* node, Builtin builtin);
+  Reduction ReduceBigIntAsUintN(Node* node);
 
   // The pendant to ReplaceWithValue when using GraphAssembler-based reductions.
   Reduction ReplaceWithSubgraph(JSCallReducerAssembler* gasm, Node* subgraph);
-  std::pair<Node*, Node*> ReleaseEffectAndControlFromAssembler(
-      JSCallReducerAssembler* gasm);
 
   // Helper to verify promise receiver maps are as expected.
   // On bailout from a reduction, be sure to return inference.NoChange().
@@ -258,17 +231,9 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
 
   bool IsBuiltinOrApiFunction(JSFunctionRef target_ref) const;
 
-  // Check whether an array has the expected length. Returns the new effect.
-  Node* CheckArrayLength(Node* array, ElementsKind elements_kind,
-                         uint32_t array_length,
-                         const FeedbackSource& feedback_source, Effect effect,
-                         Control control);
-
-  // Check whether the given new target value is a constructor function.
-  void CheckIfConstructor(Node* call);
-
   Graph* graph() const;
   JSGraph* jsgraph() const { return jsgraph_; }
+  JSHeapBroker* broker() const { return broker_; }
   Zone* temp_zone() const { return temp_zone_; }
   Isolate* isolate() const;
   Factory* factory() const;
@@ -277,18 +242,16 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
   JSOperatorBuilder* javascript() const;
   SimplifiedOperatorBuilder* simplified() const;
   Flags flags() const { return flags_; }
+  CompilationDependencies* dependencies() const { return dependencies_; }
 
   JSGraph* const jsgraph_;
   JSHeapBroker* const broker_;
   Zone* const temp_zone_;
   Flags const flags_;
+  CompilationDependencies* const dependencies_;
   std::set<Node*> waitlist_;
 
-  // For preventing infinite recursion via ReduceJSCallWithArrayLikeOrSpread.
-  std::unordered_set<Node*> generated_calls_with_array_like_or_spread_;
-
   bool has_wasm_calls_ = false;
-  const wasm::WasmModule* wasm_module_for_inlining_ = nullptr;
 };
 
 }  // namespace compiler

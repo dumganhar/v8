@@ -4,15 +4,17 @@
 
 #include "src/snapshot/startup-serializer.h"
 
+#include "src/api/api.h"
+#include "src/deoptimizer/deoptimizer.h"
 #include "src/execution/v8threads.h"
-#include "src/handles/global-handles-inl.h"
+#include "src/handles/global-handles.h"
 #include "src/heap/heap-inl.h"
 #include "src/heap/read-only-heap.h"
 #include "src/objects/contexts.h"
+#include "src/objects/foreign-inl.h"
 #include "src/objects/objects-inl.h"
 #include "src/objects/slots.h"
 #include "src/snapshot/read-only-serializer.h"
-#include "src/snapshot/shared-heap-serializer.h"
 
 namespace v8 {
 namespace internal {
@@ -60,11 +62,11 @@ class V8_NODISCARD SanitizeIsolateScope final {
 
 }  // namespace
 
-StartupSerializer::StartupSerializer(
-    Isolate* isolate, Snapshot::SerializerFlags flags,
-    SharedHeapSerializer* shared_heap_serializer)
+StartupSerializer::StartupSerializer(Isolate* isolate,
+                                     Snapshot::SerializerFlags flags,
+                                     ReadOnlySerializer* read_only_serializer)
     : RootsSerializer(isolate, flags, RootIndex::kFirstStrongRoot),
-      shared_heap_serializer_(shared_heap_serializer),
+      read_only_serializer_(read_only_serializer),
       accessor_infos_(isolate->heap()),
       call_handler_infos_(isolate->heap()) {
   InitializeCodeAddressMap();
@@ -72,19 +74,48 @@ StartupSerializer::StartupSerializer(
 
 StartupSerializer::~StartupSerializer() {
   for (Handle<AccessorInfo> info : accessor_infos_) {
-    RestoreExternalReferenceRedirector(isolate(), *info);
+    RestoreExternalReferenceRedirector(isolate(), info);
   }
   for (Handle<CallHandlerInfo> info : call_handler_infos_) {
-    RestoreExternalReferenceRedirector(isolate(), *info);
+    RestoreExternalReferenceRedirector(isolate(), info);
   }
   OutputStatistics("StartupSerializer");
 }
 
-void StartupSerializer::SerializeObjectImpl(Handle<HeapObject> obj,
-                                            SlotType slot_type) {
-  PtrComprCageBase cage_base(isolate());
 #ifdef DEBUG
-  if (obj->IsJSFunction(cage_base)) {
+namespace {
+
+bool IsUnexpectedCodeObject(Isolate* isolate, HeapObject obj) {
+  if (!obj.IsCode()) return false;
+
+  Code code = Code::cast(obj);
+  if (code.kind() == CodeKind::REGEXP) return false;
+  if (!code.is_builtin()) return true;
+  if (code.is_off_heap_trampoline()) return false;
+
+  // An on-heap builtin. We only expect this for the interpreter entry
+  // trampoline copy stored on the root list and transitively called builtins.
+  // See Heap::interpreter_entry_trampoline_for_profiling.
+
+  switch (code.builtin_index()) {
+    case Builtins::kAbort:
+    case Builtins::kCEntry_Return1_DontSaveFPRegs_ArgvOnStack_NoBuiltinExit:
+    case Builtins::kInterpreterEntryTrampoline:
+    case Builtins::kRecordWrite:
+      return false;
+    default:
+      return true;
+  }
+
+  UNREACHABLE();
+}
+
+}  // namespace
+#endif  // DEBUG
+
+void StartupSerializer::SerializeObjectImpl(Handle<HeapObject> obj) {
+#ifdef DEBUG
+  if (obj->IsJSFunction()) {
     v8::base::OS::PrintError("Reference stack:\n");
     PrintStack(std::cerr);
     obj->Print(std::cerr);
@@ -93,32 +124,37 @@ void StartupSerializer::SerializeObjectImpl(Handle<HeapObject> obj,
         "the isolate snapshot");
   }
 #endif  // DEBUG
-  {
-    DisallowGarbageCollection no_gc;
-    HeapObject raw = *obj;
-    DCHECK(!raw.IsInstructionStream());
-    if (SerializeHotObject(raw)) return;
-    if (IsRootAndHasBeenSerialized(raw) && SerializeRoot(raw)) return;
-  }
+  DCHECK(!IsUnexpectedCodeObject(isolate(), *obj));
 
-  if (SerializeReadOnlyObjectReference(*obj, &sink_)) return;
-  if (SerializeUsingSharedHeapObjectCache(&sink_, obj)) return;
-  if (SerializeBackReference(*obj)) return;
+  if (SerializeHotObject(obj)) return;
+  if (IsRootAndHasBeenSerialized(*obj) && SerializeRoot(obj)) return;
+  if (SerializeUsingReadOnlyObjectCache(&sink_, obj)) return;
+  if (SerializeBackReference(obj)) return;
 
-  if (USE_SIMULATOR_BOOL && obj->IsAccessorInfo(cage_base)) {
+  bool use_simulator = false;
+#ifdef USE_SIMULATOR
+  use_simulator = true;
+#endif
+
+  if (use_simulator && obj->IsAccessorInfo()) {
     // Wipe external reference redirects in the accessor info.
     Handle<AccessorInfo> info = Handle<AccessorInfo>::cast(obj);
-    info->remove_getter_redirection(isolate());
+    Address original_address =
+        Foreign::cast(info->getter()).foreign_address(isolate());
+    Foreign::cast(info->js_getter())
+        .set_foreign_address(isolate(), original_address);
     accessor_infos_.Push(*info);
-  } else if (USE_SIMULATOR_BOOL && obj->IsCallHandlerInfo(cage_base)) {
+  } else if (use_simulator && obj->IsCallHandlerInfo()) {
     Handle<CallHandlerInfo> info = Handle<CallHandlerInfo>::cast(obj);
-    info->remove_callback_redirection(isolate());
+    Address original_address =
+        Foreign::cast(info->callback()).foreign_address(isolate());
+    Foreign::cast(info->js_callback())
+        .set_foreign_address(isolate(), original_address);
     call_handler_infos_.Push(*info);
-  } else if (obj->IsScript(cage_base) &&
-             Handle<Script>::cast(obj)->IsUserJavaScript()) {
+  } else if (obj->IsScript() && Handle<Script>::cast(obj)->IsUserJavaScript()) {
     Handle<Script>::cast(obj)->set_context_data(
         ReadOnlyRoots(isolate()).uninitialized_symbol());
-  } else if (obj->IsSharedFunctionInfo(cage_base)) {
+  } else if (obj->IsSharedFunctionInfo()) {
     // Clear inferred name for native functions.
     Handle<SharedFunctionInfo> shared = Handle<SharedFunctionInfo>::cast(obj);
     if (!shared->IsSubjectToDebugging() && shared->HasUncompiledData()) {
@@ -132,7 +168,7 @@ void StartupSerializer::SerializeObjectImpl(Handle<HeapObject> obj,
   // Object has not yet been serialized.  Serialize it here.
   DCHECK(!ReadOnlyHeap::Contains(*obj));
   ObjectSerializer object_serializer(this, obj, &sink_);
-  object_serializer.Serialize(slot_type);
+  object_serializer.Serialize();
 }
 
 void StartupSerializer::SerializeWeakReferencesAndDeferred() {
@@ -143,10 +179,62 @@ void StartupSerializer::SerializeWeakReferencesAndDeferred() {
   VisitRootPointer(Root::kStartupObjectCache, nullptr,
                    FullObjectSlot(&undefined));
 
+  SerializeStringTable(isolate()->string_table());
+
   isolate()->heap()->IterateWeakRoots(
       this, base::EnumSet<SkipRoot>{SkipRoot::kUnserializable});
   SerializeDeferredObjects();
   Pad();
+}
+
+void StartupSerializer::SerializeStringTable(StringTable* string_table) {
+  // A StringTable is serialized as:
+  //
+  //   N : int
+  //   string 1
+  //   string 2
+  //   ...
+  //   string N
+  //
+  // Notably, the hashmap structure, including empty and deleted elements, is
+  // not serialized.
+
+  sink_.PutInt(isolate()->string_table()->NumberOfElements(),
+               "String table number of elements");
+
+  // Custom RootVisitor which walks the string table, but only serializes the
+  // string entries. This is an inline class to be able to access the non-public
+  // SerializeObject method.
+  class StartupSerializerStringTableVisitor : public RootVisitor {
+   public:
+    explicit StartupSerializerStringTableVisitor(StartupSerializer* serializer)
+        : serializer_(serializer) {}
+
+    void VisitRootPointers(Root root, const char* description,
+                           FullObjectSlot start, FullObjectSlot end) override {
+      UNREACHABLE();
+    }
+
+    void VisitRootPointers(Root root, const char* description,
+                           OffHeapObjectSlot start,
+                           OffHeapObjectSlot end) override {
+      DCHECK_EQ(root, Root::kStringTable);
+      Isolate* isolate = serializer_->isolate();
+      for (OffHeapObjectSlot current = start; current < end; ++current) {
+        Object obj = current.load(isolate);
+        if (obj.IsHeapObject()) {
+          DCHECK(obj.IsInternalizedString());
+          serializer_->SerializeObject(handle(HeapObject::cast(obj), isolate));
+        }
+      }
+    }
+
+   private:
+    StartupSerializer* serializer_;
+  };
+
+  StartupSerializerStringTableVisitor string_table_visitor(this);
+  isolate()->string_table()->IterateElements(&string_table_visitor);
 }
 
 void StartupSerializer::SerializeStrongReferences(
@@ -162,8 +250,8 @@ void StartupSerializer::SerializeStrongReferences(
   // the first page.
   isolate->heap()->IterateSmiRoots(this);
   isolate->heap()->IterateRoots(
-      this, base::EnumSet<SkipRoot>{SkipRoot::kUnserializable, SkipRoot::kWeak,
-                                    SkipRoot::kTracedHandles});
+      this,
+      base::EnumSet<SkipRoot>{SkipRoot::kUnserializable, SkipRoot::kWeak});
 }
 
 SerializedHandleChecker::SerializedHandleChecker(Isolate* isolate,
@@ -175,10 +263,9 @@ SerializedHandleChecker::SerializedHandleChecker(Isolate* isolate,
   }
 }
 
-bool StartupSerializer::SerializeUsingSharedHeapObjectCache(
+bool StartupSerializer::SerializeUsingReadOnlyObjectCache(
     SnapshotByteSink* sink, Handle<HeapObject> obj) {
-  return shared_heap_serializer_->SerializeUsingSharedHeapObjectCache(sink,
-                                                                      obj);
+  return read_only_serializer_->SerializeUsingReadOnlyObjectCache(sink, obj);
 }
 
 void StartupSerializer::SerializeUsingStartupObjectCache(
@@ -218,7 +305,6 @@ void SerializedHandleChecker::VisitRootPointers(Root root,
 
 bool SerializedHandleChecker::CheckGlobalAndEternalHandles() {
   isolate_->global_handles()->IterateAllRoots(this);
-  isolate_->traced_handles()->Iterate(this);
   isolate_->eternal_handles()->IterateAllRoots(this);
   return ok_;
 }

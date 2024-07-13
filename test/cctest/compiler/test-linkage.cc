@@ -2,12 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "include/v8-function.h"
 #include "src/api/api-inl.h"
 #include "src/codegen/code-factory.h"
 #include "src/codegen/compiler.h"
 #include "src/codegen/optimized-compilation-info.h"
-#include "src/codegen/script-details.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/graph.h"
 #include "src/compiler/linkage.h"
@@ -32,11 +30,12 @@ static Operator dummy_operator(IrOpcode::kParameter, Operator::kNoWrite,
 static Handle<JSFunction> Compile(const char* source) {
   Isolate* isolate = CcTest::i_isolate();
   Handle<String> source_code = isolate->factory()
-                                   ->NewStringFromUtf8(base::CStrVector(source))
+                                   ->NewStringFromUtf8(CStrVector(source))
                                    .ToHandleChecked();
   Handle<SharedFunctionInfo> shared =
       Compiler::GetSharedFunctionInfoForScript(
-          isolate, source_code, ScriptDetails(),
+          isolate, source_code, Compiler::ScriptDetails(),
+          v8::ScriptOriginOptions(), nullptr, nullptr,
           v8::ScriptCompiler::kNoCompileOptions,
           ScriptCompiler::kNoCacheNoReason, NOT_NATIVES_CODE)
           .ToHandleChecked();
@@ -108,8 +107,8 @@ TEST(TestLinkageStubCall) {
   // TODO(bbudge) Add tests for FP registers.
   Isolate* isolate = CcTest::InitIsolateOnce();
   Zone zone(isolate->allocator(), ZONE_NAME);
-  Callable callable = Builtins::CallableFor(isolate, Builtin::kToNumber);
-  OptimizedCompilationInfo info(base::ArrayVector("test"), &zone,
+  Callable callable = Builtins::CallableFor(isolate, Builtins::kToNumber);
+  OptimizedCompilationInfo info(ArrayVector("test"), &zone,
                                 CodeKind::FOR_TESTING);
   auto call_descriptor = Linkage::GetStubCallDescriptor(
       &zone, callable.descriptor(), 0, CallDescriptor::kNoFlags,
@@ -130,8 +129,8 @@ TEST(TestFPLinkageStubCall) {
   Isolate* isolate = CcTest::InitIsolateOnce();
   Zone zone(isolate->allocator(), ZONE_NAME);
   Callable callable =
-      Builtins::CallableFor(isolate, Builtin::kWasmFloat64ToNumber);
-  OptimizedCompilationInfo info(base::ArrayVector("test"), &zone,
+      Builtins::CallableFor(isolate, Builtins::kWasmFloat64ToNumber);
+  OptimizedCompilationInfo info(ArrayVector("test"), &zone,
                                 CodeKind::FOR_TESTING);
   auto call_descriptor = Linkage::GetStubCallDescriptor(
       &zone, callable.descriptor(), 0, CallDescriptor::kNoFlags,

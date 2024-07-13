@@ -2,38 +2,35 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <memory>
-
 #include "include/cppgc/platform.h"
 #include "include/libplatform/libplatform.h"
-#include "include/v8-initialization.h"
+#include "include/v8.h"
 #include "src/base/compiler-specific.h"
-#include "src/base/page-allocator.h"
 #include "testing/gmock/include/gmock/gmock.h"
-
-#ifdef V8_USE_PERFETTO
-#include "src/tracing/trace-event.h"
-#endif  // V8_USE_PERFETTO
 
 namespace {
 
-class CppGCEnvironment final : public ::testing::Environment {
+class DefaultPlatformEnvironment final : public ::testing::Environment {
  public:
-  void SetUp() override {
-    // Initialize the process for cppgc with an arbitrary page allocator. This
-    // has to survive as long as the process, so it's ok to leak the allocator
-    // here.
-    cppgc::InitializeProcess(new v8::base::PageAllocator());
+  DefaultPlatformEnvironment() = default;
 
-#ifdef V8_USE_PERFETTO
-    // Set up the in-process perfetto backend.
-    perfetto::TracingInitArgs init_args;
-    init_args.backends = perfetto::BackendType::kInProcessBackend;
-    perfetto::Tracing::Initialize(init_args);
-#endif  // V8_USE_PERFETTO
+  void SetUp() override {
+    platform_ = v8::platform::NewDefaultPlatform(
+        0, v8::platform::IdleTaskSupport::kEnabled);
+    ASSERT_TRUE(platform_.get() != nullptr);
+    v8::V8::InitializePlatform(platform_.get());
+    cppgc::InitializeProcess(platform_->GetPageAllocator());
+    ASSERT_TRUE(v8::V8::Initialize());
   }
 
-  void TearDown() override { cppgc::ShutdownProcess(); }
+  void TearDown() override {
+    ASSERT_TRUE(platform_.get() != nullptr);
+    v8::V8::Dispose();
+    v8::V8::ShutdownPlatform();
+  }
+
+ private:
+  std::unique_ptr<v8::Platform> platform_;
 };
 
 }  // namespace
@@ -48,7 +45,7 @@ int main(int argc, char** argv) {
   testing::FLAGS_gtest_death_test_style = "threadsafe";
 
   testing::InitGoogleMock(&argc, argv);
-  testing::AddGlobalTestEnvironment(new CppGCEnvironment);
+  testing::AddGlobalTestEnvironment(new DefaultPlatformEnvironment);
   v8::V8::SetFlagsFromCommandLine(&argc, argv, true);
   v8::V8::InitializeExternalStartupData(argv[0]);
   v8::V8::InitializeICUDefaultLocation(argv[0]);

@@ -7,20 +7,21 @@
 
 #include "src/base/bit-field.h"
 #include "src/base/hashmap.h"
+#include "src/common/assert-scope.h"
 #include "src/execution/isolate.h"
 #include "src/utils/identity-map.h"
 
 namespace v8 {
 namespace internal {
 
-// Values must be contiguous and start at 0 since they're directly used as
-// array indices.
-enum class SnapshotSpace : uint8_t {
-  kReadOnlyHeap = 0,
-  kOld = 1,
-  kCode = 2,
+enum class SnapshotSpace : byte {
+  kReadOnlyHeap,
+  kOld,
+  kCode,
+  kMap,
 };
-static constexpr int kNumberOfSnapshotSpaces = 3;
+static constexpr int kNumberOfSnapshotSpaces =
+    static_cast<int>(SnapshotSpace::kMap) + 1;
 
 class SerializerReference {
  private:
@@ -97,7 +98,7 @@ class SerializerReference {
 };
 
 // SerializerReference has to fit in an IdentityMap value field.
-static_assert(sizeof(SerializerReference) <= sizeof(void*));
+STATIC_ASSERT(sizeof(SerializerReference) <= sizeof(void*));
 
 class SerializerReferenceMap {
  public:

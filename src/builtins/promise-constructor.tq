@@ -40,8 +40,7 @@ extern macro ConstructorBuiltinsAssembler::FastNewObject(
     Context, JSFunction, JSReceiver): JSObject;
 
 extern macro
-PromiseBuiltinsAssembler::IsIsolatePromiseHookEnabledOrHasAsyncEventDelegate(
-    uint32): bool;
+PromiseBuiltinsAssembler::IsPromiseHookEnabledOrHasAsyncEventDelegate(): bool;
 
 // https://tc39.es/ecma262/#sec-promise-executor
 transitioning javascript builtin
@@ -50,7 +49,7 @@ PromiseConstructor(
     newTarget: JSAny)(executor: JSAny): JSAny {
   // 1. If NewTarget is undefined, throw a TypeError exception.
   if (newTarget == Undefined) {
-    ThrowTypeError(MessageTemplate::kPromiseNewTargetUndefined);
+    ThrowTypeError(MessageTemplate::kNotAPromise, newTarget);
   }
 
   // 2. If IsCallable(executor) is false, throw a TypeError exception.
@@ -60,11 +59,11 @@ PromiseConstructor(
 
   const promiseFun = *NativeContextSlot(ContextSlot::PROMISE_FUNCTION_INDEX);
 
-  // Throw no access type error if the stack looks fishy.
+  // Silently fail if the stack looks fishy.
   if (HasAccessCheckFailed(context, promiseFun, executor)) {
     IncrementUseCounter(
         context, SmiConstant(kPromiseConstructorReturnedUndefined));
-    runtime::ThrowNoAccess();
+    return Undefined;
   }
 
   let result: JSPromise;
@@ -74,7 +73,9 @@ PromiseConstructor(
     result = UnsafeCast<JSPromise>(
         FastNewObject(context, promiseFun, UnsafeCast<JSReceiver>(newTarget)));
     PromiseInit(result);
-    RunAnyPromiseHookInit(result, Undefined);
+    if (IsPromiseHookEnabledOrHasAsyncEventDelegate()) {
+      runtime::PromiseHookInit(result, Undefined);
+    }
   }
 
   const isDebugActive = IsDebugActive();
@@ -85,7 +86,7 @@ PromiseConstructor(
   const reject = funcs.reject;
   try {
     Call(context, UnsafeCast<Callable>(executor), Undefined, resolve, reject);
-  } catch (e, _message) {
+  } catch (e) {
     Call(context, reject, Undefined, e);
   }
 

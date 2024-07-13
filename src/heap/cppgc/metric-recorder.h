@@ -14,29 +14,27 @@ class StatsCollector;
 
 /**
  * Base class used for reporting GC statistics histograms. Embedders interested
- * in collecting histograms should implement the virtual AddMainThreadEvent
+ * in collecting histgorams should implement the virtual AddMainThreadEvent
  * methods below and pass an instance of the implementation during Heap
  * creation.
  */
 class MetricRecorder {
  public:
-  struct GCCycle {
-    enum class Type { kMinor, kMajor };
+  struct CppGCFullCycle {
     struct IncrementalPhases {
-      int64_t mark_duration_us = -1;
-      int64_t sweep_duration_us = -1;
+      int64_t mark_duration_us;
+      int64_t sweep_duration_us;
     };
     struct Phases : public IncrementalPhases {
-      int64_t weak_duration_us = -1;
-      int64_t compact_duration_us = -1;
+      int64_t weak_duration_us;
+      int64_t compact_duration_us;
     };
     struct Sizes {
-      int64_t before_bytes = -1;
-      int64_t after_bytes = -1;
-      int64_t freed_bytes = -1;
+      int64_t before_bytes;
+      int64_t after_bytes;
+      int64_t freed_bytes;
     };
 
-    Type type = Type::kMajor;
     Phases total;
     Phases main_thread;
     Phases main_thread_atomic;
@@ -48,19 +46,21 @@ class MetricRecorder {
     double main_thread_efficiency_in_bytes_per_us;
   };
 
-  struct MainThreadIncrementalMark {
-    int64_t duration_us = -1;
+  struct CppGCMainThreadIncrementalMark {
+    int64_t duration_us;
   };
 
-  struct MainThreadIncrementalSweep {
-    int64_t duration_us = -1;
+  struct CppGCMainThreadIncrementalSweep {
+    int64_t duration_us;
   };
 
   virtual ~MetricRecorder() = default;
 
-  virtual void AddMainThreadEvent(const GCCycle& event) {}
-  virtual void AddMainThreadEvent(const MainThreadIncrementalMark& event) {}
-  virtual void AddMainThreadEvent(const MainThreadIncrementalSweep& event) {}
+  virtual void AddMainThreadEvent(const CppGCFullCycle& event) {}
+  virtual void AddMainThreadEvent(const CppGCMainThreadIncrementalMark& event) {
+  }
+  virtual void AddMainThreadEvent(
+      const CppGCMainThreadIncrementalSweep& event) {}
 };
 
 }  // namespace internal

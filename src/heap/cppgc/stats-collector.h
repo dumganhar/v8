@@ -8,8 +8,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <algorithm>
-#include <atomic>
 #include <vector>
 
 #include "include/cppgc/platform.h"
@@ -34,7 +32,6 @@ namespace internal {
   V(IncrementalSweep)
 
 #define CPPGC_FOR_ALL_SCOPES(V)             \
-  V(Unmark)                                 \
   V(MarkIncrementalStart)                   \
   V(MarkIncrementalFinalize)                \
   V(MarkAtomicPrologue)                     \
@@ -42,7 +39,6 @@ namespace internal {
   V(MarkTransitiveClosure)                  \
   V(MarkTransitiveClosureWithDeadline)      \
   V(MarkFlushEphemerons)                    \
-  V(MarkOnAllocation)                       \
   V(MarkProcessBailOutObjects)              \
   V(MarkProcessMarkingWorklist)             \
   V(MarkProcessWriteBarrierWorklist)        \
@@ -54,30 +50,23 @@ namespace internal {
   V(MarkVisitCrossThreadPersistents)        \
   V(MarkVisitStack)                         \
   V(MarkVisitRememberedSets)                \
-  V(WeakContainerCallbacksProcessing)       \
-  V(CustomCallbacksProcessing)              \
-  V(SweepFinishIfOutOfWork)                 \
   V(SweepInvokePreFinalizers)               \
-  V(SweepInTask)                            \
-  V(SweepInTaskForStatistics)               \
+  V(SweepIdleStep)                          \
   V(SweepOnAllocation)                      \
   V(SweepFinalize)
 
 #define CPPGC_FOR_ALL_HISTOGRAM_CONCURRENT_SCOPES(V) \
   V(ConcurrentMark)                                  \
-  V(ConcurrentSweep)                                 \
-  V(ConcurrentWeakCallback)
+  V(ConcurrentSweep)
 
 #define CPPGC_FOR_ALL_CONCURRENT_SCOPES(V) V(ConcurrentMarkProcessEphemerons)
 
 // Sink for various time and memory statistics.
 class V8_EXPORT_PRIVATE StatsCollector final {
-  using IsForcedGC = GCConfig::IsForcedGC;
+  using CollectionType = GarbageCollector::Config::CollectionType;
+  using IsForcedGC = GarbageCollector::Config::IsForcedGC;
 
  public:
-  using MarkingType = GCConfig::MarkingType;
-  using SweepingType = GCConfig::SweepingType;
-
 #if defined(CPPGC_DECLARE_ENUM)
   static_assert(false, "CPPGC_DECLARE_ENUM macro is already defined");
 #endif
@@ -113,8 +102,6 @@ class V8_EXPORT_PRIVATE StatsCollector final {
 
     size_t epoch = -1;
     CollectionType collection_type = CollectionType::kMajor;
-    MarkingType marking_type = MarkingType::kAtomic;
-    SweepingType sweeping_type = SweepingType::kAtomic;
     IsForcedGC is_forced_gc = IsForcedGC::kNotForced;
     // Marked bytes collected during marking.
     size_t marked_bytes = 0;
@@ -228,9 +215,8 @@ class V8_EXPORT_PRIVATE StatsCollector final {
   using DisabledConcurrentScope = InternalScope<kDisabled, kConcurrentThread>;
   using EnabledConcurrentScope = InternalScope<kEnabled, kConcurrentThread>;
 
-  // Observer for allocated object size. May e.g. be used to implement heap
-  // growing heuristics. Observers may register/unregister observers at any
-  // time when being invoked.
+  // Observer for allocated object size. May be used to implement heap growing
+  // heuristics.
   class AllocationObserver {
    public:
     // Called after observing at least
@@ -261,7 +247,7 @@ class V8_EXPORT_PRIVATE StatsCollector final {
   // reasonably interesting sizes.
   static constexpr size_t kAllocationThresholdBytes = 1024;
 
-  explicit StatsCollector(Platform*);
+  StatsCollector(std::unique_ptr<MetricRecorder>, Platform*);
   StatsCollector(const StatsCollector&) = delete;
   StatsCollector& operator=(const StatsCollector&) = delete;
 
@@ -270,40 +256,30 @@ class V8_EXPORT_PRIVATE StatsCollector final {
 
   void NotifyAllocation(size_t);
   void NotifyExplicitFree(size_t);
-  // Safepoints should only be invoked when garbage collections are possible.
+  // Safepoints should only be invoked when garabge collections are possible.
   // This is necessary as increments and decrements are reported as close to
   // their actual allocation/reclamation as possible.
   void NotifySafePointForConservativeCollection();
 
   void NotifySafePointForTesting();
 
-  // Indicates a new garbage collection cycle. The phase is optional and is only
-  // used for major GC when generational GC is enabled.
-  void NotifyUnmarkingStarted(CollectionType);
-  // Indicates a new minor garbage collection cycle or a major, if generational
-  // GC is not enabled.
-  void NotifyMarkingStarted(CollectionType, MarkingType, IsForcedGC);
+  // Indicates a new garbage collection cycle.
+  void NotifyMarkingStarted(CollectionType, IsForcedGC);
   // Indicates that marking of the current garbage collection cycle is
   // completed.
   void NotifyMarkingCompleted(size_t marked_bytes);
   // Indicates the end of a garbage collection cycle. This means that sweeping
   // is finished at this point.
-  void NotifySweepingCompleted(SweepingType);
+  void NotifySweepingCompleted();
 
   size_t allocated_memory_size() const;
   // Size of live objects in bytes  on the heap. Based on the most recent marked
   // bytes and the bytes allocated since last marking.
   size_t allocated_object_size() const;
 
-  // Returns the overall marked bytes count, i.e. if young generation is
-  // enabled, it returns the accumulated number. Should not be called during
+  // Returns the most recent marked bytes count. Should not be called during
   // marking.
   size_t marked_bytes() const;
-
-  // Returns the marked bytes for the current cycle. Should only be called
-  // within GC cycle.
-  size_t marked_bytes_on_current_cycle() const;
-
   // Returns the overall duration of the most recent marking phase. Should not
   // be called during marking.
   v8::base::TimeDelta marking_time() const;
@@ -315,22 +291,14 @@ class V8_EXPORT_PRIVATE StatsCollector final {
   void NotifyAllocatedMemory(int64_t);
   void NotifyFreedMemory(int64_t);
 
-  void IncrementDiscardedMemory(size_t);
-  void DecrementDiscardedMemory(size_t);
-  void ResetDiscardedMemory();
-  size_t discarded_memory_size() const;
-  size_t resident_memory_size() const;
-
-  void SetMetricRecorder(std::unique_ptr<MetricRecorder> histogram_recorder) {
+  void SetMetricRecorderForTesting(
+      std::unique_ptr<MetricRecorder> histogram_recorder) {
     metric_recorder_ = std::move(histogram_recorder);
   }
-
-  MetricRecorder* GetMetricRecorder() const { return metric_recorder_.get(); }
 
  private:
   enum class GarbageCollectionState : uint8_t {
     kNotRunning,
-    kUnmarking,
     kMarking,
     kSweeping
   };
@@ -356,23 +324,13 @@ class V8_EXPORT_PRIVATE StatsCollector final {
   // arithmetic for simplicity.
   int64_t allocated_bytes_since_safepoint_ = 0;
   int64_t explicitly_freed_bytes_since_safepoint_ = 0;
-#ifdef CPPGC_VERIFY_HEAP
-  // Tracks live bytes for overflows.
-  size_t tracked_live_bytes_ = 0;
-#endif  // CPPGC_VERIFY_HEAP
-
-  // The number of bytes marked so far. For young generation (with sticky bits)
-  // keeps track of marked bytes across multiple GC cycles.
-  size_t marked_bytes_so_far_ = 0;
 
   int64_t memory_allocated_bytes_ = 0;
   int64_t memory_freed_bytes_since_end_of_marking_ = 0;
-  std::atomic<size_t> discarded_bytes_{0};
 
   // vector to allow fast iteration of observers. Register/Unregisters only
   // happens on startup/teardown.
   std::vector<AllocationObserver*> allocation_observers_;
-  bool allocation_observer_deleted_ = false;
 
   GarbageCollectionState gc_state_ = GarbageCollectionState::kNotRunning;
 
@@ -384,25 +342,13 @@ class V8_EXPORT_PRIVATE StatsCollector final {
 
   std::unique_ptr<MetricRecorder> metric_recorder_;
 
-  // |platform_| is used by the TRACE_EVENT_* macros.
   Platform* platform_;
 };
 
 template <typename Callback>
 void StatsCollector::ForAllAllocationObservers(Callback callback) {
-  // Iterate using indices to allow push_back() of new observers.
-  for (size_t i = 0; i < allocation_observers_.size(); ++i) {
-    auto* observer = allocation_observers_[i];
-    if (observer) {
-      callback(observer);
-    }
-  }
-  if (allocation_observer_deleted_) {
-    allocation_observers_.erase(
-        std::remove(allocation_observers_.begin(), allocation_observers_.end(),
-                    nullptr),
-        allocation_observers_.end());
-    allocation_observer_deleted_ = false;
+  for (AllocationObserver* observer : allocation_observers_) {
+    callback(observer);
   }
 }
 

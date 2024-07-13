@@ -1,12 +1,12 @@
-#!/usr/bin/env python3
-# Copyright 2012 The Chromium Authors
+#!/usr/bin/env python
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 """
-This script runs every gclient runhooks as the first hook (See DEPS). If it
-detects that the build should be clobbered, it will delete the contents of the
-build directory.
+This script runs every build as the first hook (See DEPS). If it detects that
+the build should be clobbered, it will delete the contents of the build
+directory.
 
 A landmine is tripped when a builder checks out a different revision, and the
 diff between the new landmines and the old ones is non-null. At this point, the
@@ -38,10 +38,13 @@ import landmine_utils
 
 def get_build_dir(src_dir):
   r"""
-  Returns the absolute path to the directory containing the build directories.
+  Returns output directory absolute path dependent on build and targets.
   Examples:
-    'C:\src\out'
-    '/b/s/w/ir/cache/builder/src/out'
+    r'c:\b\build\slave\win\build\src\out'
+    '/mnt/data/b/build/slave/linux/build/src/out'
+    '/b/build/slave/ios_rel_device/build/src/out'
+
+  Keep this function in sync with tools/build/scripts/slave/compile.py
   """
   if 'CHROMIUM_OUT_DIR' in os.environ:
     output_dir = os.environ.get('CHROMIUM_OUT_DIR').strip()

@@ -55,7 +55,7 @@ V8_WARN_UNUSED_RESULT MaybeHandle<JSTypedArray> ValidateIntegerTypedArray(
   if (object->IsJSTypedArray()) {
     Handle<JSTypedArray> typed_array = Handle<JSTypedArray>::cast(object);
 
-    if (typed_array->IsDetachedOrOutOfBounds()) {
+    if (typed_array->WasDetached()) {
       THROW_NEW_ERROR(
           isolate,
           NewTypeError(
@@ -99,7 +99,7 @@ V8_WARN_UNUSED_RESULT Maybe<size_t> ValidateAtomicAccess(
       Nothing<size_t>());
 
   size_t access_index;
-  size_t typed_array_length = typed_array->GetLength();
+  size_t typed_array_length = typed_array->length();
   if (!TryNumberToSize(*access_index_obj, &access_index) ||
       access_index >= typed_array_length) {
     isolate->Throw(*isolate->factory()->NewRangeError(
@@ -214,13 +214,13 @@ Object DoWait(Isolate* isolate, FutexEmulation::WaitMode mode,
   // 8. If q is NaN, let t be +∞, else let t be max(q, 0).
   double timeout_number;
   if (timeout->IsUndefined(isolate)) {
-    timeout_number = ReadOnlyRoots(isolate).infinity_value()->Number();
+    timeout_number = ReadOnlyRoots(isolate).infinity_value().Number();
   } else {
     ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, timeout,
                                        Object::ToNumber(isolate, timeout));
     timeout_number = timeout->Number();
     if (std::isnan(timeout_number))
-      timeout_number = ReadOnlyRoots(isolate).infinity_value()->Number();
+      timeout_number = ReadOnlyRoots(isolate).infinity_value().Number();
     else if (timeout_number < 0)
       timeout_number = 0;
   }
@@ -231,9 +231,7 @@ Object DoWait(Isolate* isolate, FutexEmulation::WaitMode mode,
   if (mode == FutexEmulation::WaitMode::kSync &&
       !isolate->allow_atomics_wait()) {
     THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kAtomicsOperationNotAllowed,
-                              isolate->factory()->NewStringFromAsciiChecked(
-                                  "Atomics.wait")));
+        isolate, NewTypeError(MessageTemplate::kAtomicsWaitNotAllowed));
   }
 
   Handle<JSArrayBuffer> array_buffer = sta->GetBuffer();

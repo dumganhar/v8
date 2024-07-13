@@ -13,6 +13,7 @@
 
 #include "src/base/logging.h"
 #include "src/base/macros.h"
+#include "src/base/platform/wrappers.h"
 
 namespace v8 {
 namespace internal {
@@ -20,7 +21,7 @@ namespace internal {
 using Address = uintptr_t;
 
 // ----------------------------------------------------------------------------
-// Generated memcpy/memmove for ia32 and arm.
+// Generated memcpy/memmove for ia32, arm, and mips.
 
 void init_memcopy_functions();
 
@@ -44,7 +45,7 @@ using MemCopyUint8Function = void (*)(uint8_t* dest, const uint8_t* src,
 V8_EXPORT_PRIVATE extern MemCopyUint8Function memcopy_uint8_function;
 V8_INLINE void MemCopyUint8Wrapper(uint8_t* dest, const uint8_t* src,
                                    size_t chars) {
-  memcpy(dest, src, chars);
+  base::Memcpy(dest, src, chars);
 }
 // For values < 16, the assembler function is slower than the inlined C code.
 const size_t kMinComplexMemCopy = 16;
@@ -59,6 +60,24 @@ V8_EXPORT_PRIVATE V8_INLINE void MemMove(void* dest, const void* src,
 
 // For values < 12, the assembler function is slower than the inlined C code.
 const int kMinComplexConvertMemCopy = 12;
+#elif defined(V8_HOST_ARCH_MIPS)
+using MemCopyUint8Function = void (*)(uint8_t* dest, const uint8_t* src,
+                                      size_t size);
+V8_EXPORT_PRIVATE extern MemCopyUint8Function memcopy_uint8_function;
+V8_INLINE void MemCopyUint8Wrapper(uint8_t* dest, const uint8_t* src,
+                                   size_t chars) {
+  base::Memcpy(dest, src, chars);
+}
+// For values < 16, the assembler function is slower than the inlined C code.
+const size_t kMinComplexMemCopy = 16;
+V8_INLINE void MemCopy(void* dest, const void* src, size_t size) {
+  (*memcopy_uint8_function)(reinterpret_cast<uint8_t*>(dest),
+                            reinterpret_cast<const uint8_t*>(src), size);
+}
+V8_EXPORT_PRIVATE V8_INLINE void MemMove(void* dest, const void* src,
+                                         size_t size) {
+  memmove(dest, src, size);
+}
 #else
 // Copy memory area to disjoint memory area.
 inline void MemCopy(void* dest, const void* src, size_t size) {
@@ -66,9 +85,9 @@ inline void MemCopy(void* dest, const void* src, size_t size) {
   // fixed sizes to a sequence of move instructions. This avoids the overhead of
   // the general {memcpy} function.
   switch (size) {
-#define CASE(N)           \
-  case N:                 \
-    memcpy(dest, src, N); \
+#define CASE(N)                 \
+  case N:                       \
+    base::Memcpy(dest, src, N); \
     return;
     CASE(1)
     CASE(2)
@@ -88,7 +107,7 @@ inline void MemCopy(void* dest, const void* src, size_t size) {
     CASE(16)
 #undef CASE
     default:
-      memcpy(dest, src, size);
+      base::Memcpy(dest, src, size);
       return;
   }
 }
@@ -165,7 +184,7 @@ inline void CopyWords(Address dst, const Address src, size_t num_words) {
 // Copies data from |src| to |dst|.  The data spans must not overlap.
 template <typename T>
 inline void CopyBytes(T* dst, const T* src, size_t num_bytes) {
-  static_assert(sizeof(T) == 1);
+  STATIC_ASSERT(sizeof(T) == 1);
   if (num_bytes == 0) return;
   CopyImpl<kMinComplexMemCopy>(dst, src, num_bytes);
 }
@@ -250,8 +269,8 @@ void CopyChars(DstType* dst, const SrcType* src, size_t count) V8_NONNULL(1, 2);
 
 template <typename SrcType, typename DstType>
 void CopyChars(DstType* dst, const SrcType* src, size_t count) {
-  static_assert(std::is_integral<SrcType>::value);
-  static_assert(std::is_integral<DstType>::value);
+  STATIC_ASSERT(std::is_integral<SrcType>::value);
+  STATIC_ASSERT(std::is_integral<DstType>::value);
   using SrcTypeUnsigned = typename std::make_unsigned<SrcType>::type;
   using DstTypeUnsigned = typename std::make_unsigned<DstType>::type;
 

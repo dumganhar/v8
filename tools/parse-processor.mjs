@@ -3,7 +3,18 @@
 // found in the LICENSE file.
 import { LogReader, parseString } from "./logreader.mjs";
 import { BaseArgumentsProcessor } from "./arguments.mjs";
-import { formatBytes, formatMillis} from "./js/helper.mjs";
+
+/**
+ * A thin wrapper around shell's 'read' function showing a file name on error.
+ */
+export function readFile(fileName) {
+  try {
+    return read(fileName);
+  } catch (e) {
+    console.log(fileName + ': ' + (e.message || e));
+    throw e;
+  }
+}
 
 // ===========================================================================
 
@@ -21,15 +32,18 @@ function formatNumber(value) {
 }
 
 export function BYTES(bytes, total) {
-  let result = formatBytes(bytes)
+  let units = ['B ', 'kB', 'mB', 'gB'];
+  let unitIndex = 0;
+  let value = bytes;
+  while (value > 1000 && unitIndex < units.length) {
+    value /= 1000;
+    unitIndex++;
+  }
+  let result = formatNumber(value).padStart(10) + ' ' + units[unitIndex];
   if (total !== undefined && total != 0) {
     result += PERCENT(bytes, total).padStart(5);
   }
   return result;
-}
-
-export function TIME(millis) {
-  return formatMillis(millis, 1);
 }
 
 export function PERCENT(value, total) {
@@ -262,7 +276,7 @@ class Script extends CompilationUnit {
     this.maxNestingLevel = maxNesting;
 
     // Initialize sizes.
-    if (this.ownBytes === -1) console.error('Invalid ownBytes');
+    if (!this.ownBytes === -1) throw 'Invalid state';
     if (this.funktions.length == 0) {
       this.bytesTotal = this.ownBytes = 0;
       return;
@@ -338,9 +352,9 @@ class Script extends CompilationUnit {
     let info = (name, funktions) => {
       let ownBytes = ownBytesSum(funktions);
       let nofPercent = Math.round(funktions.length / nofFunktions * 100);
-      let value = (funktions.length + "#").padStart(7) +
+      let value = (funktions.length + "").padStart(6) +
         (nofPercent + "%").padStart(5) +
-        BYTES(ownBytes, this.bytesTotal).padStart(16);
+        BYTES(ownBytes, this.bytesTotal).padStart(10);
       log((`  - ${name}`).padEnd(20) + value);
       this.metrics.set(name + "-bytes", ownBytes);
       this.metrics.set(name + "-count", funktions.length);
@@ -353,24 +367,22 @@ class Script extends CompilationUnit {
     log('  - details:      ' +
         'isEval=' + this.isEval + ' deserialized=' + this.isDeserialized +
         ' streamed=' + this.isStreamingCompiled);
-    log("    Category               Count           Bytes");
     info("scripts", this.getScripts());
     info("functions", all);
-    info("toplevel fns", all.filter(each => each.isToplevel()));
+    info("toplevel fn", all.filter(each => each.isToplevel()));
     info('preparsed', all.filter(each => each.preparseDuration > 0));
 
     info('fully parsed', all.filter(each => each.parseDuration > 0));
     // info("fn parsed", all.filter(each => each.parse2Duration > 0));
     // info("resolved", all.filter(each => each.resolutionDuration > 0));
     info("executed", all.filter(each => each.executionTimestamp > 0));
-    info('eval', all.filter(each => each.isEval));
+    info('forEval', all.filter(each => each.isEval));
     info("lazy compiled", all.filter(each => each.lazyCompileTimestamp > 0));
     info("eager compiled", all.filter(each => each.compileTimestamp > 0));
 
     info("baseline", all.filter(each => each.baselineTimestamp > 0));
     info("optimized", all.filter(each => each.optimizeTimestamp > 0));
 
-    log("    Cost split: executed vs non-executed functions, max = longest single event");
     const costs = [
       ['parse', each => each.parseDuration],
       ['preparse', each => each.preparseDuration],
@@ -500,6 +512,7 @@ class Script extends CompilationUnit {
     // [time-delta, time+delta] range.
     return this.funktions.filter(
       funktion => funktion.didMetricChange(time, delta, metric));
+    return result;
   }
 }
 
@@ -551,7 +564,7 @@ class NestingDistribution {
   }
 
   print() {
-    console.log(this.toString());
+    console.log(this.toString())
   }
 
   toString() {
@@ -564,12 +577,12 @@ class NestingDistribution {
     let percent1 = this.accumulator[1];
     let percent2plus = this.accumulator.slice(2)
       .reduce((sum, each) => sum + each, 0);
-    return "  - fn nesting level:     " +
+    return "  - nesting level:      " +
       ' avg=' + formatNumber(this.avg) +
       ' l0=' + PERCENT(percent0, this.totalBytes) +
       ' l1=' + PERCENT(percent1, this.totalBytes) +
       ' l2+=' + PERCENT(percent2plus, this.totalBytes) +
-      ' nesting-histogram=[' + accString + ']';
+      ' distribution=[' + accString + ']';
 
   }
 
@@ -580,7 +593,7 @@ class ExecutionCost {
   constructor(prefix, funktions, time_fn) {
     this.prefix = prefix;
     // Time spent on executed functions.
-    this.executedCost = 0;
+    this.executedCost = 0
     // Time spent on not executed functions.
     this.nonExecutedCost = 0;
     this.maxDuration = 0;
@@ -603,9 +616,9 @@ class ExecutionCost {
 
   toString() {
     return `  - ${this.prefix}-time:`.padEnd(24) +
-      ` Σ executed=${TIME(this.executedCost)}`.padEnd(20) +
-      ` Σ non-executed=${TIME(this.nonExecutedCost)}`.padEnd(24) +
-      ` max=${TIME(this.maxDuration)}`;
+      ` executed=${formatNumber(this.executedCost)}ms`.padEnd(20) +
+      ` non-executed=${formatNumber(this.nonExecutedCost)}ms`.padEnd(24) +
+      ` max=${formatNumber(this.maxDuration)}ms`;
   }
 
   setMetrics(dict) {
@@ -624,8 +637,7 @@ class Funktion extends CompilationUnit {
       if (end < start) throw 'invalid start end positions';
     } else {
       if (end <= 0) throw `invalid end position: ${end}`;
-      if (end < start) throw 'invalid start end positions';
-      if (end == start) console.error("Possibly invalid start/end position")
+      if (end <= start) throw 'invalid start end positions';
     }
 
     this.name = name;
@@ -738,7 +750,7 @@ function toTimestamp(microseconds) {
 
 function startOf(timestamp, time) {
   let result = toTimestamp(timestamp) - time;
-  if (result < 0) throw "start timestamp cannot be negative";
+  if (result < 0) throw "start timestamp cannnot be negative";
   return result;
 }
 
@@ -746,7 +758,7 @@ function startOf(timestamp, time) {
 export class ParseProcessor extends LogReader {
   constructor() {
     super();
-    this.setDispatchTable({
+    this.dispatchTable_ = {
       // Avoid accidental leaking of __proto__ properties and force this object
       // to be in dictionary-mode.
       __proto__: null,
@@ -780,7 +792,7 @@ export class ParseProcessor extends LogReader {
         parsers: [parseInt, parseString, parseString],
         processor: this.processScriptSource
       },
-    });
+    };
     this.functionEventDispatchTable_ = {
       // Avoid accidental leaking of __proto__ properties and force this object
       // to be in dictionary-mode.
@@ -795,9 +807,9 @@ export class ParseProcessor extends LogReader {
       'preparse-no-resolution': this.processPreparseNoResolution.bind(this),
       'preparse-resolution': this.processPreparseResolution.bind(this),
       'first-execution': this.processFirstExecution.bind(this),
-      'interpreter-lazy': this.processCompileLazy.bind(this),
-      'interpreter': this.processCompile.bind(this),
-      'interpreter-eval': this.processCompileEval.bind(this),
+      'compile-lazy': this.processCompileLazy.bind(this),
+      'compile': this.processCompile.bind(this),
+      'compile-eval': this.processCompileEval.bind(this),
       'baseline': this.processBaselineLazy.bind(this),
       'baseline-lazy': this.processBaselineLazy.bind(this),
       'optimize-lazy': this.processOptimizeLazy.bind(this),
@@ -819,17 +831,30 @@ export class ParseProcessor extends LogReader {
     this.idToScript.forEach(script => script.print());
   }
 
-  async processString(string) {
-    await this.processLogChunk(string);
+  processString(string) {
+    let end = string.length;
+    let current = 0;
+    let next = 0;
+    let line;
+    let i = 0;
+    let entry;
+    while (current < end) {
+      next = string.indexOf("\n", current);
+      if (next === -1) break;
+      i++;
+      line = string.substring(current, next);
+      current = next + 1;
+      this.processLogLine(line);
+    }
     this.postProcess();
   }
 
-  async processLogFile(fileName) {
+  processLogFile(fileName) {
     this.collectEntries = true
     this.lastLogFileName_ = fileName;
     let line;
     while (line = readline()) {
-      await this.processLogLine(line);
+      this.processLogLine(line);
     }
     this.postProcess();
   }
@@ -838,14 +863,9 @@ export class ParseProcessor extends LogReader {
     this.scripts = Array.from(this.idToScript.values())
       .filter(each => !each.isNative);
 
-    if (this.scripts.length == 0) {
-      console.error("Could not find any scripts!");
-      return false;
-    }
-
     this.scripts.forEach(script => {
       script.finalize();
-      script.calculateMetrics(false);
+      script.calculateMetrics(false)
     });
 
     this.scripts.forEach(script => this.totalScript.addAllFunktions(script));
@@ -910,7 +930,7 @@ export class ParseProcessor extends LogReader {
     let results = [];
     this.idToScript.forEach(script => {
       script.forEach(funktion => {
-        if (funktion.startPosition == start && funktion.endPosition == end) {
+        if (funktion.startPostion == start && funktion.endPosition == end) {
           results.push(funktion);
         }
       });

@@ -20,7 +20,7 @@ class StressScavengeObserver : public AllocationObserver {
   void RequestedGCDone();
 
   // The maximum percent of the newspace capacity reached. This is tracked when
-  // specifying --fuzzer-gc-analysis.
+  // specyfing --fuzzer-gc-analysis.
   double MaxNewSpaceSizeReached() const;
 
  private:

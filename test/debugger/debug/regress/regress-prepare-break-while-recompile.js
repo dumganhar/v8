@@ -25,8 +25,13 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Flags: --concurrent-recompilation
-// Flags: --no-always-turbofan
+// Flags: --concurrent-recompilation --block-concurrent-recompilation
+// Flags: --no-always-opt
+
+if (!%IsConcurrentRecompilationSupported()) {
+  print("Concurrent recompilation is disabled. Skipping this test.");
+  quit();
+}
 
 Debug = debug.Debug
 
@@ -44,7 +49,6 @@ function bar() {
 foo();
 foo();
 // Mark and kick off recompilation.
-%DisableOptimizationFinalization();
 %OptimizeFunctionOnNextCall(foo, "concurrent");
 foo();
 
@@ -52,14 +56,16 @@ foo();
 // and (shared) unoptimized code on foo, and sets both to lazy-compile builtin.
 // Clear the break point immediately after to deactivate the debugger.
 // Do all of this after compile graph has been created.
-%WaitForBackgroundOptimization();
 Debug.setListener(function(){});
 Debug.setBreakPoint(bar, 0, 0);
 Debug.clearAllBreakPoints();
 Debug.setListener(null);
-assertUnoptimized(foo);
+
+// At this point, concurrent recompilation is still blocked.
+assertUnoptimized(foo, "no sync");
+// Let concurrent recompilation proceed.
+%UnblockConcurrentRecompilation();
 
 // Install optimized code when concurrent optimization finishes.
 // This needs to be able to deal with shared code being a builtin.
-%FinalizeOptimization();
-assertUnoptimized(foo);
+assertUnoptimized(foo, "sync");

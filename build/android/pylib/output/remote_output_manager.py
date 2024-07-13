@@ -1,4 +1,4 @@
-# Copyright 2017 The Chromium Authors
+# Copyright 2017 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -22,7 +22,7 @@ class RemoteOutputManager(output_manager.OutputManager):
     Args
       bucket: Bucket to use when saving to Google Storage.
     """
-    super().__init__()
+    super(RemoteOutputManager, self).__init__()
     self._bucket = bucket
 
   #override
@@ -43,7 +43,7 @@ class RemoteOutputManager(output_manager.OutputManager):
 class LogdogArchivedFile(output_manager.ArchivedFile):
 
   def __init__(self, out_filename, out_subdir, datatype):
-    super().__init__(out_filename, out_subdir, datatype)
+    super(LogdogArchivedFile, self).__init__(out_filename, out_subdir, datatype)
     self._stream_name = '%s_%s' % (out_subdir, out_filename)
 
   def _Link(self):
@@ -57,7 +57,8 @@ class LogdogArchivedFile(output_manager.ArchivedFile):
 class GoogleStorageArchivedFile(output_manager.ArchivedFile):
 
   def __init__(self, out_filename, out_subdir, datatype, bucket):
-    super().__init__(out_filename, out_subdir, datatype)
+    super(GoogleStorageArchivedFile, self).__init__(
+        out_filename, out_subdir, datatype)
     self._bucket = bucket
     self._upload_path = None
     self._content_addressed = None

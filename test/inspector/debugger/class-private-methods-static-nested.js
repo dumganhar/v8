@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-utils.load('test/inspector/private-class-member-inspector-test.js');
-
 let { session, contextGroup, Protocol } = InspectorTest.start(
   "Test static private class methods"
 );
@@ -34,20 +32,26 @@ InspectorTest.runAsyncTestSuite([
     // Do not await here, instead oncePaused should be awaited.
     Protocol.Runtime.evaluate({ expression: 'run()' });
 
-    InspectorTest.log('private members on class A');
+    InspectorTest.log('privateProperties on class A');
     let {
       params: { callFrames }
     } = await Protocol.Debugger.oncePaused(); // inside A.#method()
 
     let frame = callFrames[0];
-    await printPrivateMembers(Protocol, InspectorTest, { objectId: frame.this.objectId });
+    let { result } = await Protocol.Runtime.getProperties({
+      objectId: frame.this.objectId
+    });
+    InspectorTest.logMessage(result.privateProperties);
     Protocol.Debugger.resume();
 
     ({ params: { callFrames } } = await Protocol.Debugger.oncePaused());  // B.test();
     frame = callFrames[0];
 
-    InspectorTest.log('private members on class B');
-    await printPrivateMembers(Protocol, InspectorTest, { objectId: frame.this.objectId });
+    InspectorTest.log('privateProperties on class B');
+    ({ result } = await Protocol.Runtime.getProperties({
+      objectId: frame.this.objectId
+    }));
+    InspectorTest.logObject(result.privateProperties);
 
     Protocol.Debugger.resume();
     Protocol.Debugger.disable();

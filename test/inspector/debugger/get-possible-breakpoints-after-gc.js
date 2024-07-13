@@ -17,6 +17,7 @@ const callGarbageCollector = `
   %CollectGarbage("");
 `;
 
+const topLevelFunction = `console.log('This is a top level function')`;
 const moduleFunction =
     `function testFunc() { console.log('This is a module function') }`;
 let mixedFunctions = ` function A() {}
@@ -32,6 +33,8 @@ function onDebuggerEnabled() {
 
 async function onExecutionContextCreated(messageObject) {
   executionContextId = messageObject.params.context.id;
+  await testGetPossibleBreakpoints(
+      executionContextId, topLevelFunction, 'topLevel.js');
   await testGetPossibleBreakpoints(
       executionContextId, moduleFunction, 'moduleFunc.js');
   await testGetPossibleBreakpoints(

@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-utils.load('test/inspector/private-class-member-inspector-test.js');
-
 let { session, contextGroup, Protocol } = InspectorTest.start(
   "Test accessing unused private methods at runtime"
 );
@@ -30,12 +28,15 @@ InspectorTest.runAsyncTestSuite([
     // Do not await here, instead oncePaused should be awaited.
     Protocol.Runtime.evaluate({ expression: 'run()' });
 
-    InspectorTest.log('private members of A in testStatic()');
+    InspectorTest.log('Get privateProperties of A in testStatic()');
     let {
       params: { callFrames }
     } = await Protocol.Debugger.oncePaused(); // inside A.testStatic()
     let frame = callFrames[0];
-    await printPrivateMembers(Protocol, InspectorTest, { objectId: frame.this.objectId });
+    let { result } = await Protocol.Runtime.getProperties({
+      objectId: frame.this.objectId
+    });
+    InspectorTest.logMessage(result.privateProperties);
 
     // Variables not referenced in the source code are currently
     // considered "optimized away".
@@ -57,8 +58,11 @@ InspectorTest.runAsyncTestSuite([
     ({ params: { callFrames } } = await Protocol.Debugger.oncePaused());  // a.testInstatnce();
     frame = callFrames[0];
 
-    InspectorTest.log('private members of a in testInstance()');
-    await printPrivateMembers(Protocol, InspectorTest, { objectId: frame.this.objectId });
+    InspectorTest.log('get privateProperties of a in testInstance()');
+    ({ result } = await Protocol.Runtime.getProperties({
+      objectId: frame.this.objectId
+    }));
+    InspectorTest.logMessage(result.privateProperties);
 
     InspectorTest.log('Evaluating this.#instanceMethod() in testInstance()');
     ({ result } = await Protocol.Debugger.evaluateOnCallFrame({

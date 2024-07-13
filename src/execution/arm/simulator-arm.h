@@ -77,7 +77,6 @@ class Simulator : public SimulatorBase {
     r14,
     r15,
     num_registers,
-    fp = 11,
     sp = 13,
     lr = 14,
     pc = 15,
@@ -256,10 +255,8 @@ class Simulator : public SimulatorBase {
   uintptr_t PopAddress();
 
   // Debugger input.
-  void set_last_debugger_input(ArrayUniquePtr<char> input) {
-    last_debugger_input_ = std::move(input);
-  }
-  const char* last_debugger_input() { return last_debugger_input_.get(); }
+  void set_last_debugger_input(char* input);
+  char* last_debugger_input() { return last_debugger_input_; }
 
   // Redirection support.
   static void SetRedirectInstruction(Instruction* instruction);
@@ -471,7 +468,7 @@ class Simulator : public SimulatorBase {
   int icount_;
 
   // Debugger input.
-  ArrayUniquePtr<char> last_debugger_input_;
+  char* last_debugger_input_;
 
   // Registered breakpoints.
   Instruction* break_pc_;

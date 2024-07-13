@@ -46,16 +46,13 @@ class MicrotaskQueueBuiltinsAssembler : public CodeStubAssembler {
   void EnterMicrotaskContext(TNode<Context> native_context);
   void RewindEnteredContext(TNode<IntPtrT> saved_entered_context_count);
 
-  void RunAllPromiseHooks(PromiseHookType type, TNode<Context> context,
-                          TNode<HeapObject> promise_or_capability);
   void RunPromiseHook(Runtime::FunctionId id, TNode<Context> context,
-                      TNode<HeapObject> promise_or_capability,
-                      TNode<Uint32T> promiseHookFlags);
+                      TNode<HeapObject> promise_or_capability);
 };
 
 TNode<RawPtrT> MicrotaskQueueBuiltinsAssembler::GetMicrotaskQueue(
     TNode<Context> native_context) {
-  CSA_DCHECK(this, IsNativeContext(native_context));
+  CSA_ASSERT(this, IsNativeContext(native_context));
   return LoadExternalPointerFromObject(native_context,
                                        NativeContext::kMicrotaskQueueOffset,
                                        kNativeContextMicrotaskQueueTag);
@@ -105,7 +102,7 @@ TNode<IntPtrT> MicrotaskQueueBuiltinsAssembler::CalculateRingBufferOffset(
 
 void MicrotaskQueueBuiltinsAssembler::PrepareForContext(
     TNode<Context> native_context, Label* bailout) {
-  CSA_DCHECK(this, IsNativeContext(native_context));
+  CSA_ASSERT(this, IsNativeContext(native_context));
 
   // Skip the microtask execution if the associated context is shutdown.
   GotoIf(WordEqual(GetMicrotaskQueue(native_context), IntPtrConstant(0)),
@@ -117,8 +114,7 @@ void MicrotaskQueueBuiltinsAssembler::PrepareForContext(
 
 void MicrotaskQueueBuiltinsAssembler::RunSingleMicrotask(
     TNode<Context> current_context, TNode<Microtask> microtask) {
-  CSA_DCHECK(this, TaggedIsNotSmi(microtask));
-  CSA_DCHECK(this, Word32BinaryNot(IsExecutionTerminating()));
+  CSA_ASSERT(this, TaggedIsNotSmi(microtask));
 
   StoreRoot(RootIndex::kCurrentMicrotask, microtask);
   TNode<IntPtrT> saved_entered_context_count = GetEnteredContextCount();
@@ -203,16 +199,16 @@ void MicrotaskQueueBuiltinsAssembler::RunSingleMicrotask(
     const TNode<Object> thenable = LoadObjectField(
         microtask, PromiseResolveThenableJobTask::kThenableOffset);
 
-    RunAllPromiseHooks(PromiseHookType::kBefore, microtask_context,
+    RunPromiseHook(Runtime::kPromiseHookBefore, microtask_context,
                    CAST(promise_to_resolve));
 
     {
       ScopedExceptionHandler handler(this, &if_exception, &var_exception);
-      CallBuiltin(Builtin::kPromiseResolveThenableJob, native_context,
+      CallBuiltin(Builtins::kPromiseResolveThenableJob, native_context,
                   promise_to_resolve, thenable, then);
     }
 
-    RunAllPromiseHooks(PromiseHookType::kAfter, microtask_context,
+    RunPromiseHook(Runtime::kPromiseHookAfter, microtask_context,
                    CAST(promise_to_resolve));
 
     RewindEnteredContext(saved_entered_context_count);
@@ -247,18 +243,18 @@ void MicrotaskQueueBuiltinsAssembler::RunSingleMicrotask(
     BIND(&preserved_data_done);
 
     // Run the promise before/debug hook if enabled.
-    RunAllPromiseHooks(PromiseHookType::kBefore, microtask_context,
-                       promise_or_capability);
+    RunPromiseHook(Runtime::kPromiseHookBefore, microtask_context,
+                   promise_or_capability);
 
     {
       ScopedExceptionHandler handler(this, &if_exception, &var_exception);
-      CallBuiltin(Builtin::kPromiseFulfillReactionJob, microtask_context,
+      CallBuiltin(Builtins::kPromiseFulfillReactionJob, microtask_context,
                   argument, job_handler, promise_or_capability);
     }
 
     // Run the promise after/debug hook if enabled.
-    RunAllPromiseHooks(PromiseHookType::kAfter, microtask_context,
-                       promise_or_capability);
+    RunPromiseHook(Runtime::kPromiseHookAfter, microtask_context,
+                   promise_or_capability);
 
     Label preserved_data_reset_done(this);
     GotoIf(IsUndefined(preserved_embedder_data), &preserved_data_reset_done);
@@ -300,18 +296,18 @@ void MicrotaskQueueBuiltinsAssembler::RunSingleMicrotask(
     BIND(&preserved_data_done);
 
     // Run the promise before/debug hook if enabled.
-    RunAllPromiseHooks(PromiseHookType::kBefore, microtask_context,
-                       promise_or_capability);
+    RunPromiseHook(Runtime::kPromiseHookBefore, microtask_context,
+                   promise_or_capability);
 
     {
       ScopedExceptionHandler handler(this, &if_exception, &var_exception);
-      CallBuiltin(Builtin::kPromiseRejectReactionJob, microtask_context,
+      CallBuiltin(Builtins::kPromiseRejectReactionJob, microtask_context,
                   argument, job_handler, promise_or_capability);
     }
 
     // Run the promise after/debug hook if enabled.
-    RunAllPromiseHooks(PromiseHookType::kAfter, microtask_context,
-                       promise_or_capability);
+    RunPromiseHook(Runtime::kPromiseHookAfter, microtask_context,
+                   promise_or_capability);
 
     Label preserved_data_reset_done(this);
     GotoIf(IsUndefined(preserved_embedder_data), &preserved_data_reset_done);
@@ -332,7 +328,7 @@ void MicrotaskQueueBuiltinsAssembler::RunSingleMicrotask(
   BIND(&if_exception);
   {
     // Report unhandled exceptions from microtasks.
-    CallRuntime(Runtime::kReportMessageFromMicrotask, GetCurrentContext(),
+    CallRuntime(Runtime::kReportMessageFromMicrotask, current_context,
                 var_exception.value());
     RewindEnteredContext(saved_entered_context_count);
     SetCurrentContext(current_context);
@@ -379,7 +375,7 @@ TNode<IntPtrT> MicrotaskQueueBuiltinsAssembler::GetEnteredContextCount() {
 
 void MicrotaskQueueBuiltinsAssembler::EnterMicrotaskContext(
     TNode<Context> native_context) {
-  CSA_DCHECK(this, IsNativeContext(native_context));
+  CSA_ASSERT(this, IsNativeContext(native_context));
 
   auto ref = ExternalReference::handle_scope_implementer_address(isolate());
   TNode<RawPtrT> hsi = Load<RawPtrT>(ExternalConstant(ref));
@@ -414,23 +410,14 @@ void MicrotaskQueueBuiltinsAssembler::EnterMicrotaskContext(
     TNode<IntPtrT> flag_data_offset =
         IntPtrConstant(HandleScopeImplementer::kIsMicrotaskContextOffset +
                        FlagStack::kDataOffset);
-    TNode<IntPtrT> flag_capacity_offset =
-        IntPtrConstant(HandleScopeImplementer::kIsMicrotaskContextOffset +
-                       FlagStack::kCapacityOffset);
-    TNode<IntPtrT> flag_size_offset =
-        IntPtrConstant(HandleScopeImplementer::kIsMicrotaskContextOffset +
-                       FlagStack::kSizeOffset);
-    // Ensure both stacks are in sync.
-    USE(flag_capacity_offset);
-    CSA_DCHECK(this,
-               WordEqual(capacity, Load<IntPtrT>(hsi, flag_capacity_offset)));
-    CSA_DCHECK(this, WordEqual(size, Load<IntPtrT>(hsi, flag_size_offset)));
-
     TNode<RawPtrT> flag_data = Load<RawPtrT>(hsi, flag_data_offset);
     StoreNoWriteBarrier(MachineRepresentation::kWord8, flag_data, size,
                         BoolConstant(true));
-    StoreNoWriteBarrier(MachineType::PointerRepresentation(), hsi,
-                        flag_size_offset, new_size);
+    StoreNoWriteBarrier(
+        MachineType::PointerRepresentation(), hsi,
+        IntPtrConstant(HandleScopeImplementer::kIsMicrotaskContextOffset +
+                       FlagStack::kSizeOffset),
+        new_size);
 
     Goto(&done);
   }
@@ -459,11 +446,13 @@ void MicrotaskQueueBuiltinsAssembler::RewindEnteredContext(
       IntPtrConstant(HandleScopeImplementer::kEnteredContextsOffset +
                      ContextStack::kSizeOffset);
 
-  if (DEBUG_BOOL) {
+#ifdef ENABLE_VERIFY_CSA
+  {
     TNode<IntPtrT> size = Load<IntPtrT>(hsi, size_offset);
     CSA_CHECK(this, IntPtrLessThan(IntPtrConstant(0), size));
     CSA_CHECK(this, IntPtrLessThanOrEqual(saved_entered_context_count, size));
   }
+#endif
 
   StoreNoWriteBarrier(MachineType::PointerRepresentation(), hsi, size_offset,
                       saved_entered_context_count);
@@ -476,50 +465,12 @@ void MicrotaskQueueBuiltinsAssembler::RewindEnteredContext(
       saved_entered_context_count);
 }
 
-void MicrotaskQueueBuiltinsAssembler::RunAllPromiseHooks(
-    PromiseHookType type, TNode<Context> context,
-    TNode<HeapObject> promise_or_capability) {
-  TNode<Uint32T> promiseHookFlags = PromiseHookFlags();
-#ifdef V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS
-  Label hook(this, Label::kDeferred), done_hook(this);
-  Branch(NeedsAnyPromiseHooks(promiseHookFlags), &hook, &done_hook);
-  BIND(&hook);
-  {
-#endif
-    switch (type) {
-      case PromiseHookType::kBefore:
-#ifdef V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS
-        RunContextPromiseHookBefore(context, promise_or_capability,
-                                    promiseHookFlags);
-#endif
-        RunPromiseHook(Runtime::kPromiseHookBefore, context,
-                       promise_or_capability, promiseHookFlags);
-        break;
-      case PromiseHookType::kAfter:
-#ifdef V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS
-        RunContextPromiseHookAfter(context, promise_or_capability,
-                                   promiseHookFlags);
-#endif
-        RunPromiseHook(Runtime::kPromiseHookAfter, context,
-                       promise_or_capability, promiseHookFlags);
-        break;
-      default:
-        UNREACHABLE();
-    }
-#ifdef V8_ENABLE_JAVASCRIPT_PROMISE_HOOKS
-    Goto(&done_hook);
-  }
-  BIND(&done_hook);
-#endif
-}
-
 void MicrotaskQueueBuiltinsAssembler::RunPromiseHook(
     Runtime::FunctionId id, TNode<Context> context,
-    TNode<HeapObject> promise_or_capability,
-    TNode<Uint32T> promiseHookFlags) {
+    TNode<HeapObject> promise_or_capability) {
   Label hook(this, Label::kDeferred), done_hook(this);
-  Branch(IsIsolatePromiseHookEnabledOrDebugIsActiveOrHasAsyncEventDelegate(
-      promiseHookFlags), &hook, &done_hook);
+  Branch(IsPromiseHookEnabledOrDebugIsActiveOrHasAsyncEventDelegate(), &hook,
+         &done_hook);
   BIND(&hook);
   {
     // Get to the underlying JSPromise instance.

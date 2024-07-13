@@ -4,7 +4,7 @@
 
 let {session, contextGroup, Protocol} = InspectorTest.start('Checks framework debugging with blackboxed ranges.');
 
-contextGroup.addInlineScript(
+contextGroup.addScript(
     `
 function foo() {
   return boo();
@@ -14,8 +14,9 @@ function boo() {
 }
 function testFunction() {
   foo();
-}`,
-    'test.js');
+}
+//# sourceURL=test.js`,
+    7, 26);
 
 session.setupScriptMap();
 Protocol.Debugger.onPaused(message => {

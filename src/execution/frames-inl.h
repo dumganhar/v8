@@ -15,16 +15,12 @@
 namespace v8 {
 namespace internal {
 
-class InnerPointerToCodeCache final {
+class InnerPointerToCodeCache {
  public:
   struct InnerPointerToCodeCacheEntry {
     Address inner_pointer;
-    base::Optional<GcSafeCode> code;
-    union {
-      SafepointEntry safepoint_entry;
-      MaglevSafepointEntry maglev_safepoint_entry;
-    };
-    InnerPointerToCodeCacheEntry() : safepoint_entry() {}
+    Code code;
+    SafepointEntry safepoint_entry;
   };
 
   explicit InnerPointerToCodeCache(Isolate* isolate) : isolate_(isolate) {
@@ -41,7 +37,7 @@ class InnerPointerToCodeCache final {
  private:
   InnerPointerToCodeCacheEntry* cache(int index) { return &cache_[index]; }
 
-  Isolate* const isolate_;
+  Isolate* isolate_;
 
   static const int kInnerPointerToCodeCacheSize = 1024;
   InnerPointerToCodeCacheEntry cache_[kInnerPointerToCodeCacheSize];
@@ -79,12 +75,7 @@ inline Address StackFrame::callee_pc() const {
 inline Address StackFrame::pc() const { return ReadPC(pc_address()); }
 
 inline Address StackFrame::unauthenticated_pc() const {
-  return unauthenticated_pc(pc_address());
-}
-
-// static
-inline Address StackFrame::unauthenticated_pc(Address* pc_address) {
-  return PointerAuthentication::StripPAC(*pc_address);
+  return PointerAuthentication::StripPAC(*pc_address());
 }
 
 inline Address StackFrame::ReadPC(Address* pc_address) {
@@ -156,28 +147,6 @@ inline Object BuiltinExitFrame::new_target_slot_object() const {
       fp() + BuiltinExitFrameConstants::kNewTargetOffset));
 }
 
-inline ApiCallbackExitFrame::ApiCallbackExitFrame(
-    StackFrameIteratorBase* iterator)
-    : ExitFrame(iterator) {}
-
-inline FullObjectSlot ApiCallbackExitFrame::receiver_slot() const {
-  // The receiver is the first argument on the frame.
-  return FullObjectSlot(fp() +
-                        ApiCallbackExitFrameConstants::kFirstArgumentOffset);
-}
-
-inline FullObjectSlot ApiCallbackExitFrame::argc_slot() const {
-  return FullObjectSlot(fp() + ApiCallbackExitFrameConstants::kArgcOffset);
-}
-
-inline FullObjectSlot ApiCallbackExitFrame::target_slot() const {
-  return FullObjectSlot(fp() + ApiCallbackExitFrameConstants::kTargetOffset);
-}
-
-inline FullObjectSlot ApiCallbackExitFrame::new_target_slot() const {
-  return FullObjectSlot(fp() + ApiCallbackExitFrameConstants::kNewTargetOffset);
-}
-
 inline CommonFrame::CommonFrame(StackFrameIteratorBase* iterator)
     : StackFrame(iterator) {}
 
@@ -194,8 +163,15 @@ inline Address CommonFrame::caller_fp() const {
 }
 
 inline Address CommonFrame::caller_pc() const {
-  return ReadPC(reinterpret_cast<Address*>(
-      fp() + StandardFrameConstants::kCallerPCOffset));
+  return ReadPC(reinterpret_cast<Address*>(ComputePCAddress(fp())));
+}
+
+inline Address CommonFrame::ComputePCAddress(Address fp) {
+  return fp + StandardFrameConstants::kCallerPCOffset;
+}
+
+inline Address CommonFrame::ComputeConstantPoolAddress(Address fp) {
+  return fp + StandardFrameConstants::kConstantPoolOffset;
 }
 
 inline bool CommonFrameWithJSLinkage::IsConstructFrame(Address fp) {
@@ -228,10 +204,6 @@ inline Object JavaScriptFrame::function_slot_object() const {
   return Object(base::Memory<Address>(fp() + offset));
 }
 
-inline TurbofanStubWithContextFrame::TurbofanStubWithContextFrame(
-    StackFrameIteratorBase* iterator)
-    : CommonFrame(iterator) {}
-
 inline StubFrame::StubFrame(StackFrameIteratorBase* iterator)
     : TypedFrame(iterator) {}
 
@@ -246,12 +218,6 @@ inline InterpretedFrame::InterpretedFrame(StackFrameIteratorBase* iterator)
 
 inline BaselineFrame::BaselineFrame(StackFrameIteratorBase* iterator)
     : UnoptimizedFrame(iterator) {}
-
-inline MaglevFrame::MaglevFrame(StackFrameIteratorBase* iterator)
-    : OptimizedFrame(iterator) {}
-
-inline TurbofanFrame::TurbofanFrame(StackFrameIteratorBase* iterator)
-    : OptimizedFrame(iterator) {}
 
 inline BuiltinFrame::BuiltinFrame(StackFrameIteratorBase* iterator)
     : TypedFrameWithJSLinkage(iterator) {}
@@ -268,22 +234,15 @@ inline WasmDebugBreakFrame::WasmDebugBreakFrame(
     : TypedFrame(iterator) {}
 
 inline WasmToJsFrame::WasmToJsFrame(StackFrameIteratorBase* iterator)
-    : WasmFrame(iterator) {}
-
-inline WasmToJsFunctionFrame::WasmToJsFunctionFrame(
-    StackFrameIteratorBase* iterator)
-    : TypedFrame(iterator) {}
+    : StubFrame(iterator) {}
 
 inline JsToWasmFrame::JsToWasmFrame(StackFrameIteratorBase* iterator)
     : StubFrame(iterator) {}
 
-inline StackSwitchFrame::StackSwitchFrame(StackFrameIteratorBase* iterator)
-    : ExitFrame(iterator) {}
-
 inline CWasmEntryFrame::CWasmEntryFrame(StackFrameIteratorBase* iterator)
     : StubFrame(iterator) {}
 
-inline WasmLiftoffSetupFrame::WasmLiftoffSetupFrame(
+inline WasmCompileLazyFrame::WasmCompileLazyFrame(
     StackFrameIteratorBase* iterator)
     : TypedFrame(iterator) {}
 #endif  // V8_ENABLE_WEBASSEMBLY
@@ -307,10 +266,28 @@ inline JavaScriptBuiltinContinuationWithCatchFrame::
         StackFrameIteratorBase* iterator)
     : JavaScriptBuiltinContinuationFrame(iterator) {}
 
-inline IrregexpFrame::IrregexpFrame(StackFrameIteratorBase* iterator)
-    : TypedFrame(iterator) {}
+inline JavaScriptFrameIterator::JavaScriptFrameIterator(Isolate* isolate)
+    : iterator_(isolate) {
+  if (!done()) Advance();
+}
 
-inline CommonFrame* DebuggableStackFrameIterator::frame() const {
+inline JavaScriptFrameIterator::JavaScriptFrameIterator(Isolate* isolate,
+                                                        ThreadLocalTop* top)
+    : iterator_(isolate, top) {
+  if (!done()) Advance();
+}
+
+inline JavaScriptFrame* JavaScriptFrameIterator::frame() const {
+  StackFrame* frame = iterator_.frame();
+  return JavaScriptFrame::cast(frame);
+}
+
+inline JavaScriptFrame* JavaScriptFrameIterator::Reframe() {
+  StackFrame* frame = iterator_.Reframe();
+  return JavaScriptFrame::cast(frame);
+}
+
+inline CommonFrame* StackTraceFrameIterator::frame() const {
   StackFrame* frame = iterator_.frame();
 #if V8_ENABLE_WEBASSEMBLY
   DCHECK(frame->is_java_script() || frame->is_wasm());
@@ -320,41 +297,33 @@ inline CommonFrame* DebuggableStackFrameIterator::frame() const {
   return static_cast<CommonFrame*>(frame);
 }
 
-inline CommonFrame* DebuggableStackFrameIterator::Reframe() {
+inline CommonFrame* StackTraceFrameIterator::Reframe() {
   iterator_.Reframe();
   return frame();
 }
 
-bool DebuggableStackFrameIterator::is_javascript() const {
+bool StackTraceFrameIterator::is_javascript() const {
   return frame()->is_java_script();
 }
 
 #if V8_ENABLE_WEBASSEMBLY
-bool DebuggableStackFrameIterator::is_wasm() const {
-  return frame()->is_wasm();
-}
+bool StackTraceFrameIterator::is_wasm() const { return frame()->is_wasm(); }
 #endif  // V8_ENABLE_WEBASSEMBLY
 
-JavaScriptFrame* DebuggableStackFrameIterator::javascript_frame() const {
+JavaScriptFrame* StackTraceFrameIterator::javascript_frame() const {
   return JavaScriptFrame::cast(frame());
 }
 
-// static
-inline bool StackFrameIteratorForProfiler::IsValidFrameType(
-    StackFrame::Type type) {
-  return StackFrame::IsJavaScript(type) || type == StackFrame::EXIT ||
-         type == StackFrame::BUILTIN_EXIT ||
-         type == StackFrame::API_CALLBACK_EXIT ||
-#if V8_ENABLE_WEBASSEMBLY
-         type == StackFrame::WASM || type == StackFrame::WASM_TO_JS ||
-         type == StackFrame::JS_TO_WASM ||
-#endif  // V8_ENABLE_WEBASSEMBLY
-         false;
-}
-
-inline StackFrame* StackFrameIteratorForProfiler::frame() const {
+inline StackFrame* SafeStackFrameIterator::frame() const {
   DCHECK(!done());
-  DCHECK(IsValidFrameType(frame_->type()));
+#if V8_ENABLE_WEBASSEMBLY
+  DCHECK(frame_->is_java_script() || frame_->is_exit() ||
+         frame_->is_builtin_exit() || frame_->is_wasm() ||
+         frame_->is_wasm_to_js() || frame_->is_js_to_wasm());
+#else
+  DCHECK(frame_->is_java_script() || frame_->is_exit() ||
+         frame_->is_builtin_exit());
+#endif  // V8_ENABLE_WEBASSEMBLY
   return frame_;
 }
 

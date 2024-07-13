@@ -23,9 +23,9 @@ Debug.setListener(listener);
 
 async function f() {
   var a = 1;
-  debugger;   // B0 StepOver
-  print(1);   // B1 StepOver
-  return a +  // B2 StepOver
+  debugger;   // B0 StepNext
+  print(1);   // B1 StepNext
+  return a +  // B2 StepNext
       0;      // B3 Continue
 }
 

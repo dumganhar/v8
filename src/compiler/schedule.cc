@@ -30,9 +30,6 @@ BasicBlock::BasicBlock(Zone* zone, Id id)
 #if DEBUG
       debug_info_(AssemblerDebugInfo(nullptr, nullptr, -1)),
 #endif
-#ifdef LOG_BUILTIN_BLOCK_COUNT
-      pgo_execution_count_(0),
-#endif
       id_(id) {
 }
 
@@ -110,7 +107,7 @@ BasicBlock* BasicBlock::GetCommonDominator(BasicBlock* b1, BasicBlock* b2) {
 void BasicBlock::Print() { StdoutStream{} << *this << "\n"; }
 
 std::ostream& operator<<(std::ostream& os, const BasicBlock& block) {
-  os << "id:" << block.id();
+  os << "B" << block.id();
 #if DEBUG
   AssemblerDebugInfo info = block.debug_info();
   if (info.name) os << info;
@@ -120,7 +117,7 @@ std::ostream& operator<<(std::ostream& os, const BasicBlock& block) {
   const BasicBlock* current_block = &block;
   while (current_block->PredecessorCount() > 0 && i++ < kMaxDisplayedBlocks) {
     current_block = current_block->predecessors().front();
-    os << " <= id:" << current_block->id();
+    os << " <= B" << current_block->id();
     info = current_block->debug_info();
     if (info.name) os << info;
   }
@@ -201,19 +198,19 @@ BasicBlock* Schedule::NewBasicBlock() {
 }
 
 void Schedule::PlanNode(BasicBlock* block, Node* node) {
-  if (v8_flags.trace_turbo_scheduler) {
+  if (FLAG_trace_turbo_scheduler) {
     StdoutStream{} << "Planning #" << node->id() << ":"
-                   << node->op()->mnemonic()
-                   << " for future add to id:" << block->id() << "\n";
+                   << node->op()->mnemonic() << " for future add to B"
+                   << block->id() << "\n";
   }
   DCHECK_NULL(this->block(node));
   SetBlockForNode(block, node);
 }
 
 void Schedule::AddNode(BasicBlock* block, Node* node) {
-  if (v8_flags.trace_turbo_scheduler) {
+  if (FLAG_trace_turbo_scheduler) {
     StdoutStream{} << "Adding #" << node->id() << ":" << node->op()->mnemonic()
-                   << " to id:" << block->id() << "\n";
+                   << " to B" << block->id() << "\n";
   }
   DCHECK(this->block(node) == nullptr || this->block(node) == block);
   block->AddNode(node);
@@ -335,8 +332,12 @@ void Schedule::InsertSwitch(BasicBlock* block, BasicBlock* end, Node* sw,
 }
 
 void Schedule::EnsureCFGWellFormedness() {
-  // Ensure there are no critical edges.
-  for (BasicBlock* block : all_blocks_) {
+  // Make a copy of all the blocks for the iteration, since adding the split
+  // edges will allocate new blocks.
+  BasicBlockVector all_blocks_copy(all_blocks_);
+
+  // Insert missing split edge blocks.
+  for (BasicBlock* block : all_blocks_copy) {
     if (block->PredecessorCount() > 1) {
       if (block != end_) {
         EnsureSplitEdgeForm(block);
@@ -463,17 +464,22 @@ std::ostream& operator<<(std::ostream& os, const Schedule& s) {
   for (BasicBlock* block :
        ((s.RpoBlockCount() == 0) ? *s.all_blocks() : *s.rpo_order())) {
     if (block == nullptr) continue;
-    os << "--- BLOCK B" << block->rpo_number() << " id" << block->id();
-#ifdef LOG_BUILTIN_BLOCK_COUNT
-    os << " PGO Execution Count:" << block->pgo_execution_count();
-#endif
+    if (block->rpo_number() == -1) {
+      os << "--- BLOCK id:" << block->id().ToInt();
+    } else {
+      os << "--- BLOCK B" << block->rpo_number();
+    }
     if (block->deferred()) os << " (deferred)";
     if (block->PredecessorCount() != 0) os << " <- ";
     bool comma = false;
     for (BasicBlock const* predecessor : block->predecessors()) {
       if (comma) os << ", ";
       comma = true;
-      os << "B" << predecessor->rpo_number();
+      if (predecessor->rpo_number() == -1) {
+        os << "id:" << predecessor->id().ToInt();
+      } else {
+        os << "B" << predecessor->rpo_number();
+      }
     }
     os << " ---\n";
     for (Node* node : *block) {
@@ -496,7 +502,11 @@ std::ostream& operator<<(std::ostream& os, const Schedule& s) {
       for (BasicBlock const* successor : block->successors()) {
         if (comma) os << ", ";
         comma = true;
-        os << "B" << successor->rpo_number();
+        if (successor->rpo_number() == -1) {
+          os << "id:" << successor->id().ToInt();
+        } else {
+          os << "B" << successor->rpo_number();
+        }
       }
       os << "\n";
     }

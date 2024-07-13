@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 
-d8.file.execute('../base.js');
+load('../base.js');
 
 new BenchmarkSuite('BasicExport', [100], [
   new Benchmark('BasicExport', false, false, 0, BasicExport)

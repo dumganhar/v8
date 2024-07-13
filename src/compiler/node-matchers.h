@@ -10,14 +10,13 @@
 
 #include "src/base/bounds.h"
 #include "src/base/compiler-specific.h"
-#include "src/base/numbers/double.h"
 #include "src/codegen/external-reference.h"
 #include "src/common/globals.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/machine-operator.h"
 #include "src/compiler/node.h"
-#include "src/compiler/opcodes.h"
 #include "src/compiler/operator.h"
+#include "src/numbers/double.h"
 #include "src/objects/heap-object.h"
 
 namespace v8 {
@@ -53,8 +52,17 @@ struct NodeMatcher {
 };
 
 inline Node* SkipValueIdentities(Node* node) {
-  while (NodeProperties::IsValueIdentity(node, &node)) {
-  }
+#ifdef DEBUG
+  bool seen_fold_constant = false;
+#endif
+  do {
+#ifdef DEBUG
+    if (node->opcode() == IrOpcode::kFoldConstant) {
+      DCHECK(!seen_fold_constant);
+      seen_fold_constant = true;
+    }
+#endif
+  } while (NodeProperties::IsValueIdentity(node, &node));
   DCHECK_NOT_NULL(node);
   return node;
 }
@@ -64,7 +72,9 @@ inline Node* SkipValueIdentities(Node* node) {
 // Note that value identities on the input node are skipped when matching. The
 // resolved value may not be a parameter of the input node. The node() method
 // returns the unmodified input node. This is by design, as reducers may wish to
-// match value constants but delay reducing the node until a later phase.
+// match value constants but delay reducing the node until a later phase. For
+// example, binary operator reducers may opt to keep FoldConstant operands while
+// applying a reduction that match on the constant value of the FoldConstant.
 template <typename T, IrOpcode::Value kOpcode>
 struct ValueMatcher : public NodeMatcher {
   using ValueType = T;
@@ -206,7 +216,7 @@ struct FloatMatcher final : public ValueMatcher<T, kOpcode> {
     if (!this->HasResolvedValue() || (this->ResolvedValue() == 0.0)) {
       return false;
     }
-    base::Double value = base::Double(this->ResolvedValue());
+    Double value = Double(this->ResolvedValue());
     return !value.IsInfinite() && base::bits::IsPowerOfTwo(value.Significand());
   }
 };
@@ -228,14 +238,7 @@ struct HeapObjectMatcherImpl final
   }
 
   HeapObjectRef Ref(JSHeapBroker* broker) const {
-    // TODO(jgruber,chromium:1209798): Using kAssumeMemoryFence works around
-    // the fact that the graph stores handles (and not refs). The assumption is
-    // that any handle inserted into the graph is safe to read; but we don't
-    // preserve the reason why it is safe to read. Thus we must over-approximate
-    // here and assume the existence of a memory fence. In the future, we should
-    // consider having the graph store ObjectRefs or ObjectData pointer instead,
-    // which would make new ref construction here unnecessary.
-    return MakeRefAssumeMemoryFence(broker, this->ResolvedValue());
+    return HeapObjectRef(broker, this->ResolvedValue());
   }
 };
 
@@ -275,7 +278,7 @@ struct LoadMatcher : public NodeMatcher {
 // For shorter pattern matching code, this struct matches both the left and
 // right hand sides of a binary operation and can put constants on the right
 // if they appear on the left hand side of a commutative operation.
-template <typename Left, typename Right, MachineRepresentation rep>
+template <typename Left, typename Right>
 struct BinopMatcher : public NodeMatcher {
   explicit BinopMatcher(Node* node)
       : NodeMatcher(node), left_(InputAt(0)), right_(InputAt(1)) {
@@ -288,8 +291,6 @@ struct BinopMatcher : public NodeMatcher {
 
   using LeftMatcher = Left;
   using RightMatcher = Right;
-
-  static constexpr MachineRepresentation representation = rep;
 
   const Left& left() const { return left_; }
   const Right& right() const { return right_; }
@@ -329,30 +330,19 @@ struct BinopMatcher : public NodeMatcher {
   Right right_;
 };
 
-using Int32BinopMatcher =
-    BinopMatcher<Int32Matcher, Int32Matcher, MachineRepresentation::kWord32>;
-using Uint32BinopMatcher =
-    BinopMatcher<Uint32Matcher, Uint32Matcher, MachineRepresentation::kWord32>;
-using Int64BinopMatcher =
-    BinopMatcher<Int64Matcher, Int64Matcher, MachineRepresentation::kWord64>;
-using Uint64BinopMatcher =
-    BinopMatcher<Uint64Matcher, Uint64Matcher, MachineRepresentation::kWord64>;
-using IntPtrBinopMatcher = BinopMatcher<IntPtrMatcher, IntPtrMatcher,
-                                        MachineType::PointerRepresentation()>;
-using UintPtrBinopMatcher = BinopMatcher<UintPtrMatcher, UintPtrMatcher,
-                                         MachineType::PointerRepresentation()>;
-using Float32BinopMatcher = BinopMatcher<Float32Matcher, Float32Matcher,
-                                         MachineRepresentation::kFloat32>;
-using Float64BinopMatcher = BinopMatcher<Float64Matcher, Float64Matcher,
-                                         MachineRepresentation::kFloat64>;
-using NumberBinopMatcher =
-    BinopMatcher<NumberMatcher, NumberMatcher, MachineRepresentation::kTagged>;
+using Int32BinopMatcher = BinopMatcher<Int32Matcher, Int32Matcher>;
+using Uint32BinopMatcher = BinopMatcher<Uint32Matcher, Uint32Matcher>;
+using Int64BinopMatcher = BinopMatcher<Int64Matcher, Int64Matcher>;
+using Uint64BinopMatcher = BinopMatcher<Uint64Matcher, Uint64Matcher>;
+using IntPtrBinopMatcher = BinopMatcher<IntPtrMatcher, IntPtrMatcher>;
+using UintPtrBinopMatcher = BinopMatcher<UintPtrMatcher, UintPtrMatcher>;
+using Float32BinopMatcher = BinopMatcher<Float32Matcher, Float32Matcher>;
+using Float64BinopMatcher = BinopMatcher<Float64Matcher, Float64Matcher>;
+using NumberBinopMatcher = BinopMatcher<NumberMatcher, NumberMatcher>;
 using HeapObjectBinopMatcher =
-    BinopMatcher<HeapObjectMatcher, HeapObjectMatcher,
-                 MachineRepresentation::kTagged>;
+    BinopMatcher<HeapObjectMatcher, HeapObjectMatcher>;
 using CompressedHeapObjectBinopMatcher =
-    BinopMatcher<CompressedHeapObjectMatcher, CompressedHeapObjectMatcher,
-                 MachineRepresentation::kCompressed>;
+    BinopMatcher<CompressedHeapObjectMatcher, CompressedHeapObjectMatcher>;
 
 template <class BinopMatcher, IrOpcode::Value kMulOpcode,
           IrOpcode::Value kShiftOpcode>
@@ -608,8 +598,7 @@ struct BaseWithIndexAndDisplacementMatcher {
         Node* left_left = left_matcher.left().node();
         Node* left_right = left_matcher.right().node();
         if (left_matcher.right().HasResolvedValue()) {
-          if (left_matcher.HasIndexInput() &&
-              OwnedByAddressingOperand(left_left)) {
+          if (left_matcher.HasIndexInput() && left_left->OwnedBy(left)) {
             // ((S - D) + B)
             index = left_matcher.IndexInput();
             scale = left_matcher.scale();
@@ -634,8 +623,7 @@ struct BaseWithIndexAndDisplacementMatcher {
           AddMatcher left_matcher(left);
           Node* left_left = left_matcher.left().node();
           Node* left_right = left_matcher.right().node();
-          if (left_matcher.HasIndexInput() &&
-              OwnedByAddressingOperand(left_left)) {
+          if (left_matcher.HasIndexInput() && left_left->OwnedBy(left)) {
             if (left_matcher.right().HasResolvedValue()) {
               // ((S + D) + B)
               index = left_matcher.IndexInput();
@@ -742,33 +730,20 @@ struct BaseWithIndexAndDisplacementMatcher {
     matches_ = true;
   }
 
-  // Warning: When {node} is used by a Add/Sub instruction, this function does
-  // not guarantee the Add/Sub will be part of a addressing operand.
   static bool OwnedByAddressingOperand(Node* node) {
     for (auto use : node->use_edges()) {
       Node* from = use.from();
       switch (from->opcode()) {
         case IrOpcode::kLoad:
         case IrOpcode::kLoadImmutable:
+        case IrOpcode::kPoisonedLoad:
         case IrOpcode::kProtectedLoad:
-        case IrOpcode::kLoadTrapOnNull:
         case IrOpcode::kInt32Add:
         case IrOpcode::kInt64Add:
           // Skip addressing uses.
           break;
-        case IrOpcode::kInt32Sub:
-          // If the subtrahend is not a constant, it is not an addressing use.
-          if (from->InputAt(1)->opcode() != IrOpcode::kInt32Constant)
-            return false;
-          break;
-        case IrOpcode::kInt64Sub:
-          // If the subtrahend is not a constant, it is not an addressing use.
-          if (from->InputAt(1)->opcode() != IrOpcode::kInt64Constant)
-            return false;
-          break;
         case IrOpcode::kStore:
         case IrOpcode::kProtectedStore:
-        case IrOpcode::kStoreTrapOnNull:
           // If the stored value is this node, it is not an addressing use.
           if (from->InputAt(2) == node) return false;
           // Otherwise it is used as an address and skipped.
@@ -833,14 +808,6 @@ struct V8_EXPORT_PRIVATE DiamondMatcher
   Node* branch_;
   Node* if_true_;
   Node* if_false_;
-};
-
-struct LoadTransformMatcher
-    : ValueMatcher<LoadTransformParameters, IrOpcode::kLoadTransform> {
-  explicit LoadTransformMatcher(Node* node) : ValueMatcher(node) {}
-  bool Is(LoadTransformation t) {
-    return HasResolvedValue() && ResolvedValue().transformation == t;
-  }
 };
 
 }  // namespace compiler

@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-d8.file.execute('../base.js');
+load('../base.js');
 
 let listener = null;
 
-d8.file.execute('debugger.js');
-d8.file.execute('runtime.js');
+load('debugger.js');
+load('runtime.js');
 
 let success = true;
 let lastId = 0;

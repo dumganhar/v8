@@ -212,92 +212,63 @@ let main = {
 
 const CATEGORY_COLOR = "#f5f5f5";
 const bucketDescriptors =
-  [
-  {
-    kinds: ["JS_IGNITION", "BC"],
-    color: "#dd2c00",
-    backgroundColor: "#ff9e80",
-    text: "JS Ignition"
-  },
-  {
-    kinds: ["JS_SPARKPLUG"],
-    color: "#b3005b",
-    backgroundColor: "#ff9e80",
-    text: "JS Sparkplug"
-  },
-  {
-    kinds: ["JS_MAGLEV"],
-    color: "#693eb8",
-    backgroundColor: "#d80093",
-    text: "JS Maglev"
-  },
-  {
-    kinds: ["JS_TURBOFAN"],
-    color: "#64dd17",
-    backgroundColor: "#80e27e",
-    text: "JS Turbofan"
-  },
-  {
-    kinds: ["IC"],
-    color: "#ff6d00",
-    backgroundColor: "#ffab40",
-    text: "IC"
-  },
-  {
-    kinds: ["STUB", "BUILTIN", "REGEXP"],
-    color: "#ffd600",
-    backgroundColor: "#ffea00",
-    text: "Other generated"
-  },
-  {
-    kinds: ["CPP", "LIB"],
-    color: "#304ffe",
-    backgroundColor: "#6ab7ff",
-    text: "C++"
-  },
-  {
-    kinds: ["CPP_EXT"],
-    color: "#003c8f",
-    backgroundColor: "#c0cfff",
-    text: "C++/external"
-  },
-  {
-    kinds: ["CPP_PARSE"],
-    color: "#aa00ff",
-    backgroundColor: "#ffb2ff",
-    text: "C++/Parser"
-  },
-  {
-    kinds: ["CPP_COMP_BC"],
-    color: "#43a047",
-    backgroundColor: "#88c399",
-    text: "C++/Bytecode compiler"
-  },
-  {
-    kinds: ["CPP_COMP_BASELINE"],
-    color: "#43a047",
-    backgroundColor: "#5a8000",
-    text: "C++/Baseline compiler"
-  },
-  {
-    kinds: ["CPP_COMP"],
-    color: "#00e5ff",
-    backgroundColor: "#6effff",
-    text: "C++/Compiler"
-  },
-  {
-    kinds: ["CPP_GC"],
-    color: "#6200ea",
-    backgroundColor: "#e1bee7",
-    text: "C++/GC"
-  },
-  {
-    kinds: ["UNKNOWN"],
-    color: "#bdbdbd",
-    backgroundColor: "#efefef",
-    text: "Unknown"
-  }
-  ];
+    [ { kinds : [ "JSOPT" ],
+        color : "#64dd17",
+        backgroundColor : "#80e27e",
+        text : "JS Optimized" },
+      { kinds : [ "JSNCI" ],
+        color : "#3289a8",
+        backgroundColor : "#3289a8",
+        text : "JS NCI" },
+      { kinds : [ "JSTURBOPROP" ],
+        color : "#693eb8",
+        backgroundColor : "#a6c452",
+        text : "JS Turboprop" },
+      { kinds : [ "JSBASELINE" ],
+        color : "#b3005b",
+        backgroundColor : "#ff9e80",
+        text : "JS Baseline" },
+      { kinds : [ "JSUNOPT", "BC" ],
+        color : "#dd2c00",
+        backgroundColor : "#ff9e80",
+        text : "JS Unoptimized" },
+      { kinds : [ "IC" ],
+        color : "#ff6d00",
+        backgroundColor : "#ffab40",
+        text : "IC" },
+      { kinds : [ "STUB", "BUILTIN", "REGEXP" ],
+        color : "#ffd600",
+        backgroundColor : "#ffea00",
+        text : "Other generated" },
+      { kinds : [ "CPP", "LIB" ],
+        color : "#304ffe",
+        backgroundColor : "#6ab7ff",
+        text : "C++" },
+      { kinds : [ "CPPEXT" ],
+        color : "#003c8f",
+        backgroundColor : "#c0cfff",
+        text : "C++/external" },
+      { kinds : [ "CPPPARSE" ],
+        color : "#aa00ff",
+        backgroundColor : "#ffb2ff",
+        text : "C++/Parser" },
+      { kinds : [ "CPPCOMPBC" ],
+        color : "#43a047",
+        backgroundColor : "#88c399",
+        text : "C++/Bytecode compiler" },
+      { kinds : [ "CPPCOMP" ],
+        color : "#00e5ff",
+        backgroundColor : "#6effff",
+        text : "C++/Compiler" },
+      { kinds : [ "CPPGC" ],
+        color : "#6200ea",
+        backgroundColor : "#e1bee7",
+        text : "C++/GC" },
+      { kinds : [ "UNKNOWN" ],
+        color : "#bdbdbd",
+        backgroundColor : "#efefef",
+        text : "Unknown" }
+    ];
 
 let kindToBucketDescriptor = {};
 for (let i = 0; i < bucketDescriptors.length; i++) {
@@ -323,17 +294,15 @@ function codeTypeToText(type) {
   switch (type) {
     case "UNKNOWN":
       return "Unknown";
-    case "CPP_PARSE":
+    case "CPPPARSE":
       return "C++ Parser";
-    case "CPP_COMP_BASELINE":
-      return "C++ Baseline Compiler";
-    case "CPP_COMP_BC":
-      return "C++ Bytecode Compiler";
-    case "CPP_COMP":
+    case "CPPCOMPBC":
+      return "C++ Bytecode Compiler)";
+    case "CPPCOMP":
       return "C++ Compiler";
-    case "CPP_GC":
+    case "CPPGC":
       return "C++ GC";
-    case "CPP_EXT":
+    case "CPPEXT":
       return "C++ External";
     case "CPP":
       return "C++";
@@ -349,16 +318,14 @@ function codeTypeToText(type) {
       return "Builtin";
     case "REGEXP":
       return "RegExp";
-    case "JS_IGNITION":
-      return "JS Ignition";
-    case "JS_SPARKPLUG":
-      return "JS Sparkplug";
-    case "JS_TURBOPROP":
+    case "JSOPT":
+      return "JS opt";
+    case "JSNCI":
+      return "JS NCI";
+    case "JSTURBOPROP":
       return "JS Turboprop";
-    case "JS_MAGLEV":
-      return "JS Maglev";
-    case "JS_TURBOFAN":
-      return "JS Turbofan";
+    case "JSUNOPT":
+      return "JS unopt";
   }
   console.error("Unknown type: " + type);
 }
@@ -908,7 +875,6 @@ class TimelineView {
           height === oldState.timelineSize.height &&
           newState.file === oldState.file &&
           newState.currentCodeId === oldState.currentCodeId &&
-          newState.callTree.attribution === oldState.callTree.attribution &&
           newState.start === oldState.start &&
           newState.end === oldState.end) {
         // No change, nothing to do.
@@ -946,10 +912,11 @@ class TimelineView {
     this.selectionStart = (start - firstTime) / (lastTime - firstTime) * width;
     this.selectionEnd = (end - firstTime) / (lastTime - firstTime) * width;
 
-    let filter = filterFromFilterId(this.currentState.callTree.attribution);
-    let stackProcessor = new CategorySampler(file, bucketCount, filter);
+    let stackProcessor = new CategorySampler(file, bucketCount);
     generateTree(file, 0, Infinity, stackProcessor);
-    let codeIdProcessor = new FunctionTimelineProcessor(currentCodeId, filter);
+    let codeIdProcessor = new FunctionTimelineProcessor(
+      currentCodeId,
+      filterFromFilterId(this.currentState.callTree.attribution));
     generateTree(file, 0, Infinity, codeIdProcessor);
 
     let buffer = document.createElement("canvas");

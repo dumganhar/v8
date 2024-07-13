@@ -29,7 +29,7 @@ var exception = null;
 function listener(event, exec_state, event_data, data) {
   if (event == Debug.DebugEvent.Exception) {
     step_count++;
-    exec_state.prepareStep(Debug.StepAction.StepOver);
+    exec_state.prepareStep(Debug.StepAction.StepNext);
   } else if (event == Debug.DebugEvent.Break) {
     step_count++;
     try {

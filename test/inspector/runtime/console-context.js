@@ -11,14 +11,9 @@ InspectorTest.runAsyncTestSuite([
       expression: 'console.context'});
     InspectorTest.logMessage(result);
 
-    // Enumerate the methods alpha-sorted to make the test
-    // independent of the (unspecified) enumeration order
-    // of console.context() methods.
     InspectorTest.log('console.context() methods:');
-    var {result: {result: {value}}} = await Protocol.Runtime.evaluate({
-      expression: 'Object.keys(console.context()).sort()',
-      returnByValue: true
-    });
+    var {result:{result:{value}}} = await Protocol.Runtime.evaluate({
+      expression: 'Object.keys(console.context())', returnByValue: true});
     InspectorTest.logMessage(value);
   },
 

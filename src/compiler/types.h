@@ -13,15 +13,8 @@
 #include "src/objects/objects.h"
 #include "src/utils/ostreams.h"
 
-#ifdef V8_ENABLE_WEBASSEMBLY
-#include "src/wasm/value-type.h"
-#endif
-
 namespace v8 {
 namespace internal {
-namespace wasm {
-struct TypeInModule;
-}
 namespace compiler {
 
 // SUMMARY
@@ -49,7 +42,6 @@ namespace compiler {
 //
 //   Constant(x) < T  iff instance_type(map(x)) < T
 //
-//    None <= Machine <= Any
 //
 // RANGE TYPES
 //
@@ -80,6 +72,10 @@ namespace compiler {
 // existing assumptions or tests.
 // Consequently, do not normally use Equals for type tests, always use Is!
 //
+// The NowIs operator implements state-sensitive subtying, as described above.
+// Any compilation decision based on such temporary properties requires runtime
+// guarding!
+//
 //
 // PROPERTIES
 //
@@ -103,51 +99,40 @@ namespace compiler {
 
 // clang-format off
 
-#define INTERNAL_BITSET_TYPE_LIST(V)    \
-  V(OtherUnsigned31, uint64_t{1} << 1)  \
-  V(OtherUnsigned32, uint64_t{1} << 2)  \
-  V(OtherSigned32,   uint64_t{1} << 3)  \
-  V(OtherNumber,     uint64_t{1} << 4)  \
-  V(OtherString,     uint64_t{1} << 5)  \
-
-#define PROPER_ATOMIC_BITSET_TYPE_LOW_LIST(V) \
-  V(Negative31,               uint64_t{1} << 6)   \
-  V(Null,                     uint64_t{1} << 7)   \
-  V(Undefined,                uint64_t{1} << 8)   \
-  V(Boolean,                  uint64_t{1} << 9)   \
-  V(Unsigned30,               uint64_t{1} << 10)  \
-  V(MinusZero,                uint64_t{1} << 11)  \
-  V(NaN,                      uint64_t{1} << 12)  \
-  V(Symbol,                   uint64_t{1} << 13)  \
-  V(InternalizedString,       uint64_t{1} << 14)  \
-  V(OtherCallable,            uint64_t{1} << 15)  \
-  V(OtherObject,              uint64_t{1} << 16)  \
-  V(OtherUndetectable,        uint64_t{1} << 17)  \
-  V(CallableProxy,            uint64_t{1} << 18)  \
-  V(OtherProxy,               uint64_t{1} << 19)  \
-  V(CallableFunction,         uint64_t{1} << 20)  \
-  V(ClassConstructor,         uint64_t{1} << 21)  \
-  V(BoundFunction,            uint64_t{1} << 22)  \
-  V(Hole,                     uint64_t{1} << 23)  \
-  V(OtherInternal,            uint64_t{1} << 24)  \
-  V(ExternalPointer,          uint64_t{1} << 25)  \
-  V(Array,                    uint64_t{1} << 26)  \
-  V(UnsignedBigInt63,         uint64_t{1} << 27)  \
-  V(OtherUnsignedBigInt64,    uint64_t{1} << 28)  \
-  V(NegativeBigInt63,         uint64_t{1} << 29)  \
-  V(OtherBigInt,              uint64_t{1} << 30)  \
-  V(WasmObject,               uint64_t{1} << 31)
-
-// We split the macro list into two parts because the Torque equivalent in
-// turbofan-types.tq uses two 32bit bitfield structs.
-#define PROPER_ATOMIC_BITSET_TYPE_HIGH_LIST(V) \
-  V(SandboxedPointer,         uint64_t{1} << 32) \
-  V(Machine,                  uint64_t{1} << 33)
+#define INTERNAL_BITSET_TYPE_LIST(V)                                      \
+  V(OtherUnsigned31, 1u << 1)  \
+  V(OtherUnsigned32, 1u << 2)  \
+  V(OtherSigned32,   1u << 3)  \
+  V(OtherNumber,     1u << 4)  \
+  V(OtherString,     1u << 5)  \
 
 #define PROPER_BITSET_TYPE_LIST(V) \
-  V(None,                     uint64_t{0}) \
-  PROPER_ATOMIC_BITSET_TYPE_LOW_LIST(V) \
-  PROPER_ATOMIC_BITSET_TYPE_HIGH_LIST(V) \
+  V(None,                     0u)        \
+  V(Negative31,               1u << 6)   \
+  V(Null,                     1u << 7)   \
+  V(Undefined,                1u << 8)   \
+  V(Boolean,                  1u << 9)   \
+  V(Unsigned30,               1u << 10)  \
+  V(MinusZero,                1u << 11)  \
+  V(NaN,                      1u << 12)  \
+  V(Symbol,                   1u << 13)  \
+  V(InternalizedString,       1u << 14)  \
+  V(OtherCallable,            1u << 16)  \
+  V(OtherObject,              1u << 17)  \
+  V(OtherUndetectable,        1u << 18)  \
+  V(CallableProxy,            1u << 19)  \
+  V(OtherProxy,               1u << 20)  \
+  V(Function,                 1u << 21)  \
+  V(BoundFunction,            1u << 22)  \
+  V(Hole,                     1u << 23)  \
+  V(OtherInternal,            1u << 24)  \
+  V(ExternalPointer,          1u << 25)  \
+  V(Array,                    1u << 26)  \
+  V(BigInt,                   1u << 27)  \
+  /* TODO(v8:10391): Remove this type once all ExternalPointer usages are */ \
+  /* sandbox-ready. */                   \
+  V(SandboxedExternalPointer, 1u << 28)  \
+  \
   V(Signed31,                     kUnsigned30 | kNegative31) \
   V(Signed32,                     kSigned31 | kOtherUnsigned31 | \
                                   kOtherSigned32) \
@@ -166,10 +151,6 @@ namespace compiler {
   V(OrderedNumber,                kPlainNumber | kMinusZero) \
   V(MinusZeroOrNaN,               kMinusZero | kNaN) \
   V(Number,                       kOrderedNumber | kNaN) \
-  V(SignedBigInt64,               kUnsignedBigInt63 | kNegativeBigInt63) \
-  V(UnsignedBigInt64,             kUnsignedBigInt63 | kOtherUnsignedBigInt64) \
-  V(BigInt,                       kSignedBigInt64 | kOtherUnsignedBigInt64 | \
-                                  kOtherBigInt) \
   V(Numeric,                      kNumber | kBigInt) \
   V(String,                       kInternalizedString | kOtherString) \
   V(UniqueName,                   kSymbol | kInternalizedString) \
@@ -197,7 +178,6 @@ namespace compiler {
   V(Proxy,                        kCallableProxy | kOtherProxy) \
   V(ArrayOrOtherObject,           kArray | kOtherObject) \
   V(ArrayOrProxy,                 kArray | kProxy) \
-  V(Function,                     kCallableFunction | kClassConstructor) \
   V(DetectableCallable,           kFunction | kBoundFunction | \
                                   kOtherCallable | kCallableProxy) \
   V(Callable,                     kDetectableCallable | kOtherUndetectable) \
@@ -205,23 +185,22 @@ namespace compiler {
   V(NonCallableOrNull,            kNonCallable | kNull) \
   V(DetectableObject,             kArray | kFunction | kBoundFunction | \
                                   kOtherCallable | kOtherObject) \
-  V(DetectableReceiver,           kDetectableObject | kProxy | kWasmObject) \
+  V(DetectableReceiver,           kDetectableObject | kProxy) \
   V(DetectableReceiverOrNull,     kDetectableReceiver | kNull) \
   V(Object,                       kDetectableObject | kOtherUndetectable) \
-  V(Receiver,                     kObject | kProxy | kWasmObject) \
+  V(Receiver,                     kObject | kProxy) \
   V(ReceiverOrUndefined,          kReceiver | kUndefined) \
-  V(ReceiverOrNull,               kReceiver | kNull) \
   V(ReceiverOrNullOrUndefined,    kReceiver | kNull | kUndefined) \
   V(SymbolOrReceiver,             kSymbol | kReceiver) \
   V(StringOrReceiver,             kString | kReceiver) \
   V(Unique,                       kBoolean | kUniqueName | kNull | \
                                   kUndefined | kHole | kReceiver) \
   V(Internal,                     kHole | kExternalPointer | \
-                                  kSandboxedPointer | kOtherInternal) \
+                                  kSandboxedExternalPointer | kOtherInternal) \
   V(NonInternal,                  kPrimitive | kReceiver) \
   V(NonBigInt,                    kNonBigIntPrimitive | kReceiver) \
   V(NonNumber,                    kBigInt | kUnique | kString | kInternal) \
-  V(Any,                          uint64_t{0xfffffffffffffffe})
+  V(Any,                          0xfffffffeu)
 
 // clang-format on
 
@@ -257,9 +236,9 @@ class UnionType;
 
 class V8_EXPORT_PRIVATE BitsetType {
  public:
-  using bitset = uint64_t;  // Internal
+  using bitset = uint32_t;  // Internal
 
-  enum : bitset {
+  enum : uint32_t {
 #define DECLARE_TYPE(type, value) k##type = (value),
     BITSET_TYPE_LIST(DECLARE_TYPE)
 #undef DECLARE_TYPE
@@ -279,18 +258,16 @@ class V8_EXPORT_PRIVATE BitsetType {
   static double Max(bitset);
 
   static bitset Glb(double min, double max);
-  static bitset Lub(HeapObjectType const& type, JSHeapBroker* broker) {
-    return Lub<HeapObjectType>(type, broker);
+  static bitset Lub(HeapObjectType const& type) {
+    return Lub<HeapObjectType>(type);
   }
-  static bitset Lub(MapRef map, JSHeapBroker* broker) {
-    return Lub<MapRef>(map, broker);
-  }
+  static bitset Lub(MapRef const& map) { return Lub<MapRef>(map); }
   static bitset Lub(double value);
   static bitset Lub(double min, double max);
   static bitset ExpandInternals(bitset bits);
 
   static const char* Name(bitset);
-  static void Print(std::ostream& os, bitset);
+  static void Print(std::ostream& os, bitset);  // NOLINT
 #ifdef DEBUG
   static void Print(bitset);
 #endif
@@ -308,7 +285,7 @@ class V8_EXPORT_PRIVATE BitsetType {
   static inline size_t BoundariesSize();
 
   template <typename MapRefLike>
-  static bitset Lub(MapRefLike map, JSHeapBroker* broker);
+  static bitset Lub(MapRefLike const& map);
 };
 
 // -----------------------------------------------------------------------------
@@ -317,14 +294,7 @@ class TypeBase {
  protected:
   friend class Type;
 
-  enum Kind {
-    kHeapConstant,
-    kOtherNumberConstant,
-    kTuple,
-    kUnion,
-    kRange,
-    kWasm
-  };
+  enum Kind { kHeapConstant, kOtherNumberConstant, kTuple, kUnion, kRange };
 
   Kind kind() const { return kind_; }
   explicit TypeBase(Kind kind) : kind_(kind) {}
@@ -386,33 +356,6 @@ class RangeType : public TypeBase {
   Limits limits_;
 };
 
-#ifdef V8_ENABLE_WEBASSEMBLY
-class WasmType : public TypeBase {
- public:
-  static WasmType* New(wasm::ValueType value_type,
-                       const wasm::WasmModule* module, Zone* zone) {
-    return zone->New<WasmType>(value_type, module);
-  }
-  wasm::ValueType value_type() const { return value_type_; }
-  const wasm::WasmModule* module() const { return module_; }
-
- private:
-  friend class Type;
-  friend Zone;
-
-  explicit WasmType(wasm::ValueType value_type, const wasm::WasmModule* module)
-      : TypeBase(kWasm), value_type_(value_type), module_(module) {}
-
-  BitsetType::bitset Lub() const {
-    // TODO(manoskouk): Specify more concrete types.
-    return BitsetType::kAny;
-  }
-
-  wasm::ValueType value_type_;
-  const wasm::WasmModule* module_;
-};
-#endif  // V8_ENABLE_WEBASSEMBLY
-
 // -----------------------------------------------------------------------------
 // The actual type.
 
@@ -426,35 +369,27 @@ class V8_EXPORT_PRIVATE Type {
   PROPER_BITSET_TYPE_LIST(DEFINE_TYPE_CONSTRUCTOR)
 #undef DEFINE_TYPE_CONSTRUCTOR
 
-  Type() : payload_(uint64_t{0}) {}
+  Type() : payload_(0) {}
 
   static Type SignedSmall() { return NewBitset(BitsetType::SignedSmall()); }
   static Type UnsignedSmall() { return NewBitset(BitsetType::UnsignedSmall()); }
 
   static Type Constant(JSHeapBroker* broker, Handle<i::Object> value,
                        Zone* zone);
-  static Type Constant(JSHeapBroker* broker, ObjectRef value, Zone* zone);
   static Type Constant(double value, Zone* zone);
   static Type Range(double min, double max, Zone* zone);
   static Type Tuple(Type first, Type second, Type third, Zone* zone);
-  static Type Tuple(Type first, Type second, Zone* zone);
 
   static Type Union(Type type1, Type type2, Zone* zone);
   static Type Intersect(Type type1, Type type2, Zone* zone);
-#ifdef V8_ENABLE_WEBASSEMBLY
-  static Type Wasm(wasm::ValueType value_type, const wasm::WasmModule* module,
-                   Zone* zone);
-  static Type Wasm(wasm::TypeInModule type_in_module, Zone* zone);
-#endif
 
-  static Type For(MapRef type, JSHeapBroker* broker) {
-    return NewBitset(
-        BitsetType::ExpandInternals(BitsetType::Lub(type, broker)));
+  static Type For(MapRef const& type) {
+    return NewBitset(BitsetType::ExpandInternals(BitsetType::Lub(type)));
   }
 
   // Predicates.
   bool IsNone() const { return payload_ == None().payload_; }
-  bool IsInvalid() const { return payload_ == uint64_t{0}; }
+  bool IsInvalid() const { return payload_ == 0u; }
 
   bool Is(Type that) const {
     return payload_ == that.payload_ || this->SlowIs(that);
@@ -463,16 +398,13 @@ class V8_EXPORT_PRIVATE Type {
   bool Equals(Type that) const { return this->Is(that) && that.Is(*this); }
 
   // Inspection.
-  bool IsBitset() const { return payload_ & uint64_t{1}; }
+  bool IsBitset() const { return payload_ & 1; }
   bool IsRange() const { return IsKind(TypeBase::kRange); }
   bool IsHeapConstant() const { return IsKind(TypeBase::kHeapConstant); }
   bool IsOtherNumberConstant() const {
     return IsKind(TypeBase::kOtherNumberConstant);
   }
   bool IsTuple() const { return IsKind(TypeBase::kTuple); }
-#ifdef V8_ENABLE_WEBASSEMBLY
-  bool IsWasm() const { return IsKind(TypeBase::kWasm); }
-#endif
 
   bool IsSingleton() const {
     if (IsNone()) return false;
@@ -481,16 +413,10 @@ class V8_EXPORT_PRIVATE Type {
            (Is(Type::PlainNumber()) && Min() == Max());
   }
 
-  bool CanBeAsserted() const { return Is(Type::NonInternal()); }
-  Handle<TurbofanType> AllocateOnHeap(Factory* factory);
-
   const HeapConstantType* AsHeapConstant() const;
   const OtherNumberConstantType* AsOtherNumberConstant() const;
   const RangeType* AsRange() const;
   const TupleType* AsTuple() const;
-#ifdef V8_ENABLE_WEBASSEMBLY
-  wasm::TypeInModule AsWasm() const;
-#endif
 
   // Minimum and maximum of a numeric type.
   // These functions do not distinguish between -0 and +0.  NaN is ignored.
@@ -533,10 +459,10 @@ class V8_EXPORT_PRIVATE Type {
   friend UnionType;
   friend size_t hash_value(Type type);
 
-  explicit Type(bitset bits) : payload_(bits | uint64_t{1}) {}
+  explicit Type(bitset bits) : payload_(bits | 1u) {}
 
   Type(TypeBase* type_base)  // NOLINT(runtime/explicit)
-      : payload_(reinterpret_cast<uint64_t>(type_base)) {}
+      : payload_(reinterpret_cast<uintptr_t>(type_base)) {}
 
   // Internal inspection.
   bool IsKind(TypeBase::Kind kind) const {
@@ -555,7 +481,7 @@ class V8_EXPORT_PRIVATE Type {
 
   bitset AsBitset() const {
     DCHECK(IsBitset());
-    return static_cast<bitset>(payload_) ^ uint64_t { 1 };
+    return static_cast<bitset>(payload_) ^ 1u;
   }
 
   const UnionType* AsUnion() const;
@@ -569,8 +495,7 @@ class V8_EXPORT_PRIVATE Type {
 
   static Type Range(RangeType::Limits lims, Zone* zone);
   static Type OtherNumberConstant(double value, Zone* zone);
-  static Type HeapConstant(HeapObjectRef value, JSHeapBroker* broker,
-                           Zone* zone);
+  static Type HeapConstant(const HeapObjectRef& value, Zone* zone);
 
   static bool Overlap(const RangeType* lhs, const RangeType* rhs);
   static bool Contains(const RangeType* lhs, const RangeType* rhs);
@@ -591,7 +516,7 @@ class V8_EXPORT_PRIVATE Type {
 
   // If LSB is set, the payload is a bitset; if LSB is clear, the payload is
   // a pointer to a subtype of the TypeBase class.
-  uint64_t payload_;
+  uintptr_t payload_;
 };
 
 inline size_t hash_value(Type type) { return type.payload_; }
@@ -628,19 +553,19 @@ class OtherNumberConstantType : public TypeBase {
 class V8_EXPORT_PRIVATE HeapConstantType : public NON_EXPORTED_BASE(TypeBase) {
  public:
   Handle<HeapObject> Value() const;
-  HeapObjectRef Ref() const { return heap_ref_; }
+  const HeapObjectRef& Ref() const { return heap_ref_; }
 
  private:
   friend class Type;
   friend class BitsetType;
   friend Zone;
 
-  static HeapConstantType* New(HeapObjectRef heap_ref,
+  static HeapConstantType* New(const HeapObjectRef& heap_ref,
                                BitsetType::bitset bitset, Zone* zone) {
     return zone->New<HeapConstantType>(bitset, heap_ref);
   }
 
-  HeapConstantType(BitsetType::bitset bitset, HeapObjectRef heap_ref);
+  HeapConstantType(BitsetType::bitset bitset, const HeapObjectRef& heap_ref);
 
   BitsetType::bitset Lub() const { return bitset_; }
 

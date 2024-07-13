@@ -5,6 +5,7 @@
 #ifndef V8_UTILS_ADDRESS_MAP_H_
 #define V8_UTILS_ADDRESS_MAP_H_
 
+#include "include/v8.h"
 #include "src/base/hashmap.h"
 #include "src/common/assert-scope.h"
 #include "src/objects/heap-object.h"
@@ -59,8 +60,7 @@ class RootIndexMap {
   RootIndexMap& operator=(const RootIndexMap&) = delete;
 
   // Returns true on successful lookup and sets *|out_root_list|.
-  V8_EXPORT_PRIVATE bool Lookup(HeapObject obj,
-                                RootIndex* out_root_list) const {
+  bool Lookup(HeapObject obj, RootIndex* out_root_list) const {
     Maybe<uint32_t> maybe_index = map_->Get(obj);
     if (maybe_index.IsJust()) {
       *out_root_list = static_cast<RootIndex>(maybe_index.FromJust());
@@ -68,7 +68,7 @@ class RootIndexMap {
     }
     return false;
   }
-  V8_EXPORT_PRIVATE bool Lookup(Address obj, RootIndex* out_root_list) const;
+  bool Lookup(Address obj, RootIndex* out_root_list) const;
 
  private:
   HeapObjectToIndexHashMap* map_;

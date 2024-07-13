@@ -9,12 +9,19 @@
 namespace v8 {
 namespace internal {
 
-const int Deoptimizer::kEagerDeoptExitSize = kInstrSize;
+const bool Deoptimizer::kSupportsFixedDeoptExitSizes = true;
+const int Deoptimizer::kNonLazyDeoptExitSize = kInstrSize;
 #ifdef V8_ENABLE_CONTROL_FLOW_INTEGRITY
 const int Deoptimizer::kLazyDeoptExitSize = 2 * kInstrSize;
 #else
 const int Deoptimizer::kLazyDeoptExitSize = 1 * kInstrSize;
 #endif
+const int Deoptimizer::kEagerWithResumeBeforeArgsSize = 2 * kInstrSize;
+const int Deoptimizer::kEagerWithResumeDeoptExitSize =
+    kEagerWithResumeBeforeArgsSize + 2 * kSystemPointerSize;
+const int Deoptimizer::kEagerWithResumeImmedArgs1PcOffset = kInstrSize;
+const int Deoptimizer::kEagerWithResumeImmedArgs2PcOffset =
+    kInstrSize + kSystemPointerSize;
 
 Float32 RegisterValues::GetFloatRegister(unsigned n) const {
   return Float32::FromBits(
@@ -24,7 +31,7 @@ Float32 RegisterValues::GetFloatRegister(unsigned n) const {
 void FrameDescription::SetCallerPc(unsigned offset, intptr_t value) {
   Address new_context =
       static_cast<Address>(GetTop()) + offset + kPCOnStackSize;
-  value = PointerAuthentication::SignAndCheckPC(isolate_, value, new_context);
+  value = PointerAuthentication::SignAndCheckPC(value, new_context);
   SetFrameSlot(offset, value);
 }
 
@@ -38,11 +45,9 @@ void FrameDescription::SetCallerConstantPool(unsigned offset, intptr_t value) {
 }
 
 void FrameDescription::SetPc(intptr_t pc) {
-  // TODO(v8:10026): We need to sign pointers to the embedded blob, which are
-  // stored in the isolate and code range objects.
   if (ENABLE_CONTROL_FLOW_INTEGRITY_BOOL) {
-    CHECK(Deoptimizer::IsValidReturnAddress(PointerAuthentication::StripPAC(pc),
-                                            isolate_));
+    CHECK(
+        Deoptimizer::IsValidReturnAddress(PointerAuthentication::StripPAC(pc)));
   }
   pc_ = pc;
 }

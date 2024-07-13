@@ -14,34 +14,24 @@ namespace baseline {
 
 #define __ basm_.
 
-// A builtin call/jump mode that is used then short builtin calls feature is
-// not enabled.
-constexpr BuiltinCallJumpMode kFallbackBuiltinCallJumpModeForBaseline =
-    BuiltinCallJumpMode::kIndirect;
-
 void BaselineCompiler::Prologue() {
   // Enter the frame here, since CallBuiltin will override lr.
   __ masm()->EnterFrame(StackFrame::BASELINE);
   DCHECK_EQ(kJSFunctionRegister, kJavaScriptCallTargetRegister);
-  int max_frame_size =
-      bytecode_->frame_size() + max_call_args_ * kSystemPointerSize;
-  CallBuiltin<Builtin::kBaselineOutOfLinePrologue>(
-      kContextRegister, kJSFunctionRegister, kJavaScriptCallArgCountRegister,
-      max_frame_size, kJavaScriptCallNewTargetRegister, bytecode_);
+  int max_frame_size = bytecode_->frame_size() + max_call_args_;
+  CallBuiltin(Builtins::kBaselineOutOfLinePrologue, kContextRegister,
+              kJSFunctionRegister, kJavaScriptCallArgCountRegister,
+              max_frame_size, kJavaScriptCallNewTargetRegister, bytecode_);
 
   PrologueFillFrame();
 }
 
 void BaselineCompiler::PrologueFillFrame() {
-  ASM_CODE_COMMENT(&masm_);
+  __ RecordComment("[ Fill frame");
   // Inlined register frame fill
   interpreter::Register new_target_or_generator_register =
       bytecode_->incoming_new_target_or_generator_register();
-  if (v8_flags.debug_code) {
-    __ masm()->CompareRoot(kInterpreterAccumulatorRegister,
-                           RootIndex::kUndefinedValue);
-    __ masm()->Assert(eq, AbortReason::kUnexpectedValue);
-  }
+  __ LoadRoot(kInterpreterAccumulatorRegister, RootIndex::kUndefinedValue);
   int register_count = bytecode_->register_count();
   // Magic value
   const int kLoopUnrollSize = 8;
@@ -81,8 +71,9 @@ void BaselineCompiler::PrologueFillFrame() {
       __ Push(kInterpreterAccumulatorRegister);
     }
     __ masm()->sub(scratch, scratch, Operand(1), SetCC);
-    __ masm()->b(gt, &loop);
+    __ JumpIf(Condition::kGreaterThan, &loop);
   }
+  __ RecordComment("]");
 }
 
 void BaselineCompiler::VerifyFrameSize() {

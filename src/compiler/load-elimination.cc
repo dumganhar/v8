@@ -7,7 +7,6 @@
 #include "src/compiler/access-builder.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/js-graph.h"
-#include "src/compiler/js-heap-broker.h"
 #include "src/compiler/node-properties.h"
 #include "src/heap/factory.h"
 #include "src/objects/objects-inl.h"
@@ -73,7 +72,7 @@ bool MustAlias(Node* a, Node* b) {
 }  // namespace
 
 Reduction LoadElimination::Reduce(Node* node) {
-  if (v8_flags.trace_turbo_load_elimination) {
+  if (FLAG_trace_turbo_load_elimination) {
     if (node->op()->EffectInputCount() > 0) {
       PrintF(" visit #%d:%s", node->id(), node->op()->mnemonic());
       if (node->op()->ValueInputCount() > 0) {
@@ -169,14 +168,14 @@ LoadElimination::AbstractElements::Kill(Node* object, Node* index,
     if (element.object == nullptr) continue;
     if (MayAlias(object, element.object)) {
       AbstractElements* that = zone->New<AbstractElements>(zone);
-      for (Element const element2 : this->elements_) {
-        if (element2.object == nullptr) continue;
-        DCHECK_NOT_NULL(element2.index);
-        DCHECK_NOT_NULL(element2.value);
-        if (!MayAlias(object, element2.object) ||
+      for (Element const element : this->elements_) {
+        if (element.object == nullptr) continue;
+        DCHECK_NOT_NULL(element.index);
+        DCHECK_NOT_NULL(element.value);
+        if (!MayAlias(object, element.object) ||
             !NodeProperties::GetType(index).Maybe(
-                NodeProperties::GetType(element2.index))) {
-          that->elements_[that->next_index_++] = element2;
+                NodeProperties::GetType(element.index))) {
+          that->elements_[that->next_index_++] = element;
         }
       }
       that->next_index_ %= arraysize(elements_);
@@ -271,7 +270,7 @@ bool MayAlias(MaybeHandle<Name> x, MaybeHandle<Name> y) {
 
 class LoadElimination::AliasStateInfo {
  public:
-  AliasStateInfo(const AbstractState* state, Node* object, MapRef map)
+  AliasStateInfo(const AbstractState* state, Node* object, Handle<Map> map)
       : state_(state), object_(object), map_(map) {}
   AliasStateInfo(const AbstractState* state, Node* object)
       : state_(state), object_(object) {}
@@ -281,23 +280,23 @@ class LoadElimination::AliasStateInfo {
  private:
   const AbstractState* state_;
   Node* object_;
-  OptionalMapRef map_;
+  MaybeHandle<Map> map_;
 };
 
 LoadElimination::AbstractField const* LoadElimination::AbstractField::KillConst(
     Node* object, Zone* zone) const {
-  for (auto info1 : this->info_for_node_) {
-    if (info1.first->IsDead()) continue;
+  for (auto pair : this->info_for_node_) {
+    if (pair.first->IsDead()) continue;
     // If we previously recorded information about a const store on the given
     // 'object', we might not have done it on the same node; e.g. we might now
     // identify the object by a FinishRegion node, whereas the initial const
     // store was performed on the Allocate node. We therefore remove information
     // on all nodes that must alias with 'object'.
-    if (MustAlias(object, info1.first)) {
+    if (MustAlias(object, pair.first)) {
       AbstractField* that = zone->New<AbstractField>(zone);
-      for (auto info2 : this->info_for_node_) {
-        if (!MustAlias(object, info2.first)) {
-          that->info_for_node_.insert(info2);
+      for (auto pair : this->info_for_node_) {
+        if (!MustAlias(object, pair.first)) {
+          that->info_for_node_.insert(pair);
         }
       }
       return that;
@@ -309,14 +308,14 @@ LoadElimination::AbstractField const* LoadElimination::AbstractField::KillConst(
 LoadElimination::AbstractField const* LoadElimination::AbstractField::Kill(
     const AliasStateInfo& alias_info, MaybeHandle<Name> name,
     Zone* zone) const {
-  for (auto info1 : this->info_for_node_) {
-    if (info1.first->IsDead()) continue;
-    if (alias_info.MayAlias(info1.first)) {
+  for (auto pair : this->info_for_node_) {
+    if (pair.first->IsDead()) continue;
+    if (alias_info.MayAlias(pair.first)) {
       AbstractField* that = zone->New<AbstractField>(zone);
-      for (auto info2 : this->info_for_node_) {
-        if (!alias_info.MayAlias(info2.first) ||
-            !MayAlias(name, info2.second.name)) {
-          that->info_for_node_.insert(info2);
+      for (auto pair : this->info_for_node_) {
+        if (!alias_info.MayAlias(pair.first) ||
+            !MayAlias(name, pair.second.name)) {
+          that->info_for_node_.insert(pair);
         }
       }
       return that;
@@ -337,15 +336,15 @@ void LoadElimination::AbstractField::Print() const {
 LoadElimination::AbstractMaps::AbstractMaps(Zone* zone)
     : info_for_node_(zone) {}
 
-LoadElimination::AbstractMaps::AbstractMaps(Node* object, ZoneRefSet<Map> maps,
-                                            Zone* zone)
+LoadElimination::AbstractMaps::AbstractMaps(Node* object,
+                                            ZoneHandleSet<Map> maps, Zone* zone)
     : info_for_node_(zone) {
   object = ResolveRenames(object);
   info_for_node_.insert(std::make_pair(object, maps));
 }
 
-bool LoadElimination::AbstractMaps::Lookup(Node* object,
-                                           ZoneRefSet<Map>* object_maps) const {
+bool LoadElimination::AbstractMaps::Lookup(
+    Node* object, ZoneHandleSet<Map>* object_maps) const {
   auto it = info_for_node_.find(ResolveRenames(object));
   if (it == info_for_node_.end()) return false;
   *object_maps = it->second;
@@ -354,12 +353,11 @@ bool LoadElimination::AbstractMaps::Lookup(Node* object,
 
 LoadElimination::AbstractMaps const* LoadElimination::AbstractMaps::Kill(
     const AliasStateInfo& alias_info, Zone* zone) const {
-  for (auto info1 : this->info_for_node_) {
-    if (alias_info.MayAlias(info1.first)) {
+  for (auto pair : this->info_for_node_) {
+    if (alias_info.MayAlias(pair.first)) {
       AbstractMaps* that = zone->New<AbstractMaps>(zone);
-      for (auto info2 : this->info_for_node_) {
-        if (!alias_info.MayAlias(info2.first))
-          that->info_for_node_.insert(info2);
+      for (auto pair : this->info_for_node_) {
+        if (!alias_info.MayAlias(pair.first)) that->info_for_node_.insert(pair);
       }
       return that;
     }
@@ -373,7 +371,7 @@ LoadElimination::AbstractMaps const* LoadElimination::AbstractMaps::Merge(
   AbstractMaps* copy = zone->New<AbstractMaps>(zone);
   for (auto this_it : this->info_for_node_) {
     Node* this_object = this_it.first;
-    ZoneRefSet<Map> this_maps = this_it.second;
+    ZoneHandleSet<Map> this_maps = this_it.second;
     auto that_it = that->info_for_node_.find(this_object);
     if (that_it != that->info_for_node_.end() && that_it->second == this_maps) {
       copy->info_for_node_.insert(this_it);
@@ -383,13 +381,9 @@ LoadElimination::AbstractMaps const* LoadElimination::AbstractMaps::Merge(
 }
 
 LoadElimination::AbstractMaps const* LoadElimination::AbstractMaps::Extend(
-    Node* object, ZoneRefSet<Map> maps, Zone* zone) const {
-  AbstractMaps* that = zone->New<AbstractMaps>(*this);
-  if (that->info_for_node_.size() >= kMaxTrackedObjects) {
-    // We are tracking too many objects, which leads to bad performance.
-    // Delete one to avoid the map from becoming bigger.
-    that->info_for_node_.erase(that->info_for_node_.begin());
-  }
+    Node* object, ZoneHandleSet<Map> maps, Zone* zone) const {
+  AbstractMaps* that = zone->New<AbstractMaps>(zone);
+  that->info_for_node_ = this->info_for_node_;
   object = ResolveRenames(object);
   that->info_for_node_[object] = maps;
   return that;
@@ -401,9 +395,9 @@ void LoadElimination::AbstractMaps::Print() const {
   for (auto pair : info_for_node_) {
     os << "    #" << pair.first->id() << ":" << pair.first->op()->mnemonic()
        << std::endl;
-    ZoneRefSet<Map> const& maps = pair.second;
+    ZoneHandleSet<Map> const& maps = pair.second;
     for (size_t i = 0; i < maps.size(); ++i) {
-      os << "     - " << Brief(*maps[i].object()) << std::endl;
+      os << "     - " << Brief(*maps[i]) << std::endl;
     }
   }
 }
@@ -480,12 +474,12 @@ void LoadElimination::AbstractState::Merge(AbstractState const* that,
 }
 
 bool LoadElimination::AbstractState::LookupMaps(
-    Node* object, ZoneRefSet<Map>* object_map) const {
+    Node* object, ZoneHandleSet<Map>* object_map) const {
   return this->maps_ && this->maps_->Lookup(object, object_map);
 }
 
 LoadElimination::AbstractState const* LoadElimination::AbstractState::SetMaps(
-    Node* object, ZoneRefSet<Map> maps, Zone* zone) const {
+    Node* object, ZoneHandleSet<Map> maps, Zone* zone) const {
   AbstractState* that = zone->New<AbstractState>(*this);
   if (that->maps_) {
     that->maps_ = that->maps_->Extend(object, maps, zone);
@@ -691,11 +685,11 @@ bool LoadElimination::AliasStateInfo::MayAlias(Node* other) const {
     return false;
   }
   // Decide aliasing based on maps (if available).
-  if (map_.has_value()) {
-    MapRef map = *map_;
-    ZoneRefSet<Map> other_maps;
+  Handle<Map> map;
+  if (map_.ToHandle(&map)) {
+    ZoneHandleSet<Map> other_maps;
     if (state_->LookupMaps(other, &other_maps) && other_maps.size() == 1) {
-      if (map != other_maps.at(0)) {
+      if (map.address() != other_maps.at(0).address()) {
         return false;
       }
     }
@@ -741,12 +735,12 @@ void LoadElimination::AbstractStateForEffectNodes::Set(
 }
 
 Reduction LoadElimination::ReduceMapGuard(Node* node) {
-  ZoneRefSet<Map> const& maps = MapGuardMapsOf(node->op());
+  ZoneHandleSet<Map> const& maps = MapGuardMapsOf(node->op());
   Node* const object = NodeProperties::GetValueInput(node, 0);
   Node* const effect = NodeProperties::GetEffectInput(node);
   AbstractState const* state = node_states_.Get(effect);
   if (state == nullptr) return NoChange();
-  ZoneRefSet<Map> object_maps;
+  ZoneHandleSet<Map> object_maps;
   if (state->LookupMaps(object, &object_maps)) {
     if (maps.contains(object_maps)) return Replace(effect);
     // TODO(turbofan): Compute the intersection.
@@ -756,12 +750,12 @@ Reduction LoadElimination::ReduceMapGuard(Node* node) {
 }
 
 Reduction LoadElimination::ReduceCheckMaps(Node* node) {
-  ZoneRefSet<Map> const& maps = CheckMapsParametersOf(node->op()).maps();
+  ZoneHandleSet<Map> const& maps = CheckMapsParametersOf(node->op()).maps();
   Node* const object = NodeProperties::GetValueInput(node, 0);
   Node* const effect = NodeProperties::GetEffectInput(node);
   AbstractState const* state = node_states_.Get(effect);
   if (state == nullptr) return NoChange();
-  ZoneRefSet<Map> object_maps;
+  ZoneHandleSet<Map> object_maps;
   if (state->LookupMaps(object, &object_maps)) {
     if (maps.contains(object_maps)) return Replace(effect);
     // TODO(turbofan): Compute the intersection.
@@ -771,12 +765,12 @@ Reduction LoadElimination::ReduceCheckMaps(Node* node) {
 }
 
 Reduction LoadElimination::ReduceCompareMaps(Node* node) {
-  ZoneRefSet<Map> const& maps = CompareMapsParametersOf(node->op());
+  ZoneHandleSet<Map> const& maps = CompareMapsParametersOf(node->op());
   Node* const object = NodeProperties::GetValueInput(node, 0);
   Node* const effect = NodeProperties::GetEffectInput(node);
   AbstractState const* state = node_states_.Get(effect);
   if (state == nullptr) return NoChange();
-  ZoneRefSet<Map> object_maps;
+  ZoneHandleSet<Map> object_maps;
   if (state->LookupMaps(object, &object_maps)) {
     if (maps.contains(object_maps)) {
       Node* value = jsgraph()->TrueConstant();
@@ -795,8 +789,8 @@ Reduction LoadElimination::ReduceEnsureWritableFastElements(Node* node) {
   AbstractState const* state = node_states_.Get(effect);
   if (state == nullptr) return NoChange();
   // Check if the {elements} already have the fixed array map.
-  ZoneRefSet<Map> elements_maps;
-  ZoneRefSet<Map> fixed_array_maps(broker()->fixed_array_map());
+  ZoneHandleSet<Map> elements_maps;
+  ZoneHandleSet<Map> fixed_array_maps(factory()->fixed_array_map());
   if (state->LookupMaps(elements, &elements_maps) &&
       fixed_array_maps.contains(elements_maps)) {
     ReplaceWithValue(node, elements, effect);
@@ -824,12 +818,12 @@ Reduction LoadElimination::ReduceMaybeGrowFastElements(Node* node) {
   if (params.mode() == GrowFastElementsMode::kDoubleElements) {
     // We know that the resulting elements have the fixed double array map.
     state = state->SetMaps(
-        node, ZoneRefSet<Map>(broker()->fixed_double_array_map()), zone());
+        node, ZoneHandleSet<Map>(factory()->fixed_double_array_map()), zone());
   } else {
     // We know that the resulting elements have the fixed array map or the COW
     // version thereof (if we didn't grow and it was already COW before).
-    ZoneRefSet<Map> fixed_array_maps(
-        {broker()->fixed_array_map(), broker()->fixed_cow_array_map()}, zone());
+    ZoneHandleSet<Map> fixed_array_maps(factory()->fixed_array_map());
+    fixed_array_maps.insert(factory()->fixed_cow_array_map(), zone());
     state = state->SetMaps(node, fixed_array_maps, zone());
   }
   // Kill the previous elements on {object}.
@@ -846,8 +840,8 @@ Reduction LoadElimination::ReduceMaybeGrowFastElements(Node* node) {
 Reduction LoadElimination::ReduceTransitionElementsKind(Node* node) {
   ElementsTransition transition = ElementsTransitionOf(node->op());
   Node* const object = NodeProperties::GetValueInput(node, 0);
-  MapRef source_map(transition.source());
-  MapRef target_map(transition.target());
+  Handle<Map> source_map(transition.source());
+  Handle<Map> target_map(transition.target());
   Node* const effect = NodeProperties::GetEffectInput(node);
   AbstractState const* state = node_states_.Get(effect);
   if (state == nullptr) return NoChange();
@@ -862,14 +856,14 @@ Reduction LoadElimination::ReduceTransitionElementsKind(Node* node) {
           MaybeHandle<Name>(), zone());
       break;
   }
-  ZoneRefSet<Map> object_maps;
+  ZoneHandleSet<Map> object_maps;
   if (state->LookupMaps(object, &object_maps)) {
-    if (ZoneRefSet<Map>(target_map).contains(object_maps)) {
+    if (ZoneHandleSet<Map>(target_map).contains(object_maps)) {
       // The {object} already has the {target_map}, so this TransitionElements
       // {node} is fully redundant (independent of what {source_map} is).
       return Replace(effect);
     }
-    if (object_maps.contains(ZoneRefSet<Map>(source_map))) {
+    if (object_maps.contains(ZoneHandleSet<Map>(source_map))) {
       object_maps.remove(source_map, zone());
       object_maps.insert(target_map, zone());
       AliasStateInfo alias_info(state, object, source_map);
@@ -885,8 +879,8 @@ Reduction LoadElimination::ReduceTransitionElementsKind(Node* node) {
 
 Reduction LoadElimination::ReduceTransitionAndStoreElement(Node* node) {
   Node* const object = NodeProperties::GetValueInput(node, 0);
-  MapRef double_map(DoubleMapParameterOf(node->op()));
-  MapRef fast_map(FastMapParameterOf(node->op()));
+  Handle<Map> double_map(DoubleMapParameterOf(node->op()));
+  Handle<Map> fast_map(FastMapParameterOf(node->op()));
   Node* const effect = NodeProperties::GetEffectInput(node);
   AbstractState const* state = node_states_.Get(effect);
   if (state == nullptr) return NoChange();
@@ -894,7 +888,7 @@ Reduction LoadElimination::ReduceTransitionAndStoreElement(Node* node) {
   // We need to add the double and fast maps to the set of possible maps for
   // this object, because we don't know which of those we'll transition to.
   // Additionally, we should kill all alias information.
-  ZoneRefSet<Map> object_maps;
+  ZoneHandleSet<Map> object_maps;
   if (state->LookupMaps(object, &object_maps)) {
     object_maps.insert(double_map, zone());
     object_maps.insert(fast_map, zone());
@@ -918,9 +912,9 @@ Reduction LoadElimination::ReduceLoadField(Node* node,
   if (access.offset == HeapObject::kMapOffset &&
       access.base_is_tagged == kTaggedBase) {
     DCHECK(IsAnyTagged(access.machine_type.representation()));
-    ZoneRefSet<Map> object_maps;
+    ZoneHandleSet<Map> object_maps;
     if (state->LookupMaps(object, &object_maps) && object_maps.size() == 1) {
-      Node* value = jsgraph()->HeapConstant(object_maps[0].object());
+      Node* value = jsgraph()->HeapConstant(object_maps[0]);
       NodeProperties::SetType(value, Type::OtherInternal());
       ReplaceWithValue(node, value, effect);
       return Replace(value);
@@ -965,8 +959,9 @@ Reduction LoadElimination::ReduceLoadField(Node* node,
       state = state->AddField(object, field_index, info, zone());
     }
   }
-  if (access.map.has_value()) {
-    state = state->SetMaps(node, ZoneRefSet<Map>(*access.map), zone());
+  Handle<Map> field_map;
+  if (access.map.ToHandle(&field_map)) {
+    state = state->SetMaps(node, ZoneHandleSet<Map>(field_map), zone());
   }
   return UpdateState(node, state);
 }
@@ -986,8 +981,8 @@ Reduction LoadElimination::ReduceStoreField(Node* node,
     Type const new_value_type = NodeProperties::GetType(new_value);
     if (new_value_type.IsHeapConstant()) {
       // Record the new {object} map information.
-      ZoneRefSet<Map> object_maps(
-          new_value_type.AsHeapConstant()->Ref().AsMap());
+      ZoneHandleSet<Map> object_maps(
+          new_value_type.AsHeapConstant()->Ref().AsMap().object());
       state = state->SetMaps(object, object_maps, zone());
     }
   } else {
@@ -1074,16 +1069,13 @@ Reduction LoadElimination::ReduceLoadElement(Node* node) {
     case MachineRepresentation::kFloat32:
     case MachineRepresentation::kCompressedPointer:
     case MachineRepresentation::kCompressed:
-    case MachineRepresentation::kSandboxedPointer:
       // TODO(turbofan): Add support for doing the truncations.
       break;
     case MachineRepresentation::kFloat64:
     case MachineRepresentation::kSimd128:
-    case MachineRepresentation::kSimd256:
     case MachineRepresentation::kTaggedSigned:
     case MachineRepresentation::kTaggedPointer:
     case MachineRepresentation::kTagged:
-    case MachineRepresentation::kMapWord:
       if (Node* replacement = state->LookupElement(
               object, index, access.machine_type.representation())) {
         // Make sure we don't resurrect dead {replacement} nodes.
@@ -1132,16 +1124,13 @@ Reduction LoadElimination::ReduceStoreElement(Node* node) {
     case MachineRepresentation::kFloat32:
     case MachineRepresentation::kCompressedPointer:
     case MachineRepresentation::kCompressed:
-    case MachineRepresentation::kSandboxedPointer:
       // TODO(turbofan): Add support for doing the truncations.
       break;
     case MachineRepresentation::kFloat64:
     case MachineRepresentation::kSimd128:
-    case MachineRepresentation::kSimd256:
     case MachineRepresentation::kTaggedSigned:
     case MachineRepresentation::kTaggedPointer:
     case MachineRepresentation::kTagged:
-    case MachineRepresentation::kMapWord:
       state = state->AddElement(object, index, new_value,
                                 access.machine_type.representation(), zone());
       break;
@@ -1165,12 +1154,12 @@ LoadElimination::AbstractState const* LoadElimination::UpdateStateForPhi(
   // Check if all the inputs have the same maps.
   AbstractState const* input_state =
       node_states_.Get(NodeProperties::GetEffectInput(effect_phi, 0));
-  ZoneRefSet<Map> object_maps;
+  ZoneHandleSet<Map> object_maps;
   if (!input_state->LookupMaps(phi->InputAt(0), &object_maps)) return state;
   for (int i = 1; i < predecessor_count; i++) {
     input_state =
         node_states_.Get(NodeProperties::GetEffectInput(effect_phi, i));
-    ZoneRefSet<Map> input_maps;
+    ZoneHandleSet<Map> input_maps;
     if (!input_state->LookupMaps(phi->InputAt(i), &input_maps)) return state;
     if (input_maps != object_maps) return state;
   }
@@ -1319,9 +1308,10 @@ LoadElimination::AbstractState const* LoadElimination::ComputeLoopState(
           case IrOpcode::kTransitionElementsKind: {
             ElementsTransition transition = ElementsTransitionOf(current->op());
             Node* const object = NodeProperties::GetValueInput(current, 0);
-            ZoneRefSet<Map> object_maps;
+            ZoneHandleSet<Map> object_maps;
             if (!state->LookupMaps(object, &object_maps) ||
-                !ZoneRefSet<Map>(transition.target()).contains(object_maps)) {
+                !ZoneHandleSet<Map>(transition.target())
+                     .contains(object_maps)) {
               element_transitions_.push_back({transition, object});
             }
             break;
@@ -1347,7 +1337,6 @@ LoadElimination::AbstractState const* LoadElimination::ComputeLoopState(
             state = state->KillElement(object, index, zone());
             break;
           }
-          case IrOpcode::kCheckMaps:
           case IrOpcode::kStoreTypedElement: {
             // Doesn't affect anything we track with the state currently.
             break;
@@ -1423,7 +1412,6 @@ LoadElimination::IndexRange LoadElimination::FieldIndexOf(
     case MachineRepresentation::kNone:
     case MachineRepresentation::kBit:
     case MachineRepresentation::kSimd128:
-    case MachineRepresentation::kSimd256:
       UNREACHABLE();
     case MachineRepresentation::kWord8:
     case MachineRepresentation::kWord16:
@@ -1436,10 +1424,8 @@ LoadElimination::IndexRange LoadElimination::FieldIndexOf(
     case MachineRepresentation::kTaggedSigned:
     case MachineRepresentation::kTaggedPointer:
     case MachineRepresentation::kTagged:
-    case MachineRepresentation::kMapWord:
     case MachineRepresentation::kCompressedPointer:
     case MachineRepresentation::kCompressed:
-    case MachineRepresentation::kSandboxedPointer:
       break;
   }
   int representation_size = ElementSizeInBytes(rep);

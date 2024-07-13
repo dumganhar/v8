@@ -43,7 +43,7 @@ from io import open    # pylint: disable=redefined-builtin, g-importing-member
 import os
 import re
 import sys
-from googlemock.test import gmock_test_utils
+import gmock_test_utils
 
 
 # The flag for generating the golden file
@@ -161,13 +161,13 @@ class GMockOutputTest(gmock_test_utils.TestCase):
     golden_file.close()
 
     # The normalized output should match the golden file.
-    self.assertEqual(golden, output)
+    self.assertEquals(golden, output)
 
     # The raw output should contain 2 leaked mock object errors for
     # test GMockOutputTest.CatchesLeakedMocks.
-    self.assertEqual(['GMockOutputTest.CatchesLeakedMocks',
-                      'GMockOutputTest.CatchesLeakedMocks'],
-                     leaky_tests)
+    self.assertEquals(['GMockOutputTest.CatchesLeakedMocks',
+                       'GMockOutputTest.CatchesLeakedMocks'],
+                      leaky_tests)
 
 
 if __name__ == '__main__':

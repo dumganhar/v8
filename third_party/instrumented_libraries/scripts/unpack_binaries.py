@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2015 The Chromium Authors
+# Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -11,18 +11,25 @@ import shutil
 import sys
 
 
-def get_archive_name(archive_prefix, release):
-  return '%s-%s.tgz' % (archive_prefix, release)
+def get_archive_name(archive_prefix):
+  supported_release = 'trusty'
+  release = subprocess.check_output(['lsb_release', '-cs']).strip()
+  if release != supported_release:
+    print('WARNING: unsupported distro. You need to run a Trusty Docker '
+          'image. Please see '
+          'https://www.chromium.org/developers/testing/memorysanitizer/')
+
+  return '%s-%s.tgz' % (archive_prefix, supported_release)
 
 
-def main(archive_prefix, release, archive_dir, target_dir, stamp_dir=None):
+def main(archive_prefix, archive_dir, target_dir, stamp_dir=None):
   shutil.rmtree(target_dir, ignore_errors=True)
 
   os.mkdir(target_dir)
   subprocess.check_call([
       'tar',
       '-zxf',
-      os.path.join(archive_dir, get_archive_name(archive_prefix, release)),
+      os.path.join(archive_dir, get_archive_name(archive_prefix)),
       '-C',
       target_dir])
   stamp_file = os.path.join(stamp_dir or target_dir, '%s.txt' % archive_prefix)
@@ -32,7 +39,7 @@ def main(archive_prefix, release, archive_dir, target_dir, stamp_dir=None):
     with open(os.path.join(stamp_dir, '%s.d' % archive_prefix), 'w') as f:
       f.write('%s: %s' % (
           stamp_file, os.path.join(archive_dir,
-                                   get_archive_name(archive_prefix, release))))
+                                   get_archive_name(archive_prefix))))
   return 0
 
 

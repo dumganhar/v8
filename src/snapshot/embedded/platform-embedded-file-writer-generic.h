@@ -5,6 +5,7 @@
 #ifndef V8_SNAPSHOT_EMBEDDED_PLATFORM_EMBEDDED_FILE_WRITER_GENERIC_H_
 #define V8_SNAPSHOT_EMBEDDED_PLATFORM_EMBEDDED_FILE_WRITER_GENERIC_H_
 
+#include "src/base/macros.h"
 #include "src/common/globals.h"  // For V8_OS_WIN_X64
 #include "src/snapshot/embedded/platform-embedded-file-writer-base.h"
 
@@ -23,13 +24,14 @@ class PlatformEmbeddedFileWriterGeneric
   }
 
   void SectionText() override;
+  void SectionData() override;
   void SectionRoData() override;
 
   void AlignToCodeAlignment() override;
-  void AlignToPageSizeIfNeeded() override;
   void AlignToDataAlignment() override;
 
   void DeclareUint32(const char* name, uint32_t value) override;
+  void DeclarePointerToSymbol(const char* name, const char* target) override;
 
   void DeclareSymbolGlobal(const char* name) override;
   void DeclareLabel(const char* name) override;

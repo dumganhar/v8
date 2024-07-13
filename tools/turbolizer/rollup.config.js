@@ -2,16 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import typescript from "rollup-plugin-typescript2";
-import node from "rollup-plugin-node-resolve";
-import path from "path";
+import typescript from 'rollup-plugin-typescript2';
+import node from 'rollup-plugin-node-resolve';
 
-const warningHandler = (warning) => {
+import path from 'path'
+
+const onwarn = warning => {
   // Silence circular dependency warning for moment package
   const node_modules = path.normalize('node_modules/');
-  if (warning.code === 'CIRCULAR_DEPENDENCY' && warning.importer.indexOf(node_modules)) {
-    return;
+  if (warning.code === 'CIRCULAR_DEPENDENCY' &&
+    !warning.importer.indexOf(node_modules)) {
+    return
   }
+
   console.warn(`(!) ${warning.message}`)
 }
 
@@ -25,5 +28,5 @@ export default {
     format: "iife",
     sourcemap: true
   },
-  onwarn: warningHandler
+  onwarn: onwarn
 };

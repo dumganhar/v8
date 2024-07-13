@@ -12,9 +12,9 @@
 #include <string>
 #include <unordered_set>
 
-#include "src/base/contextual.h"
 #include "src/base/functional.h"
 #include "src/base/optional.h"
+#include "src/torque/contextual.h"
 #include "src/torque/source-positions.h"
 
 namespace v8 {
@@ -110,6 +110,8 @@ bool StartsWithSingleUnderscore(const std::string& str);
 void ReplaceFileContentsIfDifferent(const std::string& file_path,
                                     const std::string& contents);
 
+std::string CurrentPositionAsString();
+
 template <class T>
 class Deduplicator {
  public:
@@ -174,8 +176,8 @@ void PrintCommaSeparatedList(std::ostream& os, const T& list) {
 struct BottomOffset {
   size_t offset;
 
-  BottomOffset& operator=(std::size_t other_offset) {
-    this->offset = other_offset;
+  BottomOffset& operator=(std::size_t offset) {
+    this->offset = offset;
     return *this;
   }
   BottomOffset& operator++() {

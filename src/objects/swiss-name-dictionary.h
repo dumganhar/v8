@@ -8,7 +8,6 @@
 #include <cstdint>
 
 #include "src/base/export-template.h"
-#include "src/base/optional.h"
 #include "src/common/globals.h"
 #include "src/objects/fixed-array.h"
 #include "src/objects/internal-index.h"
@@ -73,10 +72,10 @@ class V8_EXPORT_PRIVATE SwissNameDictionary : public HeapObject {
  public:
   using Group = swiss_table::Group;
 
-  template <typename IsolateT>
+  template <typename LocalIsolate>
   inline static Handle<SwissNameDictionary> Add(
-      IsolateT* isolate, Handle<SwissNameDictionary> table, Handle<Name> key,
-      Handle<Object> value, PropertyDetails details,
+      LocalIsolate* isolate, Handle<SwissNameDictionary> table,
+      Handle<Name> key, Handle<Object> value, PropertyDetails details,
       InternalIndex* entry_out = nullptr);
 
   static Handle<SwissNameDictionary> Shrink(Isolate* isolate,
@@ -85,16 +84,16 @@ class V8_EXPORT_PRIVATE SwissNameDictionary : public HeapObject {
   static Handle<SwissNameDictionary> DeleteEntry(
       Isolate* isolate, Handle<SwissNameDictionary> table, InternalIndex entry);
 
-  template <typename IsolateT>
-  inline InternalIndex FindEntry(IsolateT* isolate, Object key);
+  template <typename LocalIsolate>
+  inline InternalIndex FindEntry(LocalIsolate* isolate, Object key);
 
   // This is to make the interfaces of NameDictionary::FindEntry and
   // OrderedNameDictionary::FindEntry compatible.
   // TODO(emrich) clean this up: NameDictionary uses Handle<Object>
   // for FindEntry keys due to its Key typedef, but that's also used
   // for adding, where we do need handles.
-  template <typename IsolateT>
-  inline InternalIndex FindEntry(IsolateT* isolate, Handle<Object> key);
+  template <typename LocalIsolate>
+  inline InternalIndex FindEntry(LocalIsolate* isolate, Handle<Object> key);
 
   static inline bool IsKey(ReadOnlyRoots roots, Object key_candidate);
   inline bool ToKey(ReadOnlyRoots roots, InternalIndex entry, Object* out_key);
@@ -102,8 +101,6 @@ class V8_EXPORT_PRIVATE SwissNameDictionary : public HeapObject {
   inline Object KeyAt(InternalIndex entry);
   inline Name NameAt(InternalIndex entry);
   inline Object ValueAt(InternalIndex entry);
-  // Returns {} if we would be reading out of the bounds of the object.
-  inline base::Optional<Object> TryValueAt(InternalIndex entry);
   inline PropertyDetails DetailsAt(InternalIndex entry);
 
   inline void ValueAtPut(InternalIndex entry, Object value);
@@ -117,10 +114,6 @@ class V8_EXPORT_PRIVATE SwissNameDictionary : public HeapObject {
 
   int NumberOfEnumerableProperties();
 
-  // TODO(pthier): Add flags (similar to NamedDictionary) also for swiss dicts.
-  inline bool may_have_interesting_properties() { UNREACHABLE(); }
-  inline void set_may_have_interesting_properties(bool value) { UNREACHABLE(); }
-
   static Handle<SwissNameDictionary> ShallowCopy(
       Isolate* isolate, Handle<SwissNameDictionary> table);
 
@@ -130,15 +123,14 @@ class V8_EXPORT_PRIVATE SwissNameDictionary : public HeapObject {
   // deleted entries (which reside in initialized memory, but are not compared).
   bool EqualsForTesting(SwissNameDictionary other);
 
-  template <typename IsolateT>
-  void Initialize(IsolateT* isolate, ByteArray meta_table, int capacity);
+  template <typename LocalIsolate>
+  void Initialize(LocalIsolate* isolate, ByteArray meta_table, int capacity);
 
-  template <typename IsolateT>
-  static Handle<SwissNameDictionary> Rehash(IsolateT* isolate,
+  template <typename LocalIsolate>
+  static Handle<SwissNameDictionary> Rehash(LocalIsolate* isolate,
                                             Handle<SwissNameDictionary> table,
                                             int new_capacity);
-  template <typename IsolateT>
-  void Rehash(IsolateT* isolate);
+  void Rehash(Isolate* isolate);
 
   inline void SetHash(int hash);
   inline int Hash();
@@ -270,9 +262,9 @@ class V8_EXPORT_PRIVATE SwissNameDictionary : public HeapObject {
   using ctrl_t = swiss_table::ctrl_t;
   using Ctrl = swiss_table::Ctrl;
 
-  template <typename IsolateT>
+  template <typename LocalIsolate>
   inline static Handle<SwissNameDictionary> EnsureGrowable(
-      IsolateT* isolate, Handle<SwissNameDictionary> table);
+      LocalIsolate* isolate, Handle<SwissNameDictionary> table);
 
   // Returns table of byte-encoded PropertyDetails (without enumeration index
   // stored in PropertyDetails).

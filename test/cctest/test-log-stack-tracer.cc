@@ -29,12 +29,13 @@
 
 #include <stdlib.h>
 
-#include "include/v8-function.h"
+#include "include/v8-profiler.h"
 #include "src/api/api-inl.h"
-#include "src/base/strings.h"
+#include "src/diagnostics/disassembler.h"
 #include "src/execution/frames.h"
 #include "src/execution/isolate.h"
 #include "src/execution/vm-state-inl.h"
+#include "src/init/v8.h"
 #include "src/objects/objects-inl.h"
 #include "src/profiler/tick-sample.h"
 #include "test/cctest/cctest.h"
@@ -46,7 +47,7 @@ namespace internal {
 static bool IsAddressWithinFuncCode(JSFunction function, Isolate* isolate,
                                     void* addr) {
   i::AbstractCode code = function.abstract_code(isolate);
-  return code.contains(isolate, reinterpret_cast<Address>(addr));
+  return code.contains(reinterpret_cast<Address>(addr));
 }
 
 static bool IsAddressWithinFuncCode(v8::Local<v8::Context> context,
@@ -62,13 +63,11 @@ static bool IsAddressWithinFuncCode(v8::Local<v8::Context> context,
 // This C++ function is called as a constructor, to grab the frame pointer
 // from the calling function.  When this function runs, the stack contains
 // a C_Entry frame and a Construct frame above the calling function's frame.
-static void construct_call(const v8::FunctionCallbackInfo<v8::Value>& info) {
-  CHECK(i::ValidateCallbackInfo(info));
-  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(info.GetIsolate());
+static void construct_call(const v8::FunctionCallbackInfo<v8::Value>& args) {
+  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(args.GetIsolate());
   i::StackFrameIterator frame_iterator(isolate);
   CHECK(frame_iterator.frame()->is_exit() ||
-        frame_iterator.frame()->is_builtin_exit() ||
-        frame_iterator.frame()->is_api_callback_exit());
+        frame_iterator.frame()->is_builtin_exit());
   frame_iterator.Advance();
   CHECK(frame_iterator.frame()->is_construct());
   frame_iterator.Advance();
@@ -79,10 +78,10 @@ static void construct_call(const v8::FunctionCallbackInfo<v8::Value>& info) {
   i::StackFrame* calling_frame = frame_iterator.frame();
   CHECK(calling_frame->is_java_script());
 
-  v8::Local<v8::Context> context = info.GetIsolate()->GetCurrentContext();
+  v8::Local<v8::Context> context = args.GetIsolate()->GetCurrentContext();
 #if defined(V8_HOST_ARCH_32_BIT)
   int32_t low_bits = static_cast<int32_t>(calling_frame->fp());
-  info.This()
+  args.This()
       ->Set(context, v8_str("low_bits"), v8_num(low_bits >> 1))
       .FromJust();
 #elif defined(V8_HOST_ARCH_64_BIT)
@@ -94,13 +93,14 @@ static void construct_call(const v8::FunctionCallbackInfo<v8::Value>& info) {
   int32_t high_bits = static_cast<int32_t>(fp & kSmiValueMask);
   fp >>= kSmiValueSize - 1;
   CHECK_EQ(fp, 0);  // Ensure all the bits are successfully encoded.
-  info.This()->Set(context, v8_str("low_bits"), v8_int(low_bits)).FromJust();
-  info.This()->Set(context, v8_str("high_bits"), v8_int(high_bits)).FromJust();
+  args.This()->Set(context, v8_str("low_bits"), v8_int(low_bits)).FromJust();
+  args.This()->Set(context, v8_str("high_bits"), v8_int(high_bits)).FromJust();
 #else
 #error Host architecture is neither 32-bit nor 64-bit.
 #endif
-  info.GetReturnValue().Set(info.This());
+  args.GetReturnValue().Set(args.This());
 }
+
 
 // Use the API to create a JSFunction object that calls the above C++ function.
 void CreateFramePointerGrabberConstructor(v8::Local<v8::Context> context,
@@ -120,13 +120,13 @@ void CreateFramePointerGrabberConstructor(v8::Local<v8::Context> context,
 static void CreateTraceCallerFunction(v8::Local<v8::Context> context,
                                       const char* func_name,
                                       const char* trace_func_name) {
-  v8::base::EmbeddedVector<char, 256> trace_call_buf;
-  v8::base::SNPrintF(trace_call_buf,
-                     "function %s() {"
-                     "  fp = new FPGrabber();"
-                     "  %s(fp.low_bits, fp.high_bits);"
-                     "}",
-                     func_name, trace_func_name);
+  i::EmbeddedVector<char, 256> trace_call_buf;
+  i::SNPrintF(trace_call_buf,
+              "function %s() {"
+              "  fp = new FPGrabber();"
+              "  %s(fp.low_bits, fp.high_bits);"
+              "}",
+              func_name, trace_func_name);
 
   // Create the FPGrabber function, which grabs the caller's frame pointer
   // when called as a constructor.
@@ -143,7 +143,7 @@ static void CreateTraceCallerFunction(v8::Local<v8::Context> context,
 // walking.
 TEST(CFromJSStackTrace) {
   // BUG(1303) Inlining of JSFuncDoTrace() in JSTrace below breaks this test.
-  i::v8_flags.turbo_inlining = false;
+  i::FLAG_turbo_inlining = false;
 
   TickSample sample;
   i::TraceExtension::InitTraceEnv(&sample);
@@ -193,7 +193,7 @@ TEST(CFromJSStackTrace) {
 TEST(PureJSStackTrace) {
   // This test does not pass with inlining enabled since inlined functions
   // don't appear in the stack trace.
-  i::v8_flags.turbo_inlining = false;
+  i::FLAG_turbo_inlining = false;
 
   TickSample sample;
   i::TraceExtension::InitTraceEnv(&sample);
@@ -238,19 +238,20 @@ TEST(PureJSStackTrace) {
                                 sample.stack[base + 1]));
 }
 
-static void CFuncDoTrace(uint8_t dummy_param) {
+static void CFuncDoTrace(byte dummy_param) {
   Address fp;
 #if V8_HAS_BUILTIN_FRAME_ADDRESS
   fp = reinterpret_cast<Address>(__builtin_frame_address(0));
 #elif V8_CC_MSVC
   // Approximate a frame pointer address. We compile without base pointers,
   // so we can't trust ebp/rbp.
-  fp = reinterpret_cast<Address>(&dummy_param) - 2 * sizeof(void*);
+  fp = reinterpret_cast<Address>(&dummy_param) - 2 * sizeof(void*);  // NOLINT
 #else
 #error Unexpected platform.
 #endif
   i::TraceExtension::DoTrace(fp);
 }
+
 
 static int CFunc(int depth) {
   if (depth <= 0) {

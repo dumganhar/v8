@@ -30,7 +30,7 @@
 
 #include "include/v8config.h"
 
-// {LinuxPerfJitLogger} is only implemented on Linux.
+// {PerfJitLogger} is only implemented on Linux.
 #if V8_OS_LINUX
 
 #include "src/logging/log.h"
@@ -39,15 +39,12 @@ namespace v8 {
 namespace internal {
 
 // Linux perf tool logging support.
-class LinuxPerfJitLogger : public CodeEventLogger {
+class PerfJitLogger : public CodeEventLogger {
  public:
-  explicit LinuxPerfJitLogger(Isolate* isolate);
-  ~LinuxPerfJitLogger() override;
+  explicit PerfJitLogger(Isolate* isolate);
+  ~PerfJitLogger() override;
 
-  void CodeMoveEvent(InstructionStream from, InstructionStream to) override {
-    UNREACHABLE();  // Unsupported.
-  }
-  void BytecodeMoveEvent(BytecodeArray from, BytecodeArray to) override {}
+  void CodeMoveEvent(AbstractCode from, AbstractCode to) override;
   void CodeDisableOptEvent(Handle<AbstractCode> code,
                            Handle<SharedFunctionInfo> shared) override {}
 
@@ -58,7 +55,7 @@ class LinuxPerfJitLogger : public CodeEventLogger {
   void CloseMarkerFile(void* marker_address);
 
   uint64_t GetTimestamp();
-  void LogRecordedBuffer(AbstractCode code,
+  void LogRecordedBuffer(Handle<AbstractCode> code,
                          MaybeHandle<SharedFunctionInfo> maybe_shared,
                          const char* name, int length) override;
 #if V8_ENABLE_WEBASSEMBLY
@@ -79,7 +76,7 @@ class LinuxPerfJitLogger : public CodeEventLogger {
 
   void LogWriteBytes(const char* bytes, int size);
   void LogWriteHeader();
-  void LogWriteDebugInfo(Code code, Handle<SharedFunctionInfo> shared);
+  void LogWriteDebugInfo(Handle<Code> code, Handle<SharedFunctionInfo> shared);
 #if V8_ENABLE_WEBASSEMBLY
   void LogWriteDebugInfo(const wasm::WasmCode* code);
 #endif  // V8_ENABLE_WEBASSEMBLY
@@ -88,8 +85,8 @@ class LinuxPerfJitLogger : public CodeEventLogger {
   static const uint32_t kElfMachIA32 = 3;
   static const uint32_t kElfMachX64 = 62;
   static const uint32_t kElfMachARM = 40;
+  static const uint32_t kElfMachMIPS = 8;
   static const uint32_t kElfMachMIPS64 = 8;
-  static const uint32_t kElfMachLOONG64 = 258;
   static const uint32_t kElfMachARM64 = 183;
   static const uint32_t kElfMachS390x = 22;
   static const uint32_t kElfMachPPC64 = 21;
@@ -102,17 +99,17 @@ class LinuxPerfJitLogger : public CodeEventLogger {
     return kElfMachX64;
 #elif V8_TARGET_ARCH_ARM
     return kElfMachARM;
+#elif V8_TARGET_ARCH_MIPS
+    return kElfMachMIPS;
 #elif V8_TARGET_ARCH_MIPS64
     return kElfMachMIPS64;
-#elif V8_TARGET_ARCH_LOONG64
-    return kElfMachLOONG64;
 #elif V8_TARGET_ARCH_ARM64
     return kElfMachARM64;
 #elif V8_TARGET_ARCH_S390X
     return kElfMachS390x;
 #elif V8_TARGET_ARCH_PPC64
     return kElfMachPPC64;
-#elif V8_TARGET_ARCH_RISCV32 || V8_TARGET_ARCH_RISCV64
+#elif V8_TARGET_ARCH_RISCV64
     return kElfMachRISCV;
 #else
     UNIMPLEMENTED();
@@ -130,11 +127,11 @@ class LinuxPerfJitLogger : public CodeEventLogger {
 
   // Per-process singleton file. We assume that there is one main isolate;
   // to determine when it goes away, we keep reference count.
+  static base::LazyRecursiveMutex file_mutex_;
   static FILE* perf_output_handle_;
   static uint64_t reference_count_;
   static void* marker_address_;
   static uint64_t code_index_;
-  static int process_id_;
 };
 
 }  // namespace internal

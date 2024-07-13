@@ -26,7 +26,7 @@ struct WeakListVisitor;
 
 template <class T>
 Object VisitWeakList(Heap* heap, Object list, WeakObjectRetainer* retainer) {
-  HeapObject undefined = ReadOnlyRoots(heap).undefined_value();
+  Object undefined = ReadOnlyRoots(heap).undefined_value();
   Object head = undefined;
   T tail;
   bool record_slots = MustRecordSlots(heap);
@@ -47,7 +47,7 @@ Object VisitWeakList(Heap* heap, Object list, WeakObjectRetainer* retainer) {
       } else {
         // Subsequent elements in the list.
         DCHECK(!tail.is_null());
-        WeakListVisitor<T>::SetWeakNext(tail, HeapObject::cast(retained));
+        WeakListVisitor<T>::SetWeakNext(tail, retained);
         if (record_slots) {
           HeapObject slot_holder = WeakListVisitor<T>::WeakNextHolder(tail);
           int slot_offset = WeakListVisitor<T>::WeakNextOffset();
@@ -85,9 +85,36 @@ static void ClearWeakList(Heap* heap, Object list) {
 }
 
 template <>
+struct WeakListVisitor<Code> {
+  static void SetWeakNext(Code code, Object next) {
+    code.code_data_container(kAcquireLoad)
+        .set_next_code_link(next, UPDATE_WEAK_WRITE_BARRIER);
+  }
+
+  static Object WeakNext(Code code) {
+    return code.code_data_container(kAcquireLoad).next_code_link();
+  }
+
+  static HeapObject WeakNextHolder(Code code) {
+    return code.code_data_container(kAcquireLoad);
+  }
+
+  static int WeakNextOffset() { return CodeDataContainer::kNextCodeLinkOffset; }
+
+  static void VisitLiveObject(Heap*, Code, WeakObjectRetainer*) {}
+
+  static void VisitPhantomObject(Heap* heap, Code code) {
+    // Even though the code is dying, its code_data_container can still be
+    // alive. Clear the next_code_link slot to avoid a dangling pointer.
+    SetWeakNext(code, ReadOnlyRoots(heap).undefined_value());
+  }
+};
+
+
+template <>
 struct WeakListVisitor<Context> {
   static void SetWeakNext(Context context, Object next) {
-    context.set(Context::NEXT_CONTEXT_LINK, next, UPDATE_WRITE_BARRIER);
+    context.set(Context::NEXT_CONTEXT_LINK, next, UPDATE_WEAK_WRITE_BARRIER);
   }
 
   static Object WeakNext(Context context) {
@@ -110,6 +137,10 @@ struct WeakListVisitor<Context> {
         MarkCompactCollector::RecordSlot(context, slot,
                                          HeapObject::cast(*slot));
       }
+      // Code objects are always allocated in Code space, we do not have to
+      // visit them during scavenges.
+      DoWeakList<Code>(heap, context, retainer, Context::OPTIMIZED_CODE_LIST);
+      DoWeakList<Code>(heap, context, retainer, Context::DEOPTIMIZED_CODE_LIST);
     }
   }
 
@@ -130,14 +161,17 @@ struct WeakListVisitor<Context> {
     }
   }
 
-  static void VisitPhantomObject(Heap* heap, Context context) {}
+  static void VisitPhantomObject(Heap* heap, Context context) {
+    ClearWeakList<Code>(heap, context.get(Context::OPTIMIZED_CODE_LIST));
+    ClearWeakList<Code>(heap, context.get(Context::DEOPTIMIZED_CODE_LIST));
+  }
 };
 
 
 template <>
 struct WeakListVisitor<AllocationSite> {
   static void SetWeakNext(AllocationSite obj, Object next) {
-    obj.set_weak_next(next, UPDATE_WRITE_BARRIER);
+    obj.set_weak_next(next, UPDATE_WEAK_WRITE_BARRIER);
   }
 
   static Object WeakNext(AllocationSite obj) { return obj.weak_next(); }
@@ -153,8 +187,8 @@ struct WeakListVisitor<AllocationSite> {
 
 template <>
 struct WeakListVisitor<JSFinalizationRegistry> {
-  static void SetWeakNext(JSFinalizationRegistry obj, HeapObject next) {
-    obj.set_next_dirty(next, UPDATE_WRITE_BARRIER);
+  static void SetWeakNext(JSFinalizationRegistry obj, Object next) {
+    obj.set_next_dirty(next, UPDATE_WEAK_WRITE_BARRIER);
   }
 
   static Object WeakNext(JSFinalizationRegistry obj) {

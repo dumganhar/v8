@@ -9,6 +9,7 @@
 #include "src/codegen/arm64/decoder-arm64.h"
 #include "src/codegen/arm64/instructions-arm64.h"
 #include "src/common/globals.h"
+#include "src/utils/utils.h"
 
 namespace v8 {
 namespace internal {

@@ -4,7 +4,6 @@
 
 #include "src/regexp/regexp-dotprinter.h"
 
-#include "src/base/strings.h"
 #include "src/regexp/regexp-compiler.h"
 #include "src/utils/ostreams.h"
 
@@ -61,7 +60,8 @@ void DotPrinterImpl::PrintOnFailure(RegExpNode* from, RegExpNode* on_failure) {
 
 class AttributePrinter {
  public:
-  explicit AttributePrinter(std::ostream& os) : os_(os), first_(true) {}
+  explicit AttributePrinter(std::ostream& os)  // NOLINT
+      : os_(os), first_(true) {}
   void PrintSeparator() {
     if (first_) {
       first_ = false;
@@ -129,14 +129,14 @@ void DotPrinterImpl::VisitText(TextNode* that) {
     TextElement elm = that->elements()->at(i);
     switch (elm.text_type()) {
       case TextElement::ATOM: {
-        base::Vector<const base::uc16> data = elm.atom()->data();
-        for (int j = 0; j < data.length(); j++) {
-          os_ << static_cast<char>(data[j]);
+        Vector<const uc16> data = elm.atom()->data();
+        for (int i = 0; i < data.length(); i++) {
+          os_ << static_cast<char>(data[i]);
         }
         break;
       }
-      case TextElement::CLASS_RANGES: {
-        RegExpClassRanges* node = elm.class_ranges();
+      case TextElement::CHAR_CLASS: {
+        RegExpCharacterClass* node = elm.char_class();
         os_ << "[";
         if (node->is_negated()) os_ << "^";
         for (int j = 0; j < node->ranges(zone)->length(); j++) {
@@ -210,13 +210,9 @@ void DotPrinterImpl::VisitAction(ActionNode* that) {
       os_ << "label=\"$" << that->data_.u_position_register.reg
           << ":=$pos\", shape=octagon";
       break;
-    case ActionNode::BEGIN_POSITIVE_SUBMATCH:
+    case ActionNode::BEGIN_SUBMATCH:
       os_ << "label=\"$" << that->data_.u_submatch.current_position_register
-          << ":=$pos,begin-positive\", shape=septagon";
-      break;
-    case ActionNode::BEGIN_NEGATIVE_SUBMATCH:
-      os_ << "label=\"$" << that->data_.u_submatch.current_position_register
-          << ":=$pos,begin-negative\", shape=septagon";
+          << ":=$pos,begin\", shape=septagon";
       break;
     case ActionNode::POSITIVE_SUBMATCH_SUCCESS:
       os_ << "label=\"escape\", shape=septagon";

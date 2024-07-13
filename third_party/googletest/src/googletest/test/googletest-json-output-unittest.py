@@ -37,8 +37,8 @@ import os
 import re
 import sys
 
-from googletest.test import gtest_json_test_utils
-from googletest.test import gtest_test_utils
+import gtest_json_test_utils
+import gtest_test_utils
 
 GTEST_FILTER_FLAG = '--gtest_filter'
 GTEST_LIST_TESTS_FLAG = '--gtest_list_tests'
@@ -90,8 +90,6 @@ EXPECTED_NON_EMPTY = {
             u'*',
         u'testsuite': [{
             u'name': u'Succeeds',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 51,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -116,10 +114,6 @@ EXPECTED_NON_EMPTY = {
         u'testsuite': [{
             u'name':
                 u'Fails',
-            u'file':
-                u'gtest_xml_output_unittest_.cc',
-            u'line':
-                59,
             u'status':
                 u'RUN',
             u'result':
@@ -154,8 +148,6 @@ EXPECTED_NON_EMPTY = {
             u'*',
         u'testsuite': [{
             u'name': u'DISABLED_test_not_run',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 66,
             u'status': u'NOTRUN',
             u'result': u'SUPPRESSED',
             u'time': u'*',
@@ -179,8 +171,6 @@ EXPECTED_NON_EMPTY = {
             u'*',
         u'testsuite': [{
             u'name': u'Skipped',
-            u'file': 'gtest_xml_output_unittest_.cc',
-            u'line': 73,
             u'status': u'RUN',
             u'result': u'SKIPPED',
             u'time': u'*',
@@ -188,8 +178,6 @@ EXPECTED_NON_EMPTY = {
             u'classname': u'SkippedTest'
         }, {
             u'name': u'SkippedWithMessage',
-            u'file': 'gtest_xml_output_unittest_.cc',
-            u'line': 77,
             u'status': u'RUN',
             u'result': u'SKIPPED',
             u'time': u'*',
@@ -198,10 +186,6 @@ EXPECTED_NON_EMPTY = {
         }, {
             u'name':
                 u'SkippedAfterFailure',
-            u'file':
-                'gtest_xml_output_unittest_.cc',
-            u'line':
-                81,
             u'status':
                 u'RUN',
             u'result':
@@ -236,8 +220,6 @@ EXPECTED_NON_EMPTY = {
             u'*',
         u'testsuite': [{
             u'name': u'Succeeds',
-            u'file': 'gtest_xml_output_unittest_.cc',
-            u'line': 86,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -246,10 +228,6 @@ EXPECTED_NON_EMPTY = {
         }, {
             u'name':
                 u'Fails',
-            u'file':
-                u'gtest_xml_output_unittest_.cc',
-            u'line':
-                91,
             u'status':
                 u'RUN',
             u'result':
@@ -273,8 +251,6 @@ EXPECTED_NON_EMPTY = {
             }]
         }, {
             u'name': u'DISABLED_test',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 96,
             u'status': u'NOTRUN',
             u'result': u'SUPPRESSED',
             u'time': u'*',
@@ -299,10 +275,6 @@ EXPECTED_NON_EMPTY = {
         u'testsuite': [{
             u'name':
                 u'OutputsCData',
-            u'file':
-                u'gtest_xml_output_unittest_.cc',
-            u'line':
-                100,
             u'status':
                 u'RUN',
             u'result':
@@ -339,10 +311,6 @@ EXPECTED_NON_EMPTY = {
         u'testsuite': [{
             u'name':
                 u'InvalidCharactersInMessage',
-            u'file':
-                u'gtest_xml_output_unittest_.cc',
-            u'line':
-                107,
             u'status':
                 u'RUN',
             u'result':
@@ -381,8 +349,6 @@ EXPECTED_NON_EMPTY = {
             u'aye',
         u'testsuite': [{
             u'name': u'OneProperty',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 119,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -391,8 +357,6 @@ EXPECTED_NON_EMPTY = {
             u'key_1': u'1'
         }, {
             u'name': u'IntValuedProperty',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 123,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -401,8 +365,6 @@ EXPECTED_NON_EMPTY = {
             u'key_int': u'1'
         }, {
             u'name': u'ThreeProperties',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 127,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -413,8 +375,6 @@ EXPECTED_NON_EMPTY = {
             u'key_3': u'3'
         }, {
             u'name': u'TwoValuesForOneKeyUsesLastValue',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 133,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -439,8 +399,6 @@ EXPECTED_NON_EMPTY = {
             u'*',
         u'testsuite': [{
             u'name': u'RecordProperty',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 138,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -449,8 +407,6 @@ EXPECTED_NON_EMPTY = {
             u'key': u'1'
         }, {
             u'name': u'ExternalUtilityThatCallsRecordIntValuedProperty',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 151,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -459,8 +415,6 @@ EXPECTED_NON_EMPTY = {
             u'key_for_utility_int': u'1'
         }, {
             u'name': u'ExternalUtilityThatCallsRecordStringValuedProperty',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 155,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -486,8 +440,6 @@ EXPECTED_NON_EMPTY = {
         u'testsuite': [{
             u'name': u'HasTypeParamAttribute',
             u'type_param': u'int',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 171,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -512,8 +464,6 @@ EXPECTED_NON_EMPTY = {
         u'testsuite': [{
             u'name': u'HasTypeParamAttribute',
             u'type_param': u'long',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 171,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -538,8 +488,6 @@ EXPECTED_NON_EMPTY = {
         u'testsuite': [{
             u'name': u'HasTypeParamAttribute',
             u'type_param': u'int',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 178,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -564,8 +512,6 @@ EXPECTED_NON_EMPTY = {
         u'testsuite': [{
             u'name': u'HasTypeParamAttribute',
             u'type_param': u'long',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 178,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -590,8 +536,6 @@ EXPECTED_NON_EMPTY = {
         u'testsuite': [{
             u'name': u'HasValueParamAttribute/0',
             u'value_param': u'33',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 162,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -600,8 +544,6 @@ EXPECTED_NON_EMPTY = {
         }, {
             u'name': u'HasValueParamAttribute/1',
             u'value_param': u'42',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 162,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -610,8 +552,6 @@ EXPECTED_NON_EMPTY = {
         }, {
             u'name': u'AnotherTestThatHasValueParamAttribute/0',
             u'value_param': u'33',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 163,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -620,8 +560,6 @@ EXPECTED_NON_EMPTY = {
         }, {
             u'name': u'AnotherTestThatHasValueParamAttribute/1',
             u'value_param': u'42',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 163,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -665,8 +603,6 @@ EXPECTED_FILTERED = {
             u'*',
         u'testsuite': [{
             u'name': u'Succeeds',
-            u'file': u'gtest_xml_output_unittest_.cc',
-            u'line': 51,
             u'status': u'RUN',
             u'result': u'COMPLETED',
             u'time': u'*',
@@ -676,59 +612,15 @@ EXPECTED_FILTERED = {
     }],
 }
 
-EXPECTED_NO_TEST = {
-    u'tests':
-        0,
-    u'failures':
-        0,
-    u'disabled':
-        0,
-    u'errors':
-        0,
-    u'time':
-        u'*',
-    u'timestamp':
-        u'*',
-    u'name':
-        u'AllTests',
-    u'testsuites': [{
-        u'name':
-            u'NonTestSuiteFailure',
-        u'tests':
-            1,
-        u'failures':
-            1,
-        u'disabled':
-            0,
-        u'skipped':
-            0,
-        u'errors':
-            0,
-        u'time':
-            u'*',
-        u'timestamp':
-            u'*',
-        u'testsuite': [{
-            u'name':
-                u'',
-            u'status':
-                u'RUN',
-            u'result':
-                u'COMPLETED',
-            u'time':
-                u'*',
-            u'timestamp':
-                u'*',
-            u'classname':
-                u'',
-            u'failures': [{
-                u'failure': u'gtest_no_test_unittest.cc:*\n'
-                            u'Expected equality of these values:\n'
-                            u'  1\n  2' + STACK_TRACE_TEMPLATE,
-                u'type': u'',
-            }]
-        }]
-    }],
+EXPECTED_EMPTY = {
+    u'tests': 0,
+    u'failures': 0,
+    u'disabled': 0,
+    u'errors': 0,
+    u'time': u'*',
+    u'timestamp': u'*',
+    u'name': u'AllTests',
+    u'testsuites': [],
 }
 
 GTEST_PROGRAM_PATH = gtest_test_utils.GetTestExecutablePath(GTEST_PROGRAM_NAME)
@@ -753,14 +645,14 @@ class GTestJsonOutputUnitTest(gtest_test_utils.TestCase):
       """
       self._TestJsonOutput(GTEST_PROGRAM_NAME, EXPECTED_NON_EMPTY, 1)
 
-  def testNoTestJsonOutput(self):
+  def testEmptyJsonOutput(self):
     """Verifies JSON output for a Google Test binary without actual tests.
 
-    Runs a test program that generates an JSON output for a binary with no
-    tests, and tests that the JSON output is expected.
+    Runs a test program that generates an empty JSON output, and
+    tests that the JSON output is expected.
     """
 
-    self._TestJsonOutput('gtest_no_test_unittest', EXPECTED_NO_TEST, 0)
+    self._TestJsonOutput('gtest_no_test_unittest', EXPECTED_EMPTY, 0)
 
   def testTimestampValue(self):
     """Checks whether the timestamp attribute in the JSON output is valid.

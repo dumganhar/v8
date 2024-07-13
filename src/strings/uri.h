@@ -5,8 +5,9 @@
 #ifndef V8_STRINGS_URI_H_
 #define V8_STRINGS_URI_H_
 
-#include "src/handles/maybe-handles.h"
 #include "src/utils/allocation.h"
+#include "src/handles/maybe-handles.h"
+#include "src/objects/objects.h"
 
 namespace v8 {
 namespace internal {

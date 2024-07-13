@@ -27,7 +27,6 @@ using Uint16BinOp = uint16_t (*)(uint16_t, uint16_t);
 using Int16ShiftOp = int16_t (*)(int16_t, int);
 using Int32UnOp = int32_t (*)(int32_t);
 using Int32BinOp = int32_t (*)(int32_t, int32_t);
-using Uint32BinOp = uint32_t (*)(uint32_t, uint32_t);
 using Int32ShiftOp = int32_t (*)(int32_t, int);
 using Int64UnOp = int64_t (*)(int64_t);
 using Int64BinOp = int64_t (*)(int64_t, int64_t);
@@ -39,57 +38,49 @@ using DoubleUnOp = double (*)(double);
 using DoubleBinOp = double (*)(double, double);
 using DoubleCompareOp = int64_t (*)(double, double);
 
-void RunI8x16UnOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                      Int8UnOp expected_op);
+void RunI8x16UnOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                      WasmOpcode opcode, Int8UnOp expected_op);
 
 template <typename T = int8_t, typename OpType = T (*)(T, T)>
-void RunI8x16BinOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                       OpType expected_op);
+void RunI8x16BinOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                       WasmOpcode opcode, OpType expected_op);
 
-void RunI8x16ShiftOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                         Int8ShiftOp expected_op);
+void RunI8x16ShiftOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                         WasmOpcode opcode, Int8ShiftOp expected_op);
 void RunI8x16MixedRelationalOpTest(TestExecutionTier execution_tier,
-                                   WasmOpcode opcode, Int8BinOp expected_op);
+                                   LowerSimd lower_simd, WasmOpcode opcode,
+                                   Int8BinOp expected_op);
 
-void RunI16x8UnOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                      Int16UnOp expected_op);
+void RunI16x8UnOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                      WasmOpcode opcode, Int16UnOp expected_op);
 template <typename T = int16_t, typename OpType = T (*)(T, T)>
-void RunI16x8BinOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                       OpType expected_op);
-void RunI16x8ShiftOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                         Int16ShiftOp expected_op);
+void RunI16x8BinOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                       WasmOpcode opcode, OpType expected_op);
+void RunI16x8ShiftOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                         WasmOpcode opcode, Int16ShiftOp expected_op);
 void RunI16x8MixedRelationalOpTest(TestExecutionTier execution_tier,
-                                   WasmOpcode opcode, Int16BinOp expected_op);
+                                   LowerSimd lower_simd, WasmOpcode opcode,
+                                   Int16BinOp expected_op);
 
-void RunI32x4UnOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                      Int32UnOp expected_op);
-void RunI32x4BinOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                       Int32BinOp expected_op);
-void RunI32x4ShiftOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                         Int32ShiftOp expected_op);
+void RunI32x4UnOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                      WasmOpcode opcode, Int32UnOp expected_op);
+void RunI32x4BinOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                       WasmOpcode opcode, Int32BinOp expected_op);
+void RunI32x4ShiftOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                         WasmOpcode opcode, Int32ShiftOp expected_op);
 
-void RunI64x2UnOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                      Int64UnOp expected_op);
-void RunI64x2BinOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                       Int64BinOp expected_op);
-void RunI64x2ShiftOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                         Int64ShiftOp expected_op);
+void RunI64x2UnOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                      WasmOpcode opcode, Int64UnOp expected_op);
+void RunI64x2BinOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                       WasmOpcode opcode, Int64BinOp expected_op);
+void RunI64x2ShiftOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                         WasmOpcode opcode, Int64ShiftOp expected_op);
 
 // Generic expected value functions.
 template <typename T, typename = typename std::enable_if<
                           std::is_floating_point<T>::value>::type>
 T Negate(T a) {
   return -a;
-}
-
-template <typename T>
-T Minimum(T a, T b) {
-  return std::min(a, b);
-}
-
-template <typename T>
-T Maximum(T a, T b) {
-  return std::max(a, b);
 }
 
 #if V8_OS_AIX
@@ -150,55 +141,36 @@ bool PlatformCanRepresent(T x) {
 // Returns true for very small and very large numbers. We skip these test
 // values for the approximation instructions, which don't work at the extremes.
 bool IsExtreme(float x);
+bool IsSameNan(float expected, float actual);
 bool IsCanonical(float actual);
 void CheckFloatResult(float x, float y, float expected, float actual,
                       bool exact = true);
 
 bool IsExtreme(double x);
+bool IsSameNan(double expected, double actual);
 bool IsCanonical(double actual);
 void CheckDoubleResult(double x, double y, double expected, double actual,
                        bool exact = true);
 
-void RunF32x4UnOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                      FloatUnOp expected_op, bool exact = true);
+void RunF32x4UnOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                      WasmOpcode opcode, FloatUnOp expected_op,
+                      bool exact = true);
 
-void RunF32x4BinOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                       FloatBinOp expected_op);
+void RunF32x4BinOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                       WasmOpcode opcode, FloatBinOp expected_op);
 
-void RunF32x4CompareOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
+void RunF32x4CompareOpTest(TestExecutionTier execution_tier,
+                           LowerSimd lower_simd, WasmOpcode opcode,
                            FloatCompareOp expected_op);
 
-void RunF64x2UnOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                      DoubleUnOp expected_op, bool exact = true);
-void RunF64x2BinOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
-                       DoubleBinOp expected_op);
-void RunF64x2CompareOpTest(TestExecutionTier execution_tier, WasmOpcode opcode,
+void RunF64x2UnOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                      WasmOpcode opcode, DoubleUnOp expected_op,
+                      bool exact = true);
+void RunF64x2BinOpTest(TestExecutionTier execution_tier, LowerSimd lower_simd,
+                       WasmOpcode opcode, DoubleBinOp expected_op);
+void RunF64x2CompareOpTest(TestExecutionTier execution_tier,
+                           LowerSimd lower_simd, WasmOpcode opcode,
                            DoubleCompareOp expected_op);
-
-#ifdef V8_ENABLE_WASM_SIMD256_REVEC
-void RunI8x32UnOpRevecTest(WasmOpcode opcode, Int8UnOp expected_op);
-void RunI16x16UnOpRevecTest(WasmOpcode opcode, Int16UnOp expected_op);
-void RunI32x8UnOpRevecTest(WasmOpcode opcode, Int32UnOp expected_op);
-void RunF32x8UnOpRevecTest(WasmOpcode opcode, FloatUnOp expected_op);
-void RunF64x4UnOpRevecTest(WasmOpcode opcode, DoubleUnOp expected_op);
-
-template <typename T = int8_t, typename OpType = T (*)(T, T)>
-void RunI8x32BinOpRevecTest(WasmOpcode opcode, OpType expected_op);
-
-template <typename T = int16_t, typename OpType = T (*)(T, T)>
-void RunI16x16BinOpRevecTest(WasmOpcode opcode, OpType expected_op);
-
-template <typename T = int32_t, typename OpType = T (*)(T, T)>
-void RunI32x8BinOpRevecTest(WasmOpcode opcode, OpType expected_op);
-
-void RunI64x4BinOpRevecTest(WasmOpcode opcode, Int64BinOp expected_op);
-
-void RunI16x16ShiftOpRevecTest(WasmOpcode opcode, Int16ShiftOp expected_op);
-void RunI32x8ShiftOpRevecTest(WasmOpcode opcode, Int32ShiftOp expected_op);
-void RunI64x4ShiftOpRevecTest(WasmOpcode opcode, Int64ShiftOp expected_op);
-
-// TODO(yuhengwei): Add revec test for IGeU, IGeS, INe and IGtU
-#endif
 
 }  // namespace wasm
 }  // namespace internal

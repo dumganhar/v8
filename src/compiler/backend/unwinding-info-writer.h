@@ -33,7 +33,7 @@ namespace compiler {
 
 class InstructionBlock;
 
-static_assert(!v8_flags.perf_prof_unwinding_info.value(),
+static_assert(!FLAG_perf_prof_unwinding_info,
               "--perf-prof-unwinding-info should be statically disabled if not "
               "supported");
 

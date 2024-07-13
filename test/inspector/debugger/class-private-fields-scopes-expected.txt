@@ -4,7 +4,6 @@ Running test: testScopesPaused
 [
     [0] : {
         callFrameId : <callFrameId>
-        canBeRestarted : true
         functionLocation : {
             columnNumber : 16
             lineNumber : 4
@@ -53,11 +52,10 @@ Running test: testScopesPaused
             objectId : <objectId>
             type : object
         }
-        url : 
+        url :
     }
     [1] : {
         callFrameId : <callFrameId>
-        canBeRestarted : true
         functionLocation : {
             columnNumber : 12
             lineNumber : 1
@@ -106,17 +104,16 @@ Running test: testScopesPaused
             objectId : <objectId>
             type : object
         }
-        url : 
+        url :
     }
     [2] : {
         callFrameId : <callFrameId>
-        canBeRestarted : true
         functionLocation : {
             columnNumber : 0
             lineNumber : 0
             scriptId : <scriptId>
         }
-        functionName : 
+        functionName :
         location : {
             columnNumber : 0
             lineNumber : 0
@@ -139,6 +136,6 @@ Running test: testScopesPaused
             objectId : <objectId>
             type : object
         }
-        url : 
+        url :
     }
 ]

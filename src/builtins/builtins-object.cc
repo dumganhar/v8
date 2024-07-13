@@ -4,9 +4,10 @@
 
 #include "src/builtins/builtins-utils-inl.h"
 #include "src/builtins/builtins.h"
+#include "src/codegen/code-factory.h"
 #include "src/common/message-template.h"
-#include "src/execution/isolate.h"
 #include "src/heap/heap-inl.h"  // For ToBoolean. TODO(jkummerow): Drop.
+#include "src/logging/counters.h"
 #include "src/objects/keys.h"
 #include "src/objects/lookup.h"
 #include "src/objects/objects-inl.h"
@@ -104,12 +105,12 @@ Object ObjectLookupAccessor(Isolate* isolate, Handle<Object> object,
                             Handle<Object> key, AccessorComponent component) {
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, object,
                                      Object::ToObject(isolate, object));
-  // TODO(jkummerow/verwaest): PropertyKey(..., bool*) performs a
+  // TODO(jkummerow/verwaest): LookupIterator::Key(..., bool*) performs a
   // functionally equivalent conversion, but handles element indices slightly
   // differently. Does one of the approaches have a performance advantage?
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, key,
                                      Object::ToPropertyKey(isolate, key));
-  PropertyKey lookup_key(isolate, key);
+  LookupIterator::Key lookup_key(isolate, key);
   LookupIterator it(isolate, object, lookup_key,
                     LookupIterator::PROTOTYPE_CHAIN_SKIP_INTERCEPTOR);
 
@@ -148,7 +149,7 @@ Object ObjectLookupAccessor(Isolate* isolate, Handle<Object> object,
         }
         return ObjectLookupAccessor(isolate, prototype, key, component);
       }
-      case LookupIterator::WASM_OBJECT:
+
       case LookupIterator::INTEGER_INDEXED_EXOTIC:
       case LookupIterator::DATA:
         return ReadOnlyRoots(isolate).undefined_value();
@@ -215,10 +216,9 @@ BUILTIN(ObjectFreeze) {
   HandleScope scope(isolate);
   Handle<Object> object = args.atOrUndefined(isolate, 1);
   if (object->IsJSReceiver()) {
-    MAYBE_RETURN(
-        JSReceiver::SetIntegrityLevel(isolate, Handle<JSReceiver>::cast(object),
-                                      FROZEN, kThrowOnError),
-        ReadOnlyRoots(isolate).exception());
+    MAYBE_RETURN(JSReceiver::SetIntegrityLevel(Handle<JSReceiver>::cast(object),
+                                               FROZEN, kThrowOnError),
+                 ReadOnlyRoots(isolate).exception());
   }
   return *object;
 }
@@ -260,9 +260,8 @@ BUILTIN(ObjectPrototypeSetProto) {
 
   // 4. Let status be ? O.[[SetPrototypeOf]](proto).
   // 5. If status is false, throw a TypeError exception.
-  MAYBE_RETURN(
-      JSReceiver::SetPrototype(isolate, receiver, proto, true, kThrowOnError),
-      ReadOnlyRoots(isolate).exception());
+  MAYBE_RETURN(JSReceiver::SetPrototype(receiver, proto, true, kThrowOnError),
+               ReadOnlyRoots(isolate).exception());
 
   // Return undefined.
   return ReadOnlyRoots(isolate).undefined_value();
@@ -280,8 +279,8 @@ Object GetOwnPropertyKeys(Isolate* isolate, BuiltinArguments args,
   Handle<FixedArray> keys;
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, keys,
-      KeyAccumulator::GetKeys(isolate, receiver, KeyCollectionMode::kOwnOnly,
-                              filter, GetKeysConversion::kConvertToString));
+      KeyAccumulator::GetKeys(receiver, KeyCollectionMode::kOwnOnly, filter,
+                              GetKeysConversion::kConvertToString));
   return *isolate->factory()->NewJSArrayWithElements(keys);
 }
 
@@ -296,11 +295,10 @@ BUILTIN(ObjectGetOwnPropertySymbols) {
 BUILTIN(ObjectIsFrozen) {
   HandleScope scope(isolate);
   Handle<Object> object = args.atOrUndefined(isolate, 1);
-  Maybe<bool> result =
-      object->IsJSReceiver()
-          ? JSReceiver::TestIntegrityLevel(
-                isolate, Handle<JSReceiver>::cast(object), FROZEN)
-          : Just(true);
+  Maybe<bool> result = object->IsJSReceiver()
+                           ? JSReceiver::TestIntegrityLevel(
+                                 Handle<JSReceiver>::cast(object), FROZEN)
+                           : Just(true);
   MAYBE_RETURN(result, ReadOnlyRoots(isolate).exception());
   return isolate->heap()->ToBoolean(result.FromJust());
 }
@@ -309,11 +307,10 @@ BUILTIN(ObjectIsFrozen) {
 BUILTIN(ObjectIsSealed) {
   HandleScope scope(isolate);
   Handle<Object> object = args.atOrUndefined(isolate, 1);
-  Maybe<bool> result =
-      object->IsJSReceiver()
-          ? JSReceiver::TestIntegrityLevel(
-                isolate, Handle<JSReceiver>::cast(object), SEALED)
-          : Just(true);
+  Maybe<bool> result = object->IsJSReceiver()
+                           ? JSReceiver::TestIntegrityLevel(
+                                 Handle<JSReceiver>::cast(object), SEALED)
+                           : Just(true);
   MAYBE_RETURN(result, ReadOnlyRoots(isolate).exception());
   return isolate->heap()->ToBoolean(result.FromJust());
 }
@@ -328,10 +325,9 @@ BUILTIN(ObjectGetOwnPropertyDescriptors) {
 
   Handle<FixedArray> keys;
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-      isolate, keys,
-      KeyAccumulator::GetKeys(isolate, receiver, KeyCollectionMode::kOwnOnly,
-                              ALL_PROPERTIES,
-                              GetKeysConversion::kConvertToString));
+      isolate, keys, KeyAccumulator::GetKeys(
+                         receiver, KeyCollectionMode::kOwnOnly, ALL_PROPERTIES,
+                         GetKeysConversion::kConvertToString));
 
   Handle<JSObject> descriptors =
       isolate->factory()->NewJSObject(isolate->object_function());
@@ -359,10 +355,9 @@ BUILTIN(ObjectSeal) {
   HandleScope scope(isolate);
   Handle<Object> object = args.atOrUndefined(isolate, 1);
   if (object->IsJSReceiver()) {
-    MAYBE_RETURN(
-        JSReceiver::SetIntegrityLevel(isolate, Handle<JSReceiver>::cast(object),
-                                      SEALED, kThrowOnError),
-        ReadOnlyRoots(isolate).exception());
+    MAYBE_RETURN(JSReceiver::SetIntegrityLevel(Handle<JSReceiver>::cast(object),
+                                               SEALED, kThrowOnError),
+                 ReadOnlyRoots(isolate).exception());
   }
   return *object;
 }

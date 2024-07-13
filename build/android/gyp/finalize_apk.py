@@ -1,4 +1,4 @@
-# Copyright 2013 The Chromium Authors
+# Copyright 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Signs and aligns an APK."""
@@ -38,7 +38,7 @@ def FinalizeApk(apksigner_path,
     else:
       signer_input_path = unsigned_apk_path
 
-    sign_cmd = build_utils.JavaCmd() + [
+    sign_cmd = build_utils.JavaCmd(warnings_as_errors) + [
         '-jar',
         apksigner_path,
         'sign',

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors
+// Copyright 2016 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include "CheckFieldsVisitor.h"
 #include "CheckFinalizerVisitor.h"
-#include "CheckForbiddenFieldsVisitor.h"
 #include "CheckGCRootsVisitor.h"
 #include "Config.h"
 #include "clang/AST/AST.h"
@@ -38,11 +37,6 @@ class DiagnosticsReporter {
       const CheckFieldsVisitor::Errors& errors);
   void ClassContainsGCRoots(RecordInfo* info,
                             const CheckGCRootsVisitor::Errors& errors);
-  void ClassContainsGCRootRefs(RecordInfo* info,
-                               const CheckGCRootsVisitor::Errors& errors);
-  void ClassContainsForbiddenFields(
-      RecordInfo* info,
-      const CheckForbiddenFieldsVisitor::Errors& errors);
   void FinalizerAccessesFinalizedFields(
       clang::CXXMethodDecl* dtor,
       const CheckFinalizerVisitor::Errors& errors);
@@ -76,9 +70,7 @@ class DiagnosticsReporter {
   void NoteFieldRequiresTracing(RecordInfo* holder, clang::FieldDecl* field);
   void NoteFieldShouldNotBeTraced(RecordInfo* holder, clang::FieldDecl* field);
   void NotePartObjectContainsGCRoot(FieldPoint* point);
-  void NotePartObjectContainsGCRootRef(FieldPoint* point);
   void NoteFieldContainsGCRoot(FieldPoint* point);
-  void NoteFieldContainsGCRootRef(FieldPoint* point);
   void NoteField(FieldPoint* point, unsigned note);
   void NoteField(clang::FieldDecl* field, unsigned note);
   void NoteOverriddenNonVirtualTrace(clang::CXXMethodDecl* overridden);
@@ -96,8 +88,6 @@ class DiagnosticsReporter {
   void VariantUsedWithGC(const clang::Expr* expr,
                          const clang::CXXRecordDecl* variant,
                          const clang::CXXRecordDecl* gc_type);
-  void MemberOnStack(const clang::VarDecl* var);
-  void AdditionalPadding(const clang::RecordDecl* var, size_t padding);
 
  private:
   clang::DiagnosticBuilder ReportDiagnostic(
@@ -119,7 +109,6 @@ class DiagnosticsReporter {
   unsigned diag_fields_improperly_traced_;
   unsigned diag_class_contains_invalid_fields_;
   unsigned diag_class_contains_gc_root_;
-  unsigned diag_class_contains_gc_root_ref_;
   unsigned diag_finalizer_accesses_finalized_field_;
   unsigned diag_overridden_non_virtual_trace_;
   unsigned diag_missing_trace_dispatch_method_;
@@ -147,23 +136,13 @@ class DiagnosticsReporter {
   unsigned diag_member_in_unmanaged_class_note_;
   unsigned diag_part_object_to_gc_derived_class_note_;
   unsigned diag_part_object_contains_gc_root_note_;
-  unsigned diag_part_object_contains_gc_root_ref_note_;
   unsigned diag_field_contains_gc_root_note_;
-  unsigned diag_field_contains_gc_root_ref_note_;
   unsigned diag_finalized_field_note_;
   unsigned diag_overridden_non_virtual_trace_note_;
   unsigned diag_manual_dispatch_method_note_;
   unsigned diag_iterator_to_gc_managed_collection_note_;
   unsigned diag_trace_method_of_stack_allocated_parent_;
   unsigned diag_member_in_stack_allocated_class_;
-  unsigned diag_member_on_stack_;
-  unsigned diag_additional_padding_;
-  unsigned diag_task_runner_timer_in_gc_class_note;
-  unsigned diag_forbidden_field_part_object_class_note;
-  unsigned diag_mojo_remote_in_gc_class_note;
-  unsigned diag_mojo_receiver_in_gc_class_note;
-  unsigned diag_mojo_associated_remote_in_gc_class_note;
-  unsigned diag_mojo_associated_receiver_in_gc_class_note;
 
   unsigned diag_unique_ptr_used_with_gc_;
   unsigned diag_optional_field_used_with_gc_;

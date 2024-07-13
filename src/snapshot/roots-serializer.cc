@@ -6,6 +6,7 @@
 
 #include "src/execution/isolate.h"
 #include "src/heap/heap.h"
+#include "src/objects/objects-inl.h"
 #include "src/objects/slots.h"
 
 namespace v8 {
@@ -26,10 +27,10 @@ RootsSerializer::RootsSerializer(Isolate* isolate,
 
 int RootsSerializer::SerializeInObjectCache(Handle<HeapObject> heap_object) {
   int index;
-  if (!object_cache_index_map_.LookupOrInsert(*heap_object, &index)) {
+  if (!object_cache_index_map_.LookupOrInsert(heap_object, &index)) {
     // This object is not part of the object cache yet. Add it to the cache so
     // we can refer to it via cache index from the delegating snapshot.
-    SerializeObject(heap_object, SlotType::kAnySlot);
+    SerializeObject(heap_object);
   }
   return index;
 }
@@ -59,8 +60,8 @@ void RootsSerializer::VisitRootPointers(Root root, const char* description,
 
 void RootsSerializer::CheckRehashability(HeapObject obj) {
   if (!can_be_rehashed_) return;
-  if (!obj.NeedsRehashing(cage_base())) return;
-  if (obj.CanBeRehashed(cage_base())) return;
+  if (!obj.NeedsRehashing()) return;
+  if (obj.CanBeRehashed()) return;
   can_be_rehashed_ = false;
 }
 

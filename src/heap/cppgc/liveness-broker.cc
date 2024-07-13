@@ -9,7 +9,7 @@
 namespace cppgc {
 
 bool LivenessBroker::IsHeapObjectAliveImpl(const void* payload) const {
-  return internal::HeapObjectHeader::FromObject(payload).IsMarked();
+  return internal::HeapObjectHeader::FromPayload(payload).IsMarked();
 }
 
 namespace internal {

@@ -4,7 +4,7 @@
 
 // CPU specific code for ia32 independent of OS goes here.
 
-#if defined(__GNUC__) && !defined(GOOGLE3)
+#ifdef __GNUC__
 #include "src/third_party/valgrind/valgrind.h"
 #endif
 

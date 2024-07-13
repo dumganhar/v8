@@ -18,13 +18,10 @@
 // https://www.ibm.com/support/knowledgecenter/ssw_aix_71/assembler/idalangref_runtime_process.html
 asm(
 #if defined(_AIX)
-    ".csect .text[PR]                                   \n"
-    ".align 2                                           \n"
     ".globl .PushAllRegistersAndIterateStack, hidden    \n"
+    ".csect .text[PR]                                   \n"
     ".PushAllRegistersAndIterateStack:                  \n"
 #else
-    ".text                                              \n"
-    ".align 2                                           \n"
     ".globl PushAllRegistersAndIterateStack             \n"
     ".type PushAllRegistersAndIterateStack, %function   \n"
     ".hidden PushAllRegistersAndIterateStack            \n"
@@ -32,7 +29,7 @@ asm(
 #endif
     // Push all callee-saved registers.
     // lr, TOC pointer, r16 to r31. 160 bytes.
-    // The parameter save area shall be allocated by the caller. 112 bytes.
+    // The parameter save area shall be allocated by the caller. 112 btes.
     // At anytime, SP (r1) needs to be multiple of 16 (i.e. 16-aligned).
     "  mflr 0                                          \n"
     "  std 0, 16(1)                                    \n"

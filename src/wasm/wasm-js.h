@@ -9,25 +9,16 @@
 #ifndef V8_WASM_WASM_JS_H_
 #define V8_WASM_WASM_JS_H_
 
-#include <memory>
-
 #include "src/common/globals.h"
 
 namespace v8 {
-class WasmStreaming;
-}  // namespace v8
-
-namespace v8::internal {
+namespace internal {
 class Context;
 template <typename T>
 class Handle;
 
 namespace wasm {
-class CompilationResultResolver;
 class StreamingDecoder;
-
-V8_EXPORT_PRIVATE std::unique_ptr<WasmStreaming> StartStreamingForTesting(
-    Isolate*, std::shared_ptr<wasm::CompilationResultResolver>);
 }  // namespace wasm
 
 // Exposes a WebAssembly API to JavaScript through the V8 API.
@@ -40,6 +31,7 @@ class WasmJs {
       Isolate* isolate, Handle<Context> context);
 };
 
-}  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_WASM_WASM_JS_H_

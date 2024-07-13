@@ -4,8 +4,6 @@
 
 #include "src/objects/managed.h"
 
-#include "src/handles/global-handles-inl.h"
-
 namespace v8 {
 namespace internal {
 

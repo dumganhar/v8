@@ -86,7 +86,7 @@ transitioning macro RegExpPrototypeExecBodyWithoutResult(
     regexp: JSRegExp, string: String, regexpLastIndex: Number,
     isFastPath: constexpr bool): RegExpMatchInfo labels IfDidNotMatch {
   if (isFastPath) {
-    dcheck(HasInitialRegExpMap(regexp));
+    assert(HasInitialRegExpMap(regexp));
   } else {
     IncrementUseCounter(context, SmiConstant(kRegExpExecCalledOnSlowRegExp));
   }
@@ -200,8 +200,7 @@ extern enum Flag constexpr 'JSRegExp::Flag' {
   kUnicode,
   kDotAll,
   kHasIndices,
-  kLinear,
-  kUnicodeSets
+  kLinear
 }
 
 const kNoCounterFlagGetter: constexpr int31 = -1;
@@ -295,15 +294,6 @@ transitioning javascript builtin RegExpPrototypeUnicodeGetter(
   return FlagGetter(
       receiver, Flag::kUnicode, kRegExpPrototypeUnicodeGetter,
       'RegExp.prototype.unicode');
-}
-
-// ES2023 22.2.5.14
-// ES #sec-get-regexp.prototype.unicodeSets
-transitioning javascript builtin RegExpPrototypeUnicodeSetsGetter(
-    js-implicit context: NativeContext, receiver: JSAny)(): JSAny {
-  return FlagGetter(
-      receiver, Flag::kUnicodeSets, kNoCounterFlagGetter,
-      'RegExp.prototype.unicodeSets');
 }
 
 extern transitioning macro
@@ -407,7 +397,7 @@ transitioning macro IsRegExp(implicit context: Context)(obj: JSAny): bool {
     return Is<JSRegExp>(receiver);
   }
 
-  dcheck(value != Undefined);
+  assert(value != Undefined);
   // The common path. Symbol.match exists, equals the RegExpPrototypeMatch
   // function (and is thus trueish), and the receiver is a JSRegExp.
   if (ToBoolean(value)) {
@@ -418,7 +408,7 @@ transitioning macro IsRegExp(implicit context: Context)(obj: JSAny): bool {
     return true;
   }
 
-  dcheck(!ToBoolean(value));
+  assert(!ToBoolean(value));
   if (Is<JSRegExp>(receiver)) {
     IncrementUseCounter(context, SmiConstant(kRegExpMatchIsFalseishOnJSRegExp));
   }

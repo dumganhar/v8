@@ -1,4 +1,4 @@
-# Copyright 2013 The Chromium Authors
+# Copyright (c) 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -18,11 +18,5 @@ def GetGitHeadSHA1(in_directory):
 
 def GetGitOriginMasterHeadSHA1(in_directory):
   command_line = ['git', 'rev-parse', 'origin/master']
-  output = cmd_helper.GetCmdOutput(command_line, cwd=in_directory)
-  return output.strip()
-
-
-def GetGitOriginMainHeadSHA1(in_directory):
-  command_line = ['git', 'rev-parse', 'origin/main']
   output = cmd_helper.GetCmdOutput(command_line, cwd=in_directory)
   return output.strip()

@@ -28,9 +28,9 @@ int ExpectedBytesUsed(int64_t value, bool is_signed) {
 }
 
 void TestVLQUnsignedEquals(uint32_t value) {
-  std::vector<uint8_t> buffer;
+  std::vector<byte> buffer;
   VLQEncodeUnsigned(&buffer, value);
-  uint8_t* data_start = buffer.data();
+  byte* data_start = buffer.data();
   int index = 0;
   int expected_bytes_used = ExpectedBytesUsed(value, false);
   EXPECT_EQ(buffer.size(), static_cast<size_t>(expected_bytes_used));
@@ -39,9 +39,9 @@ void TestVLQUnsignedEquals(uint32_t value) {
 }
 
 void TestVLQEquals(int32_t value) {
-  std::vector<uint8_t> buffer;
+  std::vector<byte> buffer;
   VLQEncode(&buffer, value);
-  uint8_t* data_start = buffer.data();
+  byte* data_start = buffer.data();
   int index = 0;
   int expected_bytes_used = ExpectedBytesUsed(value, true);
   EXPECT_EQ(buffer.size(), static_cast<size_t>(expected_bytes_used));

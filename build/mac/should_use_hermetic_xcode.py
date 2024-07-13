@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
-# Copyright 2016 The Chromium Authors
+# Copyright 2016 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -15,6 +15,7 @@ Usage:
   python should_use_hermetic_xcode.py <target_os>
 """
 
+from __future__ import print_function
 
 import argparse
 import os

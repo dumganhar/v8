@@ -8,6 +8,7 @@
 #include <map>
 
 #include "src/codegen/cpu-features.h"
+#include "src/common/globals.h"
 #include "src/compiler/backend/instruction-scheduler.h"
 #include "src/compiler/backend/instruction.h"
 #include "src/compiler/common-operator.h"
@@ -15,7 +16,6 @@
 #include "src/compiler/linkage.h"
 #include "src/compiler/machine-operator.h"
 #include "src/compiler/node.h"
-#include "src/utils/bit-vector.h"
 #include "src/zone/zone-containers.h"
 
 #if V8_ENABLE_WEBASSEMBLY
@@ -33,14 +33,9 @@ namespace compiler {
 class BasicBlock;
 struct CallBuffer;  // TODO(bmeurer): Remove this.
 class Linkage;
-template <typename Adapter>
-class OperandGeneratorT;
+class OperandGenerator;
 class SwitchInfo;
 class StateObjectDeduplicator;
-
-struct TurbofanAdapter {};
-
-struct TurboshaftAdapter {};
 
 // The flags continuation is a way to combine a branch or a materialization
 // of a boolean value with an instruction that sets the flags register.
@@ -59,22 +54,31 @@ class FlagsContinuation final {
     return FlagsContinuation(kFlags_branch, condition, true_block, false_block);
   }
 
-  // Creates a new flags continuation for an eager deoptimization exit.
-  static FlagsContinuation ForDeoptimize(FlagsCondition condition,
-                                         DeoptimizeReason reason,
-                                         NodeId node_id,
-                                         FeedbackSource const& feedback,
-                                         FrameState frame_state) {
-    return FlagsContinuation(kFlags_deoptimize, condition, reason, node_id,
-                             feedback, frame_state);
+  static FlagsContinuation ForBranchAndPoison(FlagsCondition condition,
+                                              BasicBlock* true_block,
+                                              BasicBlock* false_block) {
+    return FlagsContinuation(kFlags_branch_and_poison, condition, true_block,
+                             false_block);
   }
-  static FlagsContinuation ForDeoptimizeForTesting(
-      FlagsCondition condition, DeoptimizeReason reason, NodeId node_id,
-      FeedbackSource const& feedback, Node* frame_state) {
-    // test-instruction-scheduler.cc passes a dummy Node* as frame_state.
-    // Contents don't matter as long as it's not nullptr.
-    return FlagsContinuation(kFlags_deoptimize, condition, reason, node_id,
-                             feedback, frame_state);
+
+  // Creates a new flags continuation for an eager deoptimization exit.
+  static FlagsContinuation ForDeoptimize(
+      FlagsCondition condition, DeoptimizeKind kind, DeoptimizeReason reason,
+      FeedbackSource const& feedback, Node* frame_state,
+      InstructionOperand* extra_args = nullptr, int extra_args_count = 0) {
+    return FlagsContinuation(kFlags_deoptimize, condition, kind, reason,
+                             feedback, frame_state, extra_args,
+                             extra_args_count);
+  }
+
+  // Creates a new flags continuation for an eager deoptimization exit.
+  static FlagsContinuation ForDeoptimizeAndPoison(
+      FlagsCondition condition, DeoptimizeKind kind, DeoptimizeReason reason,
+      FeedbackSource const& feedback, Node* frame_state,
+      InstructionOperand* extra_args = nullptr, int extra_args_count = 0) {
+    return FlagsContinuation(kFlags_deoptimize_and_poison, condition, kind,
+                             reason, feedback, frame_state, extra_args,
+                             extra_args_count);
   }
 
   // Creates a new flags continuation for a boolean value.
@@ -83,8 +87,9 @@ class FlagsContinuation final {
   }
 
   // Creates a new flags continuation for a wasm trap.
-  static FlagsContinuation ForTrap(FlagsCondition condition, TrapId trap_id) {
-    return FlagsContinuation(condition, trap_id);
+  static FlagsContinuation ForTrap(FlagsCondition condition, TrapId trap_id,
+                                   Node* result) {
+    return FlagsContinuation(condition, trap_id, result);
   }
 
   static FlagsContinuation ForSelect(FlagsCondition condition, Node* result,
@@ -93,8 +98,16 @@ class FlagsContinuation final {
   }
 
   bool IsNone() const { return mode_ == kFlags_none; }
-  bool IsBranch() const { return mode_ == kFlags_branch; }
-  bool IsDeoptimize() const { return mode_ == kFlags_deoptimize; }
+  bool IsBranch() const {
+    return mode_ == kFlags_branch || mode_ == kFlags_branch_and_poison;
+  }
+  bool IsDeoptimize() const {
+    return mode_ == kFlags_deoptimize || mode_ == kFlags_deoptimize_and_poison;
+  }
+  bool IsPoisoned() const {
+    return mode_ == kFlags_branch_and_poison ||
+           mode_ == kFlags_deoptimize_and_poison;
+  }
   bool IsSet() const { return mode_ == kFlags_set; }
   bool IsTrap() const { return mode_ == kFlags_trap; }
   bool IsSelect() const { return mode_ == kFlags_select; }
@@ -102,13 +115,13 @@ class FlagsContinuation final {
     DCHECK(!IsNone());
     return condition_;
   }
+  DeoptimizeKind kind() const {
+    DCHECK(IsDeoptimize());
+    return kind_;
+  }
   DeoptimizeReason reason() const {
     DCHECK(IsDeoptimize());
     return reason_;
-  }
-  NodeId node_id() const {
-    DCHECK(IsDeoptimize());
-    return node_id_;
   }
   FeedbackSource const& feedback() const {
     DCHECK(IsDeoptimize());
@@ -117,6 +130,18 @@ class FlagsContinuation final {
   Node* frame_state() const {
     DCHECK(IsDeoptimize());
     return frame_state_or_result_;
+  }
+  bool has_extra_args() const {
+    DCHECK(IsDeoptimize());
+    return extra_args_ != nullptr;
+  }
+  const InstructionOperand* extra_args() const {
+    DCHECK(has_extra_args());
+    return extra_args_;
+  }
+  int extra_args_count() const {
+    DCHECK(has_extra_args());
+    return extra_args_count_;
   }
   Node* result() const {
     DCHECK(IsSet() || IsSelect());
@@ -197,21 +222,24 @@ class FlagsContinuation final {
         condition_(condition),
         true_block_(true_block),
         false_block_(false_block) {
-    DCHECK(mode == kFlags_branch);
+    DCHECK(mode == kFlags_branch || mode == kFlags_branch_and_poison);
     DCHECK_NOT_NULL(true_block);
     DCHECK_NOT_NULL(false_block);
   }
 
   FlagsContinuation(FlagsMode mode, FlagsCondition condition,
-                    DeoptimizeReason reason, NodeId node_id,
-                    FeedbackSource const& feedback, Node* frame_state)
+                    DeoptimizeKind kind, DeoptimizeReason reason,
+                    FeedbackSource const& feedback, Node* frame_state,
+                    InstructionOperand* extra_args, int extra_args_count)
       : mode_(mode),
         condition_(condition),
+        kind_(kind),
         reason_(reason),
-        node_id_(node_id),
         feedback_(feedback),
-        frame_state_or_result_(frame_state) {
-    DCHECK(mode == kFlags_deoptimize);
+        frame_state_or_result_(frame_state),
+        extra_args_(extra_args),
+        extra_args_count_(extra_args_count) {
+    DCHECK(mode == kFlags_deoptimize || mode == kFlags_deoptimize_and_poison);
     DCHECK_NOT_NULL(frame_state);
   }
 
@@ -222,11 +250,16 @@ class FlagsContinuation final {
     DCHECK_NOT_NULL(result);
   }
 
-  FlagsContinuation(FlagsCondition condition, TrapId trap_id)
-      : mode_(kFlags_trap), condition_(condition), trap_id_(trap_id) {}
+  FlagsContinuation(FlagsCondition condition, TrapId trap_id, Node* result)
+      : mode_(kFlags_trap),
+        condition_(condition),
+        frame_state_or_result_(result),
+        trap_id_(trap_id) {
+    DCHECK_NOT_NULL(result);
+  }
 
-  FlagsContinuation(FlagsCondition condition, Node* result, Node* true_value,
-                    Node* false_value)
+  FlagsContinuation(FlagsCondition condition, Node* result,
+                    Node* true_value, Node* false_value)
       : mode_(kFlags_select),
         condition_(condition),
         frame_state_or_result_(result),
@@ -239,11 +272,13 @@ class FlagsContinuation final {
 
   FlagsMode const mode_;
   FlagsCondition condition_;
+  DeoptimizeKind kind_;             // Only valid if mode_ == kFlags_deoptimize*
   DeoptimizeReason reason_;         // Only valid if mode_ == kFlags_deoptimize*
-  NodeId node_id_;                  // Only valid if mode_ == kFlags_deoptimize*
   FeedbackSource feedback_;         // Only valid if mode_ == kFlags_deoptimize*
   Node* frame_state_or_result_;     // Only valid if mode_ == kFlags_deoptimize*
                                     // or mode_ == kFlags_set.
+  InstructionOperand* extra_args_;  // Only valid if mode_ == kFlags_deoptimize*
+  int extra_args_count_;            // Only valid if mode_ == kFlags_deoptimize*
   BasicBlock* true_block_;          // Only valid if mode_ == kFlags_branch*.
   BasicBlock* false_block_;         // Only valid if mode_ == kFlags_branch*.
   TrapId trap_id_;                  // Only valid if mode_ == kFlags_trap.
@@ -265,10 +300,8 @@ struct PushParameter {
 enum class FrameStateInputKind { kAny, kStackSlot };
 
 // Instruction selection generates an InstructionSequence for a given Schedule.
-template <typename Adapter>
-class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
+class V8_EXPORT_PRIVATE InstructionSelector final {
  public:
-  using OperandGenerator = OperandGeneratorT<Adapter>;
   // Forward declarations.
   class Features;
 
@@ -284,7 +317,7 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
   };
   enum EnableTraceTurboJson { kDisableTraceTurboJson, kEnableTraceTurboJson };
 
-  InstructionSelectorT(
+  InstructionSelector(
       Zone* zone, size_t node_count, Linkage* linkage,
       InstructionSequence* sequence, Schedule* schedule,
       SourcePositionTable* source_positions, Frame* frame,
@@ -293,15 +326,17 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
       size_t* max_pushed_argument_count,
       SourcePositionMode source_position_mode = kCallSourcePositions,
       Features features = SupportedFeatures(),
-      EnableScheduling enable_scheduling = v8_flags.turbo_instruction_scheduling
+      EnableScheduling enable_scheduling = FLAG_turbo_instruction_scheduling
                                                ? kEnableScheduling
                                                : kDisableScheduling,
       EnableRootsRelativeAddressing enable_roots_relative_addressing =
           kDisableRootsRelativeAddressing,
+      PoisoningMitigationLevel poisoning_level =
+          PoisoningMitigationLevel::kDontPoison,
       EnableTraceTurboJson trace_turbo = kDisableTraceTurboJson);
 
   // Visit code for the entire graph with the included schedule.
-  base::Optional<BailoutReason> SelectInstructions();
+  bool SelectInstructions();
 
   void StartBlock(RpoNumber rpo);
   void EndBlock(RpoNumber rpo);
@@ -401,6 +436,8 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
 
   static MachineOperatorBuilder::AlignmentRequirements AlignmentRequirements();
 
+  bool NeedsPoisoning(IsSafetyCheck safety_check) const;
+
   // ===========================================================================
   // ============ Architecture-independent graph covering methods. =============
   // ===========================================================================
@@ -408,12 +445,12 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
   // Used in pattern matching during code generation.
   // Check if {node} can be covered while generating code for the current
   // instruction. A node can be covered if the {user} of the node has the only
-  // edge, the two are in the same basic block, and there are no side-effects
-  // in-between. The last check is crucial for soundness.
-  // For pure nodes, CanCover(a,b) is checked to avoid duplicated execution:
-  // If this is not the case, code for b must still be generated for other
-  // users, and fusing is unlikely to improve performance.
+  // edge and the two are in the same basic block.
   bool CanCover(Node* user, Node* node) const;
+  // CanCover is not transitive.  The counter example are Nodes A,B,C such that
+  // CanCover(A, B) and CanCover(B,C) and B is pure: The the effect level of A
+  // and B might differ. CanCoverTransitively does the additional checks.
+  bool CanCoverTransitively(Node* user, Node* node, Node* node_input) const;
 
   // Used in pattern matching during code generation.
   // This function checks that {node} and {user} are in the same basic block,
@@ -475,7 +512,7 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
   }
 
  private:
-  friend class OperandGeneratorT<Adapter>;
+  friend class OperandGenerator;
 
   bool UseInstructionScheduling() const {
     return (enable_scheduling_ == kEnableScheduling) &&
@@ -483,10 +520,9 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
   }
 
   void AppendDeoptimizeArguments(InstructionOperandVector* args,
-                                 DeoptimizeReason reason, NodeId node_id,
+                                 DeoptimizeKind kind, DeoptimizeReason reason,
                                  FeedbackSource const& feedback,
-                                 FrameState frame_state,
-                                 DeoptimizeKind kind = DeoptimizeKind::kEager);
+                                 FrameState frame_state);
 
   void EmitTableSwitch(const SwitchInfo& sw,
                        InstructionOperand const& index_operand);
@@ -527,9 +563,6 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
   void MarkAsSimd128(Node* node) {
     MarkAsRepresentation(MachineRepresentation::kSimd128, node);
   }
-  void MarkAsSimd256(Node* node) {
-    MarkAsRepresentation(MachineRepresentation::kSimd256, node);
-  }
   void MarkAsTagged(Node* node) {
     MarkAsRepresentation(MachineRepresentation::kTagged, node);
   }
@@ -556,7 +589,8 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
   // {call_code_immediate} to generate immediate operands to calls of code.
   // {call_address_immediate} to generate immediate operands to address calls.
   void InitializeCallBuffer(Node* call, CallBuffer* buffer,
-                            CallBufferFlags flags, int stack_slot_delta = 0);
+                            CallBufferFlags flags, bool is_tail_call,
+                            int stack_slot_delta = 0);
   bool IsTailCallAddressImmediate();
 
   void UpdateMaxPushedArgumentCount(size_t count);
@@ -600,8 +634,7 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
 
 #define DECLARE_GENERATOR(x) void Visit##x(Node* node);
   MACHINE_OP_LIST(DECLARE_GENERATOR)
-  MACHINE_SIMD128_OP_LIST(DECLARE_GENERATOR)
-  MACHINE_SIMD256_OP_LIST(DECLARE_GENERATOR)
+  MACHINE_SIMD_OP_LIST(DECLARE_GENERATOR)
 #undef DECLARE_GENERATOR
 
   // Visit the load node with a value and opcode to replace with.
@@ -624,7 +657,7 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
   void VisitGoto(BasicBlock* target);
   void VisitBranch(Node* input, BasicBlock* tbranch, BasicBlock* fbranch);
   void VisitSwitch(Node* node, const SwitchInfo& sw);
-  void VisitDeoptimize(DeoptimizeReason reason, NodeId node_id,
+  void VisitDeoptimize(DeoptimizeKind kind, DeoptimizeReason reason,
                        FeedbackSource const& feedback, FrameState frame_state);
   void VisitSelect(Node* node);
   void VisitReturn(Node* ret);
@@ -634,31 +667,18 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
   void VisitStaticAssert(Node* node);
   void VisitDeadValue(Node* node);
 
-  void TryPrepareScheduleFirstProjection(Node* maybe_projection);
-
   void VisitStackPointerGreaterThan(Node* node, FlagsContinuation* cont);
 
   void VisitWordCompareZero(Node* user, Node* value, FlagsContinuation* cont);
+
+  void EmitWordPoisonOnSpeculation(Node* node);
 
   void EmitPrepareArguments(ZoneVector<compiler::PushParameter>* arguments,
                             const CallDescriptor* call_descriptor, Node* node);
   void EmitPrepareResults(ZoneVector<compiler::PushParameter>* results,
                           const CallDescriptor* call_descriptor, Node* node);
 
-  // In LOONG64, calling convention uses free GP param register to pass
-  // floating-point arguments when no FP param register is available. But
-  // gap does not support moving from FPR to GPR, so we add EmitMoveFPRToParam
-  // to complete movement.
-  void EmitMoveFPRToParam(InstructionOperand* op, LinkageLocation location);
-  // Moving floating-point param from GP param register to FPR to participate in
-  // subsequent operations, whether CallCFunction or normal floating-point
-  // operations.
-  void EmitMoveParamToFPR(Node* node, int index);
-
   bool CanProduceSignalingNaN(Node* node);
-
-  void AddOutputToSelectContinuation(OperandGenerator* g, int first_input_index,
-                                     Node* node);
 
   // ===========================================================================
   // ============= Vector instruction (SIMD) helper fns. =======================
@@ -751,21 +771,20 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
   InstructionOperandVector continuation_inputs_;
   InstructionOperandVector continuation_outputs_;
   InstructionOperandVector continuation_temps_;
-  BitVector defined_;
-  BitVector used_;
+  BoolVector defined_;
+  BoolVector used_;
   IntVector effect_level_;
-  int current_effect_level_;
   IntVector virtual_registers_;
   IntVector virtual_register_rename_;
   InstructionScheduler* scheduler_;
   EnableScheduling enable_scheduling_;
   EnableRootsRelativeAddressing enable_roots_relative_addressing_;
   EnableSwitchJumpTable enable_switch_jump_table_;
-  ZoneUnorderedMap<FrameStateInput, CachedStateValues*,
-                   typename FrameStateInput::Hash,
-                   typename FrameStateInput::Equal>
+  ZoneUnorderedMap<FrameStateInput, CachedStateValues*, FrameStateInput::Hash,
+                   FrameStateInput::Equal>
       state_values_cache_;
 
+  PoisoningMitigationLevel poisoning_level_;
   Frame* frame_;
   bool instruction_selection_failed_;
   ZoneVector<std::pair<int, int>> instr_origins_;
@@ -787,13 +806,6 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) InstructionSelectorT final {
   ZoneVector<Upper32BitsState> phi_states_;
 #endif
 };
-
-using InstructionSelector = InstructionSelectorT<TurbofanAdapter>;
-
-extern template class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
-    InstructionSelectorT<TurbofanAdapter>;
-extern template class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
-    InstructionSelectorT<TurboshaftAdapter>;
 
 }  // namespace compiler
 }  // namespace internal

@@ -1,10 +1,9 @@
-#!/usr/bin/env vpython3
-# Copyright 2016 The Chromium Authors
+#!/usr/bin/env vpython
+# Copyright 2016 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 # pylint: disable=protected-access
-
 
 import unittest
 
@@ -17,27 +16,29 @@ import mock  # pylint: disable=import-error
 class SubstituteDeviceRootTest(unittest.TestCase):
 
   def testNoneDevicePath(self):
-    self.assertEqual(
+    self.assertEquals(
         '/fake/device/root',
-        local_device_test_run.SubstituteDeviceRoot(None, '/fake/device/root'))
+        local_device_test_run.SubstituteDeviceRoot(
+            None, '/fake/device/root'))
 
   def testStringDevicePath(self):
-    self.assertEqual(
-        '/another/fake/device/path',
-        local_device_test_run.SubstituteDeviceRoot('/another/fake/device/path',
-                                                   '/fake/device/root'))
-
-  def testListWithNoneDevicePath(self):
-    self.assertEqual(
-        '/fake/device/root/subpath',
-        local_device_test_run.SubstituteDeviceRoot([None, 'subpath'],
-                                                   '/fake/device/root'))
-
-  def testListWithoutNoneDevicePath(self):
-    self.assertEqual(
+    self.assertEquals(
         '/another/fake/device/path',
         local_device_test_run.SubstituteDeviceRoot(
-            ['/', 'another', 'fake', 'device', 'path'], '/fake/device/root'))
+            '/another/fake/device/path', '/fake/device/root'))
+
+  def testListWithNoneDevicePath(self):
+    self.assertEquals(
+        '/fake/device/root/subpath',
+        local_device_test_run.SubstituteDeviceRoot(
+            [None, 'subpath'], '/fake/device/root'))
+
+  def testListWithoutNoneDevicePath(self):
+    self.assertEquals(
+        '/another/fake/device/path',
+        local_device_test_run.SubstituteDeviceRoot(
+            ['/', 'another', 'fake', 'device', 'path'],
+            '/fake/device/root'))
 
 
 class TestLocalDeviceTestRun(local_device_test_run.LocalDeviceTestRun):
@@ -45,7 +46,8 @@ class TestLocalDeviceTestRun(local_device_test_run.LocalDeviceTestRun):
   # pylint: disable=abstract-method
 
   def __init__(self):
-    super().__init__(mock.MagicMock(), mock.MagicMock())
+    super(TestLocalDeviceTestRun, self).__init__(
+        mock.MagicMock(), mock.MagicMock())
 
 
 class TestLocalDeviceNonStringTestRun(
@@ -54,18 +56,14 @@ class TestLocalDeviceNonStringTestRun(
   # pylint: disable=abstract-method
 
   def __init__(self):
-    super().__init__(mock.MagicMock(), mock.MagicMock())
+    super(TestLocalDeviceNonStringTestRun, self).__init__(
+        mock.MagicMock(), mock.MagicMock())
 
   def _GetUniqueTestName(self, test):
     return test['name']
 
 
 class LocalDeviceTestRunTest(unittest.TestCase):
-
-  def testSortTests(self):
-    test_run = TestLocalDeviceTestRun()
-    self.assertEqual(test_run._SortTests(['a', 'b', 'c', 'd', 'e', 'f', 'g']),
-                     ['d', 'f', 'c', 'b', 'e', 'a', 'g'])
 
   def testGetTestsToRetry_allTestsPassed(self):
     results = [
@@ -81,7 +79,7 @@ class LocalDeviceTestRunTest(unittest.TestCase):
 
     test_run = TestLocalDeviceTestRun()
     tests_to_retry = test_run._GetTestsToRetry(tests, try_results)
-    self.assertEqual(0, len(tests_to_retry))
+    self.assertEquals(0, len(tests_to_retry))
 
   def testGetTestsToRetry_testFailed(self):
     results = [
@@ -97,7 +95,7 @@ class LocalDeviceTestRunTest(unittest.TestCase):
 
     test_run = TestLocalDeviceTestRun()
     tests_to_retry = test_run._GetTestsToRetry(tests, try_results)
-    self.assertEqual(1, len(tests_to_retry))
+    self.assertEquals(1, len(tests_to_retry))
     self.assertIn('Test1', tests_to_retry)
 
   def testGetTestsToRetry_testUnknown(self):
@@ -112,7 +110,7 @@ class LocalDeviceTestRunTest(unittest.TestCase):
 
     test_run = TestLocalDeviceTestRun()
     tests_to_retry = test_run._GetTestsToRetry(tests, try_results)
-    self.assertEqual(1, len(tests_to_retry))
+    self.assertEquals(1, len(tests_to_retry))
     self.assertIn('Test1', tests_to_retry)
 
   def testGetTestsToRetry_wildcardFilter_allPass(self):
@@ -129,7 +127,7 @@ class LocalDeviceTestRunTest(unittest.TestCase):
 
     test_run = TestLocalDeviceTestRun()
     tests_to_retry = test_run._GetTestsToRetry(tests, try_results)
-    self.assertEqual(0, len(tests_to_retry))
+    self.assertEquals(0, len(tests_to_retry))
 
   def testGetTestsToRetry_wildcardFilter_oneFails(self):
     results = [
@@ -145,7 +143,7 @@ class LocalDeviceTestRunTest(unittest.TestCase):
 
     test_run = TestLocalDeviceTestRun()
     tests_to_retry = test_run._GetTestsToRetry(tests, try_results)
-    self.assertEqual(1, len(tests_to_retry))
+    self.assertEquals(1, len(tests_to_retry))
     self.assertIn('TestCase.*', tests_to_retry)
 
   def testGetTestsToRetry_nonStringTests(self):
@@ -165,9 +163,9 @@ class LocalDeviceTestRunTest(unittest.TestCase):
 
     test_run = TestLocalDeviceNonStringTestRun()
     tests_to_retry = test_run._GetTestsToRetry(tests, try_results)
-    self.assertEqual(1, len(tests_to_retry))
+    self.assertEquals(1, len(tests_to_retry))
     self.assertIsInstance(tests_to_retry[0], dict)
-    self.assertEqual(tests[1], tests_to_retry[0])
+    self.assertEquals(tests[1], tests_to_retry[0])
 
 
 if __name__ == '__main__':

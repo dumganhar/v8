@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 
-d8.file.execute('../base.js');
-d8.file.execute('proxies.js');
+load('../base.js');
+load('proxies.js');
 
 var success = true;
 

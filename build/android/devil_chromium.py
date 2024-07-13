@@ -1,4 +1,4 @@
-# Copyright 2015 The Chromium Authors
+# Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -128,7 +128,7 @@ def _UseLocalBuildProducts(output_directory, devil_dynamic_config):
               for dep_config in dep_configs
           }
       }
-      for dep_name, dep_configs in _DEVIL_BUILD_PRODUCT_DEPS.items()
+      for dep_name, dep_configs in _DEVIL_BUILD_PRODUCT_DEPS.iteritems()
   }
 
 
@@ -143,10 +143,7 @@ def _BuildWithChromium():
   return args.get('build_with_chromium', False)
 
 
-def Initialize(output_directory=None,
-               custom_deps=None,
-               adb_path=None,
-               use_local_devil_tools=False):
+def Initialize(output_directory=None, custom_deps=None, adb_path=None):
   """Initializes devil with chromium's binaries and third-party libraries.
 
   This includes:
@@ -172,8 +169,6 @@ def Initialize(output_directory=None,
         }
     adb_path: An optional path to use for the adb binary. If not set, this uses
       the adb binary provided by the Android SDK.
-    use_local_devil_tools: Use locally built versions of md5sum,
-      forwarder_dist, etc.
   """
   build_with_chromium = _BuildWithChromium()
 
@@ -181,7 +176,7 @@ def Initialize(output_directory=None,
     'config_type': 'BaseConfig',
     'dependencies': {},
   }
-  if use_local_devil_tools:
+  if build_with_chromium and output_directory:
     # Non-chromium users of chromium's //build directory fetch build products
     # from google storage rather than use locally built copies. Chromium uses
     # locally-built copies so that changes to the tools can be easily tested.

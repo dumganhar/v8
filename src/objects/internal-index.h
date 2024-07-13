@@ -40,7 +40,8 @@ class InternalIndex {
     return static_cast<uint32_t>(entry_);
   }
   constexpr int as_int() const {
-    DCHECK_GE(std::numeric_limits<int>::max(), entry_);
+    CONSTEXPR_DCHECK(entry_ <=
+                     static_cast<size_t>(std::numeric_limits<int>::max()));
     return static_cast<int>(entry_);
   }
 
@@ -56,10 +57,6 @@ class InternalIndex {
   InternalIndex& operator++() {
     entry_++;
     return *this;
-  }
-
-  bool operator<(const InternalIndex& other) const {
-    return entry_ < other.entry_;
   }
 
   class Range {

@@ -115,8 +115,8 @@ class InstructionSelectorTest : public TestWithNativeContextAndZone {
                             kSystemPointerSize);
       }
 
-      const RegList kCalleeSaveRegisters;
-      const DoubleRegList kCalleeSaveFPRegisters;
+      const RegList kCalleeSaveRegisters = 0;
+      const RegList kCalleeSaveFPRegisters = 0;
 
       MachineType target_type = MachineType::Pointer();
       LinkageLocation target_loc = LinkageLocation::ForAnyRegister();
@@ -234,8 +234,6 @@ class InstructionSelectorTest : public TestWithNativeContextAndZone {
 
     bool IsFixed(const InstructionOperand* operand, Register reg) const;
     bool IsSameAsFirst(const InstructionOperand* operand) const;
-    bool IsSameAsInput(const InstructionOperand* operand,
-                       int input_index) const;
     bool IsUsedAtStart(const InstructionOperand* operand) const;
 
     FrameStateDescriptor* GetFrameStateDescriptor(int deoptimization_id) {

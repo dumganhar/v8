@@ -27,19 +27,19 @@ function NaiveMapSetup() {
 
 // Make sure we inline the callback, pick up all possible TurboFan
 // optimizations.
-function RunOptFastMap(value) {
-  // Use of variable {value} in the callback function forces
+function RunOptFastMap(multiple) {
+  // Use of variable multiple in the callback function forces
   // context creation without escape analysis.
   //
   // Also, the arrow function requires inlining based on
   // SharedFunctionInfo.
-  result = array.map((v, i, a) =>  v + value);
+  result = array.map((v, i, a) =>  v + ' ' + multiple);
 }
 
 // Don't optimize because I want to optimize RunOptFastMap with a parameter
 // to be used in the callback.
 %NeverOptimizeFunction(OptFastMap);
-function OptFastMap() { RunOptFastMap(" 3"); }
+function OptFastMap() { RunOptFastMap(3); }
 
 function side_effect(a) { return a; }
 %NeverOptimizeFunction(side_effect);

@@ -6,7 +6,6 @@
 
 #include "include/cppgc/allocation.h"
 #include "src/base/macros.h"
-#include "src/base/page-allocator.h"
 #include "src/heap/cppgc/globals.h"
 #include "src/heap/cppgc/heap-object-header.h"
 #include "src/heap/cppgc/page-memory.h"
@@ -19,171 +18,164 @@ namespace internal {
 
 namespace {
 
-class PageWithBitmap final {
+bool IsEmpty(const ObjectStartBitmap& bitmap) {
+  size_t count = 0;
+  bitmap.Iterate([&count](Address) { count++; });
+  return count == 0;
+}
+
+// Abstraction for objects that hides ObjectStartBitmap::kGranularity and
+// the base address as getting either of it wrong will result in failed DCHECKs.
+class Object {
  public:
-  PageWithBitmap()
-      : base_(allocator_.AllocatePages(
-            nullptr, kPageSize, kPageSize,
-            v8::base::PageAllocator::Permission::kReadWrite)),
-        bitmap_(new(base_) ObjectStartBitmap) {}
+  static Address kBaseOffset;
 
-  PageWithBitmap(const PageWithBitmap&) = delete;
-  PageWithBitmap& operator=(const PageWithBitmap&) = delete;
-
-  ~PageWithBitmap() { allocator_.FreePages(base_, kPageSize); }
-
-  ObjectStartBitmap& bitmap() const { return *bitmap_; }
-
-  void* base() const { return base_; }
-  size_t size() const { return kPageSize; }
-
-  v8::base::PageAllocator allocator_;
-  void* base_;
-  ObjectStartBitmap* bitmap_;
-};
-
-class ObjectStartBitmapTest : public ::testing::Test {
- protected:
-  void AllocateObject(size_t object_position) {
-    bitmap().SetBit(ObjectAddress(object_position));
+  explicit Object(size_t number) : number_(number) {
+    const size_t max_entries = ObjectStartBitmap::MaxEntries();
+    EXPECT_GE(max_entries, number_);
   }
 
-  void FreeObject(size_t object_position) {
-    bitmap().ClearBit(ObjectAddress(object_position));
+  Address address() const {
+    return kBaseOffset + ObjectStartBitmap::Granularity() * number_;
   }
 
-  bool CheckObjectAllocated(size_t object_position) {
-    return bitmap().CheckBit(ObjectAddress(object_position));
+  HeapObjectHeader* header() const {
+    return reinterpret_cast<HeapObjectHeader*>(address());
   }
 
-  Address ObjectAddress(size_t pos) const {
-    return reinterpret_cast<Address>(reinterpret_cast<uintptr_t>(page.base()) +
-                                     pos * ObjectStartBitmap::Granularity());
-  }
-
-  HeapObjectHeader* ObjectHeader(size_t pos) const {
-    return reinterpret_cast<HeapObjectHeader*>(ObjectAddress(pos));
-  }
-
-  ObjectStartBitmap& bitmap() const { return page.bitmap(); }
-
-  bool IsEmpty() const {
-    size_t count = 0;
-    bitmap().Iterate([&count](Address) { count++; });
-    return count == 0;
-  }
+  // Allow implicitly converting Object to Address.
+  operator Address() const { return address(); }
 
  private:
-  PageWithBitmap page;
+  const size_t number_;
 };
+
+Address Object::kBaseOffset = reinterpret_cast<Address>(0x4000);
 
 }  // namespace
 
-TEST_F(ObjectStartBitmapTest, MoreThanZeroEntriesPossible) {
+TEST(ObjectStartBitmapTest, MoreThanZeroEntriesPossible) {
   const size_t max_entries = ObjectStartBitmap::MaxEntries();
   EXPECT_LT(0u, max_entries);
 }
 
-TEST_F(ObjectStartBitmapTest, InitialEmpty) { EXPECT_TRUE(IsEmpty()); }
-
-TEST_F(ObjectStartBitmapTest, SetBitImpliesNonEmpty) {
-  AllocateObject(0);
-  EXPECT_FALSE(IsEmpty());
+TEST(ObjectStartBitmapTest, InitialEmpty) {
+  ObjectStartBitmap bitmap(Object::kBaseOffset);
+  EXPECT_TRUE(IsEmpty(bitmap));
 }
 
-TEST_F(ObjectStartBitmapTest, SetBitCheckBit) {
-  constexpr size_t object_num = 7;
-  AllocateObject(object_num);
-  EXPECT_TRUE(CheckObjectAllocated(object_num));
+TEST(ObjectStartBitmapTest, SetBitImpliesNonEmpty) {
+  ObjectStartBitmap bitmap(Object::kBaseOffset);
+  bitmap.SetBit(Object(0));
+  EXPECT_FALSE(IsEmpty(bitmap));
 }
 
-TEST_F(ObjectStartBitmapTest, SetBitClearbitCheckBit) {
-  constexpr size_t object_num = 77;
-  AllocateObject(object_num);
-  FreeObject(object_num);
-  EXPECT_FALSE(CheckObjectAllocated(object_num));
+TEST(ObjectStartBitmapTest, SetBitCheckBit) {
+  ObjectStartBitmap bitmap(Object::kBaseOffset);
+  Object object(7);
+  bitmap.SetBit(object);
+  EXPECT_TRUE(bitmap.CheckBit(object));
 }
 
-TEST_F(ObjectStartBitmapTest, SetBitClearBitImpliesEmpty) {
-  constexpr size_t object_num = 123;
-  AllocateObject(object_num);
-  FreeObject(object_num);
-  EXPECT_TRUE(IsEmpty());
+TEST(ObjectStartBitmapTest, SetBitClearbitCheckBit) {
+  ObjectStartBitmap bitmap(Object::kBaseOffset);
+  Object object(77);
+  bitmap.SetBit(object);
+  bitmap.ClearBit(object);
+  EXPECT_FALSE(bitmap.CheckBit(object));
 }
 
-TEST_F(ObjectStartBitmapTest, AdjacentObjectsAtBegin) {
-  AllocateObject(0);
-  AllocateObject(1);
-  EXPECT_FALSE(CheckObjectAllocated(3));
+TEST(ObjectStartBitmapTest, SetBitClearBitImpliesEmpty) {
+  ObjectStartBitmap bitmap(Object::kBaseOffset);
+  Object object(123);
+  bitmap.SetBit(object);
+  bitmap.ClearBit(object);
+  EXPECT_TRUE(IsEmpty(bitmap));
+}
+
+TEST(ObjectStartBitmapTest, AdjacentObjectsAtBegin) {
+  ObjectStartBitmap bitmap(Object::kBaseOffset);
+  Object object0(0);
+  Object object1(1);
+  bitmap.SetBit(object0);
+  bitmap.SetBit(object1);
+  EXPECT_FALSE(bitmap.CheckBit(Object(3)));
   size_t count = 0;
-  bitmap().Iterate([&count, this](Address current) {
+  bitmap.Iterate([&count, object0, object1](Address current) {
     if (count == 0) {
-      EXPECT_EQ(ObjectAddress(0), current);
+      EXPECT_EQ(object0.address(), current);
     } else if (count == 1) {
-      EXPECT_EQ(ObjectAddress(1), current);
+      EXPECT_EQ(object1.address(), current);
     }
     count++;
   });
   EXPECT_EQ(2u, count);
 }
 
-TEST_F(ObjectStartBitmapTest, AdjacentObjectsAtEnd) {
-  static constexpr size_t last_entry_index =
-      ObjectStartBitmap::MaxEntries() - 1;
-  AllocateObject(last_entry_index);
-  AllocateObject(last_entry_index - 1);
-  EXPECT_FALSE(CheckObjectAllocated(last_entry_index - 2));
+TEST(ObjectStartBitmapTest, AdjacentObjectsAtEnd) {
+  ObjectStartBitmap bitmap(Object::kBaseOffset);
+  const size_t last_entry_index = ObjectStartBitmap::MaxEntries() - 1;
+  Object object0(last_entry_index - 1);
+  Object object1(last_entry_index);
+  bitmap.SetBit(object0);
+  bitmap.SetBit(object1);
+  EXPECT_FALSE(bitmap.CheckBit(Object(last_entry_index - 2)));
   size_t count = 0;
-  bitmap().Iterate([&count, this](Address current) {
+  bitmap.Iterate([&count, object0, object1](Address current) {
     if (count == 0) {
-      EXPECT_EQ(ObjectAddress(last_entry_index - 1), current);
+      EXPECT_EQ(object0.address(), current);
     } else if (count == 1) {
-      EXPECT_EQ(ObjectAddress(last_entry_index), current);
+      EXPECT_EQ(object1.address(), current);
     }
     count++;
   });
   EXPECT_EQ(2u, count);
 }
 
-TEST_F(ObjectStartBitmapTest, FindHeaderExact) {
-  constexpr size_t object_num = 654;
-  AllocateObject(object_num);
-  EXPECT_EQ(ObjectHeader(object_num),
-            bitmap().FindHeader(ObjectAddress(object_num)));
+TEST(ObjectStartBitmapTest, FindHeaderExact) {
+  ObjectStartBitmap bitmap(Object::kBaseOffset);
+  Object object(654);
+  bitmap.SetBit(object);
+  EXPECT_EQ(object.header(), bitmap.FindHeader(object.address()));
 }
 
-TEST_F(ObjectStartBitmapTest, FindHeaderApproximate) {
+TEST(ObjectStartBitmapTest, FindHeaderApproximate) {
   static const size_t kInternalDelta = 37;
-  constexpr size_t object_num = 654;
-  AllocateObject(object_num);
-  EXPECT_EQ(ObjectHeader(object_num),
-            bitmap().FindHeader(ObjectAddress(object_num) + kInternalDelta));
+  ObjectStartBitmap bitmap(Object::kBaseOffset);
+  Object object(654);
+  bitmap.SetBit(object);
+  EXPECT_EQ(object.header(),
+            bitmap.FindHeader(object.address() + kInternalDelta));
 }
 
-TEST_F(ObjectStartBitmapTest, FindHeaderIteratingWholeBitmap) {
-  AllocateObject(0);
-  Address hint_index = ObjectAddress(ObjectStartBitmap::MaxEntries() - 1);
-  EXPECT_EQ(ObjectHeader(0), bitmap().FindHeader(hint_index));
+TEST(ObjectStartBitmapTest, FindHeaderIteratingWholeBitmap) {
+  ObjectStartBitmap bitmap(Object::kBaseOffset);
+  Object object_to_find(Object(0));
+  Address hint_index = Object(ObjectStartBitmap::MaxEntries() - 1);
+  bitmap.SetBit(object_to_find);
+  EXPECT_EQ(object_to_find.header(), bitmap.FindHeader(hint_index));
 }
 
-TEST_F(ObjectStartBitmapTest, FindHeaderNextCell) {
+TEST(ObjectStartBitmapTest, FindHeaderNextCell) {
   // This white box test makes use of the fact that cells are of type uint8_t.
   const size_t kCellSize = sizeof(uint8_t);
-  AllocateObject(0);
-  AllocateObject(kCellSize - 1);
-  Address hint = ObjectAddress(kCellSize);
-  EXPECT_EQ(ObjectHeader(kCellSize - 1), bitmap().FindHeader(hint));
+  ObjectStartBitmap bitmap(Object::kBaseOffset);
+  Object object_to_find(Object(kCellSize - 1));
+  Address hint = Object(kCellSize);
+  bitmap.SetBit(Object(0));
+  bitmap.SetBit(object_to_find);
+  EXPECT_EQ(object_to_find.header(), bitmap.FindHeader(hint));
 }
 
-TEST_F(ObjectStartBitmapTest, FindHeaderSameCell) {
+TEST(ObjectStartBitmapTest, FindHeaderSameCell) {
   // This white box test makes use of the fact that cells are of type uint8_t.
   const size_t kCellSize = sizeof(uint8_t);
-  AllocateObject(0);
-  AllocateObject(kCellSize - 1);
-  Address hint = ObjectAddress(kCellSize);
-  EXPECT_EQ(ObjectHeader(kCellSize - 1), bitmap().FindHeader(hint));
-  EXPECT_EQ(ObjectHeader(kCellSize - 1),
-            bitmap().FindHeader(ObjectAddress(kCellSize - 1)));
+  ObjectStartBitmap bitmap(Object::kBaseOffset);
+  Object object_to_find(Object(kCellSize - 1));
+  bitmap.SetBit(Object(0));
+  bitmap.SetBit(object_to_find);
+  EXPECT_EQ(object_to_find.header(),
+            bitmap.FindHeader(object_to_find.address()));
 }
 
 }  // namespace internal

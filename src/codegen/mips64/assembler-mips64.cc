@@ -37,10 +37,10 @@
 #if V8_TARGET_ARCH_MIPS64
 
 #include "src/base/cpu.h"
-#include "src/codegen/flush-instruction-cache.h"
 #include "src/codegen/machine-type.h"
 #include "src/codegen/mips64/assembler-mips64-inl.h"
 #include "src/codegen/safepoint-table.h"
+#include "src/codegen/string-constants.h"
 #include "src/deoptimizer/deoptimizer.h"
 #include "src/objects/heap-number-inl.h"
 
@@ -186,8 +186,15 @@ Operand Operand::EmbeddedNumber(double value) {
   int32_t smi;
   if (DoubleToSmiInteger(value, &smi)) return Operand(Smi::FromInt(smi));
   Operand result(0, RelocInfo::FULL_EMBEDDED_OBJECT);
-  result.is_heap_number_request_ = true;
-  result.value_.heap_number_request = HeapNumberRequest(value);
+  result.is_heap_object_request_ = true;
+  result.value_.heap_object_request = HeapObjectRequest(value);
+  return result;
+}
+
+Operand Operand::EmbeddedStringConstant(const StringConstantBase* str) {
+  Operand result(0, RelocInfo::FULL_EMBEDDED_OBJECT);
+  result.is_heap_object_request_ = true;
+  result.value_.heap_object_request = HeapObjectRequest(str);
   return result;
 }
 
@@ -201,12 +208,21 @@ MemOperand::MemOperand(Register rm, int32_t unit, int32_t multiplier,
   offset_ = unit * multiplier + offset_addend;
 }
 
-void Assembler::AllocateAndInstallRequestedHeapNumbers(Isolate* isolate) {
-  DCHECK_IMPLIES(isolate == nullptr, heap_number_requests_.empty());
-  for (auto& request : heap_number_requests_) {
+void Assembler::AllocateAndInstallRequestedHeapObjects(Isolate* isolate) {
+  DCHECK_IMPLIES(isolate == nullptr, heap_object_requests_.empty());
+  for (auto& request : heap_object_requests_) {
     Handle<HeapObject> object;
-    object = isolate->factory()->NewHeapNumber<AllocationType::kOld>(
-        request.heap_number());
+    switch (request.kind()) {
+      case HeapObjectRequest::kHeapNumber:
+        object = isolate->factory()->NewHeapNumber<AllocationType::kOld>(
+            request.heap_number());
+        break;
+      case HeapObjectRequest::kStringConstant:
+        const StringConstantBase* str = request.string();
+        CHECK_NOT_NULL(str);
+        object = str->AllocateStringConstant(isolate);
+        break;
+    }
     Address pc = reinterpret_cast<Address>(buffer_start_) + request.offset();
     set_target_value_at(pc, reinterpret_cast<uint64_t>(object.location()));
   }
@@ -219,27 +235,29 @@ void Assembler::AllocateAndInstallRequestedHeapNumbers(Isolate* isolate) {
 // operations as post-increment of sp.
 const Instr kPopInstruction = DADDIU | (sp.code() << kRsShift) |
                               (sp.code() << kRtShift) |
-                              (kPointerSize & kImm16Mask);
+                              (kPointerSize & kImm16Mask);  // NOLINT
 // daddiu(sp, sp, -8) part of Push(r) operation as pre-decrement of sp.
 const Instr kPushInstruction = DADDIU | (sp.code() << kRsShift) |
                                (sp.code() << kRtShift) |
-                               (-kPointerSize & kImm16Mask);
+                               (-kPointerSize & kImm16Mask);  // NOLINT
 // Sd(r, MemOperand(sp, 0))
-const Instr kPushRegPattern = SD | (sp.code() << kRsShift) | (0 & kImm16Mask);
+const Instr kPushRegPattern =
+    SD | (sp.code() << kRsShift) | (0 & kImm16Mask);  // NOLINT
 //  Ld(r, MemOperand(sp, 0))
-const Instr kPopRegPattern = LD | (sp.code() << kRsShift) | (0 & kImm16Mask);
+const Instr kPopRegPattern =
+    LD | (sp.code() << kRsShift) | (0 & kImm16Mask);  // NOLINT
 
 const Instr kLwRegFpOffsetPattern =
-    LW | (fp.code() << kRsShift) | (0 & kImm16Mask);
+    LW | (fp.code() << kRsShift) | (0 & kImm16Mask);  // NOLINT
 
 const Instr kSwRegFpOffsetPattern =
-    SW | (fp.code() << kRsShift) | (0 & kImm16Mask);
+    SW | (fp.code() << kRsShift) | (0 & kImm16Mask);  // NOLINT
 
 const Instr kLwRegFpNegOffsetPattern =
-    LW | (fp.code() << kRsShift) | (kNegOffset & kImm16Mask);
+    LW | (fp.code() << kRsShift) | (kNegOffset & kImm16Mask);  // NOLINT
 
 const Instr kSwRegFpNegOffsetPattern =
-    SW | (fp.code() << kRsShift) | (kNegOffset & kImm16Mask);
+    SW | (fp.code() << kRsShift) | (kNegOffset & kImm16Mask);  // NOLINT
 // A mask for the Rt register for push, pop, lw, sw instructions.
 const Instr kRtMask = kRtFieldMask;
 const Instr kLwSwInstrTypeMask = 0xFFE00000;
@@ -249,7 +267,7 @@ const Instr kLwSwOffsetMask = kImm16Mask;
 Assembler::Assembler(const AssemblerOptions& options,
                      std::unique_ptr<AssemblerBuffer> buffer)
     : AssemblerBase(options, std::move(buffer)),
-      scratch_register_list_({at, s0}) {
+      scratch_register_list_(at.bit()) {
   if (CpuFeatures::IsSupported(MIPS_SIMD)) {
     EnableCpuFeature(MIPS_SIMD);
   }
@@ -260,28 +278,28 @@ Assembler::Assembler(const AssemblerOptions& options,
   trampoline_pool_blocked_nesting_ = 0;
   // We leave space (16 * kTrampolineSlotsSize)
   // for BlockTrampolinePoolScope buffer.
-  next_buffer_check_ = v8_flags.force_long_branches
+  next_buffer_check_ = FLAG_force_long_branches
                            ? kMaxInt
                            : kMaxBranchOffset - kTrampolineSlotsSize * 16;
   internal_trampoline_exception_ = false;
   last_bound_pos_ = 0;
 
-  trampoline_emitted_ = v8_flags.force_long_branches;
+  trampoline_emitted_ = FLAG_force_long_branches;
   unbound_labels_count_ = 0;
   block_buffer_growth_ = false;
 }
 
 void Assembler::GetCode(Isolate* isolate, CodeDesc* desc,
-                        SafepointTableBuilderBase* safepoint_table_builder,
+                        SafepointTableBuilder* safepoint_table_builder,
                         int handler_table_offset) {
   // As a crutch to avoid having to add manual Align calls wherever we use a
-  // raw workflow to create InstructionStream objects (mostly in tests), add
-  // another Align call here. It does no harm - the end of the InstructionStream
-  // object is aligned to the (larger) kCodeAlignment anyways.
+  // raw workflow to create Code objects (mostly in tests), add another Align
+  // call here. It does no harm - the end of the Code object is aligned to the
+  // (larger) kCodeAlignment anyways.
   // TODO(jgruber): Consider moving responsibility for proper alignment to
   // metadata table builders (safepoint, handler, constant pool, code
   // comments).
-  DataAlign(InstructionStream::kMetadataAlignment);
+  DataAlign(Code::kMetadataAlignment);
 
   EmitForbiddenSlotInstruction();
 
@@ -289,7 +307,7 @@ void Assembler::GetCode(Isolate* isolate, CodeDesc* desc,
 
   DCHECK(pc_ <= reloc_info_writer.pos());  // No overlap.
 
-  AllocateAndInstallRequestedHeapNumbers(isolate);
+  AllocateAndInstallRequestedHeapObjects(isolate);
 
   // Set up code descriptor.
   // TODO(jgruber): Reconsider how these offsets and sizes are maintained up to
@@ -305,7 +323,7 @@ void Assembler::GetCode(Isolate* isolate, CodeDesc* desc,
   const int safepoint_table_offset =
       (safepoint_table_builder == kNoSafepointTable)
           ? handler_table_offset2
-          : safepoint_table_builder->safepoint_table_offset();
+          : safepoint_table_builder->GetCodeOffset();
   const int reloc_info_offset =
       static_cast<int>(reloc_info_writer.pos() - buffer_->start());
   CodeDesc::Initialize(desc, this, safepoint_table_offset,
@@ -794,10 +812,8 @@ void Assembler::target_at_put(int pos, int target_pos, bool is_internal) {
   if ((instr & ~kImm16Mask) == 0) {
     DCHECK(target_pos == kEndOfChain || target_pos >= 0);
     // Emitted label constant, not part of a branch.
-    // Make label relative to Code pointer of generated InstructionStream
-    // object.
-    instr_at_put(
-        pos, target_pos + (InstructionStream::kHeaderSize - kHeapObjectTag));
+    // Make label relative to Code pointer of generated Code object.
+    instr_at_put(pos, target_pos + (Code::kHeaderSize - kHeapObjectTag));
     return;
   }
 
@@ -819,7 +835,7 @@ void Assembler::target_at_put(int pos, int target_pos, bool is_internal) {
         Instr instr_b = REGIMM | BGEZAL;  // Branch and link.
         instr_b = SetBranchOffset(pos, target_pos, instr_b);
         // Correct ra register to point to one instruction after jalr from
-        // MacroAssembler::BranchAndLinkLong.
+        // TurboAssembler::BranchAndLinkLong.
         Instr instr_a = DADDIU | ra.code() << kRsShift | ra.code() << kRtShift |
                         kOptimizedBranchAndLinkLongReturnOffset;
 
@@ -1047,7 +1063,7 @@ int Assembler::BranchOffset(Instr instr) {
 // space.  There is no guarantee that the relocated location can be similarly
 // encoded.
 bool Assembler::MustUseReg(RelocInfo::Mode rmode) {
-  return !RelocInfo::IsNoInfo(rmode);
+  return !RelocInfo::IsNone(rmode);
 }
 
 void Assembler::GenInstrRegister(Opcode opcode, Register rs, Register rt,
@@ -1399,8 +1415,7 @@ void Assembler::label_at_put(Label* L, int at_offset) {
   int target_pos;
   if (L->is_bound()) {
     target_pos = L->pos();
-    instr_at_put(at_offset, target_pos + (InstructionStream::kHeaderSize -
-                                          kHeapObjectTag));
+    instr_at_put(at_offset, target_pos + (Code::kHeaderSize - kHeapObjectTag));
   } else {
     if (L->is_linked()) {
       target_pos = L->pos();  // L's link.
@@ -3737,7 +3752,7 @@ void Assembler::GrowBuffer() {
   // Set up new buffer.
   std::unique_ptr<AssemblerBuffer> new_buffer = buffer_->Grow(new_size);
   DCHECK_EQ(new_size, new_buffer->size());
-  uint8_t* new_start = new_buffer->start();
+  byte* new_start = new_buffer->start();
 
   // Copy the data.
   intptr_t pc_delta = new_start - buffer_start_;
@@ -3751,21 +3766,19 @@ void Assembler::GrowBuffer() {
   buffer_ = std::move(new_buffer);
   buffer_start_ = new_start;
   pc_ += pc_delta;
-  pc_for_safepoint_ += pc_delta;
+  last_call_pc_ += pc_delta;
   reloc_info_writer.Reposition(reloc_info_writer.pos() + rc_delta,
                                reloc_info_writer.last_pc() + pc_delta);
 
   // Relocate runtime entries.
-  base::Vector<uint8_t> instructions{buffer_start_,
-                                     static_cast<size_t>(pc_offset())};
-  base::Vector<const uint8_t> reloc_info{reloc_info_writer.pos(), reloc_size};
+  Vector<byte> instructions{buffer_start_, pc_offset()};
+  Vector<const byte> reloc_info{reloc_info_writer.pos(), reloc_size};
   for (RelocIterator it(instructions, reloc_info, 0); !it.done(); it.next()) {
     RelocInfo::Mode rmode = it.rinfo()->rmode();
     if (rmode == RelocInfo::INTERNAL_REFERENCE) {
       RelocateInternalReference(rmode, it.rinfo()->pc(), pc_delta);
     }
   }
-
   DCHECK(!overflow());
 }
 
@@ -3775,14 +3788,22 @@ void Assembler::db(uint8_t data) {
   pc_ += sizeof(uint8_t);
 }
 
-void Assembler::dd(uint32_t data) {
+void Assembler::dd(uint32_t data, RelocInfo::Mode rmode) {
   CheckForEmitInForbiddenSlot();
+  if (!RelocInfo::IsNone(rmode)) {
+    DCHECK(RelocInfo::IsDataEmbeddedObject(rmode));
+    RecordRelocInfo(rmode);
+  }
   *reinterpret_cast<uint32_t*>(pc_) = data;
   pc_ += sizeof(uint32_t);
 }
 
-void Assembler::dq(uint64_t data) {
+void Assembler::dq(uint64_t data, RelocInfo::Mode rmode) {
   CheckForEmitInForbiddenSlot();
+  if (!RelocInfo::IsNone(rmode)) {
+    DCHECK(RelocInfo::IsDataEmbeddedObject(rmode));
+    RecordRelocInfo(rmode);
+  }
   *reinterpret_cast<uint64_t*>(pc_) = data;
   pc_ += sizeof(uint64_t);
 }
@@ -3804,7 +3825,7 @@ void Assembler::dd(Label* label) {
 void Assembler::RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data) {
   if (!ShouldRecordRelocInfo(rmode)) return;
   // We do not try to reuse pool constants.
-  RelocInfo rinfo(reinterpret_cast<Address>(pc_), rmode, data);
+  RelocInfo rinfo(reinterpret_cast<Address>(pc_), rmode, data, Code());
   DCHECK_GE(buffer_space(), kMaxRelocSize);  // Too late to grow buffer here.
   reloc_info_writer.Write(&rinfo);
 }
@@ -3957,6 +3978,25 @@ void Assembler::set_target_value_at(Address pc, uint64_t target,
     FlushInstructionCache(pc, 4 * kInstrSize);
   }
 }
+
+UseScratchRegisterScope::UseScratchRegisterScope(Assembler* assembler)
+    : available_(assembler->GetScratchRegisterList()),
+      old_available_(*available_) {}
+
+UseScratchRegisterScope::~UseScratchRegisterScope() {
+  *available_ = old_available_;
+}
+
+Register UseScratchRegisterScope::Acquire() {
+  DCHECK_NOT_NULL(available_);
+  DCHECK_NE(*available_, 0);
+  int index = static_cast<int>(base::bits::CountTrailingZeros32(*available_));
+  *available_ &= ~(1UL << index);
+
+  return Register::from_code(index);
+}
+
+bool UseScratchRegisterScope::hasAvailable() const { return *available_ != 0; }
 
 LoadStoreLaneParams::LoadStoreLaneParams(MachineRepresentation rep,
                                          uint8_t laneidx) {

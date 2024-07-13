@@ -7,11 +7,10 @@
 
 #include <vector>
 
-#include "src/base/macros.h"
 #include "src/common/globals.h"
 #include "src/debug/debug-frames.h"
-#include "src/debug/debug-interface.h"
 #include "src/debug/debug-scopes.h"
+#include "src/debug/debug.h"
 #include "src/execution/frames.h"
 #include "src/objects/objects.h"
 #include "src/objects/shared-function-info.h"
@@ -24,13 +23,9 @@ class FrameInspector;
 
 class DebugEvaluate : public AllStatic {
  public:
-  static V8_EXPORT_PRIVATE MaybeHandle<Object> Global(
-      Isolate* isolate, Handle<String> source, debug::EvaluateGlobalMode mode,
-      REPLMode repl_mode = REPLMode::kNo);
-
-  static V8_EXPORT_PRIVATE MaybeHandle<Object> Global(
-      Isolate* isolate, Handle<JSFunction> function,
-      debug::EvaluateGlobalMode mode, REPLMode repl_mode = REPLMode::kNo);
+  static MaybeHandle<Object> Global(Isolate* isolate, Handle<String> source,
+                                    debug::EvaluateGlobalMode mode,
+                                    REPLMode repl_mode = REPLMode::kNo);
 
   // Evaluate a piece of JavaScript in the context of a stack frame for
   // debugging.  Things that need special attention are:
@@ -40,11 +35,10 @@ class DebugEvaluate : public AllStatic {
   // The stack frame can be either a JavaScript stack frame or a Wasm
   // stack frame. In the latter case, a special Debug Proxy API is
   // provided to peek into the Wasm state.
-  static V8_EXPORT_PRIVATE MaybeHandle<Object> Local(Isolate* isolate,
-                                                     StackFrameId frame_id,
-                                                     int inlined_jsframe_index,
-                                                     Handle<String> source,
-                                                     bool throw_on_side_effect);
+  static MaybeHandle<Object> Local(Isolate* isolate, StackFrameId frame_id,
+                                   int inlined_jsframe_index,
+                                   Handle<String> source,
+                                   bool throw_on_side_effect);
 
   // This is used for break-at-entry for builtins and API functions.
   // Evaluate a piece of JavaScript in the native context, but with the
@@ -55,7 +49,6 @@ class DebugEvaluate : public AllStatic {
   static DebugInfo::SideEffectState FunctionGetSideEffectState(
       Isolate* isolate, Handle<SharedFunctionInfo> info);
   static void ApplySideEffectChecks(Handle<BytecodeArray> bytecode_array);
-  static bool IsSideEffectFreeIntrinsic(Runtime::FunctionId id);
 
 #ifdef DEBUG
   static void VerifyTransitiveBuiltins(Isolate* isolate);

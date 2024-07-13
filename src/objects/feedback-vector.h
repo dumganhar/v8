@@ -25,19 +25,8 @@ namespace v8 {
 namespace internal {
 
 class IsCompiledScope;
-class FeedbackVectorSpec;
 
-enum class UpdateFeedbackMode {
-  kOptionalFeedback,
-  kGuaranteedFeedback,
-  kNoFeedback,
-};
-
-// Which feedback slots to clear in Clear().
-enum class ClearBehavior {
-  kDefault,
-  kClearAll,  // .. also ForIn, CompareOp, BinaryOp.
-};
+enum class UpdateFeedbackMode { kOptionalFeedback, kGuaranteedFeedback };
 
 enum class FeedbackSlotKind : uint8_t {
   // This kind means that the slot points to the middle of other slot
@@ -47,9 +36,9 @@ enum class FeedbackSlotKind : uint8_t {
 
   // Sloppy kinds come first, for easy language mode testing.
   kStoreGlobalSloppy,
-  kSetNamedSloppy,
-  kSetKeyedSloppy,
-  kLastSloppyKind = kSetKeyedSloppy,
+  kStoreNamedSloppy,
+  kStoreKeyedSloppy,
+  kLastSloppyKind = kStoreKeyedSloppy,
 
   // Strict and language mode unaware kinds.
   kCall,
@@ -59,25 +48,21 @@ enum class FeedbackSlotKind : uint8_t {
   kLoadKeyed,
   kHasKeyed,
   kStoreGlobalStrict,
-  kSetNamedStrict,
-  kDefineNamedOwn,
-  kDefineKeyedOwn,
-  kSetKeyedStrict,
+  kStoreNamedStrict,
+  kStoreOwnNamed,
+  kStoreKeyedStrict,
   kStoreInArrayLiteral,
   kBinaryOp,
   kCompareOp,
-  kDefineKeyedOwnPropertyInLiteral,
+  kStoreDataPropertyInLiteral,
+  kTypeProfile,
   kLiteral,
   kForIn,
   kInstanceOf,
   kCloneObject,
-  kJumpLoop,
 
-  kLast = kJumpLoop  // Always update this if the list above changes.
+  kKindsNumber  // Last value indicating number of kinds.
 };
-
-static constexpr int kFeedbackSlotKindCount =
-    static_cast<int>(FeedbackSlotKind::kLast) + 1;
 
 using MapAndHandler = std::pair<Handle<Map>, MaybeObjectHandle>;
 using MapAndFeedback = std::pair<Handle<Map>, MaybeObjectHandle>;
@@ -108,26 +93,22 @@ inline bool IsStoreGlobalICKind(FeedbackSlotKind kind) {
          kind == FeedbackSlotKind::kStoreGlobalStrict;
 }
 
-inline bool IsSetNamedICKind(FeedbackSlotKind kind) {
-  return kind == FeedbackSlotKind::kSetNamedSloppy ||
-         kind == FeedbackSlotKind::kSetNamedStrict;
+inline bool IsStoreICKind(FeedbackSlotKind kind) {
+  return kind == FeedbackSlotKind::kStoreNamedSloppy ||
+         kind == FeedbackSlotKind::kStoreNamedStrict;
 }
 
-inline bool IsDefineNamedOwnICKind(FeedbackSlotKind kind) {
-  return kind == FeedbackSlotKind::kDefineNamedOwn;
+inline bool IsStoreOwnICKind(FeedbackSlotKind kind) {
+  return kind == FeedbackSlotKind::kStoreOwnNamed;
 }
 
-inline bool IsDefineKeyedOwnICKind(FeedbackSlotKind kind) {
-  return kind == FeedbackSlotKind::kDefineKeyedOwn;
-}
-
-inline bool IsDefineKeyedOwnPropertyInLiteralKind(FeedbackSlotKind kind) {
-  return kind == FeedbackSlotKind::kDefineKeyedOwnPropertyInLiteral;
+inline bool IsStoreDataPropertyInLiteralKind(FeedbackSlotKind kind) {
+  return kind == FeedbackSlotKind::kStoreDataPropertyInLiteral;
 }
 
 inline bool IsKeyedStoreICKind(FeedbackSlotKind kind) {
-  return kind == FeedbackSlotKind::kSetKeyedSloppy ||
-         kind == FeedbackSlotKind::kSetKeyedStrict;
+  return kind == FeedbackSlotKind::kStoreKeyedSloppy ||
+         kind == FeedbackSlotKind::kStoreKeyedStrict;
 }
 
 inline bool IsStoreInArrayLiteralICKind(FeedbackSlotKind kind) {
@@ -138,6 +119,10 @@ inline bool IsGlobalICKind(FeedbackSlotKind kind) {
   return IsLoadGlobalICKind(kind) || IsStoreGlobalICKind(kind);
 }
 
+inline bool IsTypeProfileKind(FeedbackSlotKind kind) {
+  return kind == FeedbackSlotKind::kTypeProfile;
+}
+
 inline bool IsCloneObjectKind(FeedbackSlotKind kind) {
   return kind == FeedbackSlotKind::kCloneObject;
 }
@@ -145,19 +130,18 @@ inline bool IsCloneObjectKind(FeedbackSlotKind kind) {
 inline TypeofMode GetTypeofModeFromSlotKind(FeedbackSlotKind kind) {
   DCHECK(IsLoadGlobalICKind(kind));
   return (kind == FeedbackSlotKind::kLoadGlobalInsideTypeof)
-             ? TypeofMode::kInside
-             : TypeofMode::kNotInside;
+             ? INSIDE_TYPEOF
+             : NOT_INSIDE_TYPEOF;
 }
 
 inline LanguageMode GetLanguageModeFromSlotKind(FeedbackSlotKind kind) {
-  DCHECK(IsSetNamedICKind(kind) || IsDefineNamedOwnICKind(kind) ||
-         IsStoreGlobalICKind(kind) || IsKeyedStoreICKind(kind) ||
-         IsDefineKeyedOwnICKind(kind));
-  static_assert(FeedbackSlotKind::kStoreGlobalSloppy <=
+  DCHECK(IsStoreICKind(kind) || IsStoreOwnICKind(kind) ||
+         IsStoreGlobalICKind(kind) || IsKeyedStoreICKind(kind));
+  STATIC_ASSERT(FeedbackSlotKind::kStoreGlobalSloppy <=
                 FeedbackSlotKind::kLastSloppyKind);
-  static_assert(FeedbackSlotKind::kSetKeyedSloppy <=
+  STATIC_ASSERT(FeedbackSlotKind::kStoreKeyedSloppy <=
                 FeedbackSlotKind::kLastSloppyKind);
-  static_assert(FeedbackSlotKind::kSetNamedSloppy <=
+  STATIC_ASSERT(FeedbackSlotKind::kStoreNamedSloppy <=
                 FeedbackSlotKind::kLastSloppyKind);
   return (kind <= FeedbackSlotKind::kLastSloppyKind) ? LanguageMode::kSloppy
                                                      : LanguageMode::kStrict;
@@ -197,94 +181,70 @@ class ClosureFeedbackCellArray : public FixedArray {
 
 class NexusConfig;
 
-// A FeedbackVector has a fixed header followed by an array of feedback slots,
-// of length determined by the feedback metadata.
+// A FeedbackVector has a fixed header with:
+//  - shared function info (which includes feedback metadata)
+//  - invocation count
+//  - runtime profiler ticks
+//  - optimized code cell (weak cell or Smi marker)
+// followed by an array of feedback slots, of length determined by the feedback
+// metadata.
 class FeedbackVector
     : public TorqueGeneratedFeedbackVector<FeedbackVector, HeapObject> {
  public:
   NEVER_READ_ONLY_SPACE
-  DEFINE_TORQUE_GENERATED_OSR_STATE()
   DEFINE_TORQUE_GENERATED_FEEDBACK_VECTOR_FLAGS()
-  static_assert(TieringState::kLastTieringState <= TieringStateBits::kMax);
+  STATIC_ASSERT(OptimizationMarker::kLastOptimizationMarker <
+                OptimizationMarkerBits::kMax);
+  STATIC_ASSERT(OptimizationTier::kLastOptimizationTier <
+                OptimizationTierBits::kMax);
 
-  static constexpr uint32_t kFlagsMaybeHasTurbofanCode =
-      FeedbackVector::MaybeHasTurbofanCodeBit::kMask;
-  static constexpr uint32_t kFlagsMaybeHasMaglevCode =
-      FeedbackVector::MaybeHasMaglevCodeBit::kMask;
-  static constexpr uint32_t kFlagsHasAnyOptimizedCode =
-      FeedbackVector::MaybeHasMaglevCodeBit::kMask |
-      FeedbackVector::MaybeHasTurbofanCodeBit::kMask;
-  static constexpr uint32_t kFlagsTieringStateIsAnyRequested =
-      kNoneOrInProgressMask << FeedbackVector::TieringStateBits::kShift;
-  static constexpr uint32_t kFlagsLogNextExecution =
-      FeedbackVector::LogNextExecutionBit::kMask;
+  static const bool kFeedbackVectorMaybeOptimizedCodeIsStoreRelease = true;
+  using TorqueGeneratedFeedbackVector<FeedbackVector,
+                                      HeapObject>::maybe_optimized_code;
+  DECL_RELEASE_ACQUIRE_WEAK_ACCESSORS(maybe_optimized_code)
+
+  static constexpr uint32_t kHasCompileOptimizedOrLogFirstExecutionMarker =
+      kNoneOrInOptimizationQueueMask << OptimizationMarkerBits::kShift;
+  static constexpr uint32_t kHasNoTopTierCodeOrCompileOptimizedMarkerMask =
+      kNoneOrMidTierMask << OptimizationTierBits::kShift |
+      kHasCompileOptimizedOrLogFirstExecutionMarker;
+  static constexpr uint32_t kHasOptimizedCodeOrCompileOptimizedMarkerMask =
+      OptimizationTierBits::kMask |
+      kHasCompileOptimizedOrLogFirstExecutionMarker;
 
   inline bool is_empty() const;
 
   inline FeedbackMetadata metadata() const;
-  inline FeedbackMetadata metadata(AcquireLoadTag tag) const;
 
-  // Forward declare the non-atomic accessors.
-  using TorqueGeneratedFeedbackVector::invocation_count;
-  using TorqueGeneratedFeedbackVector::set_invocation_count;
-  DECL_RELAXED_INT32_ACCESSORS(invocation_count)
-  inline void clear_invocation_count(RelaxedStoreTag tag);
+  // Increment profiler ticks, saturating at the maximal value.
+  void SaturatingIncrementProfilerTicks();
 
-  // The [osr_urgency] controls when OSR is attempted, and is incremented as
-  // the function becomes hotter. When the current loop depth is less than the
-  // osr_urgency, JumpLoop calls into runtime to attempt OSR optimization.
-  static constexpr int kMaxOsrUrgency = 6;
-  static_assert(kMaxOsrUrgency <= OsrUrgencyBits::kMax);
-  inline int osr_urgency() const;
-  inline void set_osr_urgency(int urgency);
-  inline void reset_osr_urgency();
-  inline void RequestOsrAtNextOpportunity();
-
-  // Whether this vector may contain cached optimized osr code for *any* slot.
-  // Represented internally as a bit that can be efficiently checked by
-  // generated code. May diverge from the state of the world; the invariant is
-  // that if `maybe_has_optimized_osr_code` is false, no optimized osr code
-  // exists.
-  inline bool maybe_has_optimized_osr_code() const;
-  inline void set_maybe_has_optimized_osr_code(bool value);
-
-  // The `osr_state` contains the osr_urgency and maybe_has_optimized_osr_code.
-  inline void reset_osr_state();
+  inline void clear_invocation_count();
 
   inline Code optimized_code() const;
-  // Whether maybe_optimized_code contains a cached Code object.
   inline bool has_optimized_code() const;
-
-  inline bool log_next_execution() const;
-  inline void set_log_next_execution(bool value = true);
-  // Similar to above, but represented internally as a bit that can be
-  // efficiently checked by generated code. May lag behind the actual state of
-  // the world, thus 'maybe'.
-  inline bool maybe_has_maglev_code() const;
-  inline void set_maybe_has_maglev_code(bool value);
-  inline bool maybe_has_turbofan_code() const;
-  inline void set_maybe_has_turbofan_code(bool value);
-
-  void SetOptimizedCode(Code code);
-  void EvictOptimizedCodeMarkedForDeoptimization(Isolate* isolate,
+  inline bool has_optimization_marker() const;
+  inline OptimizationMarker optimization_marker() const;
+  inline OptimizationTier optimization_tier() const;
+  inline int global_ticks_at_last_runtime_profiler_interrupt() const;
+  inline void set_global_ticks_at_last_runtime_profiler_interrupt(int ticks);
+  void ClearOptimizedCode(FeedbackCell feedback_cell);
+  void EvictOptimizedCodeMarkedForDeoptimization(FeedbackCell feedback_cell,
                                                  SharedFunctionInfo shared,
                                                  const char* reason);
-  void ClearOptimizedCode();
+  static void SetOptimizedCode(Handle<FeedbackVector> vector, Handle<Code> code,
+                               FeedbackCell feedback_cell);
+  void SetOptimizationMarker(OptimizationMarker marker);
+  void ClearOptimizationTier(FeedbackCell feedback_cell);
+  void InitializeOptimizationState();
 
-  // Optimized OSR'd code is cached in JumpLoop feedback vector slots. The
-  // slots either contain a Code object or the ClearedValue.
-  inline base::Optional<Code> GetOptimizedOsrCode(Isolate* isolate,
-                                                  FeedbackSlot slot);
-  void SetOptimizedOsrCode(Isolate* isolate, FeedbackSlot slot, Code code);
+  // Clears the optimization marker in the feedback vector.
+  void ClearOptimizationMarker();
 
-  inline TieringState tiering_state() const;
-  void set_tiering_state(TieringState state);
-  void reset_tiering_state();
-
-  TieringState osr_tiering_state();
-  void set_osr_tiering_state(TieringState marker);
-
-  void reset_flags();
+  // Sets the interrupt budget based on the optimized code available on the
+  // feedback vector. This function expects that the feedback cell contains a
+  // feedback vector.
+  static void SetInterruptBudget(FeedbackCell feedback_cell);
 
   // Conversion from a slot to an integer index to the underlying array.
   static int GetIndex(FeedbackSlot slot) { return slot.ToInt(); }
@@ -311,17 +271,14 @@ class FeedbackVector
 
   // Returns slot kind for given slot.
   V8_EXPORT_PRIVATE FeedbackSlotKind GetKind(FeedbackSlot slot) const;
-  V8_EXPORT_PRIVATE FeedbackSlotKind GetKind(FeedbackSlot slot,
-                                             AcquireLoadTag tag) const;
+
+  FeedbackSlot GetTypeProfileSlot() const;
 
   V8_EXPORT_PRIVATE static Handle<FeedbackVector> New(
       Isolate* isolate, Handle<SharedFunctionInfo> shared,
       Handle<ClosureFeedbackCellArray> closure_feedback_cell_array,
-      Handle<FeedbackCell> parent_feedback_cell,
       IsCompiledScope* is_compiled_scope);
 
-  V8_EXPORT_PRIVATE static Handle<FeedbackVector> NewForTesting(
-      Isolate* isolate, const FeedbackVectorSpec* spec);
   V8_EXPORT_PRIVATE static Handle<FeedbackVector>
   NewWithOneBinarySlotForTesting(Zone* zone, Isolate* isolate);
   V8_EXPORT_PRIVATE static Handle<FeedbackVector>
@@ -335,10 +292,11 @@ class FeedbackVector
   DEFINE_SLOT_KIND_PREDICATE(IsLoadIC)
   DEFINE_SLOT_KIND_PREDICATE(IsLoadGlobalIC)
   DEFINE_SLOT_KIND_PREDICATE(IsKeyedLoadIC)
-  DEFINE_SLOT_KIND_PREDICATE(IsSetNamedIC)
-  DEFINE_SLOT_KIND_PREDICATE(IsDefineNamedOwnIC)
+  DEFINE_SLOT_KIND_PREDICATE(IsStoreIC)
+  DEFINE_SLOT_KIND_PREDICATE(IsStoreOwnIC)
   DEFINE_SLOT_KIND_PREDICATE(IsStoreGlobalIC)
   DEFINE_SLOT_KIND_PREDICATE(IsKeyedStoreIC)
+  DEFINE_SLOT_KIND_PREDICATE(IsTypeProfile)
 #undef DEFINE_SLOT_KIND_PREDICATE
 
   // Returns typeof mode encoded into kind of given slot.
@@ -353,26 +311,16 @@ class FeedbackVector
 
   DECL_PRINTER(FeedbackVector)
 
-  void FeedbackSlotPrint(std::ostream& os, FeedbackSlot slot);
+  void FeedbackSlotPrint(std::ostream& os, FeedbackSlot slot);  // NOLINT
 
   // Clears the vector slots. Return true if feedback has changed.
-  bool ClearSlots(Isolate* isolate) {
-    return ClearSlots(isolate, ClearBehavior::kDefault);
-  }
-  // As above, but clears *all* slots - even those that we usually keep (e.g.:
-  // BinaryOp feedback).
-  bool ClearAllSlotsForTesting(Isolate* isolate) {
-    return ClearSlots(isolate, ClearBehavior::kClearAll);
-  }
+  bool ClearSlots(Isolate* isolate);
 
   // The object that indicates an uninitialized cache.
   static inline Handle<Symbol> UninitializedSentinel(Isolate* isolate);
 
   // The object that indicates a megamorphic state.
   static inline Handle<Symbol> MegamorphicSentinel(Isolate* isolate);
-
-  // The object that indicates a MegaDOM state.
-  static inline Handle<Symbol> MegaDOMSentinel(Isolate* isolate);
 
   // A raw version of the uninitialized sentinel that's safe to read during
   // garbage collection (e.g., for patching the cache).
@@ -390,8 +338,6 @@ class FeedbackVector
   TQ_OBJECT_CONSTRUCTORS(FeedbackVector)
 
  private:
-  bool ClearSlots(Isolate* isolate, ClearBehavior behavior);
-
   static void AddToVectorsForProfilingTools(Isolate* isolate,
                                             Handle<FeedbackVector> vector);
 
@@ -429,6 +375,13 @@ class V8_EXPORT_PRIVATE FeedbackVectorSpec {
     return slot_kinds_.at(slot.ToInt());
   }
 
+  bool HasTypeProfileSlot() const;
+
+  // If used, the TypeProfileSlot is always added as the first slot and its
+  // index is constant. If other slots are added before the TypeProfileSlot,
+  // this number changes.
+  static const int kTypeProfileSlotIndex = 0;
+
   FeedbackSlot AddCallICSlot() { return AddSlot(FeedbackSlotKind::kCall); }
 
   FeedbackSlot AddLoadICSlot() {
@@ -436,7 +389,7 @@ class V8_EXPORT_PRIVATE FeedbackVectorSpec {
   }
 
   FeedbackSlot AddLoadGlobalICSlot(TypeofMode typeof_mode) {
-    return AddSlot(typeof_mode == TypeofMode::kInside
+    return AddSlot(typeof_mode == INSIDE_TYPEOF
                        ? FeedbackSlotKind::kLoadGlobalInsideTypeof
                        : FeedbackSlotKind::kLoadGlobalNotInsideTypeof);
   }
@@ -450,36 +403,30 @@ class V8_EXPORT_PRIVATE FeedbackVectorSpec {
   }
 
   FeedbackSlotKind GetStoreICSlot(LanguageMode language_mode) {
-    static_assert(LanguageModeSize == 2);
-    return is_strict(language_mode) ? FeedbackSlotKind::kSetNamedStrict
-                                    : FeedbackSlotKind::kSetNamedSloppy;
+    STATIC_ASSERT(LanguageModeSize == 2);
+    return is_strict(language_mode) ? FeedbackSlotKind::kStoreNamedStrict
+                                    : FeedbackSlotKind::kStoreNamedSloppy;
   }
 
   FeedbackSlot AddStoreICSlot(LanguageMode language_mode) {
     return AddSlot(GetStoreICSlot(language_mode));
   }
 
-  FeedbackSlot AddDefineNamedOwnICSlot() {
-    return AddSlot(FeedbackSlotKind::kDefineNamedOwn);
-  }
-
-  // Similar to DefinedNamedOwn, but will throw if a private field already
-  // exists.
-  FeedbackSlot AddDefineKeyedOwnICSlot() {
-    return AddSlot(FeedbackSlotKind::kDefineKeyedOwn);
+  FeedbackSlot AddStoreOwnICSlot() {
+    return AddSlot(FeedbackSlotKind::kStoreOwnNamed);
   }
 
   FeedbackSlot AddStoreGlobalICSlot(LanguageMode language_mode) {
-    static_assert(LanguageModeSize == 2);
+    STATIC_ASSERT(LanguageModeSize == 2);
     return AddSlot(is_strict(language_mode)
                        ? FeedbackSlotKind::kStoreGlobalStrict
                        : FeedbackSlotKind::kStoreGlobalSloppy);
   }
 
   FeedbackSlotKind GetKeyedStoreICSlotKind(LanguageMode language_mode) {
-    static_assert(LanguageModeSize == 2);
-    return is_strict(language_mode) ? FeedbackSlotKind::kSetKeyedStrict
-                                    : FeedbackSlotKind::kSetKeyedSloppy;
+    STATIC_ASSERT(LanguageModeSize == 2);
+    return is_strict(language_mode) ? FeedbackSlotKind::kStoreKeyedStrict
+                                    : FeedbackSlotKind::kStoreKeyedSloppy;
   }
 
   FeedbackSlot AddKeyedStoreICSlot(LanguageMode language_mode) {
@@ -506,16 +453,14 @@ class V8_EXPORT_PRIVATE FeedbackVectorSpec {
 
   FeedbackSlot AddLiteralSlot() { return AddSlot(FeedbackSlotKind::kLiteral); }
 
-  FeedbackSlot AddDefineKeyedOwnPropertyInLiteralICSlot() {
-    return AddSlot(FeedbackSlotKind::kDefineKeyedOwnPropertyInLiteral);
+  FeedbackSlot AddStoreDataPropertyInLiteralICSlot() {
+    return AddSlot(FeedbackSlotKind::kStoreDataPropertyInLiteral);
   }
+
+  FeedbackSlot AddTypeProfileSlot();
 
   FeedbackSlot AddCloneObjectSlot() {
     return AddSlot(FeedbackSlotKind::kCloneObject);
-  }
-
-  FeedbackSlot AddJumpLoopSlot() {
-    return AddSlot(FeedbackSlotKind::kJumpLoop);
   }
 
 #ifdef OBJECT_PRINT
@@ -530,7 +475,7 @@ class V8_EXPORT_PRIVATE FeedbackVectorSpec {
 
   void append(FeedbackSlotKind kind) { slot_kinds_.push_back(kind); }
 
-  static_assert(sizeof(FeedbackSlotKind) == sizeof(uint8_t));
+  STATIC_ASSERT(sizeof(FeedbackSlotKind) == sizeof(uint8_t));
   ZoneVector<FeedbackSlotKind> slot_kinds_;
   int create_closure_slot_count_ = 0;
 
@@ -574,7 +519,7 @@ class FeedbackMetadata : public HeapObject {
   DECL_INT32_ACCESSORS(create_closure_slot_count)
 
   // Get slot_count using an acquire load.
-  inline int32_t slot_count(AcquireLoadTag) const;
+  inline int32_t synchronized_slot_count() const;
 
   // Returns number of feedback vector elements used by given slot kind.
   static inline int GetSlotSize(FeedbackSlotKind kind);
@@ -587,14 +532,15 @@ class FeedbackMetadata : public HeapObject {
   V8_EXPORT_PRIVATE FeedbackSlotKind GetKind(FeedbackSlot slot) const;
 
   // If {spec} is null, then it is considered empty.
-  template <typename IsolateT>
+  template <typename LocalIsolate>
   V8_EXPORT_PRIVATE static Handle<FeedbackMetadata> New(
-      IsolateT* isolate, const FeedbackVectorSpec* spec = nullptr);
+      LocalIsolate* isolate, const FeedbackVectorSpec* spec = nullptr);
 
   DECL_PRINTER(FeedbackMetadata)
   DECL_VERIFIER(FeedbackMetadata)
 
   static const char* Kind2String(FeedbackSlotKind kind);
+  bool HasTypeProfileSlot() const;
 
   // Garbage collection support.
   // This includes any necessary padding at the end of the object for pointer
@@ -628,7 +574,8 @@ class FeedbackMetadata : public HeapObject {
   inline int length() const;
 
   static const int kFeedbackSlotKindBits = 5;
-  static_assert(kFeedbackSlotKindCount <= (1 << kFeedbackSlotKindBits));
+  STATIC_ASSERT(static_cast<int>(FeedbackSlotKind::kKindsNumber) <
+                (1 << kFeedbackSlotKindBits));
 
   void SetKind(FeedbackSlot slot, FeedbackSlotKind kind);
 
@@ -641,10 +588,11 @@ class FeedbackMetadata : public HeapObject {
 
 // Verify that an empty hash field looks like a tagged object, but can't
 // possibly be confused with a pointer.
-static_assert((Name::kEmptyHashField & kHeapObjectTag) == kHeapObjectTag);
-static_assert(Name::kEmptyHashField == 0x3);
+// NOLINTNEXTLINE(runtime/references) (false positive)
+STATIC_ASSERT((Name::kEmptyHashField & kHeapObjectTag) == kHeapObjectTag);
+STATIC_ASSERT(Name::kEmptyHashField == 0x3);
 // Verify that a set hash field will not look like a tagged object.
-static_assert(Name::kHashNotComputedMask == kHeapObjectTag);
+STATIC_ASSERT(Name::kHashNotComputedMask == kHeapObjectTag);
 
 class FeedbackMetadataIterator {
  public:
@@ -653,7 +601,7 @@ class FeedbackMetadataIterator {
         next_slot_(FeedbackSlot(0)),
         slot_kind_(FeedbackSlotKind::kInvalid) {}
 
-  explicit FeedbackMetadataIterator(Tagged<FeedbackMetadata> metadata)
+  explicit FeedbackMetadataIterator(FeedbackMetadata metadata)
       : metadata_(metadata),
         next_slot_(FeedbackSlot(0)),
         slot_kind_(FeedbackSlotKind::kInvalid) {}
@@ -665,6 +613,7 @@ class FeedbackMetadataIterator {
   // Returns slot kind of the last slot returned by Next().
   FeedbackSlotKind kind() const {
     DCHECK_NE(FeedbackSlotKind::kInvalid, slot_kind_);
+    DCHECK_NE(FeedbackSlotKind::kKindsNumber, slot_kind_);
     return slot_kind_;
   }
 
@@ -672,7 +621,7 @@ class FeedbackMetadataIterator {
   inline int entry_size() const;
 
  private:
-  Tagged<FeedbackMetadata> metadata() const {
+  FeedbackMetadata metadata() const {
     return !metadata_handle_.is_null() ? *metadata_handle_ : metadata_;
   }
 
@@ -680,7 +629,7 @@ class FeedbackMetadataIterator {
   // to have a single iterator implementation for both "handlified" and raw
   // pointer use cases.
   Handle<FeedbackMetadata> metadata_handle_;
-  Tagged<FeedbackMetadata> metadata_;
+  FeedbackMetadata metadata_;
   FeedbackSlot cur_slot_;
   FeedbackSlot next_slot_;
   FeedbackSlotKind slot_kind_;
@@ -763,7 +712,7 @@ class V8_EXPORT_PRIVATE FeedbackNexus final {
     DCHECK(vector_.is_null());
     return vector_handle_;
   }
-  Tagged<FeedbackVector> vector() const {
+  FeedbackVector vector() const {
     return vector_handle_.is_null() ? vector_ : *vector_handle_;
   }
 
@@ -771,19 +720,15 @@ class V8_EXPORT_PRIVATE FeedbackNexus final {
   FeedbackSlotKind kind() const { return kind_; }
 
   inline LanguageMode GetLanguageMode() const {
-    return vector()->GetLanguageMode(slot());
+    return vector().GetLanguageMode(slot());
   }
 
   InlineCacheState ic_state() const;
-  bool IsUninitialized() const {
-    return ic_state() == InlineCacheState::UNINITIALIZED;
-  }
-  bool IsMegamorphic() const {
-    return ic_state() == InlineCacheState::MEGAMORPHIC;
-  }
-  bool IsGeneric() const { return ic_state() == InlineCacheState::GENERIC; }
+  bool IsUninitialized() const { return ic_state() == UNINITIALIZED; }
+  bool IsMegamorphic() const { return ic_state() == MEGAMORPHIC; }
+  bool IsGeneric() const { return ic_state() == GENERIC; }
 
-  void Print(std::ostream& os);
+  void Print(std::ostream& os);  // NOLINT
 
   // For map-based ICs (load, keyed-load, store, keyed-store).
   Map GetFirstMap() const;
@@ -805,11 +750,11 @@ class V8_EXPORT_PRIVATE FeedbackNexus final {
 
   bool IsCleared() const {
     InlineCacheState state = ic_state();
-    return !v8_flags.use_ic || state == InlineCacheState::UNINITIALIZED;
+    return !FLAG_use_ic || state == UNINITIALIZED;
   }
 
   // Clear() returns true if the state of the underlying vector was changed.
-  bool Clear(ClearBehavior behavior);
+  bool Clear();
   void ConfigureUninitialized();
   // ConfigureMegamorphic() returns true if the state of the underlying vector
   // was changed. Extra feedback is cleared if the 0 parameter version is used.
@@ -827,9 +772,6 @@ class V8_EXPORT_PRIVATE FeedbackNexus final {
 
   void ConfigurePolymorphic(
       Handle<Name> name, std::vector<MapAndHandler> const& maps_and_handlers);
-
-  void ConfigureMegaDOM(const MaybeObjectHandle& handler);
-  MaybeObjectHandle ExtractMegaDOMHandler();
 
   BinaryOperationHint GetBinaryOperationFeedback() const;
   CompareOperationHint GetCompareOperationFeedback() const;
@@ -849,15 +791,13 @@ class V8_EXPORT_PRIVATE FeedbackNexus final {
   int GetCallCount();
   void SetSpeculationMode(SpeculationMode mode);
   SpeculationMode GetSpeculationMode();
-  CallFeedbackContent GetCallFeedbackContent();
 
   // Compute the call frequency based on the call count and the invocation
   // count (taken from the type feedback vector).
   float ComputeCallFrequency();
 
   using SpeculationModeField = base::BitField<SpeculationMode, 0, 1>;
-  using CallFeedbackContentField = base::BitField<CallFeedbackContent, 1, 1>;
-  using CallCountField = base::BitField<uint32_t, 2, 30>;
+  using CallCountField = base::BitField<uint32_t, 1, 31>;
 
   // For InstanceOf ICs.
   MaybeHandle<JSObject> GetConstructorFeedback() const;
@@ -883,7 +823,18 @@ class V8_EXPORT_PRIVATE FeedbackNexus final {
 #undef LEXICAL_MODE_BIT_FIELDS
 
   // Make sure we don't overflow the smi.
-  static_assert(LEXICAL_MODE_BIT_FIELDS_Ranges::kBitsCount <= kSmiValueSize);
+  STATIC_ASSERT(LEXICAL_MODE_BIT_FIELDS_Ranges::kBitsCount <= kSmiValueSize);
+
+  // For TypeProfile feedback vector slots.
+  // ResetTypeProfile will always reset type profile information.
+  void ResetTypeProfile();
+
+  // Add a type to the list of types for source position <position>.
+  void Collect(Handle<String> type, int position);
+  JSObject GetTypeProfile() const;
+
+  std::vector<int> GetSourcePositions() const;
+  std::vector<Handle<String>> GetTypesForSourcePositions(uint32_t pos) const;
 
  private:
   template <typename FeedbackType>
@@ -896,7 +847,6 @@ class V8_EXPORT_PRIVATE FeedbackNexus final {
 
   inline MaybeObject UninitializedSentinel() const;
   inline MaybeObject MegamorphicSentinel() const;
-  inline MaybeObject MegaDOMSentinel() const;
 
   // Create an array. The caller must install it in a feedback vector slot.
   Handle<WeakFixedArray> CreateArrayOfSize(int length);
@@ -910,7 +860,7 @@ class V8_EXPORT_PRIVATE FeedbackNexus final {
   // you have a handle to the vector that is better because more operations can
   // be done, like allocation.
   Handle<FeedbackVector> vector_handle_;
-  Tagged<FeedbackVector> vector_;
+  FeedbackVector vector_;
   FeedbackSlot slot_;
   FeedbackSlotKind kind_;
   // When using the background-thread configuration, a cache is used to

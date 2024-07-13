@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors
+# Copyright 2014 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,6 +8,7 @@ Run with:
   python gn_run_binary.py <binary_name> [args ...]
 """
 
+from __future__ import print_function
 
 import os
 import subprocess

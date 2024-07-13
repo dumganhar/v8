@@ -1,12 +1,11 @@
-#!/usr/bin/env vpython3
+#!/usr/bin/env vpython
 #
-# Copyright 2018 The Chromium Authors
+# Copyright 2018 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import argparse
 import collections
-import functools
 import logging
 import re
 import subprocess
@@ -67,9 +66,7 @@ DOT_NOTATION_MAP = {
     'double': 'D'
 }
 
-
-@functools.total_ordering
-class Method:
+class Method(object):
   def __init__(self, name, class_name, param_types=None, return_type=None):
     self.name = name
     self.class_name = class_name
@@ -84,23 +81,16 @@ class Method:
     return 'Method<{}->{}({}){}>'.format(self.class_name, self.name,
         self.param_types or '', self.return_type or '')
 
-  @staticmethod
-  def serialize(method):
-    return (method.class_name, method.name, method.param_types,
-            method.return_type)
-
-  def __eq__(self, other):
-    return self.serialize(self) == self.serialize(other)
-
-  def __lt__(self, other):
-    return self.serialize(self) < self.serialize(other)
+  def __cmp__(self, other):
+    return cmp((self.class_name, self.name, self.param_types, self.return_type),
+        (other.class_name, other.name, other.param_types, other.return_type))
 
   def __hash__(self):
     # only hash name and class_name since other fields may not be set yet.
     return hash((self.name, self.class_name))
 
 
-class Class:
+class Class(object):
   def __init__(self, name):
     self.name = name
     self._methods = []
@@ -159,13 +149,13 @@ class Class:
         logging.warning('ambigous methods in dex %s at lines %s in class "%s"',
             found_methods, hint_lines, self.name)
       return found_methods
-    logging.warning(
-        'No method named "%s" in class "%s" is '
-        'mapped to lines %s', method_name, self.name, hint_lines)
-    return None
+    else:
+      logging.warning('No method named "%s" in class "%s" is '
+                      'mapped to lines %s', method_name, self.name, hint_lines)
+      return None
 
 
-class Profile:
+class Profile(object):
   def __init__(self):
     # {Method: set(char)}
     self._methods = collections.defaultdict(set)
@@ -188,7 +178,7 @@ class Profile:
         output_profile.write(line)
 
 
-class ProguardMapping:
+class ProguardMapping(object):
   def __init__(self):
     # {Method: set(Method)}
     self._method_mapping = collections.defaultdict(set)
@@ -224,8 +214,7 @@ class ProguardMapping:
 
 class MalformedLineException(Exception):
   def __init__(self, message, line_number):
-    super().__init__(message)
-    self.message = message
+    super(MalformedLineException, self).__init__(message)
     self.line_number = line_number
 
   def __str__(self):
@@ -241,8 +230,7 @@ class MalformedProfileException(MalformedLineException):
 
 
 def _RunDexDump(dexdump_path, dex_file_path):
-  return subprocess.check_output([dexdump_path,
-                                  dex_file_path]).decode('utf-8').splitlines()
+  return subprocess.check_output([dexdump_path, dex_file_path]).splitlines()
 
 
 def _ReadFile(file_path):

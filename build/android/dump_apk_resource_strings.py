@@ -1,11 +1,12 @@
-#!/usr/bin/env vpython3
+#!/usr/bin/env vpython
 # encoding: utf-8
-# Copyright 2019 The Chromium Authors
+# Copyright 2019 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 """A script to parse and dump localized strings in resource.arsc files."""
 
+from __future__ import print_function
 
 import argparse
 import collections
@@ -91,7 +92,7 @@ def AutoIndentStringList(lines, indentation=2):
 # pylint: disable=line-too-long
 
 # NOTE: aapt dump will quote the following characters only: \n, \ and "
-# see https://cs.android.com/search?q=f:ResourceTypes.cpp
+# see https://android.googlesource.com/platform/frameworks/base/+/master/libs/androidfw/ResourceTypes.cpp#7270
 
 # pylint: enable=line-too-long
 
@@ -121,7 +122,7 @@ def UnquoteString(s):
     while pos + count < size and s[pos + count] == '\\':
       count += 1
 
-    result += '\\' * (count // 2)
+    result += '\\' * (count / 2)
     start = pos + count
     if count & 1:
       if start < size:
@@ -184,7 +185,7 @@ def ReadStringMapFromRTxt(r_txt_path):
   return result
 
 
-class ResourceStringValues:
+class ResourceStringValues(object):
   """Models all possible values for a named string."""
 
   def __init__(self):
@@ -218,8 +219,8 @@ class ResourceStringValues:
 
   def ToStringList(self, res_id):
     """Convert entry to string list for human-friendly output."""
-    values = sorted([(str(config), value)
-                     for config, value in self.res_values.items()])
+    values = sorted(
+        [(str(config), value) for config, value in self.res_values.iteritems()])
     if res_id is None:
       # res_id will be None when the resource ID should not be part
       # of the output.
@@ -235,7 +236,7 @@ class ResourceStringValues:
     return result
 
 
-class ResourceStringMap:
+class ResourceStringMap(object):
   """Convenience class to hold the set of all localized strings in a table.
 
   Usage is the following:
@@ -255,7 +256,7 @@ class ResourceStringMap:
 
   def RemapResourceNames(self, id_name_map):
     """Rename all entries according to a given {res_id -> res_name} map."""
-    for res_id, res_name in id_name_map.items():
+    for res_id, res_name in id_name_map.iteritems():
       if res_id in self._res_map:
         self._res_map[res_id].res_name = res_name
 
@@ -277,10 +278,15 @@ class ResourceStringMap:
     result = ['Resource strings (count=%d) {' % len(self._res_map)]
     res_map = self._res_map
 
-    # Compare two (res_id, values) tuples by resource name first, then resource
-    # ID.
-    for res_id, _ in sorted(res_map.items(),
-                            key=lambda x: (x[1].res_name, x[0])):
+    # A small function to compare two (res_id, values) tuples
+    # by resource name first, then resource ID.
+    def cmp_id_name(a, b):
+      result = cmp(a[1].res_name, b[1].res_name)
+      if result == 0:
+        result = cmp(a[0], b[0])
+      return result
+
+    for res_id, _ in sorted(res_map.iteritems(), cmp=cmp_id_name):
       result += res_map[res_id].ToStringList(None if omit_ids else res_id)
     result.append('}  # Resource strings')
     return result
@@ -380,7 +386,7 @@ assert _RE_BUNDLE_STRING_DEFAULT_VALUE.match(
 _RE_BUNDLE_STRING_LOCALIZED_VALUE = re.compile(
     r'^\s+locale: "([0-9a-zA-Z-]+)" - \[STR\] "(.*)"$')
 assert _RE_BUNDLE_STRING_LOCALIZED_VALUE.match(
-    '        locale: "ar" - [STR] "گزینه\u200cهای بیشتر"')
+    u'        locale: "ar" - [STR] "گزینه\u200cهای بیشتر"'.encode('utf-8'))
 
 
 def ParseBundleResources(bundle_tool_jar_path, bundle_path):
@@ -531,15 +537,11 @@ def ParseApkResources(aapt_path, apk_path):
 
   res_map = ResourceStringMap()
   current_locale = None
-  current_resource_id = -1  # represents undefined.
+  current_resource_id = None
   current_resource_name = None
   need_value = False
   while True:
-    try:
-      line = p.stdout.readline().rstrip().decode('utf8')
-    except UnicodeDecodeError:
-      continue
-
+    line = p.stdout.readline().rstrip()
     if not line:
       break
     m = _RE_AAPT_CONFIG.match(line)

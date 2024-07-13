@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors
+// Copyright 2014 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,7 +25,6 @@ class UniquePtr;
 class Value;
 class WeakMember;
 class TraceWrapperV8Reference;
-class ArrayEdge;
 
 // Bare-bones visitor.
 class EdgeVisitor {
@@ -42,7 +41,6 @@ class EdgeVisitor {
   virtual void VisitCollection(Collection*) {}
   virtual void VisitIterator(Iterator*) {}
   virtual void VisitTraceWrapperV8Reference(TraceWrapperV8Reference*) {}
-  virtual void VisitArrayEdge(ArrayEdge*) {}
 };
 
 // Recursive edge visitor. The traversed path is accessible in context.
@@ -60,7 +58,6 @@ class RecursiveEdgeVisitor : public EdgeVisitor {
   void VisitCollection(Collection*) override;
   void VisitIterator(Iterator*) override;
   void VisitTraceWrapperV8Reference(TraceWrapperV8Reference*) override;
-  void VisitArrayEdge(ArrayEdge*) override;
 
  protected:
   typedef std::deque<Edge*> Context;
@@ -84,7 +81,6 @@ class RecursiveEdgeVisitor : public EdgeVisitor {
   virtual void AtCrossThreadPersistent(CrossThreadPersistent*);
   virtual void AtCollection(Collection*);
   virtual void AtIterator(Iterator*);
-  virtual void AtArrayEdge(ArrayEdge*);
 
  private:
   Context context_;
@@ -127,18 +123,6 @@ class Value : public Edge {
 
  private:
   RecordInfo* value_;
-};
-
-class ArrayEdge : public Edge {
- public:
-  explicit ArrayEdge(Edge* value) : value_(value){};
-  LivenessKind Kind() override { return kStrong; }
-  bool NeedsFinalization() override { return false; }
-  void Accept(EdgeVisitor* visitor) override { visitor->VisitArrayEdge(this); }
-  Edge* element() { return value_; }
-
- private:
-  Edge* value_;
 };
 
 // Shared base for smart-pointer edges.
@@ -232,7 +216,7 @@ class Persistent : public PtrEdge {
   LivenessKind Kind() override { return kRoot; }
   bool NeedsFinalization() override { return true; }
   TracingStatus NeedsTracing(NeedsTracingOption) override {
-    return TracingStatus::Illegal();
+    return TracingStatus::Unneeded();
   }
   void Accept(EdgeVisitor* visitor) override { visitor->VisitPersistent(this); }
 };
@@ -275,7 +259,6 @@ class Collection : public Edge {
     }
   }
   bool IsCollection() override { return true; }
-  bool IsSTDCollection();
   LivenessKind Kind() override { return kStrong; }
   bool on_heap() { return on_heap_; }
   Members& members() { return members_; }
@@ -288,12 +271,6 @@ class Collection : public Edge {
   TracingStatus NeedsTracing(NeedsTracingOption) override {
     if (on_heap_)
       return TracingStatus::Needed();
-
-    // This will be handled by matchers.
-    if (IsSTDCollection()) {
-      return TracingStatus::Unknown();
-    }
-
     // For off-heap collections, determine tracing status of members.
     TracingStatus status = TracingStatus::Unneeded();
     for (Members::iterator it = members_.begin(); it != members_.end(); ++it) {
@@ -312,7 +289,8 @@ class Collection : public Edge {
 // An iterator edge is a direct edge to some iterator type.
 class Iterator : public Edge {
  public:
-  Iterator(RecordInfo* info, bool on_heap) : info_(info), on_heap_(on_heap) {}
+  Iterator(RecordInfo* info, bool on_heap, bool is_unsafe)
+      : info_(info), on_heap_(on_heap), is_unsafe_(is_unsafe) {}
   ~Iterator() {}
 
   void Accept(EdgeVisitor* visitor) override { visitor->VisitIterator(this); }
@@ -320,17 +298,18 @@ class Iterator : public Edge {
   bool NeedsFinalization() override { return false; }
   TracingStatus NeedsTracing(NeedsTracingOption) override {
     if (on_heap_)
-      return TracingStatus::Illegal();
+      return TracingStatus::Needed();
     return TracingStatus::Unneeded();
   }
 
   RecordInfo* info() const { return info_; }
 
-  bool on_heap() const { return on_heap_; }
+  bool IsUnsafe() const { return is_unsafe_; }
 
  private:
   RecordInfo* info_;
   bool on_heap_;
+  bool is_unsafe_;
 };
 
 #endif  // TOOLS_BLINK_GC_PLUGIN_EDGE_H_

@@ -45,7 +45,7 @@ void SpillPlacer::Add(TopLevelLiveRange* range) {
   //   increasing the code size for no benefit.
   if (range->GetSpillMoveInsertionLocations(data()) == nullptr ||
       range->spilled() || top_start_block->IsDeferred() ||
-      (!v8_flags.stress_turbo_late_spilling && !range->is_loop_phi())) {
+      (!FLAG_stress_turbo_late_spilling && !range->is_loop_phi())) {
     range->CommitSpillMoves(data(), spill_operand);
     return;
   }
@@ -86,7 +86,8 @@ void SpillPlacer::Add(TopLevelLiveRange* range) {
       }
     } else {
       // Add every block that contains a use which requires the on-stack value.
-      for (const UsePosition* pos : child->positions()) {
+      for (const UsePosition* pos = child->first_pos(); pos != nullptr;
+           pos = pos->next()) {
         if (pos->type() != UsePositionType::kRequiresSlot) continue;
         InstructionBlock* block =
             code->GetInstructionBlock(pos->pos().ToInstructionIndex());
@@ -173,7 +174,7 @@ class SpillPlacer::Entry {
 
   template <State state>
   uint64_t GetValuesInState() const {
-    static_assert(state < 8);
+    STATIC_ASSERT(state < 8);
     return ((state & 1) ? first_bit_ : ~first_bit_) &
            ((state & 2) ? second_bit_ : ~second_bit_) &
            ((state & 4) ? third_bit_ : ~third_bit_);
@@ -181,7 +182,7 @@ class SpillPlacer::Entry {
 
   template <State state>
   void UpdateValuesToState(uint64_t mask) {
-    static_assert(state < 8);
+    STATIC_ASSERT(state < 8);
     first_bit_ =
         Entry::UpdateBitDataWithMask<(state & 1) != 0>(first_bit_, mask);
     second_bit_ =

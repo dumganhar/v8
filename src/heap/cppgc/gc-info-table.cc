@@ -13,7 +13,6 @@
 #include "src/base/bits.h"
 #include "src/base/lazy-instance.h"
 #include "src/base/page-allocator.h"
-#include "src/heap/cppgc/platform.h"
 
 namespace cppgc {
 namespace internal {
@@ -30,46 +29,51 @@ static_assert(v8::base::bits::IsPowerOfTwo(kEntrySize),
               "GCInfoTable entries size must be power of "
               "two");
 
+PageAllocator* GetAllocator(PageAllocator* page_allocator) {
+  if (!page_allocator) {
+    static v8::base::LeakyObject<v8::base::PageAllocator>
+        default_page_allocator;
+    page_allocator = default_page_allocator.get();
+  }
+  // TODO(chromium:1056170): Wrap page_allocator into LsanPageAllocator when
+  // running with LEAK_SANITIZER.
+  return page_allocator;
+}
+
 }  // namespace
 
 GCInfoTable* GlobalGCInfoTable::global_table_ = nullptr;
-
 constexpr GCInfoIndex GCInfoTable::kMaxIndex;
 constexpr GCInfoIndex GCInfoTable::kMinIndex;
 constexpr GCInfoIndex GCInfoTable::kInitialWantedLimit;
 
 // static
-void GlobalGCInfoTable::Initialize(PageAllocator& page_allocator) {
-  static v8::base::LeakyObject<GCInfoTable> table(page_allocator,
-                                                  GetGlobalOOMHandler());
+void GlobalGCInfoTable::Initialize(PageAllocator* page_allocator) {
+  static v8::base::LeakyObject<GCInfoTable> table(GetAllocator(page_allocator));
   if (!global_table_) {
     global_table_ = table.get();
   } else {
-    CHECK_EQ(&page_allocator, &global_table_->allocator());
+    CHECK_EQ(page_allocator, global_table_->allocator());
   }
 }
 
-GCInfoTable::GCInfoTable(PageAllocator& page_allocator,
-                         FatalOutOfMemoryHandler& oom_handler)
+GCInfoTable::GCInfoTable(PageAllocator* page_allocator)
     : page_allocator_(page_allocator),
-      oom_handler_(oom_handler),
-      table_(static_cast<decltype(table_)>(page_allocator_.AllocatePages(
-          nullptr, MaxTableSize(), page_allocator_.AllocatePageSize(),
+      table_(static_cast<decltype(table_)>(page_allocator_->AllocatePages(
+          nullptr, MaxTableSize(), page_allocator_->AllocatePageSize(),
           PageAllocator::kNoAccess))),
       read_only_table_end_(reinterpret_cast<uint8_t*>(table_)) {
-  if (!table_) {
-    oom_handler_("Oilpan: GCInfoTable initial reservation.");
-  }
+  CHECK(table_);
   Resize();
 }
 
 GCInfoTable::~GCInfoTable() {
-  page_allocator_.ReleasePages(const_cast<GCInfo*>(table_), MaxTableSize(), 0);
+  page_allocator_->ReleasePages(const_cast<GCInfo*>(table_), MaxTableSize(), 0);
 }
 
 size_t GCInfoTable::MaxTableSize() const {
   return RoundUp(GCInfoTable::kMaxIndex * kEntrySize,
-                 page_allocator_.AllocatePageSize());
+                 page_allocator_->AllocatePageSize());
 }
 
 GCInfoIndex GCInfoTable::InitialTableLimit() const {
@@ -77,7 +81,7 @@ GCInfoIndex GCInfoTable::InitialTableLimit() const {
   // of memory wanted and OS page size.
   constexpr size_t memory_wanted = kInitialWantedLimit * kEntrySize;
   const size_t initial_limit =
-      RoundUp(memory_wanted, page_allocator_.AllocatePageSize()) / kEntrySize;
+      RoundUp(memory_wanted, page_allocator_->AllocatePageSize()) / kEntrySize;
   CHECK_GT(std::numeric_limits<GCInfoIndex>::max(), initial_limit);
   return static_cast<GCInfoIndex>(
       std::min(static_cast<size_t>(kMaxIndex), initial_limit));
@@ -89,23 +93,20 @@ void GCInfoTable::Resize() {
   const size_t old_committed_size = limit_ * kEntrySize;
   const size_t new_committed_size = new_limit * kEntrySize;
   CHECK(table_);
-  CHECK_EQ(0u, new_committed_size % page_allocator_.AllocatePageSize());
+  CHECK_EQ(0u, new_committed_size % page_allocator_->AllocatePageSize());
   CHECK_GE(MaxTableSize(), new_committed_size);
   // Recommit new area as read/write.
   uint8_t* current_table_end =
       reinterpret_cast<uint8_t*>(table_) + old_committed_size;
   const size_t table_size_delta = new_committed_size - old_committed_size;
-  if (!page_allocator_.SetPermissions(current_table_end, table_size_delta,
-                                      PageAllocator::kReadWrite)) {
-    oom_handler_("Oilpan: GCInfoTable resize.");
-  }
-
+  CHECK(page_allocator_->SetPermissions(current_table_end, table_size_delta,
+                                        PageAllocator::kReadWrite));
   // Recommit old area as read-only.
   if (read_only_table_end_ != current_table_end) {
     DCHECK_GT(current_table_end, read_only_table_end_);
     const size_t read_only_delta = current_table_end - read_only_table_end_;
-    CHECK(page_allocator_.SetPermissions(read_only_table_end_, read_only_delta,
-                                         PageAllocator::kRead));
+    CHECK(page_allocator_->SetPermissions(read_only_table_end_, read_only_delta,
+                                          PageAllocator::kRead));
     read_only_table_end_ += read_only_delta;
   }
 
@@ -132,7 +133,7 @@ GCInfoIndex GCInfoTable::RegisterNewGCInfo(
 
   // Check the registered index again after taking the lock as some other
   // thread may have registered the info at the same time.
-  const GCInfoIndex index = registered_index.load(std::memory_order_relaxed);
+  GCInfoIndex index = registered_index.load(std::memory_order_relaxed);
   if (index) {
     return index;
   }
@@ -141,7 +142,7 @@ GCInfoIndex GCInfoTable::RegisterNewGCInfo(
     Resize();
   }
 
-  const GCInfoIndex new_index = current_index_++;
+  GCInfoIndex new_index = current_index_++;
   CHECK_LT(new_index, GCInfoTable::kMaxIndex);
   table_[new_index] = info;
   registered_index.store(new_index, std::memory_order_release);

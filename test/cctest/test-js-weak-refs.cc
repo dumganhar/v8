@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "src/execution/isolate.h"
+#include "src/execution/microtask-queue.h"
 #include "src/handles/handles-inl.h"
 #include "src/heap/factory-inl.h"
 #include "src/heap/heap-inl.h"
@@ -30,14 +31,6 @@ Handle<JSFinalizationRegistry> ConstructJSFinalizationRegistry(
       JSObject::New(finalization_registry_fun, finalization_registry_fun,
                     Handle<AllocationSite>::null())
           .ToHandleChecked());
-
-  // JSObject::New filled all of the internal fields with undefined. Some of
-  // them have more restrictive types, so set those now.
-  finalization_registry->set_native_context(*isolate->native_context());
-  finalization_registry->set_cleanup(
-      isolate->native_context()->empty_function());
-  finalization_registry->set_flags(0);
-
 #ifdef VERIFY_HEAP
   finalization_registry->JSFinalizationRegistryVerify(isolate);
 #endif  // VERIFY_HEAP
@@ -216,6 +209,7 @@ Handle<JSWeakRef> MakeWeakRefAndKeepDuringJob(Isolate* isolate) {
 }  // namespace
 
 TEST(TestRegister) {
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -253,6 +247,7 @@ TEST(TestRegister) {
 }
 
 TEST(TestRegisterWithKey) {
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -305,6 +300,7 @@ TEST(TestRegisterWithKey) {
 }
 
 TEST(TestWeakCellNullify1) {
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -339,6 +335,7 @@ TEST(TestWeakCellNullify1) {
 }
 
 TEST(TestWeakCellNullify2) {
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -372,6 +369,7 @@ TEST(TestWeakCellNullify2) {
 }
 
 TEST(TestJSFinalizationRegistryPopClearedCellHoldings1) {
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -427,6 +425,7 @@ TEST(TestJSFinalizationRegistryPopClearedCellHoldings1) {
 TEST(TestJSFinalizationRegistryPopClearedCellHoldings2) {
   // Test that when all WeakCells for a key are popped, the key is removed from
   // the key map.
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -477,6 +476,7 @@ TEST(TestJSFinalizationRegistryPopClearedCellHoldings2) {
 }
 
 TEST(TestUnregisterActiveCells) {
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -529,6 +529,7 @@ TEST(TestUnregisterActiveCells) {
 }
 
 TEST(TestUnregisterActiveAndClearedCells) {
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -584,6 +585,7 @@ TEST(TestUnregisterActiveAndClearedCells) {
 }
 
 TEST(TestWeakCellUnregisterTwice) {
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -631,6 +633,7 @@ TEST(TestWeakCellUnregisterTwice) {
 }
 
 TEST(TestWeakCellUnregisterPopped) {
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -671,6 +674,7 @@ TEST(TestWeakCellUnregisterPopped) {
 }
 
 TEST(TestWeakCellUnregisterNonexistentKey) {
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -683,12 +687,11 @@ TEST(TestWeakCellUnregisterNonexistentKey) {
 }
 
 TEST(TestJSWeakRef) {
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
 
   Isolate* isolate = CcTest::i_isolate();
-  i::DisableConservativeStackScanningScopeForTesting no_stack_scanning(
-      CcTest::heap());
   HandleScope outer_scope(isolate);
   Handle<JSWeakRef> weak_ref;
   {
@@ -699,7 +702,7 @@ TEST(TestJSWeakRef) {
     // This doesn't add the target into the KeepDuringJob set.
     Handle<JSWeakRef> inner_weak_ref = ConstructJSWeakRef(js_object, isolate);
 
-    heap::InvokeMajorGC(CcTest::heap());
+    CcTest::CollectAllGarbage();
     CHECK(!inner_weak_ref->target().IsUndefined(isolate));
 
     weak_ref = inner_scope.CloseAndEscape(inner_weak_ref);
@@ -707,13 +710,14 @@ TEST(TestJSWeakRef) {
 
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
-  heap::InvokeMajorGC(CcTest::heap());
+  CcTest::CollectAllGarbage();
 
   CHECK(weak_ref->target().IsUndefined(isolate));
 }
 
 TEST(TestJSWeakRefIncrementalMarking) {
-  if (!v8_flags.incremental_marking) {
+  FLAG_harmony_weak_refs = true;
+  if (!FLAG_incremental_marking) {
     return;
   }
   ManualGCScope manual_gc_scope;
@@ -722,7 +726,6 @@ TEST(TestJSWeakRefIncrementalMarking) {
 
   Isolate* isolate = CcTest::i_isolate();
   Heap* heap = isolate->heap();
-  i::DisableConservativeStackScanningScopeForTesting no_stack_scanning(heap);
   HandleScope outer_scope(isolate);
   Handle<JSWeakRef> weak_ref;
   {
@@ -734,7 +737,7 @@ TEST(TestJSWeakRefIncrementalMarking) {
     Handle<JSWeakRef> inner_weak_ref = ConstructJSWeakRef(js_object, isolate);
 
     heap::SimulateIncrementalMarking(heap, true);
-    heap::InvokeMajorGC(heap);
+    CcTest::CollectAllGarbage();
     CHECK(!inner_weak_ref->target().IsUndefined(isolate));
 
     weak_ref = inner_scope.CloseAndEscape(inner_weak_ref);
@@ -743,53 +746,52 @@ TEST(TestJSWeakRefIncrementalMarking) {
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
   heap::SimulateIncrementalMarking(heap, true);
-  heap::InvokeMajorGC(heap);
+  CcTest::CollectAllGarbage();
 
   CHECK(weak_ref->target().IsUndefined(isolate));
 }
 
 TEST(TestJSWeakRefKeepDuringJob) {
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
 
   Isolate* isolate = CcTest::i_isolate();
-  i::DisableConservativeStackScanningScopeForTesting no_stack_scanning(
-      CcTest::heap());
-
   HandleScope outer_scope(isolate);
   Handle<JSWeakRef> weak_ref = MakeWeakRefAndKeepDuringJob(isolate);
   CHECK(!weak_ref->target().IsUndefined(isolate));
-  heap::InvokeMajorGC(CcTest::heap());
+  CcTest::CollectAllGarbage();
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
   // Clears the KeepDuringJob set.
   context->GetIsolate()->ClearKeptObjects();
-  heap::InvokeMajorGC(CcTest::heap());
+  CcTest::CollectAllGarbage();
   CHECK(weak_ref->target().IsUndefined(isolate));
 
   weak_ref = MakeWeakRefAndKeepDuringJob(isolate);
   CHECK(!weak_ref->target().IsUndefined(isolate));
-  heap::InvokeMajorGC(CcTest::heap());
+  CcTest::CollectAllGarbage();
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
   // ClearKeptObjects should be called by PerformMicrotasksCheckpoint.
   CcTest::isolate()->PerformMicrotaskCheckpoint();
-  heap::InvokeMajorGC(CcTest::heap());
+  CcTest::CollectAllGarbage();
   CHECK(weak_ref->target().IsUndefined(isolate));
 
   weak_ref = MakeWeakRefAndKeepDuringJob(isolate);
   CHECK(!weak_ref->target().IsUndefined(isolate));
-  heap::InvokeMajorGC(CcTest::heap());
+  CcTest::CollectAllGarbage();
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
   // ClearKeptObjects should be called by MicrotasksScope::PerformCheckpoint.
   v8::MicrotasksScope::PerformCheckpoint(CcTest::isolate());
-  heap::InvokeMajorGC(CcTest::heap());
+  CcTest::CollectAllGarbage();
   CHECK(weak_ref->target().IsUndefined(isolate));
 }
 
 TEST(TestJSWeakRefKeepDuringJobIncrementalMarking) {
-  if (!v8_flags.incremental_marking) {
+  FLAG_harmony_weak_refs = true;
+  if (!FLAG_incremental_marking) {
     return;
   }
   ManualGCScope manual_gc_scope;
@@ -798,26 +800,26 @@ TEST(TestJSWeakRefKeepDuringJobIncrementalMarking) {
 
   Isolate* isolate = CcTest::i_isolate();
   Heap* heap = isolate->heap();
-  i::DisableConservativeStackScanningScopeForTesting no_stack_scanning(heap);
   HandleScope outer_scope(isolate);
   Handle<JSWeakRef> weak_ref = MakeWeakRefAndKeepDuringJob(isolate);
 
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
   heap::SimulateIncrementalMarking(heap, true);
-  heap::InvokeMajorGC(heap);
+  CcTest::CollectAllGarbage();
 
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
   // Clears the KeepDuringJob set.
   context->GetIsolate()->ClearKeptObjects();
   heap::SimulateIncrementalMarking(heap, true);
-  heap::InvokeMajorGC(heap);
+  CcTest::CollectAllGarbage();
 
   CHECK(weak_ref->target().IsUndefined(isolate));
 }
 
 TEST(TestRemoveUnregisterToken) {
+  FLAG_harmony_weak_refs = true;
   CcTest::InitializeVM();
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -829,7 +831,7 @@ TEST(TestRemoveUnregisterToken) {
 
   Handle<JSObject> token1 = CreateKey("token1", isolate);
   Handle<JSObject> token2 = CreateKey("token2", isolate);
-  Handle<HeapObject> undefined =
+  Handle<Object> undefined =
       handle(ReadOnlyRoots(isolate).undefined_value(), isolate);
 
   Handle<WeakCell> weak_cell1a = FinalizationRegistryRegister(
@@ -859,7 +861,9 @@ TEST(TestRemoveUnregisterToken) {
 
   finalization_registry->RemoveUnregisterToken(
       JSReceiver::cast(*token2), isolate,
-      JSFinalizationRegistry::kKeepMatchedCellsInRegistry,
+      [undefined](WeakCell matched_cell) {
+        matched_cell.set_unregister_token(*undefined);
+      },
       [](HeapObject, ObjectSlot, Object) {});
 
   // Both weak_cell2a and weak_cell2b remain on the weak cell chains.
@@ -879,7 +883,8 @@ TEST(TestRemoveUnregisterToken) {
 }
 
 TEST(JSWeakRefScavengedInWorklist) {
-  if (!v8_flags.incremental_marking || v8_flags.single_generation) {
+  FLAG_harmony_weak_refs = true;
+  if (!FLAG_incremental_marking || FLAG_single_generation) {
     return;
   }
 
@@ -887,7 +892,6 @@ TEST(JSWeakRefScavengedInWorklist) {
   CcTest::InitializeVM();
   Isolate* isolate = CcTest::i_isolate();
   Heap* heap = isolate->heap();
-  i::DisableConservativeStackScanningScopeForTesting no_stack_scanning(heap);
 
   {
     HandleScope outer_scope(isolate);
@@ -905,33 +909,27 @@ TEST(JSWeakRefScavengedInWorklist) {
       weak_ref = inner_scope.CloseAndEscape(inner_weak_ref);
     }
 
-    // Store weak_ref in Global such that it is part of the root set when
-    // starting incremental marking.
-    v8::Global<Value> global_weak_ref(
-        CcTest::isolate(), Utils::ToLocal(Handle<Object>::cast(weak_ref)));
-
     // Do marking. This puts the WeakRef above into the js_weak_refs worklist
     // since its target isn't marked.
     CHECK(
         heap->mark_compact_collector()->weak_objects()->js_weak_refs.IsEmpty());
     heap::SimulateIncrementalMarking(heap, true);
-    heap->mark_compact_collector()->local_weak_objects()->Publish();
     CHECK(!heap->mark_compact_collector()
                ->weak_objects()
                ->js_weak_refs.IsEmpty());
   }
 
   // Now collect both weak_ref and its target. The worklist should be empty.
-  heap::InvokeMinorGC(heap);
+  CcTest::CollectGarbage(NEW_SPACE);
   CHECK(heap->mark_compact_collector()->weak_objects()->js_weak_refs.IsEmpty());
 
   // The mark-compactor shouldn't see zapped WeakRefs in the worklist.
-  heap::InvokeMajorGC(heap);
+  CcTest::CollectAllGarbage();
 }
 
 TEST(JSWeakRefTenuredInWorklist) {
-  if (!v8_flags.incremental_marking || v8_flags.single_generation ||
-      v8_flags.separate_gc_phases) {
+  FLAG_harmony_weak_refs = true;
+  if (!FLAG_incremental_marking || FLAG_single_generation) {
     return;
   }
 
@@ -939,7 +937,6 @@ TEST(JSWeakRefTenuredInWorklist) {
   CcTest::InitializeVM();
   Isolate* isolate = CcTest::i_isolate();
   Heap* heap = isolate->heap();
-  i::DisableConservativeStackScanningScopeForTesting no_stack_scanning(heap);
 
   HandleScope outer_scope(isolate);
   Handle<JSWeakRef> weak_ref;
@@ -955,66 +952,59 @@ TEST(JSWeakRefTenuredInWorklist) {
 
     weak_ref = inner_scope.CloseAndEscape(inner_weak_ref);
   }
-  // Store weak_ref such that it is part of the root set when starting
-  // incremental marking.
-  v8::Global<Value> global_weak_ref(
-      CcTest::isolate(), Utils::ToLocal(Handle<Object>::cast(weak_ref)));
-  Address old_weak_ref_location = weak_ref->address();
+  JSWeakRef old_weak_ref_location = *weak_ref;
 
   // Do marking. This puts the WeakRef above into the js_weak_refs worklist
   // since its target isn't marked.
   CHECK(heap->mark_compact_collector()->weak_objects()->js_weak_refs.IsEmpty());
   heap::SimulateIncrementalMarking(heap, true);
-  heap->mark_compact_collector()->local_weak_objects()->Publish();
   CHECK(
       !heap->mark_compact_collector()->weak_objects()->js_weak_refs.IsEmpty());
 
   // Now collect weak_ref's target. We still have a Handle to weak_ref, so it is
   // moved and remains on the worklist.
-  heap::InvokeMinorGC(heap);
-  Address new_weak_ref_location = weak_ref->address();
+  CcTest::CollectGarbage(NEW_SPACE);
+  JSWeakRef new_weak_ref_location = *weak_ref;
   CHECK_NE(old_weak_ref_location, new_weak_ref_location);
   CHECK(
       !heap->mark_compact_collector()->weak_objects()->js_weak_refs.IsEmpty());
 
   // The mark-compactor should see the moved WeakRef in the worklist.
-  heap::InvokeMajorGC(heap);
+  CcTest::CollectAllGarbage();
   CHECK(heap->mark_compact_collector()->weak_objects()->js_weak_refs.IsEmpty());
   CHECK(weak_ref->target().IsUndefined(isolate));
 }
 
 TEST(UnregisterTokenHeapVerifier) {
-  if (!v8_flags.incremental_marking) return;
+  FLAG_harmony_weak_refs = true;
+  if (!FLAG_incremental_marking) return;
   ManualGCScope manual_gc_scope;
 #ifdef VERIFY_HEAP
-  v8_flags.verify_heap = true;
+  FLAG_verify_heap = true;
 #endif
 
   CcTest::InitializeVM();
   v8::Isolate* isolate = CcTest::isolate();
   Heap* heap = CcTest::heap();
-  i::DisableConservativeStackScanningScopeForTesting no_stack_scanning(heap);
   v8::HandleScope outer_scope(isolate);
 
   {
-    // Make a new FinalizationRegistry and register two objects with the same
-    // unregister token that's unreachable after the IIFE returns.
+    // Make a new FinalizationRegistry and register an object with an unregister
+    // token that's unreachable after the IIFE returns.
     v8::HandleScope scope(isolate);
     CompileRun(
         "var token = {}; "
         "var registry = new FinalizationRegistry(function ()  {}); "
         "(function () { "
-        "  let o1 = {}; "
-        "  let o2 = {}; "
-        "  registry.register(o1, {}, token); "
-        "  registry.register(o2, {}, token); "
+        "  let o = {}; "
+        "  registry.register(o, {}, token); "
         "})();");
   }
 
   // GC so the WeakCell corresponding to o is moved from the active_cells to
   // cleared_cells.
-  heap::InvokeMajorGC(heap);
-  heap::InvokeMajorGC(heap);
+  CcTest::CollectAllGarbage();
+  CcTest::CollectAllGarbage();
 
   {
     // Override the unregister token to make the original object collectible.
@@ -1029,54 +1019,6 @@ TEST(UnregisterTokenHeapVerifier) {
   // should make the unregister_token slot undefined. That slot is iterated as a
   // custom weak pointer, so if it is not made undefined, the verifier as part
   // of the incremental marking task will crash.
-  EmptyMessageQueues(isolate);
-}
-
-TEST(UnregisteredAndUnclearedCellHeapVerifier) {
-  if (!v8_flags.incremental_marking) return;
-  ManualGCScope manual_gc_scope;
-#ifdef VERIFY_HEAP
-  v8_flags.verify_heap = true;
-#endif
-
-  CcTest::InitializeVM();
-  v8::Isolate* isolate = CcTest::isolate();
-  Heap* heap = CcTest::heap();
-  i::DisableConservativeStackScanningScopeForTesting no_stack_scanning(heap);
-  v8::HandleScope outer_scope(isolate);
-
-  {
-    // Make a new FinalizationRegistry and register an object with a token.
-    v8::HandleScope scope(isolate);
-    CompileRun(
-        "var token = {}; "
-        "var registry = new FinalizationRegistry(function () {}); "
-        "registry.register({}, undefined, token);");
-  }
-
-  // Start incremental marking to activate the marking barrier.
-  heap::SimulateIncrementalMarking(heap, false);
-
-  {
-    // Make a WeakCell list with length >1, then unregister with the token to
-    // the WeakCell from the registry. The linked list manipulation keeps the
-    // unregistered WeakCell alive (i.e. not put into cleared_cells) due to the
-    // marking barrier from incremental marking. Then make the original token
-    // collectible.
-    v8::HandleScope scope(isolate);
-    CompileRun(
-        "registry.register({}); "
-        "registry.unregister(token); "
-        "token = 0;");
-  }
-
-  // Trigger GC.
-  heap::InvokeMajorGC(heap);
-  heap::InvokeMajorGC(heap);
-
-  // Pump message loop to run the finalizer task, then the incremental marking
-  // task. The verifier will verify that live WeakCells don't point to dead
-  // unregister tokens.
   EmptyMessageQueues(isolate);
 }
 

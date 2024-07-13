@@ -1,20 +1,17 @@
-# Copyright 2019 The Chromium Authors
+# Copyright 2019 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 # Contains flags that are applied only when ENABLE_DCHECK=false.
 
--checkdiscard @org.chromium.build.annotations.CheckDiscard class ** {
+-checkdiscard @org.chromium.base.annotations.CheckDiscard class ** {
   *;
 }
 -checkdiscard class ** {
-  @org.chromium.build.annotations.CheckDiscard *;
+  @org.chromium.base.annotations.CheckDiscard *;
 }
 
-# We always expect ServiceLoader.load() calls to be resolved by R8.
--whyareyounotinlining class java.util.ServiceLoader { *** load(...); }
-
-# This has a ServiceLoader.load() failure that we filter out in dex.py.
--checkdiscard class !cr_allowunused,kotlinx.coroutines.internal.FastServiceLoader {
-  *;
+# Ensure @RemovableInRelease actually works.
+-checkdiscard class ** {
+  @org.chromium.base.annotations.RemovableInRelease *;
 }

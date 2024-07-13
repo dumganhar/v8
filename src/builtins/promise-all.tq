@@ -44,15 +44,15 @@ macro CreatePromiseAllResolveElementFunction(implicit context: Context)(
     resolveElementContext: PromiseAllResolveElementContext, index: Smi,
     nativeContext: NativeContext,
     resolveFunction: SharedFunctionInfo): JSFunction {
-  dcheck(index > 0);
-  dcheck(index < kPropertyArrayHashFieldMax);
+  assert(index > 0);
+  assert(index < kPropertyArrayHashFieldMax);
 
   const map = *ContextSlot(
       nativeContext, ContextSlot::STRICT_FUNCTION_WITHOUT_PROTOTYPE_MAP_INDEX);
   const resolve = AllocateFunctionWithMapAndContext(
       map, resolveFunction, resolveElementContext);
 
-  dcheck(kPropertyArrayNoHashSentinel == 0);
+  assert(kPropertyArrayNoHashSentinel == 0);
   resolve.properties_or_hash = index;
   return resolve;
 }
@@ -138,9 +138,8 @@ transitioning macro PerformPromiseAll<F1: type, F2: type>(
     nativeContext: NativeContext, iter: iterator::IteratorRecord,
     constructor: Constructor, capability: PromiseCapability,
     promiseResolveFunction: JSAny, createResolveElementFunctor: F1,
-    createRejectElementFunctor: F2,
-    hasResolveAndRejectClosures: constexpr bool): JSAny labels
-Reject(JSAny) {
+    createRejectElementFunctor: F2): JSAny labels
+Reject(Object) {
   const promise = capability.promise;
   const resolve = capability.resolve;
   const reject = capability.reject;
@@ -173,7 +172,7 @@ Reject(JSAny) {
         // to true.
         // ReturnIfAbrupt(nextValue).
         nextValue = iterator::IteratorValue(next, fastIteratorResultMap);
-      } catch (e, _message) {
+      } catch (e) {
         goto Reject(e);
       }
 
@@ -232,7 +231,8 @@ Reject(JSAny) {
       // the PromiseReaction (aka we can pass undefined to
       // PerformPromiseThen), since this is only necessary for DevTools and
       // PromiseHooks.
-      if (promiseResolveFunction != Undefined || NeedsAnyPromiseHooks() ||
+      if (promiseResolveFunction != Undefined ||
+          IsPromiseHookEnabledOrDebugIsActiveOrHasAsyncEventDelegate() ||
           IsPromiseSpeciesProtectorCellInvalid() || Is<Smi>(nextValue) ||
           !IsPromiseThenLookupChainIntact(
               nativeContext, UnsafeCast<HeapObject>(nextValue).map)) {
@@ -263,7 +263,7 @@ Reject(JSAny) {
       // Set index to index + 1.
       index += 1;
     }
-  } catch (e, _message) deferred {
+  } catch (e) deferred {
     iterator::IteratorCloseOnException(iter);
     goto Reject(e);
   } label Done {}
@@ -278,16 +278,15 @@ Reject(JSAny) {
 
   check(remainingElementsCount >= 0);
 
-  const valuesRef:&FixedArray = ContextSlot(
-      resolveElementContext,
-      PromiseAllResolveElementContextSlots::
-          kPromiseAllResolveElementValuesSlot);
-  const values = *valuesRef;
-
   if (remainingElementsCount > 0) {
     // Pre-allocate the backing store for the {values} to the desired
     // capacity. We may already have elements in "values" - this happens
     // when the Thenable calls the resolve callback immediately.
+    const valuesRef:&FixedArray = ContextSlot(
+        resolveElementContext,
+        PromiseAllResolveElementContextSlots::
+            kPromiseAllResolveElementValuesSlot);
+    const values = *valuesRef;
     // 'index' is a 1-based index and incremented after every Promise. Later we
     // use 'values' as a 0-based array, so capacity 'index - 1' is enough.
     const newCapacity = SmiUntag(index) - 1;
@@ -302,24 +301,14 @@ Reject(JSAny) {
       //     Let valuesArray be CreateArrayFromList(values).
       //     Perform ? Call(resultCapability.[[Resolve]], undefined,
       //                    « valuesArray »).
+
+      const values: FixedArray = *ContextSlot(
+          resolveElementContext,
+          PromiseAllResolveElementContextSlots::
+              kPromiseAllResolveElementValuesSlot);
       const arrayMap =
           *NativeContextSlot(
           nativeContext, ContextSlot::JS_ARRAY_PACKED_ELEMENTS_MAP_INDEX);
-
-      // After this point, values escapes to user code.
-      //
-      // If resolve and reject handlers close over values to keep track of
-      // whether an input promise is already settled, mark the values array as
-      // COW. The original values array is still needed to guard against resolve
-      // or reject being called multiple times for an element.
-      //
-      // Otherwise, clear the slot.
-      if (hasResolveAndRejectClosures) {
-        MakeFixedArrayCOW(values);
-      } else {
-        *valuesRef = kEmptyFixedArray;
-      }
-
       const valuesArray = NewJSArray(arrayMap, values);
       Call(nativeContext, UnsafeCast<JSAny>(resolve), Undefined, valuesArray);
     }
@@ -331,13 +320,12 @@ Reject(JSAny) {
 transitioning macro GeneratePromiseAll<F1: type, F2: type>(
     implicit context: Context)(
     receiver: JSAny, iterable: JSAny, createResolveElementFunctor: F1,
-    createRejectElementFunctor: F2, message: constexpr string,
-    hasResolveAndRejectClosures: constexpr bool): JSAny {
+    createRejectElementFunctor: F2): JSAny {
   const nativeContext = LoadNativeContext(context);
   // Let C be the this value.
   // If Type(C) is not Object, throw a TypeError exception.
   const receiver = Cast<JSReceiver>(receiver)
-      otherwise ThrowTypeError(MessageTemplate::kCalledOnNonObject, message);
+      otherwise ThrowTypeError(MessageTemplate::kCalledOnNonObject, 'Promise.all');
 
   // Let promiseCapability be ? NewPromiseCapability(C).
   // Don't fire debugEvent so that forwarding the rejection through all does
@@ -345,7 +333,7 @@ transitioning macro GeneratePromiseAll<F1: type, F2: type>(
   const capability = NewPromiseCapability(receiver, False);
 
   // NewPromiseCapability guarantees that receiver is Constructor.
-  dcheck(Is<Constructor>(receiver));
+  assert(Is<Constructor>(receiver));
   const constructor = UnsafeCast<Constructor>(receiver);
 
   try {
@@ -365,12 +353,13 @@ transitioning macro GeneratePromiseAll<F1: type, F2: type>(
     //    IfAbruptRejectPromise(result, promiseCapability).
     return PerformPromiseAll(
         nativeContext, i, constructor, capability, promiseResolveFunction,
-        createResolveElementFunctor, createRejectElementFunctor,
-        hasResolveAndRejectClosures)
+        createResolveElementFunctor, createRejectElementFunctor)
         otherwise Reject;
-  } catch (e, _message) deferred {
+  } catch (e) deferred {
     goto Reject(e);
-  } label Reject(e: JSAny) deferred {
+  } label Reject(e: Object) deferred {
+    // Exception must be bound to a JS value.
+    const e = UnsafeCast<JSAny>(e);
     const reject = UnsafeCast<JSAny>(capability.reject);
     Call(context, reject, Undefined, e);
     return capability.promise;
@@ -382,7 +371,7 @@ transitioning javascript builtin PromiseAll(
     js-implicit context: Context, receiver: JSAny)(iterable: JSAny): JSAny {
   return GeneratePromiseAll(
       receiver, iterable, PromiseAllResolveElementFunctor{},
-      PromiseAllRejectElementFunctor{}, 'Promise.all', false);
+      PromiseAllRejectElementFunctor{});
 }
 
 // ES#sec-promise.allsettled
@@ -391,7 +380,7 @@ transitioning javascript builtin PromiseAllSettled(
     js-implicit context: Context, receiver: JSAny)(iterable: JSAny): JSAny {
   return GeneratePromiseAll(
       receiver, iterable, PromiseAllSettledResolveElementFunctor{},
-      PromiseAllSettledRejectElementFunctor{}, 'Promise.allSettled', true);
+      PromiseAllSettledRejectElementFunctor{});
 }
 
 extern macro PromiseAllResolveElementSharedFunConstant(): SharedFunctionInfo;
@@ -399,6 +388,4 @@ extern macro PromiseAllSettledRejectElementSharedFunConstant():
     SharedFunctionInfo;
 extern macro PromiseAllSettledResolveElementSharedFunConstant():
     SharedFunctionInfo;
-
-extern macro MakeFixedArrayCOW(FixedArray): void;
 }

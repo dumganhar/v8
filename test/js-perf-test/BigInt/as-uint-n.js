@@ -4,7 +4,7 @@
 
 "use strict";
 
-d8.file.execute('bigint-util.js');
+load('bigint-util.js');
 
 let random_bigints = [];
 

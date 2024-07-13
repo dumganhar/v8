@@ -8,9 +8,10 @@
 
 #include "src/base/platform/elapsed-timer.h"
 #include "src/codegen/assembler-inl.h"
+
 #include "test/cctest/cctest.h"
+#include "test/cctest/compiler/value-helper.h"
 #include "test/cctest/wasm/wasm-run-utils.h"
-#include "test/common/value-helper.h"
 #include "test/common/wasm/test-signatures.h"
 #include "test/common/wasm/wasm-macro-gen.h"
 
@@ -18,11 +19,22 @@ namespace v8 {
 namespace internal {
 namespace wasm {
 
-TEST(RunAsmJs_Int32AsmjsDivS) {
-  WasmRunner<int32_t, int32_t, int32_t> r(TestExecutionTier::kTurbofan,
-                                          kAsmJsSloppyOrigin);
-  r.Build(
-      {WASM_BINOP(kExprI32AsmjsDivS, WASM_LOCAL_GET(0), WASM_LOCAL_GET(1))});
+// Liftoff does not support asm.js, and is never invoked with asm.js code in
+// production. Hence test asm.js with TurboFan and Interpreter only.
+#define ASMJS_EXEC_TEST(name)                            \
+  void RunWasm_##name(TestExecutionTier execution_tier); \
+  TEST(RunWasmTurbofan_##name) {                         \
+    RunWasm_##name(TestExecutionTier::kTurbofan);        \
+  }                                                      \
+  TEST(RunWasmInterpreter_##name) {                      \
+    RunWasm_##name(TestExecutionTier::kInterpreter);     \
+  }                                                      \
+  void RunWasm_##name(TestExecutionTier execution_tier)
+
+ASMJS_EXEC_TEST(Int32AsmjsDivS) {
+  WasmRunner<int32_t, int32_t, int32_t> r(execution_tier);
+  r.builder().ChangeOriginToAsmjs();
+  BUILD(r, WASM_BINOP(kExprI32AsmjsDivS, WASM_LOCAL_GET(0), WASM_LOCAL_GET(1)));
   const int32_t kMin = std::numeric_limits<int32_t>::min();
   CHECK_EQ(0, r.Call(0, 100));
   CHECK_EQ(0, r.Call(100, 0));
@@ -31,11 +43,10 @@ TEST(RunAsmJs_Int32AsmjsDivS) {
   CHECK_EQ(0, r.Call(kMin, 0));
 }
 
-TEST(RunAsmJs_Int32AsmjsRemS) {
-  WasmRunner<int32_t, int32_t, int32_t> r(TestExecutionTier::kTurbofan,
-                                          kAsmJsSloppyOrigin);
-  r.Build(
-      {WASM_BINOP(kExprI32AsmjsRemS, WASM_LOCAL_GET(0), WASM_LOCAL_GET(1))});
+ASMJS_EXEC_TEST(Int32AsmjsRemS) {
+  WasmRunner<int32_t, int32_t, int32_t> r(execution_tier);
+  r.builder().ChangeOriginToAsmjs();
+  BUILD(r, WASM_BINOP(kExprI32AsmjsRemS, WASM_LOCAL_GET(0), WASM_LOCAL_GET(1)));
   const int32_t kMin = std::numeric_limits<int32_t>::min();
   CHECK_EQ(33, r.Call(133, 100));
   CHECK_EQ(0, r.Call(kMin, -1));
@@ -44,11 +55,10 @@ TEST(RunAsmJs_Int32AsmjsRemS) {
   CHECK_EQ(0, r.Call(kMin, 0));
 }
 
-TEST(RunAsmJs_Int32AsmjsDivU) {
-  WasmRunner<int32_t, int32_t, int32_t> r(TestExecutionTier::kTurbofan,
-                                          kAsmJsSloppyOrigin);
-  r.Build(
-      {WASM_BINOP(kExprI32AsmjsDivU, WASM_LOCAL_GET(0), WASM_LOCAL_GET(1))});
+ASMJS_EXEC_TEST(Int32AsmjsDivU) {
+  WasmRunner<int32_t, int32_t, int32_t> r(execution_tier);
+  r.builder().ChangeOriginToAsmjs();
+  BUILD(r, WASM_BINOP(kExprI32AsmjsDivU, WASM_LOCAL_GET(0), WASM_LOCAL_GET(1)));
   const int32_t kMin = std::numeric_limits<int32_t>::min();
   CHECK_EQ(0, r.Call(0, 100));
   CHECK_EQ(0, r.Call(kMin, -1));
@@ -57,11 +67,10 @@ TEST(RunAsmJs_Int32AsmjsDivU) {
   CHECK_EQ(0, r.Call(kMin, 0));
 }
 
-TEST(RunAsmJs_Int32AsmjsRemU) {
-  WasmRunner<int32_t, int32_t, int32_t> r(TestExecutionTier::kTurbofan,
-                                          kAsmJsSloppyOrigin);
-  r.Build(
-      {WASM_BINOP(kExprI32AsmjsRemU, WASM_LOCAL_GET(0), WASM_LOCAL_GET(1))});
+ASMJS_EXEC_TEST(Int32AsmjsRemU) {
+  WasmRunner<int32_t, int32_t, int32_t> r(execution_tier);
+  r.builder().ChangeOriginToAsmjs();
+  BUILD(r, WASM_BINOP(kExprI32AsmjsRemU, WASM_LOCAL_GET(0), WASM_LOCAL_GET(1)));
   const int32_t kMin = std::numeric_limits<int32_t>::min();
   CHECK_EQ(17, r.Call(217, 100));
   CHECK_EQ(0, r.Call(100, 0));
@@ -70,10 +79,10 @@ TEST(RunAsmJs_Int32AsmjsRemU) {
   CHECK_EQ(kMin, r.Call(kMin, -1));
 }
 
-TEST(RunAsmJs_I32AsmjsSConvertF32) {
-  WasmRunner<int32_t, float> r(TestExecutionTier::kTurbofan,
-                               kAsmJsSloppyOrigin);
-  r.Build({WASM_UNOP(kExprI32AsmjsSConvertF32, WASM_LOCAL_GET(0))});
+ASMJS_EXEC_TEST(I32AsmjsSConvertF32) {
+  WasmRunner<int32_t, float> r(execution_tier);
+  r.builder().ChangeOriginToAsmjs();
+  BUILD(r, WASM_UNOP(kExprI32AsmjsSConvertF32, WASM_LOCAL_GET(0)));
 
   FOR_FLOAT32_INPUTS(i) {
     int32_t expected = DoubleToInt32(i);
@@ -81,10 +90,10 @@ TEST(RunAsmJs_I32AsmjsSConvertF32) {
   }
 }
 
-TEST(RunAsmJs_I32AsmjsSConvertF64) {
-  WasmRunner<int32_t, double> r(TestExecutionTier::kTurbofan,
-                                kAsmJsSloppyOrigin);
-  r.Build({WASM_UNOP(kExprI32AsmjsSConvertF64, WASM_LOCAL_GET(0))});
+ASMJS_EXEC_TEST(I32AsmjsSConvertF64) {
+  WasmRunner<int32_t, double> r(execution_tier);
+  r.builder().ChangeOriginToAsmjs();
+  BUILD(r, WASM_UNOP(kExprI32AsmjsSConvertF64, WASM_LOCAL_GET(0)));
 
   FOR_FLOAT64_INPUTS(i) {
     int32_t expected = DoubleToInt32(i);
@@ -92,10 +101,10 @@ TEST(RunAsmJs_I32AsmjsSConvertF64) {
   }
 }
 
-TEST(RunAsmJs_I32AsmjsUConvertF32) {
-  WasmRunner<uint32_t, float> r(TestExecutionTier::kTurbofan,
-                                kAsmJsSloppyOrigin);
-  r.Build({WASM_UNOP(kExprI32AsmjsUConvertF32, WASM_LOCAL_GET(0))});
+ASMJS_EXEC_TEST(I32AsmjsUConvertF32) {
+  WasmRunner<uint32_t, float> r(execution_tier);
+  r.builder().ChangeOriginToAsmjs();
+  BUILD(r, WASM_UNOP(kExprI32AsmjsUConvertF32, WASM_LOCAL_GET(0)));
 
   FOR_FLOAT32_INPUTS(i) {
     uint32_t expected = DoubleToUint32(i);
@@ -103,10 +112,10 @@ TEST(RunAsmJs_I32AsmjsUConvertF32) {
   }
 }
 
-TEST(RunAsmJs_I32AsmjsUConvertF64) {
-  WasmRunner<uint32_t, double> r(TestExecutionTier::kTurbofan,
-                                 kAsmJsSloppyOrigin);
-  r.Build({WASM_UNOP(kExprI32AsmjsUConvertF64, WASM_LOCAL_GET(0))});
+ASMJS_EXEC_TEST(I32AsmjsUConvertF64) {
+  WasmRunner<uint32_t, double> r(execution_tier);
+  r.builder().ChangeOriginToAsmjs();
+  BUILD(r, WASM_UNOP(kExprI32AsmjsUConvertF64, WASM_LOCAL_GET(0)));
 
   FOR_FLOAT64_INPUTS(i) {
     uint32_t expected = DoubleToUint32(i);
@@ -114,13 +123,13 @@ TEST(RunAsmJs_I32AsmjsUConvertF64) {
   }
 }
 
-TEST(RunAsmJs_LoadMemI32_oob_asm) {
-  WasmRunner<int32_t, uint32_t> r(TestExecutionTier::kTurbofan,
-                                  kAsmJsSloppyOrigin);
+ASMJS_EXEC_TEST(LoadMemI32_oob_asm) {
+  WasmRunner<int32_t, uint32_t> r(execution_tier);
+  r.builder().ChangeOriginToAsmjs();
   int32_t* memory = r.builder().AddMemoryElems<int32_t>(8);
   r.builder().RandomizeMemory(1112);
 
-  r.Build({WASM_UNOP(kExprI32AsmjsLoadMem, WASM_LOCAL_GET(0))});
+  BUILD(r, WASM_UNOP(kExprI32AsmjsLoadMem, WASM_LOCAL_GET(0)));
 
   memory[0] = 999999;
   CHECK_EQ(999999, r.Call(0u));
@@ -134,13 +143,13 @@ TEST(RunAsmJs_LoadMemI32_oob_asm) {
   }
 }
 
-TEST(RunAsmJs_LoadMemF32_oob_asm) {
-  WasmRunner<float, uint32_t> r(TestExecutionTier::kTurbofan,
-                                kAsmJsSloppyOrigin);
+ASMJS_EXEC_TEST(LoadMemF32_oob_asm) {
+  WasmRunner<float, uint32_t> r(execution_tier);
+  r.builder().ChangeOriginToAsmjs();
   float* memory = r.builder().AddMemoryElems<float>(8);
   r.builder().RandomizeMemory(1112);
 
-  r.Build({WASM_UNOP(kExprF32AsmjsLoadMem, WASM_LOCAL_GET(0))});
+  BUILD(r, WASM_UNOP(kExprF32AsmjsLoadMem, WASM_LOCAL_GET(0)));
 
   memory[0] = 9999.5f;
   CHECK_EQ(9999.5f, r.Call(0u));
@@ -154,13 +163,13 @@ TEST(RunAsmJs_LoadMemF32_oob_asm) {
   }
 }
 
-TEST(RunAsmJs_LoadMemF64_oob_asm) {
-  WasmRunner<double, uint32_t> r(TestExecutionTier::kTurbofan,
-                                 kAsmJsSloppyOrigin);
+ASMJS_EXEC_TEST(LoadMemF64_oob_asm) {
+  WasmRunner<double, uint32_t> r(execution_tier);
+  r.builder().ChangeOriginToAsmjs();
   double* memory = r.builder().AddMemoryElems<double>(8);
   r.builder().RandomizeMemory(1112);
 
-  r.Build({WASM_UNOP(kExprF64AsmjsLoadMem, WASM_LOCAL_GET(0))});
+  BUILD(r, WASM_UNOP(kExprF64AsmjsLoadMem, WASM_LOCAL_GET(0)));
 
   memory[0] = 9799.5;
   CHECK_EQ(9799.5, r.Call(0u));
@@ -176,14 +185,14 @@ TEST(RunAsmJs_LoadMemF64_oob_asm) {
   }
 }
 
-TEST(RunAsmJs_StoreMemI32_oob_asm) {
-  WasmRunner<int32_t, uint32_t, uint32_t> r(TestExecutionTier::kTurbofan,
-                                            kAsmJsSloppyOrigin);
+ASMJS_EXEC_TEST(StoreMemI32_oob_asm) {
+  WasmRunner<int32_t, uint32_t, uint32_t> r(execution_tier);
+  r.builder().ChangeOriginToAsmjs();
   int32_t* memory = r.builder().AddMemoryElems<int32_t>(8);
   r.builder().RandomizeMemory(1112);
 
-  r.Build({WASM_BINOP(kExprI32AsmjsStoreMem, WASM_LOCAL_GET(0),
-                      WASM_LOCAL_GET(1))});
+  BUILD(r, WASM_BINOP(kExprI32AsmjsStoreMem, WASM_LOCAL_GET(0),
+                      WASM_LOCAL_GET(1)));
 
   memory[0] = 7777;
   CHECK_EQ(999999, r.Call(0u, 999999));
@@ -198,11 +207,11 @@ TEST(RunAsmJs_StoreMemI32_oob_asm) {
   }
 }
 
-TEST(RunAsmJs_Int32AsmjsDivS_byzero_const) {
+ASMJS_EXEC_TEST(Int32AsmjsDivS_byzero_const) {
   for (int8_t denom = -2; denom < 8; ++denom) {
-    WasmRunner<int32_t, int32_t> r(TestExecutionTier::kTurbofan,
-                                   kAsmJsSloppyOrigin);
-    r.Build({WASM_I32_ASMJS_DIVS(WASM_LOCAL_GET(0), WASM_I32V_1(denom))});
+    WasmRunner<int32_t, int32_t> r(execution_tier);
+    r.builder().ChangeOriginToAsmjs();
+    BUILD(r, WASM_I32_ASMJS_DIVS(WASM_LOCAL_GET(0), WASM_I32V_1(denom)));
     FOR_INT32_INPUTS(i) {
       if (denom == 0) {
         CHECK_EQ(0, r.Call(i));
@@ -215,11 +224,11 @@ TEST(RunAsmJs_Int32AsmjsDivS_byzero_const) {
   }
 }
 
-TEST(RunAsmJs_Int32AsmjsRemS_byzero_const) {
+ASMJS_EXEC_TEST(Int32AsmjsRemS_byzero_const) {
   for (int8_t denom = -2; denom < 8; ++denom) {
-    WasmRunner<int32_t, int32_t> r(TestExecutionTier::kTurbofan,
-                                   kAsmJsSloppyOrigin);
-    r.Build({WASM_I32_ASMJS_REMS(WASM_LOCAL_GET(0), WASM_I32V_1(denom))});
+    WasmRunner<int32_t, int32_t> r(execution_tier);
+    r.builder().ChangeOriginToAsmjs();
+    BUILD(r, WASM_I32_ASMJS_REMS(WASM_LOCAL_GET(0), WASM_I32V_1(denom)));
     FOR_INT32_INPUTS(i) {
       if (denom == 0) {
         CHECK_EQ(0, r.Call(i));
@@ -231,6 +240,8 @@ TEST(RunAsmJs_Int32AsmjsRemS_byzero_const) {
     }
   }
 }
+
+#undef ASMJS_EXEC_TEST
 
 }  // namespace wasm
 }  // namespace internal

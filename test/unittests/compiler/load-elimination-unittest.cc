@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "src/compiler/load-elimination.h"
-
 #include "src/compiler/access-builder.h"
 #include "src/compiler/js-graph.h"
 #include "src/compiler/node.h"
@@ -11,6 +10,7 @@
 #include "test/unittests/compiler/graph-reducer-unittest.h"
 #include "test/unittests/compiler/graph-unittest.h"
 #include "test/unittests/compiler/node-test-utils.h"
+#include "testing/gmock-support.h"
 
 using testing::_;
 using testing::StrictMock;
@@ -46,7 +46,7 @@ TEST_F(LoadEliminationTest, LoadElementAndLoadElement) {
                                 MachineType::AnyTagged(), kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(graph()->start());
 
@@ -72,7 +72,7 @@ TEST_F(LoadEliminationTest, StoreElementAndLoadElement) {
                                 MachineType::AnyTagged(), kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(graph()->start());
 
@@ -99,7 +99,7 @@ TEST_F(LoadEliminationTest, StoreElementAndStoreFieldAndLoadElement) {
                                 MachineType::AnyTagged(), kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(graph()->start());
 
@@ -126,12 +126,12 @@ TEST_F(LoadEliminationTest, LoadFieldAndLoadField) {
   Node* effect = graph()->start();
   Node* control = graph()->start();
   FieldAccess const access = {kTaggedBase,         kTaggedSize,
-                              MaybeHandle<Name>(), OptionalMapRef(),
+                              MaybeHandle<Name>(), MaybeHandle<Map>(),
                               Type::Any(),         MachineType::AnyTagged(),
                               kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(graph()->start());
 
@@ -152,12 +152,13 @@ TEST_F(LoadEliminationTest, StoreFieldAndLoadField) {
   Node* value = Parameter(Type::Any(), 1);
   Node* effect = graph()->start();
   Node* control = graph()->start();
-  FieldAccess access = {kTaggedBase,      kTaggedSize, MaybeHandle<Name>(),
-                        OptionalMapRef(), Type::Any(), MachineType::AnyTagged(),
+  FieldAccess access = {kTaggedBase,         kTaggedSize,
+                        MaybeHandle<Name>(), MaybeHandle<Map>(),
+                        Type::Any(),         MachineType::AnyTagged(),
                         kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(graph()->start());
 
@@ -180,18 +181,18 @@ TEST_F(LoadEliminationTest, StoreFieldAndKillFields) {
   Node* control = graph()->start();
 
   FieldAccess access1 = {kTaggedBase,         kTaggedSize,
-                         MaybeHandle<Name>(), OptionalMapRef(),
+                         MaybeHandle<Name>(), MaybeHandle<Map>(),
                          Type::Any(),         MachineType::AnyTagged(),
                          kNoWriteBarrier};
 
   // Offset that out of field cache size.
   FieldAccess access2 = {kTaggedBase,         2048 * kTaggedSize,
-                         MaybeHandle<Name>(), OptionalMapRef(),
+                         MaybeHandle<Name>(), MaybeHandle<Map>(),
                          Type::Any(),         MachineType::AnyTagged(),
                          kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(graph()->start());
 
@@ -219,12 +220,13 @@ TEST_F(LoadEliminationTest, StoreFieldAndStoreElementAndLoadField) {
   Node* index = Parameter(Type::UnsignedSmall(), 2);
   Node* effect = graph()->start();
   Node* control = graph()->start();
-  FieldAccess access = {kTaggedBase,      kTaggedSize, MaybeHandle<Name>(),
-                        OptionalMapRef(), Type::Any(), MachineType::AnyTagged(),
+  FieldAccess access = {kTaggedBase,         kTaggedSize,
+                        MaybeHandle<Name>(), MaybeHandle<Map>(),
+                        Type::Any(),         MachineType::AnyTagged(),
                         kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(graph()->start());
 
@@ -255,7 +257,7 @@ TEST_F(LoadEliminationTest, LoadElementOnTrueBranchOfDiamond) {
                                 MachineType::AnyTagged(), kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(graph()->start());
 
@@ -290,7 +292,7 @@ TEST_F(LoadEliminationTest, LoadElementOnFalseBranchOfDiamond) {
                                 MachineType::AnyTagged(), kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(graph()->start());
 
@@ -321,12 +323,12 @@ TEST_F(LoadEliminationTest, LoadFieldOnFalseBranchOfDiamond) {
   Node* effect = graph()->start();
   Node* control = graph()->start();
   FieldAccess const access = {kTaggedBase,         kTaggedSize,
-                              MaybeHandle<Name>(), OptionalMapRef(),
+                              MaybeHandle<Name>(), MaybeHandle<Map>(),
                               Type::Any(),         MachineType::AnyTagged(),
                               kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(graph()->start());
 
@@ -357,12 +359,12 @@ TEST_F(LoadEliminationTest, LoadFieldOnTrueBranchOfDiamond) {
   Node* effect = graph()->start();
   Node* control = graph()->start();
   FieldAccess const access = {kTaggedBase,         kTaggedSize,
-                              MaybeHandle<Name>(), OptionalMapRef(),
+                              MaybeHandle<Name>(), MaybeHandle<Map>(),
                               Type::Any(),         MachineType::AnyTagged(),
                               kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(graph()->start());
 
@@ -393,12 +395,12 @@ TEST_F(LoadEliminationTest, LoadFieldWithTypeMismatch) {
   Node* effect = graph()->start();
   Node* control = graph()->start();
   FieldAccess const access = {kTaggedBase,         kTaggedSize,
-                              MaybeHandle<Name>(), OptionalMapRef(),
+                              MaybeHandle<Name>(), MaybeHandle<Map>(),
                               Type::Unsigned31(),  MachineType::AnyTagged(),
                               kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(graph()->start());
 
@@ -424,7 +426,7 @@ TEST_F(LoadEliminationTest, LoadElementWithTypeMismatch) {
                                 MachineType::AnyTagged(), kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(graph()->start());
 
@@ -445,12 +447,12 @@ TEST_F(LoadEliminationTest, AliasAnalysisForFinishRegion) {
   Node* effect = graph()->start();
   Node* control = graph()->start();
   FieldAccess const access = {kTaggedBase,         kTaggedSize,
-                              MaybeHandle<Name>(), OptionalMapRef(),
+                              MaybeHandle<Name>(), MaybeHandle<Map>(),
                               Type::Signed32(),    MachineType::AnyTagged(),
                               kNoWriteBarrier};
 
   StrictMock<MockAdvancedReducerEditor> editor;
-  LoadElimination load_elimination(&editor, broker(), jsgraph(), zone());
+  LoadElimination load_elimination(&editor, jsgraph(), zone());
 
   load_elimination.Reduce(effect);
 

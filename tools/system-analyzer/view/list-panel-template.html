@@ -30,13 +30,11 @@ found in the LICENSE file. -->
     text-align: left;
     cursor: -webkit-zoom-in;
     color: rgba(var(--border-color), 1);
-    user-select: none;
   }
 
   .toggle::before {
     content: "▶";
   }
-
   .open .toggle::before {
     content: "▼";
   }
@@ -60,7 +58,7 @@ found in the LICENSE file. -->
 </style>
 
 <div class="panel">
-  <input type="checkbox" id="closer" class="panelCloserInput" checked>
+  <input type="checkbox" id="closer" class="panelCloserInput">
   <label class="panelCloserLabel" for="closer">▼</label>
   <h2 id="title"></h2>
   <div class="selection">

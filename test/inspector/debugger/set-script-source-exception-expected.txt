@@ -19,6 +19,5 @@ Running test: testSourceWithSyntaxError
             lineNumber : 1
             text : Uncaught SyntaxError: Invalid or unexpected token
         }
-        status : CompileError
     }
 }

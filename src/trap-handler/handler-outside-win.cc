@@ -40,7 +40,7 @@ void* g_registered_handler = nullptr;
 
 bool RegisterDefaultTrapHandler() {
   constexpr ULONG first = TRUE;
-  TH_CHECK(g_registered_handler == nullptr);
+  CHECK_NULL(g_registered_handler);
   g_registered_handler = AddVectoredExceptionHandler(first, HandleWasmTrap);
 
   return nullptr != g_registered_handler;

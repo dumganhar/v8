@@ -5,9 +5,10 @@
 #ifndef V8_OBJECTS_JS_WEAK_REFS_INL_H_
 #define V8_OBJECTS_JS_WEAK_REFS_INL_H_
 
+#include "src/objects/js-weak-refs.h"
+
 #include "src/api/api-inl.h"
 #include "src/heap/heap-write-barrier-inl.h"
-#include "src/objects/js-weak-refs.h"
 #include "src/objects/smi-inl.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -20,7 +21,18 @@ namespace internal {
 
 TQ_OBJECT_CONSTRUCTORS_IMPL(WeakCell)
 TQ_OBJECT_CONSTRUCTORS_IMPL(JSWeakRef)
-TQ_OBJECT_CONSTRUCTORS_IMPL(JSFinalizationRegistry)
+OBJECT_CONSTRUCTORS_IMPL(JSFinalizationRegistry, JSObject)
+
+ACCESSORS(JSFinalizationRegistry, native_context, NativeContext,
+          kNativeContextOffset)
+ACCESSORS(JSFinalizationRegistry, cleanup, Object, kCleanupOffset)
+ACCESSORS(JSFinalizationRegistry, active_cells, HeapObject, kActiveCellsOffset)
+ACCESSORS(JSFinalizationRegistry, cleared_cells, HeapObject,
+          kClearedCellsOffset)
+ACCESSORS(JSFinalizationRegistry, key_map, Object, kKeyMapOffset)
+SMI_ACCESSORS(JSFinalizationRegistry, flags, kFlagsOffset)
+ACCESSORS(JSFinalizationRegistry, next_dirty, Object, kNextDirtyOffset)
+CAST_ACCESSOR(JSFinalizationRegistry)
 
 BIT_FIELD_ACCESSORS(JSFinalizationRegistry, flags, scheduled_for_cleanup,
                     JSFinalizationRegistry::ScheduledForCleanupBit)
@@ -54,19 +66,21 @@ void JSFinalizationRegistry::RegisterWeakCellWithUnregisterToken(
 
 bool JSFinalizationRegistry::Unregister(
     Handle<JSFinalizationRegistry> finalization_registry,
-    Handle<HeapObject> unregister_token, Isolate* isolate) {
+    Handle<JSReceiver> unregister_token, Isolate* isolate) {
   // Iterate through the doubly linked list of WeakCells associated with the
   // key. Each WeakCell will be in the "active_cells" or "cleared_cells" list of
   // its FinalizationRegistry; remove it from there.
   return finalization_registry->RemoveUnregisterToken(
-      *unregister_token, isolate, kRemoveMatchedCellsFromRegistry,
+      *unregister_token, isolate,
+      [isolate](WeakCell matched_cell) {
+        matched_cell.RemoveFromFinalizationRegistryCells(isolate);
+      },
       [](HeapObject, ObjectSlot, Object) {});
 }
 
-template <typename GCNotifyUpdatedSlotCallback>
+template <typename MatchCallback, typename GCNotifyUpdatedSlotCallback>
 bool JSFinalizationRegistry::RemoveUnregisterToken(
-    HeapObject unregister_token, Isolate* isolate,
-    RemoveUnregisterTokenMode removal_mode,
+    JSReceiver unregister_token, Isolate* isolate, MatchCallback match_callback,
     GCNotifyUpdatedSlotCallback gc_notify_updated_slot) {
   // This method is called from both FinalizationRegistry#unregister and for
   // removing weakly-held dead unregister tokens. The latter is during GC so
@@ -104,16 +118,7 @@ bool JSFinalizationRegistry::RemoveUnregisterToken(
     value = weak_cell.key_list_next();
     if (weak_cell.unregister_token() == unregister_token) {
       // weak_cell has the same unregister token; remove it from the key list.
-      switch (removal_mode) {
-        case kRemoveMatchedCellsFromRegistry:
-          weak_cell.RemoveFromFinalizationRegistryCells(isolate);
-          break;
-        case kKeepMatchedCellsInRegistry:
-          // Do nothing.
-          break;
-      }
-      // Clear unregister token-related fields.
-      weak_cell.set_unregister_token(undefined);
+      match_callback(weak_cell);
       weak_cell.set_key_list_prev(undefined);
       weak_cell.set_key_list_next(undefined);
       was_present = true;
@@ -158,10 +163,6 @@ HeapObject WeakCell::relaxed_target() const {
   return TaggedField<HeapObject>::Relaxed_Load(*this, kTargetOffset);
 }
 
-HeapObject WeakCell::relaxed_unregister_token() const {
-  return TaggedField<HeapObject>::Relaxed_Load(*this, kUnregisterTokenOffset);
-}
-
 template <typename GCNotifyUpdatedSlotCallback>
 void WeakCell::Nullify(Isolate* isolate,
                        GCNotifyUpdatedSlotCallback gc_notify_updated_slot) {
@@ -170,7 +171,7 @@ void WeakCell::Nullify(Isolate* isolate,
   // only called for WeakCells which haven't been unregistered yet, so they will
   // be in the active_cells list. (The caller must guard against calling this
   // for unregistered WeakCells by checking that the target is not undefined.)
-  DCHECK(target().CanBeHeldWeakly());
+  DCHECK(target().IsJSReceiver());
   set_target(ReadOnlyRoots(isolate).undefined_value());
 
   JSFinalizationRegistry fr =
@@ -216,7 +217,7 @@ void WeakCell::RemoveFromFinalizationRegistryCells(Isolate* isolate) {
 
   // It's important to set_target to undefined here. This guards that we won't
   // call Nullify (which assumes that the WeakCell is in active_cells).
-  DCHECK(target().IsUndefined() || target().CanBeHeldWeakly());
+  DCHECK(target().IsUndefined() || target().IsJSReceiver());
   set_target(ReadOnlyRoots(isolate).undefined_value());
 
   JSFinalizationRegistry fr =

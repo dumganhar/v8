@@ -4,7 +4,7 @@
 
 #include <memory>
 
-#include "include/v8-platform.h"
+#include "include/v8.h"
 #include "src/api/api-inl.h"
 #include "src/ast/ast.h"
 #include "src/ast/scopes.h"
@@ -35,14 +35,14 @@ class BackgroundCompileTaskTest : public TestWithNativeContext {
 
   AccountingAllocator* allocator() { return allocator_; }
 
-  static void SetUpTestSuite() {
+  static void SetUpTestCase() {
     CHECK_NULL(save_flags_);
     save_flags_ = new SaveFlags();
-    TestWithNativeContext::SetUpTestSuite();
+    TestWithNativeContext::SetUpTestCase();
   }
 
-  static void TearDownTestSuite() {
-    TestWithNativeContext::TearDownTestSuite();
+  static void TearDownTestCase() {
+    TestWithNativeContext::TearDownTestCase();
     CHECK_NOT_NULL(save_flags_);
     delete save_flags_;
     save_flags_ = nullptr;
@@ -50,12 +50,48 @@ class BackgroundCompileTaskTest : public TestWithNativeContext {
 
   BackgroundCompileTask* NewBackgroundCompileTask(
       Isolate* isolate, Handle<SharedFunctionInfo> shared,
-      size_t stack_size = v8_flags.stack_size) {
+      size_t stack_size = FLAG_stack_size) {
+    UnoptimizedCompileState state(isolate);
+    std::unique_ptr<ParseInfo> outer_parse_info =
+        test::OuterParseInfoForShared(isolate, shared, &state);
+    AstValueFactory* ast_value_factory =
+        outer_parse_info->GetOrCreateAstValueFactory();
+    AstNodeFactory ast_node_factory(ast_value_factory,
+                                    outer_parse_info->zone());
+
+    const AstRawString* function_name =
+        ast_value_factory->GetOneByteString("f");
+    DeclarationScope* script_scope =
+        outer_parse_info->zone()->New<DeclarationScope>(
+            outer_parse_info->zone(), ast_value_factory);
+    DeclarationScope* function_scope =
+        outer_parse_info->zone()->New<DeclarationScope>(
+            outer_parse_info->zone(), script_scope, FUNCTION_SCOPE);
+    function_scope->set_start_position(shared->StartPosition());
+    function_scope->set_end_position(shared->EndPosition());
+    std::vector<void*> buffer;
+    ScopedPtrList<Statement> statements(&buffer);
+    const FunctionLiteral* function_literal =
+        ast_node_factory.NewFunctionLiteral(
+            function_name, function_scope, statements, -1, -1, -1,
+            FunctionLiteral::kNoDuplicateParameters,
+            FunctionSyntaxKind::kAnonymousExpression,
+            FunctionLiteral::kShouldEagerCompile, shared->StartPosition(), true,
+            shared->function_literal_id(), nullptr);
+
     return new BackgroundCompileTask(
-        isolate, shared, test::SourceCharacterStreamForShared(isolate, shared),
+        outer_parse_info.get(), function_name, function_literal,
         isolate->counters()->worker_thread_runtime_call_stats(),
-        isolate->counters()->compile_function_on_background(),
-        v8_flags.stack_size);
+        isolate->counters()->compile_function_on_background(), FLAG_stack_size);
+  }
+
+ protected:
+  void SetUp() override {
+    // TODO(leszeks): Support background finalization in compiler dispatcher.
+    if (FLAG_finalize_streaming_on_background) {
+      GTEST_SKIP_(
+          "Parallel compile tasks don't yet support background finalization");
+    }
   }
 
  private:
@@ -80,9 +116,9 @@ TEST_F(BackgroundCompileTaskTest, SyntaxError) {
   std::unique_ptr<BackgroundCompileTask> task(
       NewBackgroundCompileTask(isolate(), shared));
 
-  task->RunOnMainThread(isolate());
+  task->Run();
   ASSERT_FALSE(Compiler::FinalizeBackgroundCompileTask(
-      task.get(), isolate(), Compiler::KEEP_EXCEPTION));
+      task.get(), shared, isolate(), Compiler::KEEP_EXCEPTION));
   ASSERT_TRUE(isolate()->has_pending_exception());
 
   isolate()->clear_pending_exception();
@@ -106,9 +142,9 @@ TEST_F(BackgroundCompileTaskTest, CompileAndRun) {
   std::unique_ptr<BackgroundCompileTask> task(
       NewBackgroundCompileTask(isolate(), shared));
 
-  task->RunOnMainThread(isolate());
+  task->Run();
   ASSERT_TRUE(Compiler::FinalizeBackgroundCompileTask(
-      task.get(), isolate(), Compiler::KEEP_EXCEPTION));
+      task.get(), shared, isolate(), Compiler::KEEP_EXCEPTION));
   ASSERT_TRUE(shared->is_compiled());
 
   Smi value = Smi::cast(*RunJS("f(100);"));
@@ -132,9 +168,9 @@ TEST_F(BackgroundCompileTaskTest, CompileFailure) {
   std::unique_ptr<BackgroundCompileTask> task(
       NewBackgroundCompileTask(isolate(), shared, 100));
 
-  task->RunOnMainThread(isolate());
+  task->Run();
   ASSERT_FALSE(Compiler::FinalizeBackgroundCompileTask(
-      task.get(), isolate(), Compiler::KEEP_EXCEPTION));
+      task.get(), shared, isolate(), Compiler::KEEP_EXCEPTION));
   ASSERT_TRUE(isolate()->has_pending_exception());
 
   isolate()->clear_pending_exception();
@@ -179,7 +215,7 @@ TEST_F(BackgroundCompileTaskTest, CompileOnBackgroundThread) {
   V8::GetCurrentPlatform()->CallOnWorkerThread(std::move(background_task));
   semaphore.Wait();
   ASSERT_TRUE(Compiler::FinalizeBackgroundCompileTask(
-      task.get(), isolate(), Compiler::KEEP_EXCEPTION));
+      task.get(), shared, isolate(), Compiler::KEEP_EXCEPTION));
   ASSERT_TRUE(shared->is_compiled());
 }
 
@@ -202,9 +238,9 @@ TEST_F(BackgroundCompileTaskTest, EagerInnerFunctions) {
   std::unique_ptr<BackgroundCompileTask> task(
       NewBackgroundCompileTask(isolate(), shared));
 
-  task->RunOnMainThread(isolate());
+  task->Run();
   ASSERT_TRUE(Compiler::FinalizeBackgroundCompileTask(
-      task.get(), isolate(), Compiler::KEEP_EXCEPTION));
+      task.get(), shared, isolate(), Compiler::KEEP_EXCEPTION));
   ASSERT_TRUE(shared->is_compiled());
 
   Handle<JSFunction> e = RunJS<JSFunction>("f();");
@@ -230,11 +266,9 @@ TEST_F(BackgroundCompileTaskTest, LazyInnerFunctions) {
   std::unique_ptr<BackgroundCompileTask> task(
       NewBackgroundCompileTask(isolate(), shared));
 
-  // There's already a task for this SFI.
-
-  task->RunOnMainThread(isolate());
+  task->Run();
   ASSERT_TRUE(Compiler::FinalizeBackgroundCompileTask(
-      task.get(), isolate(), Compiler::KEEP_EXCEPTION));
+      task.get(), shared, isolate(), Compiler::KEEP_EXCEPTION));
   ASSERT_TRUE(shared->is_compiled());
 
   Handle<JSFunction> e = RunJS<JSFunction>("f();");

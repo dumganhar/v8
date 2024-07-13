@@ -138,26 +138,15 @@ int CallDescriptor::GetOffsetToReturns() const {
   return offset;
 }
 
-uint32_t CallDescriptor::GetTaggedParameterSlots() const {
-  uint32_t count = 0;
-  uint32_t first_offset = kMaxInt;
+int CallDescriptor::GetTaggedParameterSlots() const {
+  int result = 0;
   for (size_t i = 0; i < InputCount(); ++i) {
     LinkageLocation operand = GetInputLocation(i);
     if (!operand.IsRegister() && operand.GetType().IsTagged()) {
-      ++count;
-      // Caller frame slots have negative indices and start at -1. Flip it
-      // back to a positive offset (to be added to the frame's SP to find the
-      // slot).
-      int slot_offset = -operand.GetLocation() - 1;
-      DCHECK_GE(slot_offset, 0);
-      first_offset = std::min(first_offset, static_cast<uint32_t>(slot_offset));
+      ++result;
     }
   }
-  if (count > 0) {
-    DCHECK(first_offset != kMaxInt);
-    return (first_offset << 16) | (count & 0xFFFFu);
-  }
-  return 0;
+  return result;
 }
 
 bool CallDescriptor::CanTailCall(const CallDescriptor* callee) const {
@@ -208,37 +197,6 @@ int CallDescriptor::CalculateFixedFrameSize(CodeKind code_kind) const {
   UNREACHABLE();
 }
 
-EncodedCSignature CallDescriptor::ToEncodedCSignature() const {
-  int parameter_count = static_cast<int>(ParameterCount());
-  EncodedCSignature sig(parameter_count);
-  CHECK_LT(parameter_count, EncodedCSignature::kInvalidParamCount);
-
-  for (int i = 0; i < parameter_count; ++i) {
-    if (IsFloatingPoint(GetParameterType(i).representation())) {
-      sig.SetFloat(i);
-    }
-  }
-  if (ReturnCount() > 0) {
-    DCHECK_EQ(1, ReturnCount());
-    if (IsFloatingPoint(GetReturnType(0).representation())) {
-      sig.SetFloat(EncodedCSignature::kReturnIndex);
-    }
-  }
-  return sig;
-}
-
-void CallDescriptor::ComputeParamCounts() const {
-  gp_param_count_ = 0;
-  fp_param_count_ = 0;
-  for (size_t i = 0; i < ParameterCount(); ++i) {
-    if (IsFloatingPoint(GetParameterType(i).representation())) {
-      ++fp_param_count_.value();
-    } else {
-      ++gp_param_count_.value();
-    }
-  }
-}
-
 CallDescriptor* Linkage::ComputeIncoming(Zone* zone,
                                          OptimizedCompilationInfo* info) {
 #if V8_ENABLE_WEBASSEMBLY
@@ -250,10 +208,9 @@ CallDescriptor* Linkage::ComputeIncoming(Zone* zone,
     // If we are compiling a JS function, use a JS call descriptor,
     // plus the receiver.
     SharedFunctionInfo shared = info->closure()->shared();
-    return GetJSCallDescriptor(
-        zone, info->is_osr(),
-        shared.internal_formal_parameter_count_with_receiver(),
-        CallDescriptor::kCanUseRoots);
+    return GetJSCallDescriptor(zone, info->is_osr(),
+                               1 + shared.internal_formal_parameter_count(),
+                               CallDescriptor::kCanUseRoots);
   }
   return nullptr;  // TODO(titzer): ?
 }
@@ -268,7 +225,6 @@ bool Linkage::NeedsFrameStateInput(Runtime::FunctionId function) {
     case Runtime::kAbort:
     case Runtime::kAllocateInOldGeneration:
     case Runtime::kCreateIterResultObject:
-    case Runtime::kGrowableSharedArrayBufferByteLength:
     case Runtime::kIncBlockCounter:
     case Runtime::kIsFunction:
     case Runtime::kNewClosure:
@@ -277,7 +233,6 @@ bool Linkage::NeedsFrameStateInput(Runtime::FunctionId function) {
     case Runtime::kPushBlockContext:
     case Runtime::kPushCatchContext:
     case Runtime::kReThrow:
-    case Runtime::kReThrowWithMessage:
     case Runtime::kStringEqual:
     case Runtime::kStringLessThan:
     case Runtime::kStringLessThanOrEqual:
@@ -294,6 +249,10 @@ bool Linkage::NeedsFrameStateInput(Runtime::FunctionId function) {
     case Runtime::kInlineGeneratorClose:
     case Runtime::kInlineGeneratorGetResumeMode:
     case Runtime::kInlineCreateJSGeneratorObject:
+    case Runtime::kInlineIsArray:
+    case Runtime::kInlineIsJSReceiver:
+    case Runtime::kInlineIsRegExp:
+    case Runtime::kInlineIsSmi:
       return false;
 
     default:
@@ -303,6 +262,18 @@ bool Linkage::NeedsFrameStateInput(Runtime::FunctionId function) {
   // For safety, default to needing a FrameState unless allowlisted.
   return true;
 }
+
+
+bool CallDescriptor::UsesOnlyRegisters() const {
+  for (size_t i = 0; i < InputCount(); ++i) {
+    if (!GetInputLocation(i).IsRegister()) return false;
+  }
+  for (size_t i = 0; i < ReturnCount(); ++i) {
+    if (!GetReturnLocation(i).IsRegister()) return false;
+  }
+  return true;
+}
+
 
 CallDescriptor* Linkage::GetRuntimeCallDescriptor(
     Zone* zone, Runtime::FunctionId function_id, int js_parameter_count,
@@ -373,7 +344,7 @@ CallDescriptor* Linkage::GetCEntryStubCallDescriptor(
       js_parameter_count,               // stack_parameter_count
       properties,                       // properties
       kNoCalleeSaved,                   // callee-saved
-      kNoCalleeSavedFp,                 // callee-saved fp
+      kNoCalleeSaved,                   // callee-saved fp
       flags,                            // flags
       debug_name,                       // debug name
       stack_order);                     // stack order
@@ -381,8 +352,7 @@ CallDescriptor* Linkage::GetCEntryStubCallDescriptor(
 
 CallDescriptor* Linkage::GetJSCallDescriptor(Zone* zone, bool is_osr,
                                              int js_parameter_count,
-                                             CallDescriptor::Flags flags,
-                                             Operator::Properties properties) {
+                                             CallDescriptor::Flags flags) {
   const size_t return_count = 1;
   const size_t context_count = 1;
   const size_t new_target_count = 1;
@@ -417,23 +387,20 @@ CallDescriptor* Linkage::GetJSCallDescriptor(Zone* zone, bool is_osr,
   MachineType target_type = MachineType::AnyTagged();
   // When entering into an OSR function from unoptimized code the JSFunction
   // is not in a register, but it is on the stack in the marker spill slot.
-  // For kind == JSDescKind::kBuiltin, we should still use the regular
-  // kJSFunctionRegister, so that frame attribution for stack traces works.
-  LinkageLocation target_loc = is_osr
-                                   ? LinkageLocation::ForSavedCallerFunction()
-                                   : regloc(kJSFunctionRegister, target_type);
-  CallDescriptor::Kind descriptor_kind = CallDescriptor::kCallJSFunction;
-  return zone->New<CallDescriptor>(  // --
-      descriptor_kind,               // kind
-      target_type,                   // target MachineType
-      target_loc,                    // target location
-      locations.Build(),             // location_sig
-      js_parameter_count,            // stack_parameter_count
-      properties,                    // properties
-      kNoCalleeSaved,                // callee-saved
-      kNoCalleeSavedFp,              // callee-saved fp
-      flags,                         // flags
-      "js-call");                    // debug name
+  LinkageLocation target_loc =
+      is_osr ? LinkageLocation::ForSavedCallerFunction()
+             : regloc(kJSFunctionRegister, MachineType::AnyTagged());
+  return zone->New<CallDescriptor>(     // --
+      CallDescriptor::kCallJSFunction,  // kind
+      target_type,                      // target MachineType
+      target_loc,                       // target location
+      locations.Build(),                // location_sig
+      js_parameter_count,               // stack_parameter_count
+      Operator::kNoProperties,          // properties
+      kNoCalleeSaved,                   // callee-saved
+      kNoCalleeSaved,                   // callee-saved fp
+      flags,                            // flags
+      "js-call");                       // debug name
 }
 
 // TODO(turbofan): cache call descriptors for code stub calls.
@@ -475,20 +442,20 @@ CallDescriptor* Linkage::GetStubCallDescriptor(
       num_returns++;
     }
   }
-  USE(num_fp_returns);
 
   // Add parameters in registers and on the stack.
   for (int i = 0; i < js_parameter_count; i++) {
     if (i < register_parameter_count) {
       // The first parameters go in registers.
+      // TODO(bbudge) Add floating point registers to the InterfaceDescriptor
+      // and use them for FP types. Currently, this works because on most
+      // platforms, all FP registers are available for use. On ia32, xmm0 is
+      // not allocatable and so we must work around that with platform-specific
+      // descriptors, adjusting the GP register set to avoid eax, which has
+      // register code 0.
+      Register reg = descriptor.GetRegisterParameter(i);
       MachineType type = descriptor.GetParameterType(i);
-      if (IsFloatingPoint(type.representation())) {
-        DoubleRegister reg = descriptor.GetDoubleRegisterParameter(i);
-        locations.AddParam(regloc(reg, type));
-      } else {
-        Register reg = descriptor.GetRegisterParameter(i);
-        locations.AddParam(regloc(reg, type));
-      }
+      locations.AddParam(regloc(reg, type));
     } else {
       // The rest of the parameters go on the stack.
       int stack_slot = i - register_parameter_count - stack_parameter_count;
@@ -523,12 +490,6 @@ CallDescriptor* Linkage::GetStubCallDescriptor(
       break;
   }
 
-  RegList allocatable_registers = descriptor.allocatable_registers();
-  RegList callee_saved_registers = kNoCalleeSaved;
-  if (descriptor.CalleeSaveRegisters()) {
-    callee_saved_registers = allocatable_registers;
-    DCHECK(!callee_saved_registers.is_empty());
-  }
   LinkageLocation target_loc = LinkageLocation::ForAnyRegister(target_type);
   return zone->New<CallDescriptor>(          // --
       kind,                                  // kind
@@ -537,12 +498,12 @@ CallDescriptor* Linkage::GetStubCallDescriptor(
       locations.Build(),                     // location_sig
       stack_parameter_count,                 // stack_parameter_count
       properties,                            // properties
-      callee_saved_registers,                // callee-saved registers
-      kNoCalleeSavedFp,                      // callee-saved fp
+      kNoCalleeSaved,                        // callee-saved registers
+      kNoCalleeSaved,                        // callee-saved fp
       CallDescriptor::kCanUseRoots | flags,  // flags
       descriptor.DebugName(),                // debug name
       descriptor.GetStackArgumentOrder(),    // stack order
-      allocatable_registers);
+      descriptor.allocatable_registers());
 }
 
 // static
@@ -585,7 +546,7 @@ CallDescriptor* Linkage::GetBytecodeDispatchCallDescriptor(
       stack_parameter_count,         // stack_parameter_count
       Operator::kNoProperties,       // properties
       kNoCalleeSaved,                // callee-saved registers
-      kNoCalleeSavedFp,              // callee-saved fp
+      kNoCalleeSaved,                // callee-saved fp
       kFlags,                        // flags
       descriptor.DebugName());
 }
@@ -666,6 +627,7 @@ LinkageLocation Linkage::GetParameterSecondaryLocation(int index) const {
   }
 #endif  // V8_ENABLE_WEBASSEMBLY
   UNREACHABLE();
+  return LinkageLocation::ForCalleeFrameSlot(0, MachineType::AnyTagged());
 }
 
 

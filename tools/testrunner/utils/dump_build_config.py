@@ -12,6 +12,7 @@ the string "true".
 """
 
 import json
+import os
 import sys
 
 assert len(sys.argv) > 2

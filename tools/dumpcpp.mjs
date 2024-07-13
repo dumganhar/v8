@@ -5,20 +5,19 @@
 import { LogReader, parseString } from "./logreader.mjs";
 import { CodeMap, CodeEntry } from "./codemap.mjs";
 export {
-    ArgumentsProcessor, LinuxCppEntriesProvider,
-    WindowsCppEntriesProvider, MacOSCppEntriesProvider,
+    ArgumentsProcessor, UnixCppEntriesProvider,
+    WindowsCppEntriesProvider, MacCppEntriesProvider,
   } from  "./tickprocessor.mjs";
 
 
 export class CppProcessor extends LogReader {
   constructor(cppEntriesProvider, timedRange, pairwiseTimedRange) {
-    super(timedRange, pairwiseTimedRange);
-    this.setDispatchTable({
-         __proto__: null,
+    super({}, timedRange, pairwiseTimedRange);
+    this.dispatchTable_ = {
         'shared-library': {
           parsers: [parseString, parseInt, parseInt, parseInt],
           processor: this.processSharedLibrary }
-    });
+    };
     this.cppEntriesProvider_ = cppEntriesProvider;
     this.codeMap_ = new CodeMap();
     this.lastLogFileName_ = null;
@@ -42,7 +41,7 @@ export class CppProcessor extends LogReader {
   processLogFileInTest(fileName) {
     // Hack file name to avoid dealing with platform specifics.
     this.lastLogFileName_ = 'v8.log';
-    const contents = d8.file.read(fileName);
+    const contents = readFile(fileName);
     this.processLogChunk(contents);
   }
 

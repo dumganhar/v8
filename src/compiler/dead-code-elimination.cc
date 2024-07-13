@@ -6,6 +6,7 @@
 
 #include "src/compiler/common-operator.h"
 #include "src/compiler/graph.h"
+#include "src/compiler/js-operator.h"
 #include "src/compiler/node-properties.h"
 #include "src/compiler/operator-properties.h"
 
@@ -45,6 +46,7 @@ Node* FindDeadInput(Node* node) {
 }  // namespace
 
 Reduction DeadCodeElimination::Reduce(Node* node) {
+  DisallowHeapAccessIf no_heap_access(!FLAG_turbo_direct_heap_access);
   switch (node->opcode()) {
     case IrOpcode::kEnd:
       return ReduceEnd(node);

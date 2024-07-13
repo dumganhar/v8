@@ -18,7 +18,7 @@ function listener(event, exec_state, event_data, data) {
       entry += exec_state.frame(i).sourceColumn();
     }
     log.push(entry);
-    exec_state.prepareStep(Debug.StepAction.StepInto);
+    exec_state.prepareStep(Debug.StepAction.StepIn);
   } catch (e) {
     exception = e;
   }

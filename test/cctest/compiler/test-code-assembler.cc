@@ -10,8 +10,8 @@
 #include "src/objects/heap-number-inl.h"
 #include "src/objects/js-function.h"
 #include "src/objects/objects-inl.h"
+#include "test/cctest/compiler/code-assembler-tester.h"
 #include "test/cctest/compiler/function-tester.h"
-#include "test/common/code-assembler-tester.h"
 
 namespace v8 {
 namespace internal {
@@ -148,11 +148,12 @@ Handle<JSFunction> CreateSumAllArgumentsFunction(FunctionTester* ft) {
 TEST(SimpleCallJSFunction0Arg) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  const int kContextOffset = kNumParams + 3;
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeAssembler m(asm_tester.state());
   {
     auto function = m.Parameter<JSFunction>(1);
-    auto context = m.GetJSContextParameter();
+    auto context = m.Parameter<Context>(kContextOffset);
 
     auto receiver = SmiTag(&m, m.IntPtrConstant(42));
 
@@ -170,11 +171,12 @@ TEST(SimpleCallJSFunction0Arg) {
 TEST(SimpleCallJSFunction1Arg) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 1;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  const int kContextOffset = kNumParams + 3;
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeAssembler m(asm_tester.state());
   {
     auto function = m.Parameter<JSFunction>(1);
-    auto context = m.GetJSContextParameter();
+    auto context = m.Parameter<Context>(kContextOffset);
 
     Node* receiver = SmiTag(&m, m.IntPtrConstant(42));
     Node* a = SmiTag(&m, m.IntPtrConstant(13));
@@ -193,11 +195,12 @@ TEST(SimpleCallJSFunction1Arg) {
 TEST(SimpleCallJSFunction2Arg) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 2;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  const int kContextOffset = kNumParams + 3;
+  CodeAssemblerTester asm_tester(isolate, kNumParams + 1);  // Include receiver.
   CodeAssembler m(asm_tester.state());
   {
     auto function = m.Parameter<JSFunction>(1);
-    auto context = m.GetJSContextParameter();
+    auto context = m.Parameter<Context>(kContextOffset);
 
     Node* receiver = SmiTag(&m, m.IntPtrConstant(42));
     Node* a = SmiTag(&m, m.IntPtrConstant(13));
@@ -443,7 +446,7 @@ TEST(TestOutOfScopeVariable) {
 TEST(ExceptionHandler) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeAssembler m(asm_tester.state());
 
   TVariable<Object> var(m.SmiConstant(0), &m);
@@ -464,11 +467,10 @@ TEST(ExceptionHandler) {
 }
 
 TEST(TestCodeAssemblerCodeComment) {
-#ifdef V8_CODE_COMMENTS
-  i::v8_flags.code_comments = true;
+  i::FLAG_code_comments = true;
   Isolate* isolate(CcTest::InitIsolateOnce());
   const int kNumParams = 0;
-  CodeAssemblerTester asm_tester(isolate, JSParameterCount(kNumParams));
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeAssembler m(asm_tester.state());
 
   m.Comment("Comment1");
@@ -484,7 +486,6 @@ TEST(TestCodeAssemblerCodeComment) {
     it.Next();
   }
   CHECK(found_comment);
-#endif  // V8_CODE_COMMENTS
 }
 
 TEST(StaticAssert) {

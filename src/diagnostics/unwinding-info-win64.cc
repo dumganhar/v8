@@ -10,33 +10,29 @@
 #if defined(V8_OS_WIN_X64)
 #include "src/codegen/x64/assembler-x64.h"
 #elif defined(V8_OS_WIN_ARM64)
+#include "src/base/platform/wrappers.h"
 #include "src/codegen/arm64/assembler-arm64-inl.h"
 #include "src/codegen/arm64/macro-assembler-arm64-inl.h"
 #else
 #error "Unsupported OS"
 #endif  // V8_OS_WIN_X64
 
-#include <windows.h>
-
-// This has to come after windows.h.
-#include <versionhelpers.h>  // For IsWindows8OrGreater().
-
 namespace v8 {
 namespace internal {
 namespace win64_unwindinfo {
 
-bool CanEmitUnwindInfoForBuiltins() { return v8_flags.win64_unwinding_info; }
+bool CanEmitUnwindInfoForBuiltins() { return FLAG_win64_unwinding_info; }
 
 bool CanRegisterUnwindInfoForNonABICompliantCodeRange() {
-  return !v8_flags.jitless;
+  return !FLAG_jitless;
 }
 
 bool RegisterUnwindInfoForExceptionHandlingOnly() {
   DCHECK(CanRegisterUnwindInfoForNonABICompliantCodeRange());
 #if defined(V8_OS_WIN_ARM64)
-  return !v8_flags.win64_unwinding_info;
+  return !FLAG_win64_unwinding_info;
 #else
-  return !IsWindows8OrGreater() || !v8_flags.win64_unwinding_info;
+  return !IsWindows8OrGreater() || !FLAG_win64_unwinding_info;
 #endif
 }
 
@@ -175,8 +171,8 @@ void InitUnwindingRecord(Record* record, size_t code_size_in_bytes) {
   masm.movq(rax, reinterpret_cast<uint64_t>(&CRASH_HANDLER_FUNCTION_NAME));
   masm.jmp(rax);
   DCHECK_LE(masm.instruction_size(), sizeof(record->exception_thunk));
-  memcpy(&record->exception_thunk[0], masm.buffer_start(),
-         masm.instruction_size());
+  base::Memcpy(&record->exception_thunk[0], masm.buffer_start(),
+               masm.instruction_size());
 }
 
 #elif defined(V8_OS_WIN_ARM64)
@@ -286,7 +282,7 @@ struct V8UnwindData {
     // error is acceptable when the unwinding info for the caller frame also
     // depends on fp rather than sp, as is the case for V8 builtins and runtime-
     // generated code.
-    static_assert(kNumberOfUnwindCodeWords >= 1);
+    STATIC_ASSERT(kNumberOfUnwindCodeWords >= 1);
     unwind_codes[0] = Combine8BitUnwindCodes(
         OpSetFp, MakeOpSaveFpLrX(-CommonFrameConstants::kCallerSPOffset),
         OpEnd);
@@ -345,7 +341,7 @@ std::vector<uint8_t> GetUnwindInfoForBuiltinFunction(
 
   if (fp_adjustment.IsDefault()) {
     // One code word is plenty.
-    static_assert(kDefaultNumberOfUnwindCodeWords <
+    STATIC_ASSERT(kDefaultNumberOfUnwindCodeWords <
                   kMaxNumberOfUnwindCodeWords);
     xdata.unwind_info.CodeWords = kDefaultNumberOfUnwindCodeWords;
   } else {
@@ -447,14 +443,14 @@ void InitUnwindingRecord(Record* record, size_t code_size_in_bytes) {
   // Hardcoded thunk.
   AssemblerOptions options;
   options.record_reloc_info_for_serialization = false;
-  MacroAssembler masm(nullptr, options, CodeObjectRequired::kNo,
+  TurboAssembler masm(nullptr, options, CodeObjectRequired::kNo,
                       NewAssemblerBuffer(64));
   masm.Mov(x16,
            Operand(reinterpret_cast<uint64_t>(&CRASH_HANDLER_FUNCTION_NAME)));
   masm.Br(x16);
   DCHECK_LE(masm.instruction_size(), sizeof(record->exception_thunk));
-  memcpy(&record->exception_thunk[0], masm.buffer_start(),
-         masm.instruction_size());
+  base::Memcpy(&record->exception_thunk[0], masm.buffer_start(),
+               masm.instruction_size());
 }
 
 #endif  // V8_OS_WIN_X64
@@ -468,27 +464,24 @@ static decltype(
     &::RtlDeleteGrowableFunctionTable) delete_growable_function_table_func =
     nullptr;
 
-void LoadNtdllUnwindingFunctionsOnce() {
-  // Load functions from the ntdll.dll module.
-  HMODULE ntdll_module =
-      LoadLibraryEx(L"ntdll.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-  DCHECK_NOT_NULL(ntdll_module);
-
-  // This fails on Windows 7.
-  add_growable_function_table_func =
-      reinterpret_cast<decltype(&::RtlAddGrowableFunctionTable)>(
-          ::GetProcAddress(ntdll_module, "RtlAddGrowableFunctionTable"));
-  DCHECK_IMPLIES(IsWindows8OrGreater(), add_growable_function_table_func);
-
-  delete_growable_function_table_func =
-      reinterpret_cast<decltype(&::RtlDeleteGrowableFunctionTable)>(
-          ::GetProcAddress(ntdll_module, "RtlDeleteGrowableFunctionTable"));
-  DCHECK_IMPLIES(IsWindows8OrGreater(), delete_growable_function_table_func);
-}
-
 void LoadNtdllUnwindingFunctions() {
-  base::CallOnce(&load_ntdll_unwinding_functions_once,
-                 &LoadNtdllUnwindingFunctionsOnce);
+  base::CallOnce(&load_ntdll_unwinding_functions_once, []() {
+    // Load functions from the ntdll.dll module.
+    HMODULE ntdll_module =
+        LoadLibraryEx(L"ntdll.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    DCHECK_NOT_NULL(ntdll_module);
+
+    // This fails on Windows 7.
+    add_growable_function_table_func =
+        reinterpret_cast<decltype(&::RtlAddGrowableFunctionTable)>(
+            ::GetProcAddress(ntdll_module, "RtlAddGrowableFunctionTable"));
+    DCHECK_IMPLIES(IsWindows8OrGreater(), add_growable_function_table_func);
+
+    delete_growable_function_table_func =
+        reinterpret_cast<decltype(&::RtlDeleteGrowableFunctionTable)>(
+            ::GetProcAddress(ntdll_module, "RtlDeleteGrowableFunctionTable"));
+    DCHECK_IMPLIES(IsWindows8OrGreater(), delete_growable_function_table_func);
+  });
 }
 
 bool AddGrowableFunctionTable(PVOID* DynamicTable,
@@ -581,11 +574,6 @@ void UnregisterNonABICompliantCodeRange(void* start) {
       ExceptionHandlerRecord* record =
           reinterpret_cast<ExceptionHandlerRecord*>(start);
       CHECK(::RtlDeleteFunctionTable(record->runtime_function));
-
-      // Unprotect reserved page.
-      DWORD old_protect;
-      CHECK(VirtualProtect(start, sizeof(ExceptionHandlerRecord),
-                           PAGE_READWRITE, &old_protect));
     }
 #endif  // V8_OS_WIN_X64
   } else {
@@ -594,11 +582,6 @@ void UnregisterNonABICompliantCodeRange(void* start) {
     if (record->dynamic_table) {
       DeleteGrowableFunctionTable(record->dynamic_table);
     }
-
-    // Unprotect reserved page.
-    DWORD old_protect;
-    CHECK(VirtualProtect(start, sizeof(CodeRangeUnwindingRecord),
-                         PAGE_READWRITE, &old_protect));
   }
 }
 

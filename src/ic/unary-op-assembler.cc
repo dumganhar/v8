@@ -28,12 +28,8 @@ class UnaryOpAssemblerImpl final : public CodeStubAssembler {
     TVARIABLE(BigInt, var_bigint);
     TVARIABLE(Object, var_result);
     Label if_number(this), if_bigint(this, Label::kDeferred), out(this);
-    LazyNode<HeapObject> get_vector = [&]() { return maybe_feedback_vector; };
-    FeedbackValues feedback = {&var_feedback, &get_vector, &slot,
-                               update_feedback_mode};
     TaggedToWord32OrBigIntWithFeedback(context, value, &if_number, &var_word32,
-                                       &if_bigint, nullptr, &var_bigint,
-                                       feedback);
+                                       &if_bigint, &var_bigint, &var_feedback);
 
     // Number case.
     BIND(&if_number);
@@ -140,10 +136,8 @@ class UnaryOpAssemblerImpl final : public CodeStubAssembler {
     TVARIABLE(Object, var_result);
     TVARIABLE(Float64T, var_float_value);
     TVARIABLE(Smi, var_feedback, SmiConstant(BinaryOperationFeedback::kNone));
-    TVARIABLE(Object, var_exception);
     Label start(this, {&var_value, &var_feedback}), end(this);
     Label do_float_op(this, &var_float_value);
-    Label if_exception(this, Label::kDeferred);
     Goto(&start);
     // We might have to try again after ToNumeric conversion.
     BIND(&start);
@@ -151,7 +145,7 @@ class UnaryOpAssemblerImpl final : public CodeStubAssembler {
       Label if_smi(this), if_heapnumber(this), if_oddball(this);
       Label if_bigint(this, Label::kDeferred);
       Label if_other(this, Label::kDeferred);
-      value = var_value.value();
+      TNode<Object> value = var_value.value();
       GotoIf(TaggedIsSmi(value), &if_smi);
 
       TNode<HeapObject> value_heap_object = CAST(value);
@@ -187,7 +181,7 @@ class UnaryOpAssemblerImpl final : public CodeStubAssembler {
         // We do not require an Or with earlier feedback here because once we
         // convert the value to a number, we cannot reach this path. We can
         // only reach this path on the first pass when the feedback is kNone.
-        CSA_DCHECK(this, SmiEqual(var_feedback.value(),
+        CSA_ASSERT(this, SmiEqual(var_feedback.value(),
                                   SmiConstant(BinaryOperationFeedback::kNone)));
         OverwriteFeedback(&var_feedback,
                           BinaryOperationFeedback::kNumberOrOddball);
@@ -201,24 +195,13 @@ class UnaryOpAssemblerImpl final : public CodeStubAssembler {
         // We do not require an Or with earlier feedback here because once we
         // convert the value to a number, we cannot reach this path. We can
         // only reach this path on the first pass when the feedback is kNone.
-        CSA_DCHECK(this, SmiEqual(var_feedback.value(),
+        CSA_ASSERT(this, SmiEqual(var_feedback.value(),
                                   SmiConstant(BinaryOperationFeedback::kNone)));
         OverwriteFeedback(&var_feedback, BinaryOperationFeedback::kAny);
-        {
-          ScopedExceptionHandler handler(this, &if_exception, &var_exception);
-          var_value = CallBuiltin(Builtin::kNonNumberToNumeric, context,
-                                  value_heap_object);
-        }
+        var_value = CallBuiltin(Builtins::kNonNumberToNumeric, context,
+                                value_heap_object);
         Goto(&start);
       }
-    }
-
-    BIND(&if_exception);
-    {
-      UpdateFeedback(var_feedback.value(), maybe_feedback_vector, slot,
-                     update_feedback_mode);
-      CallRuntime(Runtime::kReThrow, context, var_exception.value());
-      Unreachable();
     }
 
     BIND(&do_float_op);
@@ -240,7 +223,7 @@ class UnaryOpAssemblerImpl final : public CodeStubAssembler {
                                      TNode<Object> value, TNode<UintPtrT> slot,
                                      TNode<HeapObject> maybe_feedback_vector,
                                      UpdateFeedbackMode update_feedback_mode) {
-    static_assert(kOperation == Operation::kIncrement ||
+    STATIC_ASSERT(kOperation == Operation::kIncrement ||
                   kOperation == Operation::kDecrement);
     static constexpr int kAddValue =
         (kOperation == Operation::kIncrement) ? 1 : -1;

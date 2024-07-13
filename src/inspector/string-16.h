@@ -6,14 +6,13 @@
 #define V8_INSPECTOR_STRING_16_H_
 
 #include <stdint.h>
-
 #include <cctype>
 #include <climits>
 #include <cstring>
 #include <string>
-#include <utility>
 #include <vector>
 
+#include "../../third_party/inspector_protocol/crdtp/serializer_traits.h"
 #include "src/base/compiler-specific.h"
 
 namespace v8_inspector {
@@ -28,8 +27,8 @@ class String16 {
   String16(const String16&) V8_NOEXCEPT = default;
   String16(String16&&) V8_NOEXCEPT = default;
   String16(const UChar* characters, size_t size);
-  V8_EXPORT String16(const UChar* characters);
-  V8_EXPORT String16(const char* characters);
+  V8_EXPORT String16(const UChar* characters);  // NOLINT(runtime/explicit)
+  V8_EXPORT String16(const char* characters);   // NOLINT(runtime/explicit)
   String16(const char* characters, size_t size);
   explicit String16(const std::basic_string<UChar>& impl);
   explicit String16(std::basic_string<UChar>&& impl);
@@ -47,7 +46,6 @@ class String16 {
   int64_t toInteger64(bool* ok = nullptr) const;
   uint64_t toUInt64(bool* ok = nullptr) const;
   int toInteger(bool* ok = nullptr) const;
-  std::pair<size_t, size_t> getTrimmedOffsetAndLength() const;
   String16 stripWhiteSpace() const;
   const UChar* characters16() const { return m_impl.c_str(); }
   size_t length() const { return m_impl.length(); }
@@ -169,5 +167,14 @@ struct hash<v8_inspector::String16> {
 }  // namespace std
 
 #endif  // !defined(__APPLE__) || defined(_LIBCPP_VERSION)
+
+// See third_party/inspector_protocol/crdtp/serializer_traits.h.
+namespace v8_crdtp {
+template <>
+struct SerializerTraits<v8_inspector::String16> {
+  static void Serialize(const v8_inspector::String16& str,
+                        std::vector<uint8_t>* out);
+};
+}  // namespace v8_crdtp
 
 #endif  // V8_INSPECTOR_STRING_16_H_

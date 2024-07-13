@@ -5,7 +5,8 @@
 #ifndef V8_CODEGEN_IA32_REGISTER_IA32_H_
 #define V8_CODEGEN_IA32_REGISTER_IA32_H_
 
-#include "src/codegen/register-base.h"
+#include "src/codegen/register.h"
+#include "src/codegen/reglist.h"
 
 namespace v8 {
 namespace internal {
@@ -66,15 +67,8 @@ class Register : public RegisterBase<Register, kRegAfterLast> {
 };
 
 ASSERT_TRIVIALLY_COPYABLE(Register);
-static_assert(sizeof(Register) <= sizeof(int),
+static_assert(sizeof(Register) == sizeof(int),
               "Register can efficiently be passed by value");
-
-// Assign |source| value to |no_reg| and return the |source|'s previous value.
-inline Register ReassignRegister(Register& source) {
-  Register result = source;
-  source = Register::no_reg();
-  return result;
-}
 
 #define DEFINE_REGISTER(R) \
   constexpr Register R = Register::from_code(kRegCode_##R);
@@ -88,7 +82,7 @@ constexpr int ArgumentPaddingSlots(int argument_count) {
   return 0;
 }
 
-constexpr AliasingKind kFPAliasing = AliasingKind::kOverlap;
+constexpr bool kSimpleFPAliasing = true;
 constexpr bool kSimdMaskRegisters = false;
 
 enum DoubleCode {
@@ -118,6 +112,17 @@ constexpr DoubleRegister no_dreg = DoubleRegister::no_reg();
 // Note that the bit values must match those used in actual instruction encoding
 constexpr int kNumRegs = 8;
 
+// Caller-saved registers
+constexpr RegList kJSCallerSaved =
+    Register::ListOf(eax, ecx, edx,
+                     ebx,   // used as caller-saved register in JavaScript code
+                     edi);  // callee function
+
+constexpr int kNumJSCallerSaved = 5;
+
+// Number of registers for which space is reserved in safepoints.
+constexpr int kNumSafepointRegisters = 8;
+
 // Define {RegisterName} methods for the register types.
 DEFINE_REGISTER_NAMES(Register, GENERAL_REGISTERS)
 DEFINE_REGISTER_NAMES(XMMRegister, DOUBLE_REGISTERS)
@@ -144,6 +149,10 @@ constexpr Register kJavaScriptCallNewTargetRegister = edx;
 // platforms. Note that on ia32 it aliases kJavaScriptCallCodeStartRegister.
 constexpr Register kJavaScriptCallExtraArg1Register = ecx;
 
+// The off-heap trampoline does not need a register on ia32 (it uses a
+// pc-relative call instead).
+constexpr Register kOffHeapTrampolineRegister = no_reg;
+
 constexpr Register kRuntimeCallFunctionRegister = edx;
 constexpr Register kRuntimeCallArgCountRegister = eax;
 constexpr Register kRuntimeCallArgvRegister = ecx;
@@ -151,6 +160,9 @@ constexpr Register kWasmInstanceRegister = esi;
 constexpr Register kWasmCompileLazyFuncIndexRegister = edi;
 
 constexpr Register kRootRegister = ebx;
+
+// TODO(860429): Remove remaining poisoning infrastructure on ia32.
+constexpr Register kSpeculationPoisonRegister = no_reg;
 
 constexpr DoubleRegister kFPReturnRegister0 = xmm1;  // xmm0 isn't allocatable.
 

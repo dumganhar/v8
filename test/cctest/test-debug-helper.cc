@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "include/v8-template.h"
 #include "src/api/api-inl.h"
 #include "src/debug/debug.h"
 #include "src/execution/frames-inl.h"
 #include "src/flags/flags.h"
 #include "src/heap/read-only-spaces.h"
+#include "src/heap/spaces.h"
 #include "test/cctest/cctest.h"
 #include "tools/debug_helper/debug-helper.h"
 
@@ -228,22 +228,16 @@ TEST(GetObjectProperties) {
   // its properties should match what we read last time.
   d::ObjectPropertiesResultPtr props2;
   {
-    d::HeapAddresses heap_addresses_without_ro_space = heap_addresses;
-    heap_addresses_without_ro_space.read_only_space_first_page = 0;
-    uintptr_t map_ptr = props->properties[0]->address;
-    uintptr_t map_map_ptr = *reinterpret_cast<i::Tagged_t*>(map_ptr);
-#if V8_MAP_PACKING
-    map_map_ptr = reinterpret_cast<i::MapWord*>(&map_map_ptr)->ToMap().ptr();
-#endif
+    heap_addresses.read_only_space_first_page = 0;
     uintptr_t map_address =
-        d::GetObjectProperties(map_map_ptr, &ReadMemory,
-                               heap_addresses_without_ro_space)
+        d::GetObjectProperties(
+            *reinterpret_cast<i::Tagged_t*>(props->properties[0]->address),
+            &ReadMemory, heap_addresses)
             ->properties[0]
             ->address;
     MemoryFailureRegion failure(map_address, map_address + i::Map::kSize);
     props2 = d::GetObjectProperties(second_string_address, &ReadMemory,
-                                    heap_addresses_without_ro_space,
-                                    "v8::internal::String");
+                                    heap_addresses, "v8::internal::String");
     if (COMPRESS_POINTERS_BOOL) {
       // The first page of each heap space can be automatically detected when
       // pointer compression is active, so we expect to use known maps instead
@@ -313,16 +307,11 @@ TEST(GetObjectProperties) {
   CHECK(Contains(props->brief, "\"" + std::string(80, 'a') + "...\""));
 
   // GetObjectProperties can read cacheable external strings.
-  StringResource* string_resource = new StringResource(true);
   auto external_string =
-      v8::String::NewExternalTwoByte(isolate, string_resource);
+      v8::String::NewExternalTwoByte(isolate, new StringResource(true));
   o = v8::Utils::OpenHandle(*external_string.ToLocalChecked());
   props = d::GetObjectProperties(o->ptr(), &ReadMemory, heap_addresses);
   CHECK(Contains(props->brief, "\"abcde\""));
-  CheckProp(*props->properties[5], "char16_t", "raw_characters",
-            d::PropertyKind::kArrayOfKnownSize, string_resource->length());
-  CHECK_EQ(props->properties[5]->address,
-           reinterpret_cast<uintptr_t>(string_resource->data()));
   // GetObjectProperties cannot read uncacheable external strings.
   external_string =
       v8::String::NewExternalTwoByte(isolate, new StringResource(false));
@@ -349,15 +338,11 @@ TEST(GetObjectProperties) {
   // Verify the result for a heap object field which is itself a struct: the
   // "descriptors" field on a DescriptorArray.
   // Start by getting the object's map and the map's descriptor array.
-  uintptr_t map_ptr = ReadProp<i::Tagged_t>(*props, "map");
-#if V8_MAP_PACKING
-  map_ptr = reinterpret_cast<i::MapWord*>(&map_ptr)->ToMap().ptr();
-#endif
-  props = d::GetObjectProperties(map_ptr, &ReadMemory, heap_addresses);
+  props = d::GetObjectProperties(ReadProp<i::Tagged_t>(*props, "map"),
+                                 &ReadMemory, heap_addresses);
   props = d::GetObjectProperties(
       ReadProp<i::Tagged_t>(*props, "instance_descriptors"), &ReadMemory,
       heap_addresses);
-  CHECK_EQ(props->num_properties, 6);
   // It should have at least two descriptors (possibly plus slack).
   CheckProp(*props->properties[1], "uint16_t", "number_of_all_descriptors");
   uint16_t number_of_all_descriptors =
@@ -365,7 +350,7 @@ TEST(GetObjectProperties) {
   CHECK_GE(number_of_all_descriptors, 2);
   // The "descriptors" property should describe the struct layout for each
   // element in the array.
-  const d::ObjectProperty& descriptors = *props->properties[5];
+  const d::ObjectProperty& descriptors = *props->properties[6];
   // No C++ type is reported directly because there may not be an actual C++
   // struct with this layout, hence the empty string in this check.
   CheckProp(descriptors, /*type=*/"", "descriptors",

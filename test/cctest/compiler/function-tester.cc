@@ -4,7 +4,6 @@
 
 #include "test/cctest/compiler/function-tester.h"
 
-#include "include/v8-function.h"
 #include "src/api/api-inl.h"
 #include "src/codegen/assembler.h"
 #include "src/codegen/optimized-compilation-info.h"
@@ -22,7 +21,8 @@ namespace compiler {
 
 FunctionTester::FunctionTester(const char* source, uint32_t flags)
     : isolate(main_isolate()),
-      function((v8_flags.allow_natives_syntax = true, NewFunction(source))),
+      canonical(isolate),
+      function((FLAG_allow_natives_syntax = true, NewFunction(source))),
       flags_(flags) {
   Compile(function);
   const uint32_t supported_flags = OptimizedCompilationInfo::kInlining;
@@ -31,6 +31,7 @@ FunctionTester::FunctionTester(const char* source, uint32_t flags)
 
 FunctionTester::FunctionTester(Graph* graph, int param_count)
     : isolate(main_isolate()),
+      canonical(isolate),
       function(NewFunction(BuildFunction(param_count).c_str())),
       flags_(0) {
   CompileGraph(graph);
@@ -38,11 +39,11 @@ FunctionTester::FunctionTester(Graph* graph, int param_count)
 
 FunctionTester::FunctionTester(Handle<Code> code, int param_count)
     : isolate(main_isolate()),
-      function((v8_flags.allow_natives_syntax = true,
+      canonical(isolate),
+      function((FLAG_allow_natives_syntax = true,
                 NewFunction(BuildFunction(param_count).c_str()))),
       flags_(0) {
   CHECK(!code.is_null());
-  CHECK(code->IsCode());
   Compile(function);
   function->set_code(*code, kReleaseStore);
 }
@@ -139,9 +140,9 @@ Handle<JSFunction> FunctionTester::ForMachineGraph(Graph* graph,
       p, p.GetIsolate());  // allocated in outer handle scope.
 }
 
-Handle<JSFunction> FunctionTester::Compile(Handle<JSFunction> f) {
+Handle<JSFunction> FunctionTester::Compile(Handle<JSFunction> function) {
   Zone zone(isolate->allocator(), ZONE_NAME);
-  return Optimize(f, &zone, isolate, flags_);
+  return Optimize(function, &zone, isolate, flags_);
 }
 
 // Compile the given machine graph instead of the source of the function

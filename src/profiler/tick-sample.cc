@@ -7,15 +7,14 @@
 #include <cinttypes>
 
 #include "include/v8-profiler.h"
-#include "src/base/sanitizer/asan.h"
-#include "src/base/sanitizer/msan.h"
-#include "src/execution/embedder-state.h"
 #include "src/execution/frames-inl.h"
 #include "src/execution/simulator.h"
 #include "src/execution/vm-state-inl.h"
 #include "src/heap/heap-inl.h"  // For Heap::code_range.
 #include "src/logging/counters.h"
 #include "src/profiler/profiler-stats.h"
+#include "src/sanitizer/asan.h"
+#include "src/sanitizer/msan.h"
 
 namespace v8 {
 namespace internal {
@@ -32,7 +31,7 @@ bool IsSamePage(i::Address ptr1, i::Address ptr2) {
 bool IsNoFrameRegion(i::Address address) {
   struct Pattern {
     int bytes_count;
-    uint8_t bytes[8];
+    i::byte bytes[8];
     int offsets[4];
   };
   static Pattern patterns[] = {
@@ -59,7 +58,7 @@ bool IsNoFrameRegion(i::Address address) {
 #endif
     {0, {}, {}}
   };
-  uint8_t* pc = reinterpret_cast<uint8_t*>(address);
+  i::byte* pc = reinterpret_cast<i::byte*>(address);
   for (Pattern* pattern = patterns; pattern->bytes_count; ++pattern) {
     for (int* offset_ptr = pattern->offsets; *offset_ptr != -1; ++offset_ptr) {
       int offset = *offset_ptr;
@@ -106,7 +105,7 @@ bool SimulatorHelper::FillRegisters(Isolate* isolate,
   state->sp = reinterpret_cast<void*>(simulator->sp());
   state->fp = reinterpret_cast<void*>(simulator->fp());
   state->lr = reinterpret_cast<void*>(simulator->lr());
-#elif V8_TARGET_ARCH_MIPS64 || V8_TARGET_ARCH_LOONG64
+#elif V8_TARGET_ARCH_MIPS || V8_TARGET_ARCH_MIPS64
   if (!simulator->has_bad_pc()) {
     state->pc = reinterpret_cast<void*>(simulator->get_pc());
   }
@@ -127,13 +126,6 @@ bool SimulatorHelper::FillRegisters(Isolate* isolate,
   state->fp = reinterpret_cast<void*>(simulator->get_register(Simulator::fp));
   state->lr = reinterpret_cast<void*>(simulator->get_register(Simulator::ra));
 #elif V8_TARGET_ARCH_RISCV64
-  if (!simulator->has_bad_pc()) {
-    state->pc = reinterpret_cast<void*>(simulator->get_pc());
-  }
-  state->sp = reinterpret_cast<void*>(simulator->get_register(Simulator::sp));
-  state->fp = reinterpret_cast<void*>(simulator->get_register(Simulator::fp));
-  state->lr = reinterpret_cast<void*>(simulator->get_register(Simulator::ra));
-#elif V8_TARGET_ARCH_RISCV32
   if (!simulator->has_bad_pc()) {
     state->pc = reinterpret_cast<void*>(simulator->get_pc());
   }
@@ -167,7 +159,7 @@ DISABLE_ASAN void TickSample::Init(Isolate* v8_isolate,
                                    bool update_stats,
                                    bool use_simulator_reg_state,
                                    base::TimeDelta sampling_interval) {
-  update_stats_ = update_stats;
+  this->update_stats = update_stats;
   SampleInfo info;
   RegisterState regs = reg_state;
   if (!GetStackSample(v8_isolate, &regs, record_c_entry_frame, stack,
@@ -185,9 +177,6 @@ DISABLE_ASAN void TickSample::Init(Isolate* v8_isolate,
   pc = regs.pc;
   frames_count = static_cast<unsigned>(info.frames_count);
   has_external_callback = info.external_callback_entry != nullptr;
-  context = info.context;
-  embedder_context = info.embedder_context;
-  embedder_state = info.embedder_state;
   if (has_external_callback) {
     external_callback_entry = info.external_callback_entry;
   } else if (frames_count) {
@@ -206,14 +195,10 @@ DISABLE_ASAN void TickSample::Init(Isolate* v8_isolate,
   } else {
     tos = nullptr;
   }
-  sampling_interval_ = sampling_interval;
-  timestamp = base::TimeTicks::Now();
+  this->sampling_interval = sampling_interval;
+  timestamp = base::TimeTicks::HighResolutionNow();
 }
 
-// IMPORTANT: 'GetStackSample' is sensitive to stack overflows. For this reason
-// we try not to use any function/method marked as V8_EXPORT_PRIVATE with their
-// only use-site in 'GetStackSample': The resulting linker stub needs quite
-// a bit of stack space and has caused stack overflow crashes in the past.
 bool TickSample::GetStackSample(Isolate* v8_isolate, RegisterState* regs,
                                 RecordCEntryFrame record_c_entry_frame,
                                 void** frames, size_t frames_limit,
@@ -224,25 +209,7 @@ bool TickSample::GetStackSample(Isolate* v8_isolate, RegisterState* regs,
   sample_info->frames_count = 0;
   sample_info->vm_state = isolate->current_vm_state();
   sample_info->external_callback_entry = nullptr;
-  sample_info->embedder_state = EmbedderStateTag::EMPTY;
-  sample_info->embedder_context = nullptr;
-  sample_info->context = nullptr;
-
   if (sample_info->vm_state == GC) return true;
-
-  EmbedderState* embedder_state = isolate->current_embedder_state();
-  if (embedder_state != nullptr) {
-    sample_info->embedder_context =
-        reinterpret_cast<void*>(embedder_state->native_context_address());
-    sample_info->embedder_state = embedder_state->GetState();
-  }
-
-  Context top_context = isolate->context();
-  if (top_context.ptr() != i::Context::kNoContext &&
-      top_context.ptr() != i::Context::kInvalidContext) {
-    NativeContext top_native_context = top_context.native_context();
-    sample_info->context = reinterpret_cast<void*>(top_native_context.ptr());
-  }
 
   i::Address js_entry_sp = isolate->js_entry_sp();
   if (js_entry_sp == 0) return true;  // Not executing JS now.
@@ -265,7 +232,7 @@ bool TickSample::GetStackSample(Isolate* v8_isolate, RegisterState* regs,
   // TODO(petermarshall): Code range is always null on ia32 so this check for
   // IsNoFrameRegion will never actually run there.
   if (regs->pc &&
-      isolate->heap()->code_region().contains(
+      isolate->heap()->memory_allocator()->code_range().contains(
           reinterpret_cast<i::Address>(regs->pc)) &&
       IsNoFrameRegion(reinterpret_cast<i::Address>(regs->pc))) {
     // The frame is not setup, so it'd be hard to iterate the stack. Bailout.
@@ -305,35 +272,31 @@ bool TickSample::GetStackSample(Isolate* v8_isolate, RegisterState* regs,
     }
   }
 
-  i::StackFrameIteratorForProfiler it(
-      isolate, reinterpret_cast<i::Address>(regs->pc),
-      reinterpret_cast<i::Address>(regs->fp),
-      reinterpret_cast<i::Address>(regs->sp),
-      reinterpret_cast<i::Address>(regs->lr), js_entry_sp);
+  i::SafeStackFrameIterator it(isolate, reinterpret_cast<i::Address>(regs->pc),
+                               reinterpret_cast<i::Address>(regs->fp),
+                               reinterpret_cast<i::Address>(regs->sp),
+                               reinterpret_cast<i::Address>(regs->lr),
+                               js_entry_sp);
 
   if (it.done()) return true;
 
   size_t i = 0;
   if (record_c_entry_frame == kIncludeCEntryFrame &&
       (it.top_frame_type() == internal::StackFrame::EXIT ||
-       it.top_frame_type() == internal::StackFrame::BUILTIN_EXIT ||
-       it.top_frame_type() == internal::StackFrame::API_CALLBACK_EXIT)) {
+       it.top_frame_type() == internal::StackFrame::BUILTIN_EXIT)) {
     frames[i] = reinterpret_cast<void*>(isolate->c_function());
     i++;
   }
-#ifdef V8_RUNTIME_CALL_STATS
+
   i::RuntimeCallTimer* timer =
       isolate->counters()->runtime_call_stats()->current_timer();
-#endif  // V8_RUNTIME_CALL_STATS
   for (; !it.done() && i < frames_limit; it.Advance()) {
-#ifdef V8_RUNTIME_CALL_STATS
     while (timer && reinterpret_cast<i::Address>(timer) < it.frame()->fp() &&
            i < frames_limit) {
       frames[i++] = reinterpret_cast<void*>(timer->counter());
       timer = timer->parent();
     }
     if (i == frames_limit) break;
-#endif  // V8_RUNTIME_CALL_STATS
 
     if (it.frame()->is_interpreted()) {
       // For interpreted frames use the bytecode array pointer as the pc.
@@ -377,9 +340,9 @@ void TickSample::print() const {
   PrintF(" - has_external_callback: %d\n", has_external_callback);
   PrintF(" - %s: %p\n",
          has_external_callback ? "external_callback_entry" : "tos", tos);
-  PrintF(" - update_stats: %d\n", update_stats_);
+  PrintF(" - update_stats: %d\n", update_stats);
   PrintF(" - sampling_interval: %" PRId64 "\n",
-         sampling_interval_.InMicroseconds());
+         sampling_interval.InMicroseconds());
   PrintF("\n");
 }
 

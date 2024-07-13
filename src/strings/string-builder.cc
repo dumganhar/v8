@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/base/strings.h"
+#include "src/strings/string-builder-inl.h"
+
 #include "src/execution/isolate-inl.h"
 #include "src/objects/fixed-array-inl.h"
 #include "src/objects/js-array-inl.h"
-#include "src/strings/string-builder-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -34,7 +34,7 @@ void StringBuilderConcatHelper(String special, sinkchar* sink,
         pos = Smi::ToInt(obj);
         len = -encoded_slice;
       }
-      String::WriteToFlat(special, sink + position, pos, len);
+      String::WriteToFlat(special, sink + position, pos, pos + len);
       position += len;
     } else {
       String string = String::cast(element);
@@ -49,10 +49,9 @@ template void StringBuilderConcatHelper<uint8_t>(String special, uint8_t* sink,
                                                  FixedArray fixed_array,
                                                  int array_length);
 
-template void StringBuilderConcatHelper<base::uc16>(String special,
-                                                    base::uc16* sink,
-                                                    FixedArray fixed_array,
-                                                    int array_length);
+template void StringBuilderConcatHelper<uc16>(String special, uc16* sink,
+                                              FixedArray fixed_array,
+                                              int array_length);
 
 int StringBuilderConcatLength(int special_length, FixedArray fixed_array,
                               int array_length, bool* one_byte) {
@@ -119,16 +118,6 @@ FixedArrayBuilder::FixedArrayBuilder(Handle<FixedArray> backing_store)
   DCHECK_GT(backing_store->length(), 0);
 }
 
-FixedArrayBuilder::FixedArrayBuilder(Isolate* isolate)
-    : array_(isolate->factory()->empty_fixed_array()),
-      length_(0),
-      has_non_smi_elements_(false) {}
-
-// static
-FixedArrayBuilder FixedArrayBuilder::Lazy(Isolate* isolate) {
-  return FixedArrayBuilder(isolate);
-}
-
 bool FixedArrayBuilder::HasCapacity(int elements) {
   int length = array_->length();
   int required_length = length_ + elements;
@@ -139,13 +128,6 @@ void FixedArrayBuilder::EnsureCapacity(Isolate* isolate, int elements) {
   int length = array_->length();
   int required_length = length_ + elements;
   if (length < required_length) {
-    if (length == 0) {
-      constexpr int kInitialCapacityForLazy = 16;
-      array_ = isolate->factory()->NewFixedArrayWithHoles(
-          std::max(kInitialCapacityForLazy, elements));
-      return;
-    }
-
     int new_length = length;
     do {
       new_length *= 2;
@@ -171,6 +153,12 @@ void FixedArrayBuilder::Add(Smi value) {
 }
 
 int FixedArrayBuilder::capacity() { return array_->length(); }
+
+Handle<JSArray> FixedArrayBuilder::ToJSArray(Handle<JSArray> target_array) {
+  JSArray::SetContent(target_array, array_);
+  target_array->set_length(Smi::FromInt(length_));
+  return target_array;
+}
 
 ReplacementStringBuilder::ReplacementStringBuilder(Heap* heap,
                                                    Handle<String> subject,
@@ -225,7 +213,7 @@ MaybeHandle<String> ReplacementStringBuilder::ToString() {
         String);
 
     DisallowGarbageCollection no_gc;
-    base::uc16* char_buffer = seq->GetChars(no_gc);
+    uc16* char_buffer = seq->GetChars(no_gc);
     StringBuilderConcatHelper(*subject_, char_buffer, *array_builder_.array(),
                               array_builder_.length());
     joined_string = Handle<String>::cast(seq);
@@ -255,10 +243,6 @@ IncrementalStringBuilder::IncrementalStringBuilder(Isolate* isolate)
 
 int IncrementalStringBuilder::Length() const {
   return accumulator_->length() + current_index_;
-}
-
-bool IncrementalStringBuilder::HasValidCurrentIndex() const {
-  return current_index_ < part_length_;
 }
 
 void IncrementalStringBuilder::Accumulate(Handle<String> new_part) {
@@ -297,9 +281,6 @@ MaybeHandle<String> IncrementalStringBuilder::Finish() {
   if (overflowed_) {
     THROW_NEW_ERROR(isolate_, NewInvalidStringLengthError(), String);
   }
-  if (isolate()->serializer_enabled()) {
-    return factory()->InternalizeString(accumulator());
-  }
   return accumulator();
 }
 
@@ -320,21 +301,12 @@ bool IncrementalStringBuilder::CanAppendByCopy(Handle<String> string) {
 void IncrementalStringBuilder::AppendStringByCopy(Handle<String> string) {
   DCHECK(CanAppendByCopy(string));
 
+  Handle<SeqOneByteString> part =
+      Handle<SeqOneByteString>::cast(current_part());
   {
     DisallowGarbageCollection no_gc;
-    if (encoding_ == String::ONE_BYTE_ENCODING) {
-      String::WriteToFlat(
-          *string,
-          Handle<SeqOneByteString>::cast(current_part())->GetChars(no_gc) +
-              current_index_,
-          0, string->length());
-    } else {
-      String::WriteToFlat(
-          *string,
-          Handle<SeqTwoByteString>::cast(current_part())->GetChars(no_gc) +
-              current_index_,
-          0, string->length());
-    }
+    String::WriteToFlat(*string, part->GetChars(no_gc) + current_index_, 0,
+                        string->length());
   }
   current_index_ += string->length();
   DCHECK(current_index_ <= part_length_);

@@ -49,8 +49,8 @@
 
 #include <fcntl.h>
 #include <unistd.h>
+#include <vector>
 
-#include "src/base/platform/platform.h"
 #include "src/codegen/assembler.h"
 #include "src/codegen/external-reference.h"
 #include "src/codegen/label.h"
@@ -93,7 +93,7 @@ class V8_EXPORT_PRIVATE Operand {
  public:
   // immediate
   V8_INLINE explicit Operand(intptr_t immediate,
-                             RelocInfo::Mode rmode = RelocInfo::NO_INFO)
+                             RelocInfo::Mode rmode = RelocInfo::NONE)
       : rmode_(rmode) {
     value_.immediate = immediate;
   }
@@ -103,7 +103,7 @@ class V8_EXPORT_PRIVATE Operand {
     value_.immediate = static_cast<intptr_t>(f.address());
   }
   explicit Operand(Handle<HeapObject> handle);
-  V8_INLINE explicit Operand(Smi value) : rmode_(RelocInfo::NO_INFO) {
+  V8_INLINE explicit Operand(Smi value) : rmode_(RelocInfo::NONE) {
     value_.immediate = static_cast<intptr_t>(value.ptr());
   }
 
@@ -111,6 +111,7 @@ class V8_EXPORT_PRIVATE Operand {
   V8_INLINE explicit Operand(Register rm);
 
   static Operand EmbeddedNumber(double value);  // Smi or HeapNumber
+  static Operand EmbeddedStringConstant(const StringConstantBase* str);
 
   // Return true if this is a register operand.
   V8_INLINE bool is_reg() const { return rm_.is_valid(); }
@@ -119,13 +120,13 @@ class V8_EXPORT_PRIVATE Operand {
 
   inline intptr_t immediate() const {
     DCHECK(!rm_.is_valid());
-    DCHECK(!is_heap_number_request());
+    DCHECK(!is_heap_object_request());
     return value_.immediate;
   }
 
-  HeapNumberRequest heap_number_request() const {
-    DCHECK(is_heap_number_request());
-    return value_.heap_number_request;
+  HeapObjectRequest heap_object_request() const {
+    DCHECK(is_heap_object_request());
+    return value_.heap_object_request;
   }
 
   inline void setBits(int n) {
@@ -135,12 +136,12 @@ class V8_EXPORT_PRIVATE Operand {
 
   Register rm() const { return rm_; }
 
-  bool is_heap_number_request() const {
-    DCHECK_IMPLIES(is_heap_number_request_, !rm_.is_valid());
-    DCHECK_IMPLIES(is_heap_number_request_,
+  bool is_heap_object_request() const {
+    DCHECK_IMPLIES(is_heap_object_request_, !rm_.is_valid());
+    DCHECK_IMPLIES(is_heap_object_request_,
                    rmode_ == RelocInfo::FULL_EMBEDDED_OBJECT ||
                        rmode_ == RelocInfo::CODE_TARGET);
-    return is_heap_number_request_;
+    return is_heap_object_request_;
   }
 
   RelocInfo::Mode rmode() const { return rmode_; }
@@ -149,10 +150,10 @@ class V8_EXPORT_PRIVATE Operand {
   Register rm_ = no_reg;
   union Value {
     Value() {}
-    HeapNumberRequest heap_number_request;  // if is_heap_number_request_
+    HeapObjectRequest heap_object_request;  // if is_heap_object_request_
     intptr_t immediate;                     // otherwise
   } value_;                                 // valid if rm_ == no_reg
-  bool is_heap_number_request_ = false;
+  bool is_heap_object_request_ = false;
 
   RelocInfo::Mode rmode_;
 
@@ -230,9 +231,9 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
 
   // GetCode emits any pending (non-emitted) code and fills the descriptor desc.
   static constexpr int kNoHandlerTable = 0;
-  static constexpr SafepointTableBuilderBase* kNoSafepointTable = nullptr;
+  static constexpr SafepointTableBuilder* kNoSafepointTable = nullptr;
   void GetCode(Isolate* isolate, CodeDesc* desc,
-               SafepointTableBuilderBase* safepoint_table_builder,
+               SafepointTableBuilder* safepoint_table_builder,
                int handler_table_offset);
 
   // Convenience wrapper for code without safepoint or handler tables.
@@ -320,7 +321,7 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   RegList* GetScratchRegisterList() { return &scratch_register_list_; }
 
   // ---------------------------------------------------------------------------
-  // InstructionStream generation
+  // Code generation
 
   template <class T, int size, int lo, int hi>
   inline T getfield(T value) {
@@ -1043,7 +1044,7 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   }
 
   // ---------------------------------------------------------------------------
-  // InstructionStream generation
+  // Code generation
 
   // Insert the smallest number of nop instructions
   // possible to align the pc offset to a multiple
@@ -1054,7 +1055,6 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void DataAlign(int m);
   // Aligns code to something that's optimal for a jump target for the platform.
   void CodeTargetAlign();
-  void LoopHeaderAlign() { CodeTargetAlign(); }
 
   void breakpoint(bool do_print) {
     if (do_print) {
@@ -1271,7 +1271,6 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
 
   // Load Address Instructions
   void larl(Register r, Label* l);
-  void lgrl(Register r, Label* l);
 
   // Exception-generating instructions and debugging support
   void stop(Condition cond = al, int32_t code = kDefaultStopCode,
@@ -1305,15 +1304,15 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
 
   // Record a deoptimization reason that can be used by a log or cpu profiler.
   // Use --trace-deopt to enable.
-  void RecordDeoptReason(DeoptimizeReason reason, uint32_t node_id,
-                         SourcePosition position, int id);
+  void RecordDeoptReason(DeoptimizeReason reason, SourcePosition position,
+                         int id);
 
   // Writes a single byte or word of data in the code stream.  Used
   // for inline tables, e.g., jump-tables.
   void db(uint8_t data);
-  void dd(uint32_t data);
-  void dq(uint64_t data);
-  void dp(uintptr_t data);
+  void dd(uint32_t data, RelocInfo::Mode rmode = RelocInfo::NONE);
+  void dq(uint64_t data, RelocInfo::Mode rmode = RelocInfo::NONE);
+  void dp(uintptr_t data, RelocInfo::Mode rmode = RelocInfo::NONE);
 
   // Read/patch instructions
   SixByteInstr instr_at(int pos) {
@@ -1329,7 +1328,7 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
     return Instruction::InstructionLength(buffer_start_ + pos);
   }
 
-  static SixByteInstr instr_at(uint8_t* pc) {
+  static SixByteInstr instr_at(byte* pc) {
     return Instruction::InstructionBits(pc);
   }
 
@@ -1357,15 +1356,16 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void emit_label_addr(Label* label);
 
  public:
-  uint8_t* buffer_pos() const { return buffer_start_; }
+  byte* buffer_pos() const { return buffer_start_; }
 
-  // InstructionStream generation
+
+  // Code generation
   // The relocation writer's position is at least kGap bytes below the end of
   // the generated instructions. This is so that multi-instruction sequences do
   // not have to check for overflow. The same is true for writes of large
   // relocation info entries.
   static constexpr int kGap = 32;
-  static_assert(AssemblerBase::kMinimalBufferSize >= 2 * kGap);
+  STATIC_ASSERT(AssemblerBase::kMinimalBufferSize >= 2 * kGap);
 
  protected:
   int buffer_space() const { return reloc_info_writer.pos() - pc_; }
@@ -1465,7 +1465,7 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void bind_to(Label* L, int pos);
   void next(Label* L);
 
-  void AllocateAndInstallRequestedHeapNumbers(Isolate* isolate);
+  void AllocateAndInstallRequestedHeapObjects(Isolate* isolate);
 
   int WriteCodeComments();
 
@@ -1482,26 +1482,17 @@ class EnsureSpace {
 
 class V8_EXPORT_PRIVATE V8_NODISCARD UseScratchRegisterScope {
  public:
-  explicit UseScratchRegisterScope(Assembler* assembler)
-      : assembler_(assembler),
-        old_available_(*assembler->GetScratchRegisterList()) {}
+  explicit UseScratchRegisterScope(Assembler* assembler);
+  ~UseScratchRegisterScope();
 
-  ~UseScratchRegisterScope() {
-    *assembler_->GetScratchRegisterList() = old_available_;
-  }
-
-  Register Acquire() {
-    return assembler_->GetScratchRegisterList()->PopFirst();
-  }
+  Register Acquire();
 
   // Check if we have registers available to acquire.
-  bool CanAcquire() const {
-    return !assembler_->GetScratchRegisterList()->is_empty();
-  }
+  bool CanAcquire() const { return *assembler_->GetScratchRegisterList() != 0; }
 
  private:
   friend class Assembler;
-  friend class MacroAssembler;
+  friend class TurboAssembler;
 
   Assembler* assembler_;
   RegList old_available_;

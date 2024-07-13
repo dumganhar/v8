@@ -40,6 +40,7 @@ int WrappedMain(int argc, const char** argv) {
     //               $/cancelRequests or contet updates, that require restarts.
     HandleMessage(std::move(message), &WriteMessage);
   }
+  return 0;
 }
 
 }  // namespace ls

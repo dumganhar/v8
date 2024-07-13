@@ -18,6 +18,7 @@ namespace internal {
 #include "torque-generated/src/objects/template-objects-tq-inl.inc"
 
 TQ_OBJECT_CONSTRUCTORS_IMPL(TemplateObjectDescription)
+TQ_OBJECT_CONSTRUCTORS_IMPL(CachedTemplateObject)
 
 }  // namespace internal
 }  // namespace v8

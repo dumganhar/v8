@@ -1,18 +1,14 @@
-# Copyright 2020 The Chromium Authors
+# Copyright 2020 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Class for interacting with the Skia Gold image diffing service."""
 
 import logging
 import os
-import platform
 import shutil
+import subprocess
 import sys
 import tempfile
-import time
-from typing import Any, Dict, List, Optional, Tuple
-
-from skia_gold_common import skia_gold_properties
 
 CHROMIUM_SRC = os.path.realpath(
     os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -21,20 +17,13 @@ GOLDCTL_BINARY = os.path.join(CHROMIUM_SRC, 'tools', 'skia_goldctl')
 if sys.platform == 'win32':
   GOLDCTL_BINARY = os.path.join(GOLDCTL_BINARY, 'win', 'goldctl') + '.exe'
 elif sys.platform == 'darwin':
-  machine = platform.machine().lower()
-  if any(machine.startswith(m) for m in ('arm64', 'aarch64')):
-    GOLDCTL_BINARY = os.path.join(GOLDCTL_BINARY, 'mac_arm64', 'goldctl')
-  else:
-    GOLDCTL_BINARY = os.path.join(GOLDCTL_BINARY, 'mac_amd64', 'goldctl')
+  GOLDCTL_BINARY = os.path.join(GOLDCTL_BINARY, 'mac', 'goldctl')
 else:
   GOLDCTL_BINARY = os.path.join(GOLDCTL_BINARY, 'linux', 'goldctl')
 
 
-StepRetVal = Tuple[int, Optional[str]]
-
-
-class SkiaGoldSession():
-  class StatusCodes():
+class SkiaGoldSession(object):
+  class StatusCodes(object):
     """Status codes for RunComparison."""
     SUCCESS = 0
     AUTH_FAILURE = 1
@@ -44,24 +33,24 @@ class SkiaGoldSession():
     LOCAL_DIFF_FAILURE = 5
     NO_OUTPUT_MANAGER = 6
 
-  class ComparisonResults():
+  class ComparisonResults(object):
     """Struct-like object for storing results of an image comparison."""
 
     def __init__(self):
-      self.public_triage_link: Optional[str] = None
-      self.internal_triage_link: Optional[str] = None
-      self.triage_link_omission_reason: Optional[str] = None
-      self.local_diff_given_image: Optional[str] = None
-      self.local_diff_closest_image: Optional[str] = None
-      self.local_diff_diff_image: Optional[str] = None
+      self.public_triage_link = None
+      self.internal_triage_link = None
+      self.triage_link_omission_reason = None
+      self.local_diff_given_image = None
+      self.local_diff_closest_image = None
+      self.local_diff_diff_image = None
 
   def __init__(self,
-               working_dir: str,
-               gold_properties: skia_gold_properties.SkiaGoldProperties,
-               keys_file: str,
-               corpus: str,
-               instance: str,
-               bucket: Optional[str] = None):
+               working_dir,
+               gold_properties,
+               keys_file,
+               corpus,
+               instance,
+               bucket=None):
     """Abstract class to handle all aspects of image comparison via Skia Gold.
 
     A single SkiaGoldSession is valid for a single instance/corpus/keys_file
@@ -84,12 +73,9 @@ class SkiaGoldSession():
     self._corpus = corpus
     self._instance = instance
     self._bucket = bucket
-    self._local_png_directory = (self._gold_properties.local_png_directory
-                                 or tempfile.mkdtemp())
-    with tempfile.NamedTemporaryFile(suffix='.txt',
-                                     dir=working_dir,
-                                     delete=False) as triage_link_file:
-      self._triage_link_file = triage_link_file.name
+    self._triage_link_file = tempfile.NamedTemporaryFile(suffix='.txt',
+                                                         dir=working_dir,
+                                                         delete=False).name
     # A map of image name (string) to ComparisonResults for that image.
     self._comparison_results = {}
     self._authenticated = False
@@ -101,14 +87,12 @@ class SkiaGoldSession():
     shutil.copy(keys_file, self._keys_file)
 
   def RunComparison(self,
-                    name: str,
-                    png_file: str,
-                    output_manager: Any,
-                    inexact_matching_args: Optional[List[str]] = None,
-                    use_luci: bool = True,
-                    service_account: Optional[str] = None,
-                    optional_keys: Optional[Dict[str, str]] = None,
-                    force_dryrun: bool = False) -> StepRetVal:
+                    name,
+                    png_file,
+                    output_manager,
+                    inexact_matching_args=None,
+                    use_luci=True,
+                    optional_keys=None):
     """Helper method to run all steps to compare a produced image.
 
     Handles authentication, itnitialization, comparison, and, if necessary,
@@ -127,22 +111,17 @@ class SkiaGoldSession():
       use_luci: If true, authentication will use the service account provided by
           the LUCI context. If false, will attempt to use whatever is set up in
           gsutil, which is only supported for local runs.
-      service_account: If set, uses the provided service account instead of
-          LUCI_CONTEXT or whatever is set in gsutil.
       optional_keys: A dict containing optional key/value pairs to pass to Gold
           for this comparison. Optional keys are keys unrelated to the
           configuration the image was produced on, e.g. a comment or whether
           Gold should treat the image as ignored.
-      force_dryrun: A boolean denoting whether dryrun should be forced on
-          regardless of whether this is a local comparison or not.
 
     Returns:
       A tuple (status, error). |status| is a value from
       SkiaGoldSession.StatusCodes signifying the result of the comparison.
       |error| is an error message describing the status if not successful.
     """
-    auth_rc, auth_stdout = self.Authenticate(use_luci=use_luci,
-                                             service_account=service_account)
+    auth_rc, auth_stdout = self.Authenticate(use_luci=use_luci)
     if auth_rc:
       return self.StatusCodes.AUTH_FAILURE, auth_stdout
 
@@ -154,8 +133,7 @@ class SkiaGoldSession():
         name=name,
         png_file=png_file,
         inexact_matching_args=inexact_matching_args,
-        optional_keys=optional_keys,
-        force_dryrun=force_dryrun)
+        optional_keys=optional_keys)
     if not compare_rc:
       return self.StatusCodes.SUCCESS, None
 
@@ -174,17 +152,13 @@ class SkiaGoldSession():
       return self.StatusCodes.LOCAL_DIFF_FAILURE, diff_stdout
     return self.StatusCodes.COMPARISON_FAILURE_LOCAL, compare_stdout
 
-  def Authenticate(self,
-                   use_luci: bool = True,
-                   service_account: Optional[str] = None) -> StepRetVal:
+  def Authenticate(self, use_luci=True):
     """Authenticates with Skia Gold for this session.
 
     Args:
       use_luci: If true, authentication will use the service account provided
           by the LUCI context. If false, will attempt to use whatever is set up
           in gsutil, which is only supported for local runs.
-      service_account: If set, uses the provided service account instead of
-          LUCI_CONTEXT or whatever is set in gsutil.
 
     Returns:
       A tuple (return_code, output). |return_code| is the return code of the
@@ -197,24 +171,21 @@ class SkiaGoldSession():
       logging.warning('Not actually authenticating with Gold due to '
                       '--bypass-skia-gold-functionality being present.')
       return 0, None
-    assert not (use_luci and service_account)
 
     auth_cmd = [GOLDCTL_BINARY, 'auth', '--work-dir', self._working_dir]
     if use_luci:
       auth_cmd.append('--luci')
-    elif service_account:
-      auth_cmd.extend(['--service-account', service_account])
     elif not self._gold_properties.local_pixel_tests:
       raise RuntimeError(
-          'Cannot authenticate to Skia Gold with use_luci=False without a '
-          'service account unless running local pixel tests')
+          'Cannot authenticate to Skia Gold with use_luci=False unless running '
+          'local pixel tests')
 
     rc, stdout = self._RunCmdForRcAndOutput(auth_cmd)
     if rc == 0:
       self._authenticated = True
     return rc, stdout
 
-  def Initialize(self) -> StepRetVal:
+  def Initialize(self):
     """Initializes the working directory if necessary.
 
     This can technically be skipped if the same information is passed to the
@@ -274,11 +245,10 @@ class SkiaGoldSession():
     return rc, stdout
 
   def Compare(self,
-              name: str,
-              png_file: str,
-              inexact_matching_args: Optional[List[str]] = None,
-              optional_keys: Optional[Dict[str, str]] = None,
-              force_dryrun: bool = False) -> StepRetVal:
+              name,
+              png_file,
+              inexact_matching_args=None,
+              optional_keys=None):
     """Compares the given image to images known to Gold.
 
     Triage links can later be retrieved using GetTriageLinks().
@@ -293,8 +263,6 @@ class SkiaGoldSession():
           for this comparison. Optional keys are keys unrelated to the
           configuration the image was produced on, e.g. a comment or whether
           Gold should treat the image as ignored.
-      force_dryrun: A boolean denoting whether dryrun should be forced on
-          regardless of whether this is a local comparison or not.
 
     Returns:
       A tuple (return_code, output). |return_code| is the return code of the
@@ -317,7 +285,7 @@ class SkiaGoldSession():
         '--work-dir',
         self._working_dir,
     ]
-    if self._gold_properties.local_pixel_tests or force_dryrun:
+    if self._gold_properties.local_pixel_tests:
       compare_cmd.append('--dryrun')
     if inexact_matching_args:
       logging.info('Using inexact matching arguments for image %s: %s', name,
@@ -325,7 +293,7 @@ class SkiaGoldSession():
       compare_cmd.extend(inexact_matching_args)
 
     optional_keys = optional_keys or {}
-    for k, v in optional_keys.items():
+    for k, v in optional_keys.iteritems():
       compare_cmd.extend([
           '--add-test-optional-key',
           '%s:%s' % (k, v),
@@ -366,7 +334,7 @@ class SkiaGoldSession():
             'Failed to read triage link from file')
     return rc, stdout
 
-  def Diff(self, name: str, png_file: str, output_manager: Any) -> StepRetVal:
+  def Diff(self, name, png_file, output_manager):
     """Performs a local image diff against the closest known positive in Gold.
 
     This is used for running tests on a workstation, where uploading data to
@@ -393,7 +361,7 @@ class SkiaGoldSession():
           '--bypass-skia-gold-functionality is not supported when running '
           'tests locally.')
 
-    output_dir = self._CreateDiffOutputDir(name)
+    output_dir = self._CreateDiffOutputDir()
     # TODO(skbug.com/10611): Remove this temporary work dir and instead just use
     # self._working_dir once `goldctl diff` stops clobbering the auth files in
     # the provided work directory.
@@ -425,7 +393,7 @@ class SkiaGoldSession():
     finally:
       shutil.rmtree(os.path.realpath(os.path.join(temp_work_dir, '..')))
 
-  def GetTriageLinks(self, name: str) -> Tuple[str, str]:
+  def GetTriageLinks(self, name):
     """Gets the triage links for the given image.
 
     Args:
@@ -443,7 +411,7 @@ class SkiaGoldSession():
     return (comparison_results.public_triage_link,
             comparison_results.internal_triage_link)
 
-  def GetTriageLinkOmissionReason(self, name: str) -> str:
+  def GetTriageLinkOmissionReason(self, name):
     """Gets the reason why a triage link is not available for an image.
 
     Args:
@@ -466,7 +434,7 @@ class SkiaGoldSession():
         'Somehow have a ComparisonResults instance for %s that should not '
         'exist' % name)
 
-  def GetGivenImageLink(self, name: str) -> str:
+  def GetGivenImageLink(self, name):
     """Gets the link to the given image used for local diffing.
 
     Args:
@@ -479,7 +447,7 @@ class SkiaGoldSession():
     assert name in self._comparison_results
     return self._comparison_results[name].local_diff_given_image
 
-  def GetClosestImageLink(self, name: str) -> str:
+  def GetClosestImageLink(self, name):
     """Gets the link to the closest known image used for local diffing.
 
     Args:
@@ -492,7 +460,7 @@ class SkiaGoldSession():
     assert name in self._comparison_results
     return self._comparison_results[name].local_diff_closest_image
 
-  def GetDiffImageLink(self, name: str) -> str:
+  def GetDiffImageLink(self, name):
     """Gets the link to the diff between the given and closest images.
 
     Args:
@@ -505,7 +473,7 @@ class SkiaGoldSession():
     assert name in self._comparison_results
     return self._comparison_results[name].local_diff_diff_image
 
-  def _GeneratePublicTriageLink(self, internal_link: str) -> str:
+  def _GeneratePublicTriageLink(self, internal_link):
     """Generates a public triage link given an internal one.
 
     Args:
@@ -519,7 +487,7 @@ class SkiaGoldSession():
     return internal_link.replace('%s-gold' % self._instance,
                                  '%s-public-gold' % self._instance)
 
-  def _ClearTriageLinkFile(self) -> None:
+  def _ClearTriageLinkFile(self):
     """Clears the contents of the triage link file.
 
     This should be done before every comparison since goldctl appends to the
@@ -528,13 +496,10 @@ class SkiaGoldSession():
     """
     open(self._triage_link_file, 'w').close()
 
-  def _CreateDiffOutputDir(self, _name: str) -> str:
-    # We don't use self._local_png_directory here since we want it to be
-    # automatically cleaned up with the working directory. Any subclasses that
-    # want to keep it around can override this method.
+  def _CreateDiffOutputDir(self):
     return tempfile.mkdtemp(dir=self._working_dir)
 
-  def _GetDiffGoldInstance(self) -> str:
+  def _GetDiffGoldInstance(self):
     """Gets the Skia Gold instance to use for the Diff step.
 
     This can differ based on how a particular instance is set up, mainly
@@ -545,8 +510,7 @@ class SkiaGoldSession():
     # instance.
     return str(self._instance) + '-public'
 
-  def _StoreDiffLinks(self, image_name: str, output_manager: Any,
-                      output_dir: str) -> None:
+  def _StoreDiffLinks(self, image_name, output_manager, output_dir):
     """Stores the local diff files as links.
 
     The ComparisonResults entry for |image_name| should have its *_image fields
@@ -563,7 +527,7 @@ class SkiaGoldSession():
     raise NotImplementedError()
 
   @staticmethod
-  def _RunCmdForRcAndOutput(cmd: List[str]) -> Tuple[int, str]:
+  def _RunCmdForRcAndOutput(cmd):
     """Runs |cmd| and returns its returncode and output.
 
     Args:
