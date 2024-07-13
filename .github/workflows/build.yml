@@ -29,7 +29,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.9'
 
       - name: Select XCode Version
         uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd
@@ -155,7 +155,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.9'
 
       - name: Select XCode Version
         uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd
@@ -187,8 +187,10 @@ jobs:
 
       - name: Install dsymutil
         run: |
-          export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
-          python3 ${{ env.DEPOT_TOOLS_PATH }}/download_from_google_storage.py --no_resume --no_auth --bucket chromium-browser-clang -s tools/clang/dsymutil/bin/dsymutil.x64.sha1 -o tools/clang/dsymutil/bin/dsymutil
+          # export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
+          # python3 ${{ env.DEPOT_TOOLS_PATH }}/download_from_google_storage.py --no_resume --no_auth --bucket chromium-browser-clang -s tools/clang/dsymutil/bin/dsymutil.x64.sha1 -o tools/clang/dsymutil/bin/dsymutil
+          wget https://github.com/dumganhar/v8/releases/download/for-tool-packages/v8-9.1-llvm-build-tools-dsymutil.zip -O ./llvm-build-tools-dsymutil.zip
+          unzip llvm-build-tools-dsymutil.zip -d tools/clang/dsymutil/
 
       - name: Install ninja
         run: |
@@ -328,6 +330,10 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
 
       - name: Install NDK r23c
         uses: nttld/setup-ndk@v1
@@ -670,6 +676,12 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+
       - name: Get oh sdk cache directory path
         id: oh-sdk-cache-dir-path
         run: |
@@ -883,6 +895,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
 
       - name: Clone DepotTools
         run: |
