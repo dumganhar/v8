@@ -336,7 +336,7 @@ component("zlib") {
   if (is_android) {
     import("//build/config/android/config.gni")
     if (defined(android_ndk_root) && android_ndk_root != "") {
-#cjh      deps += [ "//third_party/android_ndk:cpu_features" ]
+      deps += [ "//third_party/android_ndk:cpu_features" ]
     } else {
       assert(false, "CPU detection requires the Android NDK")
     }
