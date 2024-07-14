@@ -71,6 +71,7 @@
 /third_party/googletest/src
 !/third_party/v8
 !/third_party/wasm-api
+!/third_party/cpu_features
 /tools/clang
 /tools/gcmole/bootstrap
 /tools/gcmole/gcmole-tools
