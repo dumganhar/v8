@@ -229,7 +229,7 @@ jobs:
           echo "---------------------"
           ls -l ./out/ios/obj
           mkdir dist
-          cp ./out/ios/obj/d8 ./dist/
+          cp ./out/ios/d8 ./dist/
           cp ./out/ios/obj/libv8_monolith.a ./dist/
           cp -r ./include ./dist/
 
@@ -335,11 +335,11 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install NDK r23c
+      - name: Install NDK r21e
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
-          ndk-version: r23c
+          ndk-version: r21e
           add-to-path: false
           local-cache: false
 
