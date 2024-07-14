@@ -882,6 +882,7 @@ jobs:
           tag: ${{ github.ref }}
 
   build_linux:
+    if: false
     permissions:
       contents: write
     strategy:
