@@ -26,6 +26,7 @@ ARGS="target_os=\"android\"
 target_cpu=\"${ARCH}\"
 v8_target_cpu=\"${ARCH}\"
 use_thin_lto=false
+enable_resource_allowlist_generation=false
 use_lld=true
 clang_use_chrome_plugins=false
 chrome_pgo_phase=0
