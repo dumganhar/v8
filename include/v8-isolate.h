@@ -1712,6 +1712,12 @@ class V8_EXPORT Isolate {
   void VisitExternalResources(ExternalResourceVisitor* visitor);
 
   /**
+   * Iterates through all the persistent handles in the current isolate's heap
+   * that have class_ids.
+   */
+  void VisitHandlesWithClassIds(PersistentHandleVisitor* visitor);
+
+  /**
    * Check if this isolate is in use.
    * True if at least one thread Enter'ed this isolate.
    */

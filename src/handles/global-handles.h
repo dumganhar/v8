@@ -123,7 +123,7 @@ class V8_EXPORT_PRIVATE GlobalHandles final {
   size_t handles_count() const;
   size_t last_gc_custom_callbacks() const { return last_gc_custom_callbacks_; }
 
-  void IterateAllRootsForTesting(v8::PersistentHandleVisitor* v);
+  void IterateAllRootsWithClassIds(v8::PersistentHandleVisitor* v);
 
 #ifdef DEBUG
   void PrintStats();

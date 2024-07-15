@@ -10865,6 +10865,12 @@ bool Isolate::IsInUse() {
   return i_isolate->IsInUse();
 }
 
+void Isolate::VisitHandlesWithClassIds(PersistentHandleVisitor* visitor) {
+  i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(this);
+  i::DisallowGarbageCollection no_gc;
+  i_isolate->global_handles()->IterateAllRootsWithClassIds(visitor);
+}
+
 void Isolate::SetAllowAtomicsWait(bool allow) {
   i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(this);
   i_isolate->set_allow_atomics_wait(allow);
