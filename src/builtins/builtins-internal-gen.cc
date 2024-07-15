@@ -4,14 +4,14 @@
 
 #include "src/api/api.h"
 #include "src/baseline/baseline.h"
+#include "src/builtins/builtins-inl.h"
 #include "src/builtins/builtins-utils-gen.h"
-#include "src/builtins/builtins.h"
-#include "src/codegen/code-stub-assembler.h"
+#include "src/codegen/code-stub-assembler-inl.h"
 #include "src/codegen/interface-descriptors-inl.h"
 #include "src/codegen/macro-assembler-inl.h"
 #include "src/common/globals.h"
 #include "src/execution/frame-constants.h"
-#include "src/heap/memory-chunk.h"
+#include "src/heap/mutable-page.h"
 #include "src/ic/accessor-assembler.h"
 #include "src/ic/keyed-store-generic.h"
 #include "src/logging/counters.h"
@@ -137,10 +137,10 @@ class WriteBarrierCodeStubAssembler : public CodeStubAssembler {
   }
 
   TNode<BoolT> IsPageFlagSet(TNode<IntPtrT> object, int mask) {
-    TNode<IntPtrT> page = PageFromAddress(object);
+    TNode<IntPtrT> header = MemoryChunkFromAddress(object);
     TNode<IntPtrT> flags = UncheckedCast<IntPtrT>(
-        Load(MachineType::Pointer(), page,
-             IntPtrConstant(BasicMemoryChunk::kFlagsOffset)));
+        Load(MachineType::Pointer(), header,
+             IntPtrConstant(MemoryChunkLayout::kFlagsOffset)));
     return WordNotEqual(WordAnd(flags, IntPtrConstant(mask)),
                         IntPtrConstant(0));
   }
@@ -153,43 +153,15 @@ class WriteBarrierCodeStubAssembler : public CodeStubAssembler {
     return WordEqual(WordAnd(Load<IntPtrT>(cell), mask), IntPtrConstant(0));
   }
 
-  void GetMarkBit(TNode<IntPtrT> object, TNode<IntPtrT>* cell,
-                  TNode<IntPtrT>* mask) {
-    TNode<IntPtrT> page = PageFromAddress(object);
-    TNode<IntPtrT> bitmap =
-        IntPtrAdd(page, IntPtrConstant(MemoryChunk::kMarkingBitmapOffset));
-
-    {
-      // Temp variable to calculate cell offset in bitmap.
-      TNode<WordT> r0;
-      int shift = MarkingBitmap::kBitsPerCellLog2 + kTaggedSizeLog2 -
-                  MarkingBitmap::kBytesPerCellLog2;
-      r0 = WordShr(object, IntPtrConstant(shift));
-      r0 = WordAnd(r0, IntPtrConstant((kPageAlignmentMask >> shift) &
-                                      ~(MarkingBitmap::kBytesPerCell - 1)));
-      *cell = IntPtrAdd(bitmap, Signed(r0));
-    }
-    {
-      // Temp variable to calculate bit offset in cell.
-      TNode<WordT> r1;
-      r1 = WordShr(object, IntPtrConstant(kTaggedSizeLog2));
-      r1 = WordAnd(r1,
-                   IntPtrConstant((1 << MarkingBitmap::kBitsPerCellLog2) - 1));
-      // It seems that LSB(e.g. cl) is automatically used, so no manual masking
-      // is needed. Uncomment the following line otherwise.
-      // WordAnd(r1, IntPtrConstant((1 << kBitsPerByte) - 1)));
-      *mask = WordShl(IntPtrConstant(1), r1);
-    }
-  }
-
   void InsertIntoRememberedSet(TNode<IntPtrT> object, TNode<IntPtrT> slot,
                                SaveFPRegsMode fp_mode) {
     Label slow_path(this), next(this);
-    TNode<IntPtrT> page = PageFromAddress(object);
+    TNode<IntPtrT> chunk = MemoryChunkFromAddress(object);
+    TNode<IntPtrT> page = PageMetadataFromMemoryChunk(chunk);
 
     // Load address of SlotSet
     TNode<IntPtrT> slot_set = LoadSlotSet(page, &slow_path);
-    TNode<IntPtrT> slot_offset = IntPtrSub(slot, page);
+    TNode<IntPtrT> slot_offset = IntPtrSub(slot, chunk);
 
     // Load bucket
     TNode<IntPtrT> bucket = LoadBucket(slot_set, slot_offset, &slow_path);
@@ -205,7 +177,7 @@ class WriteBarrierCodeStubAssembler : public CodeStubAssembler {
       CallCFunctionWithCallerSavedRegisters(
           function, MachineTypeOf<Int32T>::value, fp_mode,
           std::make_pair(MachineTypeOf<IntPtrT>::value, page),
-          std::make_pair(MachineTypeOf<IntPtrT>::value, slot));
+          std::make_pair(MachineTypeOf<IntPtrT>::value, slot_offset));
       Goto(&next);
     }
 
@@ -215,7 +187,7 @@ class WriteBarrierCodeStubAssembler : public CodeStubAssembler {
   TNode<IntPtrT> LoadSlotSet(TNode<IntPtrT> page, Label* slow_path) {
     TNode<IntPtrT> slot_set = UncheckedCast<IntPtrT>(
         Load(MachineType::Pointer(), page,
-             IntPtrConstant(MemoryChunk::kOldToNewSlotSetOffset)));
+             IntPtrConstant(MutablePageMetadata::kOldToNewSlotSetOffset)));
     GotoIf(WordEqual(slot_set, IntPtrConstant(0)), slow_path);
     return slot_set;
   }
@@ -316,10 +288,15 @@ class WriteBarrierCodeStubAssembler : public CodeStubAssembler {
     InYoungGeneration(value, &generational_barrier, &shared_barrier);
 
     BIND(&generational_barrier);
-    CSA_DCHECK(this,
-               IsPageFlagSet(value, MemoryChunk::kIsInYoungGenerationMask));
+    if (!v8_flags.sticky_mark_bits) {
+      CSA_DCHECK(this,
+                 IsPageFlagSet(value, MemoryChunk::kIsInYoungGenerationMask));
+    }
     GenerationalBarrierSlow(slot, next, fp_mode);
 
+    // TODO(333906585): With sticky-mark bits and without the shared barrier
+    // support, we actually never jump here. Don't put it under the flag though,
+    // since the assert below has been useful.
     BIND(&shared_barrier);
     CSA_DCHECK(this, IsPageFlagSet(value, MemoryChunk::kInSharedHeap));
     SharedBarrierSlow(slot, next, fp_mode);
@@ -392,10 +369,20 @@ class WriteBarrierCodeStubAssembler : public CodeStubAssembler {
 
   void InYoungGeneration(TNode<IntPtrT> object, Label* true_label,
                          Label* false_label) {
-    TNode<BoolT> object_is_young =
-        IsPageFlagSet(object, MemoryChunk::kIsInYoungGenerationMask);
+    if (v8_flags.sticky_mark_bits) {
+      Label not_read_only(this);
 
-    Branch(object_is_young, true_label, false_label);
+      TNode<BoolT> is_read_only_page = IsPageFlagSet(
+          object, MemoryChunk::kIsInReadOnlyHeapOrMajorGCInProgressMask);
+      Branch(is_read_only_page, false_label, &not_read_only);
+
+      BIND(&not_read_only);
+      Branch(IsUnmarked(object), true_label, false_label);
+    } else {
+      TNode<BoolT> object_is_young =
+          IsPageFlagSet(object, MemoryChunk::kIsInYoungGenerationMask);
+      Branch(object_is_young, true_label, false_label);
+    }
   }
 
   void InSharedHeap(TNode<IntPtrT> object, Label* true_label,
@@ -408,7 +395,7 @@ class WriteBarrierCodeStubAssembler : public CodeStubAssembler {
 
   void IncrementalWriteBarrierMinor(TNode<IntPtrT> slot, TNode<IntPtrT> value,
                                     SaveFPRegsMode fp_mode, Label* next) {
-    Label check_is_unmarked(this);
+    Label check_is_unmarked(this, Label::kDeferred);
 
     InYoungGeneration(value, &check_is_unmarked, next);
 
@@ -474,7 +461,8 @@ class WriteBarrierCodeStubAssembler : public CodeStubAssembler {
 
   void IncrementalWriteBarrier(TNode<IntPtrT> slot, SaveFPRegsMode fp_mode) {
     Label next(this), write_into_shared_object(this),
-        write_into_local_object(this), local_object_and_value(this);
+        write_into_local_object(this),
+        local_object_and_value(this, Label::kDeferred);
 
     TNode<IntPtrT> object = BitcastTaggedToWord(
         UncheckedParameter<Object>(WriteBarrierDescriptor::kObject));
@@ -1021,16 +1009,16 @@ class SetOrCopyDataPropertiesAssembler : public CodeStubAssembler {
         TNode<BoolT> target_is_simple_receiver = IsSimpleObjectMap(target_map);
         ForEachEnumerableOwnProperty(
             context, source_map, CAST(source), kEnumerationOrder,
-            [=](TNode<Name> key, TNode<Object> value) {
+            [=](TNode<Name> key, LazyNode<Object> value) {
               KeyedStoreGenericGenerator::SetProperty(
                   state(), context, target, target_is_simple_receiver, key,
-                  value, LanguageMode::kStrict);
+                  value(), LanguageMode::kStrict);
             },
             if_runtime);
       } else {
         ForEachEnumerableOwnProperty(
             context, source_map, CAST(source), kEnumerationOrder,
-            [=](TNode<Name> key, TNode<Object> value) {
+            [=](TNode<Name> key, LazyNode<Object> value) {
               Label skip(this);
               if (excluded_property_count.has_value()) {
                 BuildFastLoop<IntPtrT>(
@@ -1049,7 +1037,7 @@ class SetOrCopyDataPropertiesAssembler : public CodeStubAssembler {
               }
 
               CallBuiltin(Builtin::kCreateDataProperty, context, target, key,
-                          value);
+                          value());
               Goto(&skip);
               Bind(&skip);
             },
@@ -1281,18 +1269,18 @@ TF_BUILTIN(AdaptorWithBuiltinExitFrame, CodeStubAssembler) {
       Int32Constant(BuiltinExitFrameConstants::kNumExtraArgsWithoutReceiver));
 
   const bool builtin_exit_frame = true;
-  TNode<Code> code = HeapConstantNoHole(
-      CodeFactory::CEntry(isolate(), 1, ArgvMode::kStack, builtin_exit_frame));
+  const bool switch_to_central_stack = false;
+  Builtin centry = Builtins::CEntry(1, ArgvMode::kStack, builtin_exit_frame,
+                                    switch_to_central_stack);
 
   // Unconditionally push argc, target and new target as extra stack arguments.
   // They will be used by stack frame iterators when constructing stack trace.
-  TailCallStub(CEntry1ArgvOnStackDescriptor{},  // descriptor
-               code, context,       // standard arguments for TailCallStub
-               argc, c_function,    // register arguments
-               TheHoleConstant(),   // additional stack argument 1 (padding)
-               SmiFromInt32(argc),  // additional stack argument 2
-               target,              // additional stack argument 3
-               new_target);         // additional stack argument 4
+  TailCallBuiltin(centry, context,     // standard arguments for TailCallBuiltin
+                  argc, c_function,    // register arguments
+                  TheHoleConstant(),   // additional stack argument 1 (padding)
+                  SmiFromInt32(argc),  // additional stack argument 2
+                  target,              // additional stack argument 3
+                  new_target);         // additional stack argument 4
 }
 
 TF_BUILTIN(NewHeapNumber, CodeStubAssembler) {
@@ -1319,6 +1307,28 @@ TF_BUILTIN(AllocateInOldGeneration, CodeStubAssembler) {
   TailCallRuntime(Runtime::kAllocateInOldGeneration, NoContextConstant(),
                   SmiFromIntPtr(requested_size), runtime_flags);
 }
+
+#if V8_ENABLE_WEBASSEMBLY
+TF_BUILTIN(WasmAllocateInYoungGeneration, CodeStubAssembler) {
+  auto requested_size = UncheckedParameter<IntPtrT>(Descriptor::kRequestedSize);
+  CSA_CHECK(this, IsValidPositiveSmi(requested_size));
+
+  TNode<Smi> allocation_flags =
+      SmiConstant(Smi::FromInt(AllocateDoubleAlignFlag::encode(false)));
+  TailCallRuntime(Runtime::kAllocateInYoungGeneration, NoContextConstant(),
+                  SmiFromIntPtr(requested_size), allocation_flags);
+}
+
+TF_BUILTIN(WasmAllocateInOldGeneration, CodeStubAssembler) {
+  auto requested_size = UncheckedParameter<IntPtrT>(Descriptor::kRequestedSize);
+  CSA_CHECK(this, IsValidPositiveSmi(requested_size));
+
+  TNode<Smi> runtime_flags =
+      SmiConstant(Smi::FromInt(AllocateDoubleAlignFlag::encode(false)));
+  TailCallRuntime(Runtime::kAllocateInOldGeneration, NoContextConstant(),
+                  SmiFromIntPtr(requested_size), runtime_flags);
+}
+#endif
 
 TF_BUILTIN(Abort, CodeStubAssembler) {
   auto message_id = Parameter<Smi>(Descriptor::kMessageOrMessageId);
@@ -1366,13 +1376,13 @@ void Builtins::Generate_WasmCEntry(MacroAssembler* masm) {
 
 #if !defined(V8_TARGET_ARCH_ARM)
 void Builtins::Generate_MemCopyUint8Uint8(MacroAssembler* masm) {
-  masm->Call(BUILTIN_CODE(masm->isolate(), Illegal), RelocInfo::CODE_TARGET);
+  masm->CallBuiltin(Builtin::kIllegal);
 }
 #endif  // !defined(V8_TARGET_ARCH_ARM)
 
 #ifndef V8_TARGET_ARCH_IA32
 void Builtins::Generate_MemMove(MacroAssembler* masm) {
-  masm->Call(BUILTIN_CODE(masm->isolate(), Illegal), RelocInfo::CODE_TARGET);
+  masm->CallBuiltin(Builtin::kIllegal);
 }
 #endif  // V8_TARGET_ARCH_IA32
 
@@ -1401,7 +1411,8 @@ void Builtins::Generate_MaglevOptimizeCodeOrTailCallOptimizedCodeSlot(
   using D = MaglevOptimizeCodeOrTailCallOptimizedCodeSlotDescriptor;
   Register flags = D::GetRegisterParameter(D::kFlags);
   Register feedback_vector = D::GetRegisterParameter(D::kFeedbackVector);
-  masm->AssertFeedbackVector(feedback_vector);
+  Register temporary = D::GetRegisterParameter(D::kTemporary);
+  masm->AssertFeedbackVector(feedback_vector, temporary);
   masm->OptimizeCodeOrTailCallOptimizedCodeSlot(flags, feedback_vector);
   masm->Trap();
 }

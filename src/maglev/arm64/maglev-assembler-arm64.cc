@@ -13,30 +13,35 @@ namespace maglev {
 
 #define __ masm->
 
-void MaglevAssembler::Allocate(RegisterSnapshot register_snapshot,
-                               Register object, int size_in_bytes,
-                               AllocationType alloc_type,
-                               AllocationAlignment alignment) {
-  DCHECK(allow_allocate());
+namespace {
+
+void SubSizeAndTagObject(MaglevAssembler* masm, Register object,
+                         Register size_in_bytes) {
+  __ Sub(object, object, size_in_bytes);
+  __ Add(object, object, kHeapObjectTag);
+}
+
+void SubSizeAndTagObject(MaglevAssembler* masm, Register object,
+                         int size_in_bytes) {
+  __ Add(object, object, kHeapObjectTag - size_in_bytes);
+}
+
+template <typename T>
+void AllocateRaw(MaglevAssembler* masm, Isolate* isolate,
+                 RegisterSnapshot register_snapshot, Register object,
+                 T size_in_bytes, AllocationType alloc_type,
+                 AllocationAlignment alignment) {
   // TODO(victorgomes): Call the runtime for large object allocation.
   // TODO(victorgomes): Support double alignment.
+  DCHECK(masm->allow_allocate());
   DCHECK_EQ(alignment, kTaggedAligned);
-  size_in_bytes = ALIGN_TO_ALLOCATION_ALIGNMENT(size_in_bytes);
   if (v8_flags.single_generation) {
     alloc_type = AllocationType::kOld;
   }
-  bool in_new_space = alloc_type == AllocationType::kYoung;
-  ExternalReference top =
-      in_new_space
-          ? ExternalReference::new_space_allocation_top_address(isolate_)
-          : ExternalReference::old_space_allocation_top_address(isolate_);
-  ExternalReference limit =
-      in_new_space
-          ? ExternalReference::new_space_allocation_limit_address(isolate_)
-          : ExternalReference::old_space_allocation_limit_address(isolate_);
-
-  ZoneLabelRef done(this);
-  ScratchRegisterScope temps(this);
+  ExternalReference top = SpaceAllocationTopAddress(isolate, alloc_type);
+  ExternalReference limit = SpaceAllocationLimitAddress(isolate, alloc_type);
+  ZoneLabelRef done(masm);
+  MaglevAssembler::ScratchRegisterScope temps(masm);
   Register scratch = temps.Acquire();
   // We are a bit short on registers, so we use the same register for {object}
   // and {new_top}. Once we have defined {new_top}, we don't use {object} until
@@ -45,38 +50,35 @@ void MaglevAssembler::Allocate(RegisterSnapshot register_snapshot,
   // {size_in_bytes}.
   Register new_top = object;
   // Check if there is enough space.
-  Ldr(object, ExternalReferenceAsOperand(top, scratch));
-  Add(new_top, object, size_in_bytes);
-  Ldr(scratch, ExternalReferenceAsOperand(limit, scratch));
-  Cmp(new_top, scratch);
+  __ Ldr(object, __ ExternalReferenceAsOperand(top, scratch));
+  __ Add(new_top, object, size_in_bytes);
+  __ Ldr(scratch, __ ExternalReferenceAsOperand(limit, scratch));
+  __ Cmp(new_top, scratch);
   // Otherwise call runtime.
-  JumpToDeferredIf(
-      ge,
-      [](MaglevAssembler* masm, RegisterSnapshot register_snapshot,
-         Register object, Builtin builtin, int size_in_bytes,
-         ZoneLabelRef done) {
-        // Remove {object} from snapshot, since it is the returned allocated
-        // HeapObject.
-        register_snapshot.live_registers.clear(object);
-        register_snapshot.live_tagged_registers.clear(object);
-        {
-          SaveRegisterStateForCall save_register_state(masm, register_snapshot);
-          using D = AllocateDescriptor;
-          __ Move(D::GetRegisterParameter(D::kRequestedSize), size_in_bytes);
-          __ CallBuiltin(builtin);
-          save_register_state.DefineSafepoint();
-          __ Move(object, kReturnRegister0);
-        }
-        __ B(*done);
-      },
-      register_snapshot, object,
-      in_new_space ? Builtin::kAllocateInYoungGeneration
-                   : Builtin::kAllocateInOldGeneration,
-      size_in_bytes, done);
+  __ JumpToDeferredIf(kUnsignedGreaterThanEqual, AllocateSlow<T>,
+                      register_snapshot, object, AllocateBuiltin(alloc_type),
+                      size_in_bytes, done);
   // Store new top and tag object.
-  Move(ExternalReferenceAsOperand(top, scratch), new_top);
-  Add(object, object, kHeapObjectTag - size_in_bytes);
-  bind(*done);
+  __ Move(__ ExternalReferenceAsOperand(top, scratch), new_top);
+  SubSizeAndTagObject(masm, object, size_in_bytes);
+  __ bind(*done);
+}
+}  // namespace
+
+void MaglevAssembler::Allocate(RegisterSnapshot register_snapshot,
+                               Register object, int size_in_bytes,
+                               AllocationType alloc_type,
+                               AllocationAlignment alignment) {
+  AllocateRaw(this, isolate_, register_snapshot, object, size_in_bytes,
+              alloc_type, alignment);
+}
+
+void MaglevAssembler::Allocate(RegisterSnapshot register_snapshot,
+                               Register object, Register size_in_bytes,
+                               AllocationType alloc_type,
+                               AllocationAlignment alignment) {
+  AllocateRaw(this, isolate_, register_snapshot, object, size_in_bytes,
+              alloc_type, alignment);
 }
 
 void MaglevAssembler::OSRPrologue(Graph* graph) {
@@ -294,8 +296,9 @@ void MaglevAssembler::StringFromCharCode(RegisterSnapshot register_snapshot,
         register_snapshot.live_registers.set(char_code);
         __ AllocateTwoByteString(register_snapshot, string, 1);
         __ And(scratch, char_code, Immediate(0xFFFF));
-        __ Strh(scratch.W(),
-                FieldMemOperand(string, SeqTwoByteString::kHeaderSize));
+        __ Strh(
+            scratch.W(),
+            FieldMemOperand(string, OFFSET_OF_DATA_START(SeqTwoByteString)));
         if (reallocate_result) {
           __ Move(result, string);
         }
@@ -363,7 +366,7 @@ void MaglevAssembler::StringCharCodeOrCodePointAt(
                              LAST_STRING_TYPE);
     Check(ls, AbortReason::kUnexpectedValue);
 
-    Ldr(scratch.W(), FieldMemOperand(string, String::kLengthOffset));
+    Ldr(scratch.W(), FieldMemOperand(string, offsetof(String, length_)));
     Cmp(index.W(), scratch.W());
     Check(lo, AbortReason::kUnexpectedValue);
   }
@@ -391,7 +394,7 @@ void MaglevAssembler::StringCharCodeOrCodePointAt(
 
   // Is a thin string.
   {
-    LoadTaggedField(string, string, ThinString::kActualOffset);
+    LoadTaggedField(string, string, offsetof(ThinString, actual_));
     B(&loop);
   }
 
@@ -400,8 +403,9 @@ void MaglevAssembler::StringCharCodeOrCodePointAt(
     ScratchRegisterScope temps(this);
     Register offset = temps.Acquire();
 
-    LoadAndUntagTaggedSignedField(offset, string, SlicedString::kOffsetOffset);
-    LoadTaggedField(string, string, SlicedString::kParentOffset);
+    LoadAndUntagTaggedSignedField(offset, string,
+                                  offsetof(SlicedString, offset_));
+    LoadTaggedField(string, string, offsetof(SlicedString, parent_));
     Add(index, index, offset);
     B(&loop);
   }
@@ -412,10 +416,10 @@ void MaglevAssembler::StringCharCodeOrCodePointAt(
     // register as well.
     Register second_string = instance_type;
     LoadTaggedFieldWithoutDecompressing(second_string, string,
-                                        ConsString::kSecondOffset);
+                                        offsetof(ConsString, second_));
     CompareRoot(second_string, RootIndex::kempty_string);
     B(deferred_runtime_call, ne);
-    LoadTaggedField(string, string, ConsString::kFirstOffset);
+    LoadTaggedField(string, string, offsetof(ConsString, first_));
     B(&loop);  // Try again with first string.
   }
 
@@ -426,7 +430,7 @@ void MaglevAssembler::StringCharCodeOrCodePointAt(
     // The result of one-byte string will be the same for both modes
     // (CharCodeAt/CodePointAt), since it cannot be the first half of a
     // surrogate pair.
-    Add(index, index, SeqOneByteString::kHeaderSize - kHeapObjectTag);
+    Add(index, index, OFFSET_OF_DATA_START(SeqOneByteString) - kHeapObjectTag);
     Ldrb(result, MemOperand(string, index));
     B(result_fits_one_byte);
 
@@ -434,7 +438,8 @@ void MaglevAssembler::StringCharCodeOrCodePointAt(
     // {instance_type} is unused from this point, so we can use as scratch.
     Register scratch = instance_type;
     Lsl(scratch, index, 1);
-    Add(scratch, scratch, SeqTwoByteString::kHeaderSize - kHeapObjectTag);
+    Add(scratch, scratch,
+        OFFSET_OF_DATA_START(SeqTwoByteString) - kHeapObjectTag);
     Ldrh(result, MemOperand(string, scratch));
 
     if (mode == BuiltinStringPrototypeCharCodeOrCodePointAt::kCodePointAt) {
@@ -443,13 +448,14 @@ void MaglevAssembler::StringCharCodeOrCodePointAt(
       CompareAndBranch(first_code_point, Immediate(0xd800), kNotEqual, *done);
 
       Register length = scratch;
-      Ldr(length.W(), FieldMemOperand(string, String::kLengthOffset));
+      Ldr(length.W(), FieldMemOperand(string, offsetof(String, length_)));
       Add(index.W(), index.W(), Immediate(1));
       CompareAndBranch(index, length, kGreaterThanEqual, *done);
 
       Register second_code_point = scratch;
       Lsl(index, index, 1);
-      Add(index, index, SeqTwoByteString::kHeaderSize - kHeapObjectTag);
+      Add(index, index,
+          OFFSET_OF_DATA_START(SeqTwoByteString) - kHeapObjectTag);
       Ldrh(second_code_point, MemOperand(string, index));
 
       // {index} is not needed at this point.
@@ -556,7 +562,7 @@ void MaglevAssembler::TryTruncateDoubleToUint32(Register dst,
   DoubleRegister converted_back = temps.AcquireDouble();
 
   // Convert the input float64 value to uint32.
-  Fcvtzu(dst, src);
+  Fcvtzu(dst.W(), src);
   // Convert that uint32 value back to float64.
   Ucvtf(converted_back, dst);
   // Check that the result of the float64->uint32->float64 is equal to the input

@@ -12,7 +12,8 @@
 #include "src/heap/heap-write-barrier-inl.h"
 #include "src/heap/heap.h"
 #include "src/heap/large-spaces.h"
-#include "src/heap/memory-chunk.h"
+#include "src/heap/main-allocator.h"
+#include "src/heap/mutable-page.h"
 #include "src/heap/spaces-inl.h"
 #include "test/unittests/test-utils.h"
 
@@ -34,7 +35,8 @@ static Tagged<HeapObject> AllocateUnaligned(MainAllocator* allocator,
 static Tagged<HeapObject> AllocateUnaligned(OldLargeObjectSpace* allocator,
                                             OldLargeObjectSpace* space,
                                             int size) {
-  AllocationResult allocation = allocator->AllocateRaw(size);
+  AllocationResult allocation =
+      allocator->AllocateRaw(space->heap()->main_thread_local_heap(), size);
   CHECK(!allocation.IsFailure());
   Tagged<HeapObject> filler;
   CHECK(allocation.To(&filler));
@@ -49,13 +51,15 @@ TEST_F(SpacesTest, CompactionSpaceMerge) {
   OldSpace* old_space = heap->old_space();
   EXPECT_TRUE(old_space != nullptr);
 
+  heap->SetGCState(Heap::MARK_COMPACT);
+
   CompactionSpace* compaction_space =
       new CompactionSpace(heap, OLD_SPACE, NOT_EXECUTABLE,
                           CompactionSpaceKind::kCompactionSpaceForMarkCompact);
-  MainAllocator allocator(heap, compaction_space);
+  MainAllocator allocator(heap, compaction_space, MainAllocator::kInGC);
   EXPECT_TRUE(compaction_space != nullptr);
 
-  for (Page* p : *old_space) {
+  for (PageMetadata* p : *old_space) {
     // Unlink free lists from the main space to avoid reusing the memory for
     // compaction spaces.
     old_space->UnlinkFreeListCategories(p);
@@ -72,7 +76,7 @@ TEST_F(SpacesTest, CompactionSpaceMerge) {
     Tagged<HeapObject> object =
         allocator
             .AllocateRaw(kMaxRegularHeapObjectSize, kTaggedAligned,
-                         AllocationOrigin::kRuntime)
+                         AllocationOrigin::kGC)
             .ToObjectChecked();
     heap->CreateFillerObjectAt(object.address(), kMaxRegularHeapObjectSize);
   }
@@ -85,79 +89,52 @@ TEST_F(SpacesTest, CompactionSpaceMerge) {
             old_space->CountTotalPages());
 
   delete compaction_space;
-}
 
-TEST_F(SpacesTest, WriteBarrierFromHeapObject) {
-  constexpr Address address1 = Page::kPageSize;
-  Tagged<HeapObject> object1 =
-      HeapObject::unchecked_cast(Tagged<Object>(address1));
-  BasicMemoryChunk* chunk1 = BasicMemoryChunk::FromHeapObject(object1);
-  heap_internals::MemoryChunk* slim_chunk1 =
-      heap_internals::MemoryChunk::FromHeapObject(object1);
-  EXPECT_EQ(static_cast<void*>(chunk1), static_cast<void*>(slim_chunk1));
-  constexpr Address address2 = 2 * Page::kPageSize - 1;
-  Tagged<HeapObject> object2 =
-      HeapObject::unchecked_cast(Tagged<Object>(address2));
-  BasicMemoryChunk* chunk2 = BasicMemoryChunk::FromHeapObject(object2);
-  heap_internals::MemoryChunk* slim_chunk2 =
-      heap_internals::MemoryChunk::FromHeapObject(object2);
-  EXPECT_EQ(static_cast<void*>(chunk2), static_cast<void*>(slim_chunk2));
+  heap->SetGCState(Heap::NOT_IN_GC);
 }
 
 TEST_F(SpacesTest, WriteBarrierIsMarking) {
-  const size_t kSizeOfMemoryChunk = sizeof(MemoryChunk);
+  const size_t kSizeOfMemoryChunk = sizeof(MutablePageMetadata);
   char memory[kSizeOfMemoryChunk];
   memset(&memory, 0, kSizeOfMemoryChunk);
   MemoryChunk* chunk = reinterpret_cast<MemoryChunk*>(&memory);
-  heap_internals::MemoryChunk* slim_chunk =
-      reinterpret_cast<heap_internals::MemoryChunk*>(&memory);
   EXPECT_FALSE(chunk->IsFlagSet(MemoryChunk::INCREMENTAL_MARKING));
-  EXPECT_FALSE(slim_chunk->IsMarking());
-  chunk->SetFlag(MemoryChunk::INCREMENTAL_MARKING);
+  EXPECT_FALSE(chunk->IsMarking());
+  chunk->SetFlagNonExecutable(MemoryChunk::INCREMENTAL_MARKING);
   EXPECT_TRUE(chunk->IsFlagSet(MemoryChunk::INCREMENTAL_MARKING));
-  EXPECT_TRUE(slim_chunk->IsMarking());
-  chunk->ClearFlag(MemoryChunk::INCREMENTAL_MARKING);
+  EXPECT_TRUE(chunk->IsMarking());
+  chunk->ClearFlagNonExecutable(MemoryChunk::INCREMENTAL_MARKING);
   EXPECT_FALSE(chunk->IsFlagSet(MemoryChunk::INCREMENTAL_MARKING));
-  EXPECT_FALSE(slim_chunk->IsMarking());
+  EXPECT_FALSE(chunk->IsMarking());
 }
 
 TEST_F(SpacesTest, WriteBarrierInYoungGenerationToSpace) {
-  const size_t kSizeOfMemoryChunk = sizeof(MemoryChunk);
+  const size_t kSizeOfMemoryChunk = sizeof(MutablePageMetadata);
   char memory[kSizeOfMemoryChunk];
   memset(&memory, 0, kSizeOfMemoryChunk);
   MemoryChunk* chunk = reinterpret_cast<MemoryChunk*>(&memory);
-  heap_internals::MemoryChunk* slim_chunk =
-      reinterpret_cast<heap_internals::MemoryChunk*>(&memory);
   EXPECT_FALSE(chunk->InYoungGeneration());
-  EXPECT_FALSE(slim_chunk->InYoungGeneration());
-  chunk->SetFlag(MemoryChunk::TO_PAGE);
+  chunk->SetFlagNonExecutable(MemoryChunk::TO_PAGE);
   EXPECT_TRUE(chunk->InYoungGeneration());
-  EXPECT_TRUE(slim_chunk->InYoungGeneration());
-  chunk->ClearFlag(MemoryChunk::TO_PAGE);
+  chunk->ClearFlagNonExecutable(MemoryChunk::TO_PAGE);
   EXPECT_FALSE(chunk->InYoungGeneration());
-  EXPECT_FALSE(slim_chunk->InYoungGeneration());
 }
 
 TEST_F(SpacesTest, WriteBarrierInYoungGenerationFromSpace) {
-  const size_t kSizeOfMemoryChunk = sizeof(MemoryChunk);
+  const size_t kSizeOfMemoryChunk = sizeof(MutablePageMetadata);
   char memory[kSizeOfMemoryChunk];
   memset(&memory, 0, kSizeOfMemoryChunk);
   MemoryChunk* chunk = reinterpret_cast<MemoryChunk*>(&memory);
-  heap_internals::MemoryChunk* slim_chunk =
-      reinterpret_cast<heap_internals::MemoryChunk*>(&memory);
   EXPECT_FALSE(chunk->InYoungGeneration());
-  EXPECT_FALSE(slim_chunk->InYoungGeneration());
-  chunk->SetFlag(MemoryChunk::FROM_PAGE);
+  chunk->SetFlagNonExecutable(MemoryChunk::FROM_PAGE);
   EXPECT_TRUE(chunk->InYoungGeneration());
-  EXPECT_TRUE(slim_chunk->InYoungGeneration());
-  chunk->ClearFlag(MemoryChunk::FROM_PAGE);
+  chunk->ClearFlagNonExecutable(MemoryChunk::FROM_PAGE);
   EXPECT_FALSE(chunk->InYoungGeneration());
-  EXPECT_FALSE(slim_chunk->InYoungGeneration());
 }
 
 TEST_F(SpacesTest, CodeRangeAddressReuse) {
   CodeRangeAddressHint hint;
-  const size_t base_alignment = MemoryChunk::kPageSize;
+  const size_t base_alignment = MutablePageMetadata::kPageSize;
   // Create code ranges.
   Address code_range1 = hint.GetAddressHint(100, base_alignment);
   CHECK(IsAligned(code_range1, base_alignment));
@@ -231,48 +208,6 @@ TEST_F(SpacesTest, FreeListManySelectFreeListCategoryType) {
         // Otherwise, size should fit in |selected|, but not in |selected+1|.
         EXPECT_LE(free_list.categories_min[selected], size);
         EXPECT_LT(size, free_list.categories_min[selected + 1]);
-      }
-    }
-  }
-}
-
-// Tests that FreeListMany::GuaranteedAllocatable returns what it should.
-TEST_F(SpacesTest, FreeListManyGuaranteedAllocatable) {
-  FreeListMany free_list;
-
-  for (int cat = kFirstCategory; cat < free_list.last_category_; cat++) {
-    std::vector<size_t> sizes;
-    // Adding size less than this category's minimum
-    sizes.push_back(free_list.categories_min[cat] - 8);
-    // Adding size equal to this category's minimum
-    sizes.push_back(free_list.categories_min[cat]);
-    // Adding size greater than this category's minimum
-    sizes.push_back(free_list.categories_min[cat] + 8);
-    if (cat != free_list.last_category_) {
-      // Adding size between this category's minimum and the next category
-      sizes.push_back(
-          (free_list.categories_min[cat] + free_list.categories_min[cat + 1]) /
-          2);
-    }
-
-    for (size_t size : sizes) {
-      FreeListCategoryType cat_free =
-          free_list.SelectFreeListCategoryType(size);
-      size_t guaranteed_allocatable = free_list.GuaranteedAllocatable(size);
-      if (cat_free == free_list.last_category_) {
-        // If |cat_free| == last_category, then guaranteed_allocatable must
-        // return the last category, because when allocating, the last category
-        // is searched entirely.
-        EXPECT_EQ(free_list.SelectFreeListCategoryType(guaranteed_allocatable),
-                  free_list.last_category_);
-      } else if (size < free_list.categories_min[0]) {
-        // If size < free_list.categories_min[0], then the bytes are wasted, and
-        // guaranteed_allocatable should return 0.
-        EXPECT_EQ(guaranteed_allocatable, 0ul);
-      } else {
-        // Otherwise, |guaranteed_allocatable| is equal to the minimum of
-        // |size|'s category (|cat_free|);
-        EXPECT_EQ(free_list.categories_min[cat_free], guaranteed_allocatable);
       }
     }
   }

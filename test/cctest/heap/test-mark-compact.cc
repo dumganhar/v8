@@ -76,18 +76,18 @@ TEST(Promotion) {
   }
 }
 
-// This is the same as Factory::NewMap, except it doesn't retry on
-// allocation failure.
+// This is the same as Factory::NewContextfulMapForCurrentContext, except it
+// doesn't retry on allocation failure.
 AllocationResult HeapTester::AllocateMapForTest(Isolate* isolate) {
   Heap* heap = isolate->heap();
   Tagged<HeapObject> obj;
   AllocationResult alloc = heap->AllocateRaw(Map::kSize, AllocationType::kMap);
   if (!alloc.To(&obj)) return alloc;
-  obj->set_map_after_allocation(ReadOnlyRoots(heap).meta_map(),
-                                SKIP_WRITE_BARRIER);
+  ReadOnlyRoots roots(isolate);
+  obj->set_map_after_allocation(*isolate->meta_map());
   return AllocationResult::FromObject(isolate->factory()->InitializeMap(
       Map::cast(obj), JS_OBJECT_TYPE, JSObject::kHeaderSize,
-      TERMINAL_FAST_ELEMENTS_KIND, 0, heap));
+      TERMINAL_FAST_ELEMENTS_KIND, 0, roots));
 }
 
 // This is the same as Factory::NewFixedArray, except it doesn't retry
@@ -202,20 +202,20 @@ HEAP_TEST(DoNotEvacuatePinnedPages) {
       heap, static_cast<int>(MemoryChunkLayout::AllocatableMemoryInDataPage()),
       AllocationType::kOld);
 
-  Page* page = Page::FromHeapObject(*handles.front());
+  MemoryChunk* chunk = MemoryChunk::FromHeapObject(*handles.front());
 
   CHECK(heap->InSpace(*handles.front(), OLD_SPACE));
-  page->SetFlag(MemoryChunk::PINNED);
+  chunk->SetFlagNonExecutable(MemoryChunk::PINNED);
 
   heap::InvokeMajorGC(heap);
   heap->EnsureSweepingCompleted(Heap::SweepingForcedFinalizationMode::kV8Only);
 
   // The pinned flag should prevent the page from moving.
   for (Handle<FixedArray> object : handles) {
-    CHECK_EQ(page, Page::FromHeapObject(*object));
+    CHECK_EQ(chunk, MemoryChunk::FromHeapObject(*object));
   }
 
-  page->ClearFlag(MemoryChunk::PINNED);
+  chunk->ClearFlagNonExecutable(MemoryChunk::PINNED);
 
   heap::InvokeMajorGC(heap);
   heap->EnsureSweepingCompleted(Heap::SweepingForcedFinalizationMode::kV8Only);
@@ -223,7 +223,7 @@ HEAP_TEST(DoNotEvacuatePinnedPages) {
   // `compact_on_every_full_gc` ensures that this page is an evacuation
   // candidate, so with the pin flag cleared compaction should now move it.
   for (Handle<FixedArray> object : handles) {
-    CHECK_NE(page, Page::FromHeapObject(*object));
+    CHECK_NE(chunk, MemoryChunk::FromHeapObject(*object));
   }
 }
 
@@ -357,7 +357,7 @@ TEST(Regress5829) {
   array->set_length(9);
   heap->CreateFillerObjectAt(old_end - kTaggedSize, kTaggedSize);
   heap->FreeMainThreadLinearAllocationAreas();
-  Page* page = Page::FromAddress(array->address());
+  PageMetadata* page = PageMetadata::FromAddress(array->address());
   for (auto object_and_size : LiveObjectRange(page)) {
     CHECK(!IsFreeSpaceOrFiller(object_and_size.first));
   }

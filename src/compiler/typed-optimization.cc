@@ -50,6 +50,8 @@ Reduction TypedOptimization::Reduce(Node* node) {
       return ReduceCheckNumber(node);
     case IrOpcode::kCheckString:
       return ReduceCheckString(node);
+    case IrOpcode::kCheckStringOrStringWrapper:
+      return ReduceCheckStringOrStringWrapper(node);
     case IrOpcode::kCheckEqualsInternalizedString:
       return ReduceCheckEqualsInternalizedString(node);
     case IrOpcode::kCheckEqualsSymbol:
@@ -141,7 +143,7 @@ Node* ResolveSameValueRenames(Node* node) {
 Reduction TypedOptimization::ReduceConvertReceiver(Node* node) {
   Node* const value = NodeProperties::GetValueInput(node, 0);
   Type const value_type = NodeProperties::GetType(value);
-  Node* const global_proxy = NodeProperties::GetValueInput(node, 1);
+  Node* const global_proxy = NodeProperties::GetValueInput(node, 2);
   if (value_type.Is(Type::Receiver())) {
     ReplaceWithValue(node, value);
     return Replace(value);
@@ -259,6 +261,16 @@ Reduction TypedOptimization::ReduceCheckString(Node* node) {
   Node* const input = NodeProperties::GetValueInput(node, 0);
   Type const input_type = NodeProperties::GetType(input);
   if (input_type.Is(Type::String())) {
+    ReplaceWithValue(node, input);
+    return Replace(input);
+  }
+  return NoChange();
+}
+
+Reduction TypedOptimization::ReduceCheckStringOrStringWrapper(Node* node) {
+  Node* const input = NodeProperties::GetValueInput(node, 0);
+  Type const input_type = NodeProperties::GetType(input);
+  if (input_type.Is(Type::StringOrStringWrapper())) {
     ReplaceWithValue(node, input);
     return Replace(input);
   }
@@ -454,7 +466,7 @@ Reduction TypedOptimization::
       }
       break;
     case IrOpcode::kStringLessThan:
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case IrOpcode::kStringLessThanOrEqual:
       if (string.length() == 0) {
         // String.fromCharCode(x) <= "" is always false,

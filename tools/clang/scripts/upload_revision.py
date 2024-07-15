@@ -65,14 +65,20 @@ Cq-Include-Trybots: chromium/try:linux_chromium_cfi_rel_ng
 Cq-Include-Trybots: chromium/try:linux_chromium_chromeos_msan_rel_ng
 Cq-Include-Trybots: chromium/try:linux_chromium_msan_rel_ng
 Cq-Include-Trybots: chromium/try:mac11-arm64-rel,mac_chromium_asan_rel_ng
-Cq-Include-Trybots: chromium/try:ios-catalyst
-Cq-Include-Trybots: chromium/try:win-asan
-Cq-Include-Trybots: chromium/try:android-official,fuchsia-official
+Cq-Include-Trybots: chromium/try:ios-catalyst,win-asan,android-official
+Cq-Include-Trybots: chromium/try:fuchsia-arm64-cast-receiver-rel
 Cq-Include-Trybots: chromium/try:mac-official,linux-official
 Cq-Include-Trybots: chromium/try:win-official,win32-official
+Cq-Include-Trybots: chromium/try:win-arm64-rel
 Cq-Include-Trybots: chromium/try:linux-swangle-try-x64,win-swangle-try-x86
+Cq-Include-Trybots: chromium/try:android-cronet-mainline-clang-arm64-dbg
+Cq-Include-Trybots: chromium/try:android-cronet-mainline-clang-arm64-rel
+Cq-Include-Trybots: chromium/try:android-cronet-mainline-clang-x86-dbg
+Cq-Include-Trybots: chromium/try:android-cronet-mainline-clang-x86-rel
+Cq-Include-Trybots: chromium/try:android-cronet-riscv64-dbg
+Cq-Include-Trybots: chromium/try:android-cronet-riscv64-rel
 Cq-Include-Trybots: chrome/try:iphone-device,ipad-device
-Cq-Include-Trybots: chrome/try:linux-chromeos-chrome,win-arm64-rel
+Cq-Include-Trybots: chrome/try:linux-chromeos-chrome
 Cq-Include-Trybots: chrome/try:win-chrome,win64-chrome,linux-chrome,mac-chrome
 Cq-Include-Trybots: chrome/try:linux-pgo,mac-pgo,win32-pgo,win64-pgo'''
 
@@ -192,7 +198,7 @@ def PatchRustStage0():
   if verify_stage0.returncode == 0:
     return
 
-  # TODO(crbug.com/1405814): We're printing a warning that the hash has
+  # TODO(crbug.com/40252478): We're printing a warning that the hash has
   # changed, but we could require a verification step of some sort here. We
   # should do the same for both Rust and Clang if we do so.
   print(verify_stage0.stdout)
@@ -240,7 +246,7 @@ def Git(*args, no_run: bool):
 
 def main():
   parser = argparse.ArgumentParser(description='upload new clang revision')
-  # TODO(crbug.com/1401042): Remove this when the cron job doesn't pass a SHA.
+  # TODO(crbug.com/40250560): Remove this when the cron job doesn't pass a SHA.
   parser.add_argument(
       'ignored',
       nargs='?',
@@ -368,7 +374,7 @@ def main():
       RUST_UPDATE_PY_PATH,
       no_run=args.no_git)
   Git('commit', '-m', commit_message, no_run=args.no_git)
-  Git('cl', 'upload', '-f', '--bypass-hooks', no_run=args.no_git)
+  Git('cl', 'upload', '-f', '--bypass-hooks', '--squash', no_run=args.no_git)
   if not args.skip_clang:
     Git('cl',
         'try',

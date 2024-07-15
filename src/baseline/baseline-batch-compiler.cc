@@ -42,12 +42,13 @@ class BaselineCompilerTask {
 
   // Executed in the background thread.
   void Compile(LocalIsolate* local_isolate) {
+    RCS_SCOPE(local_isolate, RuntimeCallCounterId::kCompileBackgroundBaseline);
     base::ScopedTimer timer(v8_flags.log_function_events ? &time_taken_
                                                          : nullptr);
     BaselineCompiler compiler(local_isolate, shared_function_info_, bytecode_);
     compiler.GenerateCode();
-    maybe_code_ = local_isolate->heap()->NewPersistentMaybeHandle(
-        compiler.Build(local_isolate));
+    maybe_code_ =
+        local_isolate->heap()->NewPersistentMaybeHandle(compiler.Build());
   }
 
   // Executed in the main thread.
@@ -66,7 +67,7 @@ class BaselineCompilerTask {
 
     shared_function_info_->set_baseline_code(*code, kReleaseStore);
     shared_function_info_->set_age(0);
-    if (v8_flags.trace_baseline_concurrent_compilation) {
+    if (v8_flags.trace_baseline) {
       CodeTracer::Scope scope(isolate->GetCodeTracer());
       std::stringstream ss;
       ss << "[Concurrent Sparkplug Off Thread] Function ";
@@ -99,9 +100,9 @@ class BaselineBatchCompilerJob {
     handles_ = isolate->NewPersistentHandles();
     tasks_.reserve(batch_size);
     for (int i = 0; i < batch_size; i++) {
-      MaybeObject maybe_sfi = task_queue->get(i);
+      Tagged<MaybeObject> maybe_sfi = task_queue->get(i);
       // TODO(victorgomes): Do I need to clear the value?
-      task_queue->set(i, HeapObjectReference::ClearedValue(isolate));
+      task_queue->set(i, ClearedValue(isolate));
       Tagged<HeapObject> obj;
       // Skip functions where weak reference is no longer valid.
       if (!maybe_sfi.GetHeapObjectIfWeak(&obj)) continue;
@@ -112,7 +113,7 @@ class BaselineBatchCompilerJob {
       if (shared->is_sparkplug_compiling()) continue;
       tasks_.emplace_back(isolate, handles_.get(), shared);
     }
-    if (v8_flags.trace_baseline_concurrent_compilation) {
+    if (v8_flags.trace_baseline) {
       CodeTracer::Scope scope(isolate->GetCodeTracer());
       PrintF(scope.file(), "[Concurrent Sparkplug] compiling %zu functions\n",
              tasks_.size());
@@ -246,6 +247,11 @@ BaselineBatchCompiler::~BaselineBatchCompiler() {
   }
 }
 
+bool BaselineBatchCompiler::concurrent() const {
+  return v8_flags.concurrent_sparkplug &&
+         !isolate_->EfficiencyModeEnabledForTiering();
+}
+
 void BaselineBatchCompiler::EnqueueFunction(Handle<JSFunction> function) {
   Handle<SharedFunctionInfo> shared(function->shared(), isolate_);
   // Immediately compile the function if batch compilation is disabled.
@@ -257,7 +263,7 @@ void BaselineBatchCompiler::EnqueueFunction(Handle<JSFunction> function) {
     return;
   }
   if (ShouldCompileBatch(*shared)) {
-    if (v8_flags.concurrent_sparkplug) {
+    if (concurrent()) {
       CompileBatchConcurrent(*shared);
     } else {
       CompileBatch(function);
@@ -278,7 +284,7 @@ void BaselineBatchCompiler::EnqueueSFI(Tagged<SharedFunctionInfo> shared) {
 
 void BaselineBatchCompiler::Enqueue(Handle<SharedFunctionInfo> shared) {
   EnsureQueueCapacity();
-  compilation_queue_->set(last_index_++, HeapObjectReference::Weak(*shared));
+  compilation_queue_->set(last_index_++, MakeWeak(*shared));
 }
 
 void BaselineBatchCompiler::InstallBatch() {
@@ -310,9 +316,9 @@ void BaselineBatchCompiler::CompileBatch(Handle<JSFunction> function) {
                               &is_compiled_scope);
   }
   for (int i = 0; i < last_index_; i++) {
-    MaybeObject maybe_sfi = compilation_queue_->get(i);
+    Tagged<MaybeObject> maybe_sfi = compilation_queue_->get(i);
     MaybeCompileFunction(maybe_sfi);
-    compilation_queue_->set(i, HeapObjectReference::ClearedValue(isolate_));
+    compilation_queue_->set(i, ClearedValue(isolate_));
   }
   ClearBatch();
 }
@@ -363,7 +369,8 @@ bool BaselineBatchCompiler::ShouldCompileBatch(
   return false;
 }
 
-bool BaselineBatchCompiler::MaybeCompileFunction(MaybeObject maybe_sfi) {
+bool BaselineBatchCompiler::MaybeCompileFunction(
+    Tagged<MaybeObject> maybe_sfi) {
   Tagged<HeapObject> heapobj;
   // Skip functions where the weak reference is no longer valid.
   if (!maybe_sfi.GetHeapObjectIfWeak(&heapobj)) return false;

@@ -20,12 +20,22 @@ bool TrustedRange::InitReservation(size_t requested) {
 
   auto page_allocator = GetPlatformPageAllocator();
 
-  const size_t kPageSize = MemoryChunk::kPageSize;
+  const size_t kPageSize = MutablePageMetadata::kPageSize;
   CHECK(IsAligned(kPageSize, page_allocator->AllocatePageSize()));
 
-  // The allocatable region must not cross a 4GB boundary so that the default
-  // pointer compression scheme of truncating pointers to 32-bits still works.
-  const size_t base_alignment = base::bits::RoundUpToPowerOfTwo(requested);
+  // We want the trusted range to be allocated above 4GB, for a few reasons:
+  //   1. Certain (sandbox) bugs allow access to (only) the first 4GB of the
+  //      address space, so we don't want sensitive objects to live there.
+  //   2. When pointers to trusted objects have the upper 32 bits cleared, they
+  //      may look like compressed pointers to some code in V8. For example, the
+  //      stack spill slot visiting logic (VisitSpillSlot in frames.cc)
+  //      currently assumes that when the top 32-bits are zero, then it's
+  //      dealing with a compressed pointer and will attempt to decompress them
+  //      with the main cage base, which in this case would break.
+  //
+  // To achieve this, we simply require 4GB alignment of the allocation and
+  // assume that we can never map the zeroth page.
+  const size_t base_alignment = size_t{4} * GB;
 
   const Address requested_start_hint =
       RoundDown(reinterpret_cast<Address>(page_allocator->GetRandomMmapAddr()),
@@ -37,7 +47,10 @@ bool TrustedRange::InitReservation(size_t requested) {
   params.page_size = kPageSize;
   params.base_alignment = base_alignment;
   params.requested_start_hint = requested_start_hint;
-  params.jit = JitPermission::kNoJit;
+  params.permissions = PageAllocator::Permission::kNoAccess;
+  params.page_initialization_mode =
+      base::PageInitializationMode::kAllocatedPagesCanBeUninitialized;
+  params.page_freeing_mode = base::PageFreeingMode::kMakeInaccessible;
   return VirtualMemoryCage::InitReservation(params);
 }
 
@@ -53,6 +66,8 @@ void InitProcessWideTrustedRange(size_t requested_size) {
         nullptr, "Failed to reserve virtual memory for TrustedRange");
   }
   process_wide_trusted_range_ = trusted_range;
+
+  TrustedSpaceCompressionScheme::InitBase(trusted_range->base());
 }
 }  // namespace
 

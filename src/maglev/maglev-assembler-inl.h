@@ -254,6 +254,25 @@ inline void MaglevAssembler::JumpToDeferredIf(Condition cond,
                    std::forward<Args>(args)...));
 }
 
+template <typename T>
+inline void AllocateSlow(MaglevAssembler* masm,
+                         RegisterSnapshot register_snapshot, Register object,
+                         Builtin builtin, T size_in_bytes, ZoneLabelRef done) {
+  // Remove {object} from snapshot, since it is the returned allocated
+  // HeapObject.
+  register_snapshot.live_registers.clear(object);
+  register_snapshot.live_tagged_registers.clear(object);
+  {
+    SaveRegisterStateForCall save_register_state(masm, register_snapshot);
+    using D = AllocateDescriptor;
+    masm->Move(D::GetRegisterParameter(D::kRequestedSize), size_in_bytes);
+    masm->CallBuiltin(builtin);
+    save_register_state.DefineSafepoint();
+    masm->Move(object, kReturnRegister0);
+  }
+  masm->Jump(*done);
+}
+
 inline void MaglevAssembler::SmiToDouble(DoubleRegister result, Register smi) {
   AssertSmi(smi);
   SmiUntag(smi);
@@ -341,6 +360,13 @@ inline void MaglevAssembler::LoadAndUntagTaggedSignedField(Register result,
                                                            Register object,
                                                            int offset) {
   MacroAssembler::SmiUntagField(result, FieldMemOperand(object, offset));
+}
+
+inline void MaglevAssembler::LoadHeapNumberOrOddballValue(DoubleRegister result,
+                                                          Register object) {
+  static_assert(offsetof(HeapNumber, value_) ==
+                offsetof(Oddball, to_number_raw_));
+  LoadHeapNumberValue(result, object);
 }
 
 namespace detail {
@@ -858,8 +884,16 @@ inline void MaglevAssembler::StringLength(Register result, Register string) {
                              LAST_STRING_TYPE);
     Check(kUnsignedLessThanEqual, AbortReason::kUnexpectedValue);
   }
-  LoadSignedField(result, FieldMemOperand(string, String::kLengthOffset),
+  LoadSignedField(result, FieldMemOperand(string, offsetof(String, length_)),
                   sizeof(int32_t));
+}
+
+void MaglevAssembler::LoadMapForCompare(Register dst, Register obj) {
+#ifdef V8_COMPRESS_POINTERS
+  MacroAssembler::LoadCompressedMap(dst, obj);
+#else
+  MacroAssembler::LoadMap(dst, obj);
+#endif
 }
 
 }  // namespace maglev

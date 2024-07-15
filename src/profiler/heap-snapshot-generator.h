@@ -20,6 +20,7 @@
 #include "src/objects/js-objects.h"
 #include "src/objects/literal-objects.h"
 #include "src/objects/objects.h"
+#include "src/objects/string.h"
 #include "src/objects/visitors.h"
 #include "src/profiler/strings-storage.h"
 #include "src/strings/string-hasher.h"
@@ -45,8 +46,8 @@ class JSGlobalProxy;
 class JSPromise;
 class JSWeakCollection;
 
-struct SourceLocation {
-  SourceLocation(int entry_index, int scriptId, int line, int col)
+struct EntrySourceLocation {
+  EntrySourceLocation(int entry_index, int scriptId, int line, int col)
       : entry_index(entry_index), scriptId(scriptId), line(line), col(col) {}
 
   const int entry_index;
@@ -237,7 +238,9 @@ class HeapSnapshot {
   std::deque<HeapGraphEdge>& edges() { return edges_; }
   const std::deque<HeapGraphEdge>& edges() const { return edges_; }
   std::vector<HeapGraphEdge*>& children() { return children_; }
-  const std::vector<SourceLocation>& locations() const { return locations_; }
+  const std::vector<EntrySourceLocation>& locations() const {
+    return locations_;
+  }
   void RememberLastJSObjectId();
   SnapshotObjectId max_snapshot_js_object_id() const {
     return max_snapshot_js_object_id_;
@@ -262,6 +265,9 @@ class HeapSnapshot {
   HeapEntry* GetEntryById(SnapshotObjectId id);
   void FillChildren();
 
+  void AddScriptLineEnds(int script_id, String::LineEndsVector&& line_ends);
+  String::LineEndsVector& GetScriptLineEnds(int script_id);
+
   void Print(int max_depth);
 
  private:
@@ -280,10 +286,17 @@ class HeapSnapshot {
   std::deque<HeapGraphEdge> edges_;
   std::vector<HeapGraphEdge*> children_;
   std::unordered_map<SnapshotObjectId, HeapEntry*> entries_by_id_cache_;
-  std::vector<SourceLocation> locations_;
+  std::vector<EntrySourceLocation> locations_;
   SnapshotObjectId max_snapshot_js_object_id_ = -1;
   v8::HeapProfiler::HeapSnapshotMode snapshot_mode_;
   v8::HeapProfiler::NumericsMode numerics_mode_;
+
+  // The ScriptsLineEndsMap instance stores the line ends of scripts that did
+  // not get their line_ends() information populated in heap.
+  using ScriptId = int;
+  using ScriptsLineEndsMap =
+      std::unordered_map<ScriptId, String::LineEndsVector>;
+  ScriptsLineEndsMap scripts_line_ends_map_;
 };
 
 
@@ -512,8 +525,8 @@ class V8_EXPORT_PRIVATE V8HeapExplorer : public HeapEntriesAllocator {
 #if V8_ENABLE_WEBASSEMBLY
   void ExtractWasmStructReferences(Tagged<WasmStruct> obj, HeapEntry* entry);
   void ExtractWasmArrayReferences(Tagged<WasmArray> obj, HeapEntry* entry);
-  void ExtractWasmInstanceObjectReference(Tagged<WasmInstanceObject> obj,
-                                          HeapEntry* entry);
+  void ExtractWasmTrustedInstanceDataReferences(
+      Tagged<WasmTrustedInstanceData> obj, HeapEntry* entry);
 #endif  // V8_ENABLE_WEBASSEMBLY
 
   bool IsEssentialObject(Tagged<Object> object);
@@ -556,7 +569,8 @@ class V8_EXPORT_PRIVATE V8HeapExplorer : public HeapEntriesAllocator {
                              Tagged<Object> child);
   const char* GetStrongGcSubrootName(Tagged<HeapObject> object);
   void TagObject(Tagged<Object> obj, const char* tag,
-                 base::Optional<HeapEntry::Type> type = {});
+                 base::Optional<HeapEntry::Type> type = {},
+                 bool overwrite_existing_name = false);
   void RecursivelyTagConstantPool(Tagged<Object> obj, const char* tag,
                                   HeapEntry::Type type, int recursion_limit);
 
@@ -575,6 +589,7 @@ class V8_EXPORT_PRIVATE V8HeapExplorer : public HeapEntriesAllocator {
   v8::HeapProfiler::ObjectNameResolver* global_object_name_resolver_;
 
   std::vector<bool> visited_fields_;
+  size_t max_pointers_;
 
   friend class IndexedReferencesExtractor;
   friend class RootsReferencesExtractor;
@@ -746,7 +761,7 @@ class HeapSnapshotJSONSerializer {
   void SerializeSamples();
   void SerializeString(const unsigned char* s);
   void SerializeStrings();
-  void SerializeLocation(const SourceLocation& location);
+  void SerializeLocation(const EntrySourceLocation& location);
   void SerializeLocations();
 
   static const int kEdgeFieldsCount;

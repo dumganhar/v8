@@ -556,7 +556,9 @@ class AvdConfig:
       # https://bit.ly/3agmjcM).
       # Wait for this step to complete since it can take a while for old OSs
       # like M, otherwise the avd may have "Encryption Unsuccessful" error.
-      instance.device.WaitUntilFullyBooted(decrypt=True, timeout=180, retries=0)
+      instance.device.WaitUntilFullyBooted(decrypt=True, timeout=360, retries=0)
+      logging.info('The build fingerprint of the system is %r',
+                   instance.device.build_fingerprint)
 
       if additional_apks:
         for apk in additional_apks:
@@ -591,6 +593,8 @@ class AvdConfig:
                                         check_return=True)
 
       if snapshot:
+        logging.info('Wait additional 60 secs before saving snapshot for AVD')
+        time.sleep(60)
         instance.SaveSnapshot()
 
       instance.Stop()
@@ -884,8 +888,11 @@ class AvdConfig:
       with ini.update_ini_file(config_path) as config_contents:
         config_contents.update(properties)
 
-    # Create qt config file to disable adb warning when launched in window mode.
+    # Create qt config file to disable certain warnings when launched in window.
     with ini.update_ini_file(self._qt_config_path) as config_contents:
+      # Disable nested virtualization warning.
+      config_contents['General'] = {'showNestedWarning': 'false'}
+      # Disable adb warning.
       config_contents['set'] = {'autoFindAdb': 'false'}
 
   def _Initialize(self):
@@ -1004,6 +1011,13 @@ class _AvdInstance:
           self.GetSnapshotName(),
       ]
 
+      avd_type = self._avd_name.split('_')[1]
+      logging.info('Emulator Type: %s', avd_type)
+
+      if avd_type == 'car':
+        logging.info('Auto emulator will start slow')
+        is_slow_start = True
+
       if wipe_data:
         emulator_cmd.append('-wipe-data')
       if disk_size:
@@ -1027,8 +1041,8 @@ class _AvdInstance:
         # Always print timestamp when debug tags are set.
         self._debug_tags.add('time')
         emulator_cmd.extend(['-debug', ','.join(self._debug_tags)])
-        if 'kernel' in self._debug_tags:
-          # TODO(crbug.com/1404176): newer API levels need "-virtio-console"
+        if 'kernel' in self._debug_tags or 'all' in self._debug_tags:
+          # TODO(crbug.com/40885864): newer API levels need "-virtio-console"
           # as well to print kernel log.
           emulator_cmd.append('-show-kernel')
 
@@ -1170,7 +1184,7 @@ class _AvdInstance:
     return self._emulator_device
 
 
-# TODO(crbug.com/1275767): Refactor it to a dict-based approach.
+# TODO(crbug.com/40207212): Refactor it to a dict-based approach.
 def _EnsureSystemSettings(device):
   set_long_press_timeout_cmd = [
       'settings', 'put', 'secure', 'long_press_timeout', _LONG_PRESS_TIMEOUT
@@ -1188,7 +1202,7 @@ def _EnsureSystemSettings(device):
   else:
     logging.warning('long_press_timeout is not set correctly')
 
-  # TODO(crbug.com/1488458): Move the date sync function to device_utils.py
+  # TODO(crbug.com/40283631): Move the date sync function to device_utils.py
   if device.IsUserBuild():
     logging.warning('Cannot sync the device date on "user" build')
     return
@@ -1210,10 +1224,14 @@ def _EnsureSystemSettings(device):
   set_date_command.append(strgmtime)
   device.RunShellCommand(set_date_command, check_return=True, as_root=True)
 
+  logging.info('Hide system error dialogs such as crash and ANR dialogs.')
+  device.RunShellCommand(
+      ['settings', 'put', 'global', 'hide_error_dialogs', '1'])
+
 
 def _EnableNetwork(device):
   logging.info('Enable the network on the emulator.')
-  # TODO(https://crbug.com/1486376): Remove airplane_mode once all AVD
+  # TODO(crbug.com/40282869): Remove airplane_mode once all AVD
   # are rolled to svc-based version.
   device.RunShellCommand(
       ['settings', 'put', 'global', 'airplane_mode_on', '0'], as_root=True)

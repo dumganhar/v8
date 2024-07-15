@@ -1033,7 +1033,7 @@ TEST(SubclassErrorBuiltin) {
   CcTest::InitializeVM();
   v8::HandleScope scope(CcTest::isolate());
 
-  const int first_field = 2;
+  const int first_field = 3;
   TestSubclassBuiltin("A1", JS_ERROR_TYPE, "Error", "'err'", first_field);
   TestSubclassBuiltin("A2", JS_ERROR_TYPE, "EvalError", "'err'", first_field);
   TestSubclassBuiltin("A3", JS_ERROR_TYPE, "RangeError", "'err'", first_field);
@@ -1139,6 +1139,7 @@ TEST(SubclassArrayBuiltinNoInlineNew) {
 TEST(SubclassTypedArrayBuiltin) {
   // Avoid eventual completion of in-object slack tracking.
   v8_flags.always_turbofan = false;
+  v8_flags.js_float16array = true;
   CcTest::InitializeVM();
   v8::HandleScope scope(CcTest::isolate());
 

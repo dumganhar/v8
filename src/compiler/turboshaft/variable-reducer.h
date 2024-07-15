@@ -49,10 +49,13 @@ namespace v8::internal::compiler::turboshaft {
 //
 // Note that the VariableAssembler does not do "old-OpIndex => Variable"
 // book-keeping: the users of the Variable should do that themselves (which
-// is what OptimizationPhase does for instance).
+// is what CopyingPhase does for instance).
 
-template <class Next>
-class VariableReducer : public Next {
+// VariableReducer always adds a RequiredOptimizationReducer, because phis
+// with constant inputs introduced by `VariableReducer` need to be eliminated.
+template <class AfterNext>
+class VariableReducer : public RequiredOptimizationReducer<AfterNext> {
+  using Next = RequiredOptimizationReducer<AfterNext>;
   using Snapshot = SnapshotTable<OpIndex, VariableData>::Snapshot;
 
   struct GetActiveLoopVariablesIndex {
@@ -85,14 +88,7 @@ class VariableReducer : public Next {
   };
 
  public:
-  TURBOSHAFT_REDUCER_BOILERPLATE()
-
-#if defined(__clang__)
-  // Phis with constant inputs introduced by `VariableReducer` need to be
-  // eliminated.
-  static_assert(
-      reducer_list_contains<ReducerList, RequiredOptimizationReducer>::value);
-#endif
+  TURBOSHAFT_REDUCER_BOILERPLATE(VariableReducer)
 
   void Bind(Block* new_block) {
     Next::Bind(new_block);
@@ -142,7 +138,7 @@ class VariableReducer : public Next {
     }
   }
 
-  void RestoreTemporaryVariableSnapshotAfter(Block* block) {
+  void RestoreTemporaryVariableSnapshotAfter(const Block* block) {
     DCHECK(table_.IsSealed());
     DCHECK(block_to_snapshot_mapping_[block->index()].has_value());
     table_.StartNewSnapshot(*block_to_snapshot_mapping_[block->index()]);
@@ -154,13 +150,13 @@ class VariableReducer : public Next {
     is_temporary_ = false;
   }
 
-  OpIndex REDUCE(Goto)(Block* destination) {
-    OpIndex result = Next::ReduceGoto(destination);
+  V<None> REDUCE(Goto)(Block* destination, bool is_backedge) {
+    V<None> result = Next::ReduceGoto(destination, is_backedge);
     if (!destination->IsBound()) {
       return result;
     }
     DCHECK(destination->IsLoop());
-    DCHECK(destination->HasExactlyNPredecessors(2));
+    DCHECK(destination->PredecessorCount() == 2);
     Snapshot loop_header_snapshot =
         *block_to_snapshot_mapping_
             [destination->LastPredecessor()->NeighboringPredecessor()->index()];

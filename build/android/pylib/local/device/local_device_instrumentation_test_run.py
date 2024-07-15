@@ -5,11 +5,11 @@
 
 import collections
 import contextlib
-import copy
 import hashlib
 import json
 import logging
 import os
+import pickle
 import posixpath
 import re
 import shutil
@@ -23,7 +23,6 @@ from devil.android import crash_handler
 from devil.android import device_errors
 from devil.android import device_temp_file
 from devil.android import flag_changer
-from devil.android.sdk import shared_prefs
 from devil.android.sdk import version_codes
 from devil.android import logcat_monitor
 from devil.android.tools import system_app
@@ -31,10 +30,10 @@ from devil.android.tools import webview_app
 from devil.utils import reraiser_thread
 from incremental_install import installer
 from pylib import constants
-from pylib import valgrind_tools
 from pylib.base import base_test_result
 from pylib.base import output_manager
 from pylib.constants import host_paths
+from pylib.instrumentation import instrumentation_parser
 from pylib.instrumentation import instrumentation_test_instance
 from pylib.local.device import local_device_environment
 from pylib.local.device import local_device_test_run
@@ -44,7 +43,6 @@ from pylib.utils import chrome_proxy_utils
 from pylib.utils import code_coverage_utils
 from pylib.utils import gold_utils
 from pylib.utils import instrumentation_tracing
-from pylib.utils import shared_preference_utils
 from pylib.utils.device_dependencies import DevicePathComponentsFor
 from py_trace_event import trace_event
 from py_trace_event import trace_time
@@ -71,7 +69,7 @@ _WPR_GO_LINUX_X86_64_PATH = os.path.join(host_paths.DIR_SOURCE_ROOT,
 _TAG = 'test_runner_py'
 
 TIMEOUT_ANNOTATIONS = [
-    ('Manual', 10 * 60 * 60),
+    ('Manual', 1000 * 60 * 60),
     ('IntegrationTest', 10 * 60),
     ('External', 10 * 60),
     ('EnormousTest', 5 * 60),
@@ -92,25 +90,22 @@ LOGCAT_FILTERS = ['*:e', 'chromium:v', 'cr_*:v', 'DEBUG:I',
                   'StrictMode:D', '%s:I' % _TAG]
 
 EXTRA_CLANG_COVERAGE_DEVICE_FILE = (
-    'org.chromium.base.test.BaseChromiumAndroidJUnitRunner.'
-    'ClangCoverageDeviceFile')
+    'BaseChromiumAndroidJUnitRunner.ClangCoverageDeviceFile')
 
 EXTRA_SCREENSHOT_FILE = (
     'org.chromium.base.test.ScreenshotOnFailureStatement.ScreenshotFile')
 
+EXTRA_TIMEOUT_SCALE = 'BaseChromiumAndroidJUnitRunner.TimeoutScale'
+
 EXTRA_UI_CAPTURE_DIR = (
     'org.chromium.base.test.util.Screenshooter.ScreenshotDir')
 
-EXTRA_TRACE_FILE = ('org.chromium.base.test.BaseJUnit4ClassRunner.TraceFile')
+EXTRA_TRACE_FILE = 'BaseChromiumAndroidJUnitRunner.TraceFile'
 
 _EXTRA_RUN_DISABLED_TEST = (
     'org.chromium.base.test.util.DisableIfSkipCheck.RunDisabledTest')
 
-_EXTRA_TEST_LIST = (
-    'org.chromium.base.test.BaseChromiumAndroidJUnitRunner.TestList')
-
-_EXTRA_TEST_IS_UNIT = (
-    'org.chromium.base.test.BaseChromiumAndroidJUnitRunner.IsUnitTest')
+_EXTRA_TEST_IS_UNIT = 'BaseChromiumAndroidJUnitRunner.IsUnitTest'
 
 _EXTRA_PACKAGE_UNDER_TEST = ('org.chromium.chrome.test.pagecontroller.rules.'
                              'ChromeUiApplicationTestRule.PackageUnderTest')
@@ -135,6 +130,37 @@ RENDER_TEST_MODEL_SDK_CONFIGS = {
 _BATCH_SUFFIX = '_batch'
 # If the batch is too big it starts to fail for command line length reasons.
 _LOCAL_TEST_BATCH_MAX_GROUP_SIZE = 200
+
+_PICKLE_FORMAT_VERSION = 12
+
+
+class _TestListPickleException(Exception):
+  pass
+
+
+def _LoadTestsFromPickle(pickle_path, test_mtime, pickle_extras):
+  if not os.path.exists(pickle_path):
+    raise _TestListPickleException('%s does not exist.' % pickle_path)
+  if os.path.getmtime(pickle_path) <= test_mtime:
+    raise _TestListPickleException('File is stale: %s' % pickle_path)
+
+  with open(pickle_path, 'rb') as f:
+    pickle_data = pickle.load(f)
+  if pickle_data['VERSION'] != _PICKLE_FORMAT_VERSION:
+    raise _TestListPickleException('PICKLE_FORMAT_VERSION has changed.')
+  if pickle_data.get('EXTRAS') != pickle_extras:
+    raise _TestListPickleException('PICKLE EXTRAS has changed.')
+  return pickle_data['TEST_METHODS']
+
+
+def _SaveTestsToPickle(pickle_path, tests, pickle_extras):
+  pickle_data = {
+      'VERSION': _PICKLE_FORMAT_VERSION,
+      'EXTRAS': pickle_extras,
+      'TEST_METHODS': tests,
+  }
+  with open(pickle_path, 'wb') as pickle_file:
+    pickle.dump(pickle_data, pickle_file)
 
 
 @contextlib.contextmanager
@@ -193,6 +219,84 @@ def _GetTargetPackageName(test_apk):
   return test_apk.GetAllInstrumentations()[0]['android:targetPackage']
 
 
+def _ParseTestListOutputFromChromiumListener(output):
+  parser = instrumentation_parser.InstrumentationParser(output)
+  tests_by_class = collections.defaultdict(list)
+  annotations_by_class = {}
+  for code, bundle in parser.IterStatus():
+    # Code used only by TestListInstrumentationRunListener.
+    if code == 5:
+      if 'class' in bundle:
+        cur_class = bundle['class']
+        annotations_by_class[cur_class] = json.loads(
+            bundle['class_annotations'])
+      tests_by_class[cur_class].append({
+          'method':
+          bundle['method'],
+          'annotations':
+          json.loads(bundle['method_annotations']),
+      })
+    elif 'class' in bundle and 'current' in bundle:
+      # From AndroidX Listener.
+      # Both listeners are active for APKs built in chromium that do not use
+      # BaseChromiumAndroidJUnitRunner for instrumentation (e.g. to be
+      # compatible with other build systems).
+      continue
+    elif code == -1:
+      # RESULT_OK
+      continue
+    else:
+      logging.warning('Unexpected code=%s output: %r', code, bundle)
+
+  # GetResult() cannot be called before IterStatus().
+  code, result = parser.GetResult()
+  if code != instrumentation_parser.RESULT_CODE_OK:
+    raise Exception('Test listing failed: %s' % result.get('stream', result))
+  return [{
+      'class': class_name,
+      'methods': methods,
+      'annotations': annotations_by_class[class_name],
+  } for class_name, methods in tests_by_class.items()]
+
+
+def _ParseTestListOutputFromAndroidxListener(output):
+  parser = instrumentation_parser.InstrumentationParser(output)
+  tests_by_class = collections.defaultdict(list)
+  for code, bundle in parser.IterStatus():
+    if 'class' in bundle and 'current' in bundle:
+      # AndroidX's InstrumentationResultPrinter uses:
+      # code=0 for start
+      # code=1 for finished
+      # code=-3 for ignored.
+      if code == 1:
+        class_name = bundle.get('class')
+        method_name = bundle.get('test')
+        # TODO(crbug.com/326260748): Handle spaces in names.
+        if any(c in method_name for c in ' *-:'):
+          logging.warning('Ignoring method with invalid chars: %s.%s',
+                          class_name, method_name)
+          continue
+        if class_name and method_name:
+          tests_by_class[class_name].append({
+              'method': method_name,
+              'annotations': {},
+          })
+    elif code == -1:
+      # RESULT_OK
+      continue
+    else:
+      logging.warning('Unexpected code=%s output: %r', code, bundle)
+  # GetResult() cannot be called before IterStatus().
+  code, result = parser.GetResult()
+  if code != instrumentation_parser.RESULT_CODE_OK:
+    raise Exception('Test listing failed: %s' % result.get('stream', result))
+  return [{
+      'class': class_name,
+      'methods': methods,
+      'annotations': {}
+  } for class_name, methods in tests_by_class.items()]
+
+
 class LocalDeviceInstrumentationTestRun(
     local_device_test_run.LocalDeviceTestRun):
   def __init__(self, env, test_instance):
@@ -202,7 +306,6 @@ class LocalDeviceInstrumentationTestRun(
     self._flag_changers = {}
     self._webview_flag_changers = {}
     self._render_tests_device_output_dir = None
-    self._shared_prefs_to_restore = []
     self._skia_gold_session_manager = None
     self._skia_gold_work_dir = None
 
@@ -419,19 +522,6 @@ class LocalDeviceInstrumentationTestRun(
         dev.RunShellCommand(cmd, check_return=True)
 
       @trace_event.traced
-      def edit_shared_prefs(dev):
-        for setting in self._test_instance.edit_shared_prefs:
-          shared_pref = shared_prefs.SharedPrefs(
-              dev, setting['package'], setting['filename'],
-              use_encrypted_path=setting.get('supports_encrypted_path', False))
-          pref_to_restore = copy.copy(shared_pref)
-          pref_to_restore.Load()
-          self._shared_prefs_to_restore.append(pref_to_restore)
-
-          shared_preference_utils.ApplySharedPreferenceSetting(
-              shared_pref, setting)
-
-      @trace_event.traced
       def approve_app_links(dev):
         self._ToggleAppLinks(dev, 'STATE_APPROVED')
 
@@ -509,13 +599,10 @@ class LocalDeviceInstrumentationTestRun(
           logging.debug('Attempting to set WebView flags: %r', webview_flags)
           self._webview_flag_changers[str(dev)].AddFlags(webview_flags)
 
-        valgrind_tools.SetChromeTimeoutScale(
-            dev, self._test_instance.timeout_scale)
-
       install_steps += [push_test_data, create_flag_changer]
       post_install_steps += [
-          set_debug_app, edit_shared_prefs, approve_app_links,
-          set_vega_permissions, DismissCrashDialogs
+          set_debug_app, approve_app_links, set_vega_permissions,
+          DismissCrashDialogs
       ]
 
       def bind_crash_handler(step, dev):
@@ -600,15 +687,6 @@ class LocalDeviceInstrumentationTestRun(
         logging.info('Running custom teardown shell command: %s', cmd)
         dev.RunShellCommand(cmd, shell=True, check_return=True)
 
-      valgrind_tools.SetChromeTimeoutScale(dev, None)
-
-      # Restore any shared preference files that we stored during setup.
-      # This should be run sometime before the replace package contextmanager
-      # gets exited so we don't have to special case restoring files of
-      # replaced system apps.
-      for pref_to_restore in self._shared_prefs_to_restore:
-        pref_to_restore.Commit(force_commit=True)
-
       # If we've force approved app links for a package, undo that now.
       self._ToggleAppLinks(dev, 'STATE_NO_RESPONSE')
 
@@ -668,16 +746,59 @@ class LocalDeviceInstrumentationTestRun(
     # Each test or test batch will be a single shard.
     return tests
 
+  def _GetTestsFromPickle(self, pickle_extras):
+    test_apk_path = self._test_instance.test_apk.path
+    pickle_path = '%s-testlist.pickle' % test_apk_path
+    # For incremental APKs, the code doesn't live in the apk, so instead check
+    # the timestamp of the target's .dex files.
+    if self._test_instance.test_apk_incremental_install_json:
+      with open(self._test_instance.test_apk_incremental_install_json) as f:
+        data = json.load(f)
+      out_dir = constants.GetOutDirectory()
+      test_mtime = max(
+          os.path.getmtime(os.path.join(out_dir, p)) for p in data['dex_files'])
+    else:
+      test_mtime = os.path.getmtime(test_apk_path)
+
+    try:
+      raw_tests = _LoadTestsFromPickle(pickle_path, test_mtime, pickle_extras)
+      logging.info('Using cached test list.')
+    except _TestListPickleException as e:
+      logging.info('Not using cached test list: %s', e)
+      raw_tests = None
+    return raw_tests, pickle_path
+
   #override
   def _GetTests(self):
-    if self._test_instance.junit4_runner_supports_listing:
-      raw_tests = self._GetTestsFromRunner()
-      tests = self._test_instance.ProcessRawTests(raw_tests)
-    else:
-      tests = self._test_instance.GetTests()
-    tests = self._ApplyExternalSharding(
-        tests, self._test_instance.external_shard_index,
-        self._test_instance.total_external_shards)
+    ti = self._test_instance
+    use_dexdump = (not ti.has_chromium_test_listener
+                   and ti.has_external_annotation_filters)
+    run_disabled = ti.GetRunDisabledFlag()
+    # run_disabled effects test listing only when using AndroidJUnitRunner.
+    use_androidx_runner = not use_dexdump and not ti.has_chromium_test_listener
+    pickle_extras = (use_dexdump, use_androidx_runner and run_disabled)
+    raw_tests, pickle_path = self._GetTestsFromPickle(pickle_extras)
+
+    if raw_tests is None:
+      if use_dexdump:
+        # This path is hit by CTS tests.
+        # Dexdump is not able to find parameterized tests, so some tests might
+        # be missed.
+        # We should consider using AndroidJunitRunner's "-e annotation Foo,Bar"
+        # and "-e notAnnotation Foo,Bar" to list tests when annotation filters
+        # exist instead.
+        logging.info('Getting tests from dexdump (due to annotation filters)')
+        raw_tests = instrumentation_test_instance.GetTestsFromDexdump(
+            ti.test_apk.path)
+      else:
+        logging.info('Getting tests by having %s list them.',
+                     ti.junit4_runner_class)
+        raw_tests = self._GetTestsFromRunner(run_disabled=run_disabled)
+      _SaveTestsToPickle(pickle_path, raw_tests, pickle_extras)
+
+    tests = ti.ProcessRawTests(raw_tests)
+    tests = self._ApplyExternalSharding(tests, ti.external_shard_index,
+                                        ti.total_external_shards)
     return tests
 
   #override
@@ -762,7 +883,7 @@ class LocalDeviceInstrumentationTestRun(
       ])
     all_tests.extend(other_tests)
     # Sort all tests by hash.
-    # TODO(crbug.com/1257820): Add sorting logic back to _PartitionTests.
+    # TODO(crbug.com/40200835): Add sorting logic back to _PartitionTests.
     return self._SortTests(all_tests)
 
   #override
@@ -785,7 +906,6 @@ class LocalDeviceInstrumentationTestRun(
       extras[_EXTRA_PACKAGE_UNDER_TEST] = package_name
 
     flags_to_add = []
-    test_timeout_scale = None
     if self._test_instance.coverage_directory:
       coverage_basename = '%s' % ('%s_%s_group' %
                                   (test[0]['class'], test[0]['method'])
@@ -807,7 +927,8 @@ class LocalDeviceInstrumentationTestRun(
 
       if self._env.force_main_user:
         coverage_directory = device.ResolveSpecialPath(coverage_directory)
-      if not device.PathExists(coverage_directory):
+      if not device.PathExists(coverage_directory,
+                               as_root=self._env.force_main_user):
         # Root permission is needed when accessing a secondary user's path.
         device.RunShellCommand(['mkdir', '-p', coverage_directory],
                                check_return=True,
@@ -818,8 +939,11 @@ class LocalDeviceInstrumentationTestRun(
           device)
       # "%2m" is used to expand to 2 raw profiles at runtime. "%p" writes
       # process ID.
-      # See https://clang.llvm.org/docs/SourceBasedCodeCoverage.html
-      clang_profile_filename = '%s_%s.profraw' % (coverage_basename, '%2m_%p')
+      # "%c" enables continuous mode. See crbug.com/1468343, crbug.com/1518474
+      # For more details, refer to:
+      #   https://clang.llvm.org/docs/SourceBasedCodeCoverage.html
+      clang_profile_filename = ('%s_%s.profraw' %
+                                (coverage_basename, '%2m_%p%c'))
       extras[EXTRA_CLANG_COVERAGE_DEVICE_FILE] = posixpath.join(
           device_clang_profile_dir, clang_profile_filename)
 
@@ -881,7 +1005,6 @@ class LocalDeviceInstrumentationTestRun(
       timeout = min(MAX_BATCH_TEST_TIMEOUT,
                     FIXED_TEST_TIMEOUT_OVERHEAD + sum(timeouts))
     else:
-      assert test['is_junit4']
       test_name = instrumentation_test_instance.GetTestName(test)
       test_display_name = self._GetUniqueTestName(test)
 
@@ -891,11 +1014,10 @@ class LocalDeviceInstrumentationTestRun(
       timeout = FIXED_TEST_TIMEOUT_OVERHEAD + self._GetTimeoutFromAnnotations(
           test['annotations'], test_display_name)
 
-      test_timeout_scale = self._GetTimeoutScaleFromAnnotations(
-          test['annotations'])
-      if test_timeout_scale and test_timeout_scale != 1:
-        valgrind_tools.SetChromeTimeoutScale(
-            device, test_timeout_scale * self._test_instance.timeout_scale)
+      timeout_scale = self._test_instance.timeout_scale * (
+          self._GetTimeoutScaleFromAnnotations(test['annotations']))
+      if timeout_scale != 1:
+        extras[EXTRA_TIMEOUT_SCALE] = str(self._test_instance.timeout_scale)
 
     if self._test_instance.wait_for_java_debugger:
       timeout = None
@@ -964,8 +1086,9 @@ class LocalDeviceInstrumentationTestRun(
         output = self._test_instance.MaybeDeobfuscateLines(output)
         # TODO(jbudorick): Make instrumentation tests output a JSON so this
         # doesn't have to parse the output.
-        result_code, result_bundle, statuses = (
-            self._test_instance.ParseAmInstrumentRawOutput(output))
+        parser = instrumentation_parser.InstrumentationParser(output)
+        statuses = list(parser.IterStatus())
+        result_code, result_bundle = parser.GetResult()
         results = self._test_instance.GenerateTestResults(
             result_code, result_bundle, statuses, duration_ms,
             device.product_cpu_abi, self._test_instance.symbolizer)
@@ -976,11 +1099,6 @@ class LocalDeviceInstrumentationTestRun(
       def restore_flags():
         if flags_to_add:
           self._flag_changers[str(device)].Restore()
-
-      def restore_timeout_scale():
-        if test_timeout_scale:
-          valgrind_tools.SetChromeTimeoutScale(
-              device, self._test_instance.timeout_scale)
 
       def handle_coverage_data():
         if self._test_instance.coverage_directory:
@@ -1096,9 +1214,9 @@ class LocalDeviceInstrumentationTestRun(
       # the results! Things such as whether the test CRASHED have not yet been
       # determined.
       post_test_steps = [
-          restore_flags, restore_timeout_scale, stop_chrome_proxy,
-          handle_coverage_data, handle_render_test_data,
-          pull_ui_screen_captures, pull_baseline_profile
+          restore_flags, stop_chrome_proxy, handle_coverage_data,
+          handle_render_test_data, pull_ui_screen_captures,
+          pull_baseline_profile
       ]
       if self._env.concurrent_adb:
         reraiser_thread.RunAsync(post_test_steps)
@@ -1115,12 +1233,12 @@ class LocalDeviceInstrumentationTestRun(
         if r.GetName() == test_name:
           r.SetName(test_display_name)
 
-    # Add UNKNOWN results for any missing tests.
+    # Add NOTRUN results for any missing tests.
     iterable_test = test if isinstance(test, list) else [test]
     test_names = set(self._GetUniqueTestName(t) for t in iterable_test)
     results_names = set(r.GetName() for r in results)
     results.extend(
-        base_test_result.BaseTestResult(u, base_test_result.ResultType.UNKNOWN)
+        base_test_result.BaseTestResult(u, base_test_result.ResultType.NOTRUN)
         for u in test_names.difference(results_names))
 
     # Update the result type if we detect a crash.
@@ -1210,11 +1328,11 @@ class LocalDeviceInstrumentationTestRun(
           # associate with the first test.
           results[0].SetLink('tombstones', tombstone_file.Link())
 
-    unknown_tests = set(r.GetName() for r in results
-                        if r.GetType() == base_test_result.ResultType.UNKNOWN)
+    notrun_tests = set(r.GetName() for r in results
+                       if r.GetType() == base_test_result.ResultType.NOTRUN)
 
     # If a test that is batched crashes, the rest of the tests in that batch
-    # won't be ran and will have their status left as unknown in results,
+    # won't be ran and will have their status left as NOTRUN in results,
     # so rerun the tests. (see crbug/1127935)
     # Need to "unbatch" the tests, so that on subsequent tries, the tests can
     # get ran individually. This prevents an unrecognized crash from preventing
@@ -1223,7 +1341,7 @@ class LocalDeviceInstrumentationTestRun(
     # level.
     tests_to_rerun = []
     for t in iterable_test:
-      if self._GetUniqueTestName(t) in unknown_tests:
+      if self._GetUniqueTestName(t) in notrun_tests:
         prior_attempts = t.get('run_attempts', 0)
         t['run_attempts'] = prior_attempts + 1
         # It's possible every test in the batch could crash, so need to
@@ -1234,11 +1352,9 @@ class LocalDeviceInstrumentationTestRun(
           tests_to_rerun.append(t)
 
     # If we have a crash that isn't recognized as a crash in a batch, the tests
-    # will be marked as unknown. Sometimes a test failure causes a crash, but
+    # will be marked as NOTRUN. Sometimes a test failure causes a crash, but
     # the crash isn't recorded because the failure was detected first.
-    # When the UNKNOWN tests are reran while unbatched and pass,
-    # they'll have an UNKNOWN, PASS status, so will be improperly marked as
-    # flaky, so change status to NOTRUN and don't try rerunning. They will
+    # To avoid useless reruns, don't try rerunning. They will
     # get rerun individually at the local_device_test_run/environment level.
     # as the "Batch" annotation was removed.
     found_crash_or_fail = False
@@ -1251,72 +1367,52 @@ class LocalDeviceInstrumentationTestRun(
       # Don't bother rerunning since the unrecognized crashes in
       # the batch will keep failing.
       tests_to_rerun = None
-      for r in results:
-        if r.GetType() == base_test_result.ResultType.UNKNOWN:
-          r.SetType(base_test_result.ResultType.NOTRUN)
 
     return results, tests_to_rerun if tests_to_rerun else None
 
-  def _GetTestsFromRunner(self):
-    test_apk_path = self._test_instance.test_apk.path
-    pickle_path = '%s-runner.pickle' % test_apk_path
-    # For incremental APKs, the code doesn't live in the apk, so instead check
-    # the timestamp of the target's .stamp file.
-    if self._test_instance.test_apk_incremental_install_json:
-      with open(self._test_instance.test_apk_incremental_install_json) as f:
-        data = json.load(f)
-      out_dir = constants.GetOutDirectory()
-      test_mtime = max(
-          os.path.getmtime(os.path.join(out_dir, p)) for p in data['dex_files'])
-    else:
-      test_mtime = os.path.getmtime(test_apk_path)
-
-    try:
-      return instrumentation_test_instance.GetTestsFromPickle(
-          pickle_path, test_mtime)
-    except instrumentation_test_instance.TestListPickleException as e:
-      logging.info('Could not get tests from pickle: %s', e)
-    logging.info('Getting tests by having %s list them.',
-                 self._test_instance.junit4_runner_class)
+  def _GetTestsFromRunner(self, run_disabled):
     def list_tests(d):
       def _run(dev):
-        # We need to use GetAppWritablePath instead of GetExternalStoragePath
-        # here because we will not have applied legacy storage workarounds on R+
-        # yet.
-        with device_temp_file.DeviceTempFile(
-            dev.adb,
-            suffix='.json',
-            dir=dev.GetAppWritablePath(),
-            device_utils=dev) as dev_test_list_json:
-          junit4_runner_class = self._test_instance.junit4_runner_class
-          test_package = self._test_instance.test_package
-          extras = {
+        junit4_runner_class = self._test_instance.junit4_runner_class
+        test_package = self._test_instance.test_package
+        extras = {
             'log': 'true',
             # Workaround for https://github.com/mockito/mockito/issues/922
             'notPackage': 'net.bytebuddy',
-          }
-          extras[_EXTRA_TEST_LIST] = dev_test_list_json.name
-          target = '%s/%s' % (test_package, junit4_runner_class)
-          timeout = 240
-          if self._test_instance.wait_for_java_debugger:
-            timeout = None
-          with self._ArchiveLogcat(dev, 'list_tests'):
-            test_list_run_output = dev.StartInstrumentation(
-                target, extras=extras, retries=0, timeout=timeout)
-          if any(test_list_run_output):
-            logging.error('Unexpected output while listing tests:')
-            for line in test_list_run_output:
-              logging.error('  %s', line)
-          with tempfile_ext.NamedTemporaryDirectory() as host_dir:
-            host_file = os.path.join(host_dir, 'list_tests.json')
-            device_file_path = dev_test_list_json.name
-            if self._env.force_main_user:
-              device_file_path = dev.ResolveSpecialPath(device_file_path)
-            dev.PullFile(device_file_path,
-                         host_file,
-                         as_root=self._env.force_main_user)
-            with open(host_file, 'r') as host_file:
-              return json.load(host_file)
+        }
+        if self._test_instance.timeout_scale != 1:
+          extras[EXTRA_TIMEOUT_SCALE] = str(self._test_instance.timeout_scale)
+
+        # BaseChromiumAndroidJUnitRunner ignores this bundle value (and always
+        # adds the listener). This is needed to enable the the listener when
+        # using AndroidJUnitRunner directly.
+        if self._test_instance.has_chromium_test_listener:
+          extras['listener'] = (
+              'org.chromium.testing.TestListInstrumentationRunListener')
+        elif not run_disabled:
+          extras['notAnnotation'] = 'androidx.test.filters.FlakyTest'
+
+        target = '%s/%s' % (test_package, junit4_runner_class)
+        timeout = 240
+        if self._test_instance.wait_for_java_debugger:
+          timeout = None
+        with self._ArchiveLogcat(dev, 'list_tests'):
+          test_list_run_output = dev.StartInstrumentation(target,
+                                                          raw=True,
+                                                          extras=extras,
+                                                          retries=0,
+                                                          timeout=timeout)
+        if ('INSTRUMENTATION_RESULT: shortMsg=Process crashed.'
+            in test_list_run_output):
+          # Message output by ActivityManagerService when app crashes.
+          logging.error('Crashed detected. Output was: \n%s',
+                        test_list_run_output)
+          return None
+        if self._test_instance.has_chromium_test_listener:
+          logging.info('Parsing tests from TestListInstrumentationRunListener')
+          return _ParseTestListOutputFromChromiumListener(test_list_run_output)
+        logging.info('Parsing tests from androidx InstrumentationResultPrinter')
+        return _ParseTestListOutputFromAndroidxListener(test_list_run_output)
 
       return crash_handler.RetryOnSystemCrash(_run, d)
 
@@ -1331,7 +1427,6 @@ class LocalDeviceInstrumentationTestRun(
     # Get the first viable list of raw tests
     raw_tests = [tl for tl in raw_test_lists if tl][0]
 
-    instrumentation_test_instance.SaveTestsToPickle(pickle_path, raw_tests)
     return raw_tests
 
   @contextlib.contextmanager
@@ -1370,7 +1465,7 @@ class LocalDeviceInstrumentationTestRun(
     device_file_path = trace_device_file.name
     if self._env.force_main_user:
       device_file_path = device.ResolveSpecialPath(device_file_path)
-    if device.FileExists(device_file_path, as_root=self._env.force_main_user):
+    if device.PathExists(device_file_path, as_root=self._env.force_main_user):
       try:
         java_trace_json = device.ReadFile(device_file_path,
                                           as_root=self._env.force_main_user)
@@ -1434,7 +1529,7 @@ class LocalDeviceInstrumentationTestRun(
     device_file_path = screenshot_device_file.name
     if self._env.force_main_user:
       device_file_path = device.ResolveSpecialPath(device_file_path)
-    if device.FileExists(device_file_path):
+    if device.PathExists(device_file_path, as_root=self._env.force_main_user):
       with self._env.output_manager.ArchivedTempfile(
           screenshot_filename, 'screenshot',
           output_manager.Datatype.PNG) as screenshot_host_file:
@@ -1464,7 +1559,7 @@ class LocalDeviceInstrumentationTestRun(
     logging.info('Starting Gold directory existence check')
     start_time = time.time()
     try:
-      if not device.FileExists(gold_dir):
+      if not device.PathExists(gold_dir):
         return
     finally:
       logging.info('Gold directory existence check took %fs',
@@ -1635,8 +1730,12 @@ class LocalDeviceInstrumentationTestRun(
 
           processed_template_output = _GenerateRenderTestHtml(
               render_name, given_link, closest_link, diff_link)
+          # We include the timestamp in the HTML results filename so that
+          # multiple tries from the same run do not clobber each other.
+          timestamp = time.strftime('%Y%m%dT%H%M%S-UTC', time.gmtime())
+          html_results_name = f'{render_name}_{timestamp}.html'
           with self._env.output_manager.ArchivedTempfile(
-              '%s.html' % render_name, 'gold_local_diffs',
+              html_results_name, 'gold_local_diffs',
               output_manager.Datatype.HTML) as html_results:
             html_results.write(processed_template_output)
           _SetLinkOnResults(results, full_test_name, render_name,
@@ -1820,7 +1919,7 @@ def _SetLinkOnResults(results, full_test_name, link_name, link):
     full_test_name: A string containing the full name of the test, e.g.
         org.chromium.chrome.SomeTestClass#someTestMethod.
     link_name: A string containing the name of the link being set.
-    link: A string containing the lkink being set.
+    link: A string containing the link being set.
   """
   found_matching_test = _MatchingTestInResults(results, full_test_name)
   if not found_matching_test and _ShouldReportNoMatchingResult(full_test_name):

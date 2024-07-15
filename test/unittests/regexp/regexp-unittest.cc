@@ -89,7 +89,7 @@ static void CheckParseEq(const char* input, const char* expected,
   CHECK(RegExpParser::ParseRegExpFromHeapString(isolate, &zone, str, flags,
                                                 &result));
   CHECK_NOT_NULL(result.tree);
-  CHECK(result.error == RegExpError::kNone);
+  CHECK_EQ(RegExpError::kNone, result.error);
   std::ostringstream os;
   result.tree->Print(os, &zone);
   if (strcmp(expected, os.str().c_str()) != 0) {
@@ -108,7 +108,7 @@ static bool CheckSimple(const char* input) {
   CHECK(RegExpParser::ParseRegExpFromHeapString(isolate, &zone, str, {},
                                                 &result));
   CHECK_NOT_NULL(result.tree);
-  CHECK(result.error == RegExpError::kNone);
+  CHECK_EQ(RegExpError::kNone, result.error);
   return result.simple;
 }
 
@@ -127,7 +127,7 @@ static MinMaxPair CheckMinMaxMatch(const char* input) {
   CHECK(RegExpParser::ParseRegExpFromHeapString(isolate, &zone, str, {},
                                                 &result));
   CHECK_NOT_NULL(result.tree);
-  CHECK(result.error == RegExpError::kNone);
+  CHECK_EQ(RegExpError::kNone, result.error);
   int min_match = result.tree->min_match();
   int max_match = result.tree->max_match();
   MinMaxPair pair = {min_match, max_match};
@@ -443,7 +443,7 @@ static void ExpectError(const char* input, const char* expected,
   CHECK(!RegExpParser::ParseRegExpFromHeapString(isolate, &zone, str, flags,
                                                  &result));
   CHECK_NULL(result.tree);
-  CHECK(result.error != RegExpError::kNone);
+  CHECK_NE(RegExpError::kNone, result.error);
   CHECK_EQ(0, strcmp(expected, RegExpErrorString(result.error)));
 }
 
@@ -1166,8 +1166,8 @@ TEST_F(RegExpTest, MacroAssemblerStackOverflow) {
       *regexp, *input, 0, start_adr, start_adr + input->length(), nullptr);
 
   CHECK_EQ(NativeRegExpMacroAssembler::EXCEPTION, result);
-  CHECK(isolate()->has_pending_exception());
-  isolate()->clear_pending_exception();
+  CHECK(isolate()->has_exception());
+  isolate()->clear_exception();
 }
 
 TEST_F(RegExpTest, MacroAssemblerNativeLotsOfRegisters) {
@@ -1210,7 +1210,7 @@ TEST_F(RegExpTest, MacroAssemblerNativeLotsOfRegisters) {
   CHECK_EQ(0, captures[0]);
   CHECK_EQ(42, captures[1]);
 
-  isolate()->clear_pending_exception();
+  isolate()->clear_exception();
 }
 
 TEST_F(RegExpTest, MacroAssembler) {
@@ -1720,7 +1720,7 @@ TEST_F(RegExpTestWithContext, UseCountRegExp) {
   CHECK(resultToStringError->IsObject());
 }
 
-class UncachedExternalString
+class UncachedExternalStringResource
     : public v8::String::ExternalOneByteStringResource {
  public:
   const char* data() const override { return "abcdefghijklmnopqrstuvwxyz"; }
@@ -1731,10 +1731,11 @@ class UncachedExternalString
 TEST_F(RegExpTestWithContext, UncachedExternalString) {
   v8::HandleScope scope(isolate());
   v8::Local<v8::String> external =
-      v8::String::NewExternalOneByte(isolate(), new UncachedExternalString())
+      v8::String::NewExternalOneByte(isolate(),
+                                     new UncachedExternalStringResource())
           .ToLocalChecked();
-  CHECK(v8::Utils::OpenHandle(*external)->map() ==
-        ReadOnlyRoots(i_isolate()).uncached_external_one_byte_string_map());
+  CHECK_EQ(v8::Utils::OpenDirectHandle(*external)->map(),
+           ReadOnlyRoots(i_isolate()).uncached_external_one_byte_string_map());
   v8::Local<v8::Object> global = context()->Global();
   global->Set(context(), NewString("external"), external).FromJust();
   RunJS("var re = /y(.)/; re.test('ab');");
@@ -2308,7 +2309,7 @@ TEST_F(RegExpTestWithContext, UnicodePropertyEscapeCodeSize) {
 
   static constexpr int kMaxSize = 200 * KB;
   static constexpr bool kIsNotLatin1 = false;
-  Tagged<Object> maybe_code = re->code(kIsNotLatin1);
+  Tagged<Object> maybe_code = re->code(i_isolate(), kIsNotLatin1);
   Tagged<Object> maybe_bytecode = re->bytecode(kIsNotLatin1);
   if (IsByteArray(maybe_bytecode)) {
     // On x64, excessive inlining produced >250KB.

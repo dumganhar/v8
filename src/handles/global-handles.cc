@@ -700,7 +700,7 @@ V8_INLINE bool GlobalHandles::ResetWeakNodeIfDead(
       node->ResetPhantomHandle();
       break;
     case WeaknessType::kCallback:
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case WeaknessType::kCallbackWithTwoEmbedderFields:
       node->CollectPhantomCallbackData(&pending_phantom_callbacks_);
       break;
@@ -945,10 +945,10 @@ void GlobalHandles::ApplyPersistentHandleVisitor(
       node->wrapper_class_id());
 }
 
-void GlobalHandles::IterateAllRootsWithClassIds(
+void GlobalHandles::IterateAllRootsForTesting(
     v8::PersistentHandleVisitor* visitor) {
   for (Node* node : *regular_nodes_) {
-    if (node->IsWeakOrStrongRetainer() && node->has_wrapper_class_id()) {
+    if (node->IsWeakOrStrongRetainer()) {
       ApplyPersistentHandleVisitor(visitor, node);
     }
   }

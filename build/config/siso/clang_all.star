@@ -17,6 +17,11 @@ def __filegroups(ctx):
             "type": "glob",
             "includes": ["*.h"],
         },
+        # vendor provided headers for libc++.
+        "buildtools/third_party/libc++:headers": {
+            "type": "glob",
+            "includes": ["__*"],
+        },
 
         # toolchain root
         # :headers for compiling
@@ -27,6 +32,9 @@ def __filegroups(ctx):
                 "bin/clang",
                 "bin/clang++",
                 "bin/clang-cl.exe",
+                "*_ignorelist.txt",
+                # https://crbug.com/335997052
+                "clang_rt.profile*.lib",
             ],
         },
     }
@@ -36,8 +44,21 @@ __input_deps = {
     # third_party/libc++/src/include:headers,
     # but scandeps doesn't scan `__config` file, which uses
     # `#include <__config_site>`
+    # also need `__assertion_handler`. b/321171148
     "third_party/libc++/src/include": [
-        "buildtools/third_party/libc++/__config_site",
+        "buildtools/third_party/libc++:headers",
+    ],
+    "third_party/llvm-build/Release+Asserts/bin/clang": [
+        "build/config/unsafe_buffers_paths.txt",
+    ],
+    "third_party/llvm-build/Release+Asserts/bin/clang++": [
+        "build/config/unsafe_buffers_paths.txt",
+    ],
+    "third_party/llvm-build/Release+Asserts/bin/clang-cl": [
+        "build/config/unsafe_buffers_paths.txt",
+    ],
+    "third_party/llvm-build/Release+Asserts/bin/clang-cl.exe": [
+        "build/config/unsafe_buffers_paths.txt",
     ],
 }
 

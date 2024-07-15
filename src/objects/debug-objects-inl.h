@@ -38,7 +38,7 @@ BIT_FIELD_ACCESSORS(DebugInfo, debugger_hints, debugging_id,
                     DebugInfo::DebuggingIdBits)
 
 bool DebugInfo::HasInstrumentedBytecodeArray() {
-  return has_debug_bytecode_array(kAcquireLoad);
+  return has_debug_bytecode_array();
 }
 
 Tagged<BytecodeArray> DebugInfo::OriginalBytecodeArray(Isolate* isolate) {
@@ -49,7 +49,7 @@ Tagged<BytecodeArray> DebugInfo::OriginalBytecodeArray(Isolate* isolate) {
 Tagged<BytecodeArray> DebugInfo::DebugBytecodeArray(Isolate* isolate) {
   DCHECK(HasInstrumentedBytecodeArray());
   Tagged<BytecodeArray> result = debug_bytecode_array(isolate, kAcquireLoad);
-  DCHECK_EQ(shared()->GetActiveBytecodeArray(), result);
+  DCHECK_EQ(shared()->GetActiveBytecodeArray(isolate), result);
   return result;
 }
 
@@ -92,9 +92,6 @@ bool ErrorStackData::HasCallSiteInfos() const { return !HasFormattedStack(); }
 ACCESSORS_RELAXED_CHECKED(ErrorStackData, call_site_infos, Tagged<FixedArray>,
                           kCallSiteInfosOrFormattedStackOffset,
                           !HasFormattedStack())
-
-NEVER_READ_ONLY_SPACE_IMPL(PromiseOnStack)
-TQ_OBJECT_CONSTRUCTORS_IMPL(PromiseOnStack)
 
 }  // namespace internal
 }  // namespace v8

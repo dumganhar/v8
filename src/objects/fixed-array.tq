@@ -17,6 +17,18 @@ extern class FixedArray extends FixedArrayBase {
 type EmptyFixedArray extends FixedArray;
 
 @cppObjectDefinition
+extern class TrustedFixedArray extends TrustedObject {
+  const length: Smi;
+  objects[length]: Object;
+}
+
+@cppObjectDefinition
+extern class ProtectedFixedArray extends TrustedObject {
+  const length: Smi;
+  objects[length]: TrustedObject|Smi;
+}
+
+@cppObjectDefinition
 extern class FixedDoubleArray extends FixedArrayBase {
   floats[length]: float64_or_hole;
 }
@@ -28,7 +40,19 @@ extern class WeakFixedArray extends HeapObject {
 }
 
 @cppObjectDefinition
+extern class TrustedWeakFixedArray extends TrustedObject {
+  const length: Smi;
+  objects[length]: MaybeObject;
+}
+
+@cppObjectDefinition
 extern class ByteArray extends FixedArrayBase {
+  bytes[length]: uint8;
+}
+
+@cppObjectDefinition
+extern class TrustedByteArray extends TrustedObject {
+  const length: Smi;
   bytes[length]: uint8;
 }
 
@@ -134,14 +158,14 @@ extern macro CopyFixedArrayElements(
     intptr, intptr, intptr): void;
 
 macro ExtractFixedArray(
-    source: FixedArray, first: intptr, count: intptr,
-    capacity: intptr): FixedArray {
+    source: FixedArray, first: intptr, count: intptr, capacity: intptr,
+    initialElement: Hole): FixedArray {
   // TODO(turbofan): This should be optimized to use memcpy for initialization.
   return NewFixedArray(
       capacity,
       IteratorSequence<Object>(
           (&source.objects).Iterator(first, first + count),
-          ConstantIterator(TheHole)));
+          ConstantIterator(initialElement)));
 }
 macro ExtractFixedDoubleArray(
     source: FixedDoubleArray, first: intptr, count: intptr,

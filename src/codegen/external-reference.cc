@@ -166,6 +166,21 @@ constexpr struct alignas(16) {
     uint32_t{0x4f00'0000},
 };
 
+constexpr struct alignas(16) {
+  uint32_t a;
+  uint32_t b;
+  uint32_t c;
+  uint32_t d;
+  uint32_t e;
+  uint32_t f;
+  uint32_t g;
+  uint32_t h;
+} wasm_i32x8_int32_overflow_as_float = {
+    uint32_t{0x4f00'0000}, uint32_t{0x4f00'0000}, uint32_t{0x4f00'0000},
+    uint32_t{0x4f00'0000}, uint32_t{0x4f00'0000}, uint32_t{0x4f00'0000},
+    uint32_t{0x4f00'0000}, uint32_t{0x4f00'0000},
+};
+
 // Implementation of ExternalReference
 
 static ExternalReference::Type BuiltinCallTypeForResultSize(int result_size) {
@@ -260,6 +275,10 @@ ExternalReference ExternalReference::trusted_pointer_table_base_address(
 ExternalReference ExternalReference::code_pointer_table_address() {
   // TODO(saelo): maybe rename to code_pointer_table_base_address?
   return ExternalReference(GetProcessWideCodePointerTable()->base_address());
+}
+
+ExternalReference ExternalReference::memory_chunk_metadata_table_address() {
+  return ExternalReference(MemoryChunk::MetadataTableAddress());
 }
 
 #endif  // V8_ENABLE_SANDBOX
@@ -406,19 +425,19 @@ FUNCTION_REFERENCE(delete_handle_scope_extensions,
 FUNCTION_REFERENCE(ephemeron_key_write_barrier_function,
                    Heap::EphemeronKeyWriteBarrierFromCode)
 
-ExternalPointerHandle AllocateAndInitializeExternalPointerTableEntry(
+ExternalPointerHandle AllocateAndInitializeYoungExternalPointerTableEntry(
     Isolate* isolate, Address pointer) {
 #ifdef V8_ENABLE_SANDBOX
   return isolate->external_pointer_table().AllocateAndInitializeEntry(
-      isolate->heap()->external_pointer_space(), pointer,
+      isolate->heap()->young_external_pointer_space(), pointer,
       kExternalObjectValueTag);
 #else
   return 0;
 #endif  // V8_ENABLE_SANDBOX
 }
 
-FUNCTION_REFERENCE(allocate_and_initialize_external_pointer_table_entry,
-                   AllocateAndInitializeExternalPointerTableEntry)
+FUNCTION_REFERENCE(allocate_and_initialize_young_external_pointer_table_entry,
+                   AllocateAndInitializeYoungExternalPointerTableEntry)
 
 FUNCTION_REFERENCE(get_date_field_function, JSDate::GetField)
 
@@ -465,11 +484,16 @@ FUNCTION_REFERENCE(compute_output_frames_function,
                    Deoptimizer::ComputeOutputFrames)
 
 #ifdef V8_ENABLE_WEBASSEMBLY
+FUNCTION_REFERENCE(wasm_delete_deoptimizer, Deoptimizer::DeleteForWasm)
 FUNCTION_REFERENCE(wasm_sync_stack_limit, wasm::sync_stack_limit)
 FUNCTION_REFERENCE(wasm_switch_to_the_central_stack,
                    wasm::switch_to_the_central_stack)
 FUNCTION_REFERENCE(wasm_switch_from_the_central_stack,
                    wasm::switch_from_the_central_stack)
+FUNCTION_REFERENCE(wasm_switch_to_the_central_stack_for_js,
+                   wasm::switch_to_the_central_stack_for_js)
+FUNCTION_REFERENCE(wasm_switch_from_the_central_stack_for_js,
+                   wasm::switch_from_the_central_stack_for_js)
 FUNCTION_REFERENCE(wasm_f32_trunc, wasm::f32_trunc_wrapper)
 FUNCTION_REFERENCE(wasm_f32_floor, wasm::f32_floor_wrapper)
 FUNCTION_REFERENCE(wasm_f32_ceil, wasm::f32_ceil_wrapper)
@@ -498,10 +522,10 @@ FUNCTION_REFERENCE(wasm_int64_div, wasm::int64_div_wrapper)
 FUNCTION_REFERENCE(wasm_int64_mod, wasm::int64_mod_wrapper)
 FUNCTION_REFERENCE(wasm_uint64_div, wasm::uint64_div_wrapper)
 FUNCTION_REFERENCE(wasm_uint64_mod, wasm::uint64_mod_wrapper)
-FUNCTION_REFERENCE(wasm_word32_ctz, wasm::word32_ctz_wrapper)
-FUNCTION_REFERENCE(wasm_word64_ctz, wasm::word64_ctz_wrapper)
-FUNCTION_REFERENCE(wasm_word32_popcnt, wasm::word32_popcnt_wrapper)
-FUNCTION_REFERENCE(wasm_word64_popcnt, wasm::word64_popcnt_wrapper)
+FUNCTION_REFERENCE(wasm_word32_ctz, base::bits::CountTrailingZeros<uint32_t>)
+FUNCTION_REFERENCE(wasm_word64_ctz, base::bits::CountTrailingZeros<uint64_t>)
+FUNCTION_REFERENCE(wasm_word32_popcnt, base::bits::CountPopulation<uint32_t>)
+FUNCTION_REFERENCE(wasm_word64_popcnt, base::bits::CountPopulation<uint64_t>)
 FUNCTION_REFERENCE(wasm_word32_rol, wasm::word32_rol_wrapper)
 FUNCTION_REFERENCE(wasm_word32_ror, wasm::word32_ror_wrapper)
 FUNCTION_REFERENCE(wasm_word64_rol, wasm::word64_rol_wrapper)
@@ -642,9 +666,8 @@ ExternalReference ExternalReference::handle_scope_limit_address(
   return ExternalReference(HandleScope::current_limit_address(isolate));
 }
 
-ExternalReference ExternalReference::scheduled_exception_address(
-    Isolate* isolate) {
-  return ExternalReference(isolate->scheduled_exception_address());
+ExternalReference ExternalReference::exception_address(Isolate* isolate) {
+  return ExternalReference(isolate->exception_address());
 }
 
 ExternalReference ExternalReference::address_of_pending_message(
@@ -666,11 +689,6 @@ ExternalReference ExternalReference::address_of_min_int() {
 ExternalReference
 ExternalReference::address_of_mock_arraybuffer_allocator_flag() {
   return ExternalReference(&v8_flags.mock_arraybuffer_allocator);
-}
-
-ExternalReference
-ExternalReference::address_of_FLAG_harmony_regexp_unicode_sets() {
-  return ExternalReference(&v8_flags.harmony_regexp_unicode_sets);
 }
 
 // TODO(jgruber): Update the other extrefs pointing at v8_flags. addresses to be
@@ -791,6 +809,12 @@ ExternalReference ExternalReference::address_of_wasm_uint32_max_as_double() {
 ExternalReference ExternalReference::address_of_wasm_int32_overflow_as_float() {
   return ExternalReference(
       reinterpret_cast<Address>(&wasm_int32_overflow_as_float));
+}
+
+ExternalReference
+ExternalReference::address_of_wasm_i32x8_int32_overflow_as_float() {
+  return ExternalReference(
+      reinterpret_cast<Address>(&wasm_i32x8_int32_overflow_as_float));
 }
 
 ExternalReference ExternalReference::supports_cetss_address() {
@@ -937,11 +961,6 @@ ExternalReference ExternalReference::address_of_regexp_stack_memory_top_address(
 ExternalReference ExternalReference::address_of_regexp_stack_stack_pointer(
     Isolate* isolate) {
   return ExternalReference(isolate->regexp_stack()->stack_pointer_address());
-}
-
-ExternalReference ExternalReference::javascript_execution_assert(
-    Isolate* isolate) {
-  return ExternalReference(isolate->javascript_execution_assert_address());
 }
 
 FUNCTION_REFERENCE_WITH_TYPE(ieee754_acos_function, base::ieee754::acos,
@@ -1110,26 +1129,22 @@ void StringWriteToFlatTwoByte(Address source, uint16_t* sink, int32_t start,
 }
 
 const uint8_t* ExternalOneByteStringGetChars(Address string) {
-  PtrComprCageBase cage_base = GetPtrComprCageBaseFromOnHeapAddress(string);
   // The following CHECK is a workaround to prevent a CFI bug where
   // ExternalOneByteStringGetChars() and ExternalTwoByteStringGetChars() are
   // merged by the linker, resulting in one of the input type's vtable address
   // failing the address range check.
   // TODO(chromium:1160961): Consider removing the CHECK when CFI is fixed.
-  CHECK(IsExternalOneByteString(Tagged<Object>(string), cage_base));
-  return ExternalOneByteString::cast(Tagged<Object>(string))
-      ->GetChars(cage_base);
+  CHECK(IsExternalOneByteString(Tagged<Object>(string)));
+  return ExternalOneByteString::cast(Tagged<Object>(string))->GetChars();
 }
 const uint16_t* ExternalTwoByteStringGetChars(Address string) {
-  PtrComprCageBase cage_base = GetPtrComprCageBaseFromOnHeapAddress(string);
   // The following CHECK is a workaround to prevent a CFI bug where
   // ExternalOneByteStringGetChars() and ExternalTwoByteStringGetChars() are
   // merged by the linker, resulting in one of the input type's vtable address
   // failing the address range check.
   // TODO(chromium:1160961): Consider removing the CHECK when CFI is fixed.
-  CHECK(IsExternalTwoByteString(Tagged<Object>(string), cage_base));
-  return ExternalTwoByteString::cast(Tagged<Object>(string))
-      ->GetChars(cage_base);
+  CHECK(IsExternalTwoByteString(Tagged<Object>(string)));
+  return ExternalTwoByteString::cast(Tagged<Object>(string))->GetChars();
 }
 
 }  // namespace
@@ -1423,6 +1438,10 @@ ExternalReference ExternalReference::fast_c_call_caller_fp_address(
       isolate->isolate_data()->fast_c_call_caller_fp_address());
 }
 
+ExternalReference ExternalReference::context_address(Isolate* isolate) {
+  return ExternalReference(isolate->context_address());
+}
+
 ExternalReference ExternalReference::fast_c_call_caller_pc_address(
     Isolate* isolate) {
   return ExternalReference(
@@ -1439,6 +1458,12 @@ ExternalReference ExternalReference::api_callback_thunk_argument_address(
     Isolate* isolate) {
   return ExternalReference(
       isolate->isolate_data()->api_callback_thunk_argument_address());
+}
+
+ExternalReference ExternalReference::continuation_preserved_embedder_data(
+    Isolate* isolate) {
+  return ExternalReference(
+      isolate->continuation_preserved_embedder_data_address());
 }
 
 ExternalReference ExternalReference::stack_is_iterable_address(

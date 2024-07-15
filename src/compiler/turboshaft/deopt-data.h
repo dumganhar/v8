@@ -26,7 +26,7 @@ struct FrameStateData {
 
   class Builder {
    public:
-    void AddParentFrameState(OpIndex parent) {
+    void AddParentFrameState(V<FrameState> parent) {
       DCHECK(inputs_.empty());
       inlined_ = true;
       inputs_.push_back(parent);
@@ -77,6 +77,7 @@ struct FrameStateData {
     base::SmallVector<MachineType, 32> machine_types_;
     base::SmallVector<uint32_t, 16> int_operands_;
     base::SmallVector<OpIndex, 32> inputs_;
+
     bool inlined_ = false;
   };
 

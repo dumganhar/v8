@@ -115,7 +115,7 @@ class InterpreterTester {
 
   static Handle<Object> NewObject(const char* script);
 
-  static Handle<String> GetName(Isolate* isolate, const char* name);
+  static DirectHandle<String> GetName(Isolate* isolate, const char* name);
 
   static std::string SourceForBody(const char* body);
 
@@ -166,8 +166,8 @@ class InterpreterTester {
     }
 
     if (!bytecode_.is_null()) {
-      function->shared()->set_function_data(*bytecode_.ToHandleChecked(),
-                                            kReleaseStore);
+      function->shared()->overwrite_bytecode_array(
+          *bytecode_.ToHandleChecked());
       is_compiled_scope = function->shared()->is_compiled_scope(isolate_);
     }
     if (HasFeedbackMetadata()) {

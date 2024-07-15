@@ -5,6 +5,7 @@
 #ifndef V8_OBJECTS_BYTECODE_ARRAY_H_
 #define V8_OBJECTS_BYTECODE_ARRAY_H_
 
+#include "src/objects/struct.h"
 #include "src/objects/trusted-object.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -12,6 +13,8 @@
 
 namespace v8 {
 namespace internal {
+
+class BytecodeWrapper;
 
 namespace interpreter {
 class Register;
@@ -30,17 +33,28 @@ class BytecodeArray : public ExposedTrustedObject {
   inline void set_length(int value);
   inline void set_length(int value, ReleaseStoreTag tag);
 
-  DECL_ACCESSORS(constant_pool, Tagged<FixedArray>)
   // The handler table contains offsets of exception handlers.
-  DECL_ACCESSORS(handler_table, Tagged<ByteArray>)
+  DECL_PROTECTED_POINTER_ACCESSORS(handler_table, TrustedByteArray)
+
+  DECL_PROTECTED_POINTER_ACCESSORS(constant_pool, TrustedFixedArray)
+
+  // The BytecodeWrapper for this BytecodeArray. When the sandbox is enabled,
+  // the BytecodeArray lives in trusted space outside of the sandbox, but the
+  // wrapper object lives inside the main heap and therefore inside the
+  // sandbox. As such, the wrapper object can be used in cases where a
+  // BytecodeArray needs to be referenced alongside other tagged pointer
+  // references (so for example inside a FixedArray).
+  DECL_ACCESSORS(wrapper, Tagged<BytecodeWrapper>)
+
   // Source position table. Can contain:
-  // * undefined (initial value)
-  // * empty_byte_array (for bytecode generated for functions that will never
-  // have source positions, e.g. native functions).
-  // * ByteArray (when source positions have been collected for the bytecode)
-  // * exception (when an error occurred while explicitly collecting source
-  // positions for pre-existing bytecode).
-  DECL_RELEASE_ACQUIRE_ACCESSORS(source_position_table, Tagged<HeapObject>)
+  // * Smi::zero() (initial value, or if an error occurred while explicitly
+  // collecting source positions for pre-existing bytecode).
+  // * empty_trusted_byte_array (for bytecode generated for functions that will
+  // never have source positions, e.g. native functions).
+  // * TrustedByteArray (if source positions were collected for the bytecode)
+  DECL_RELEASE_ACQUIRE_PROTECTED_POINTER_ACCESSORS(source_position_table,
+                                                   TrustedByteArray)
+
   DECL_INT32_ACCESSORS(frame_size)
 
   static constexpr int SizeFor(int length) {
@@ -65,21 +79,22 @@ class BytecodeArray : public ExposedTrustedObject {
       interpreter::Register incoming_new_target_or_generator_register);
 
   inline bool HasSourcePositionTable() const;
-  inline bool DidSourcePositionGenerationFail() const;
 
   // If source positions have not been collected or an exception has been thrown
-  // this will return empty_byte_array.
-  DECL_GETTER(SourcePositionTable, Tagged<ByteArray>)
+  // this will return the empty_trusted_byte_array.
+  DECL_GETTER(SourcePositionTable, Tagged<TrustedByteArray>)
 
   // Raw accessors to access these fields during code cache deserialization.
   DECL_GETTER(raw_constant_pool, Tagged<Object>)
   DECL_GETTER(raw_handler_table, Tagged<Object>)
-  DECL_GETTER(raw_source_position_table, Tagged<Object>)
+  // This accessor can also be used when it's not guaranteed that a source
+  // position table exists, for example because it hasn't been collected. In
+  // that case, Smi::zero() will be returned.
+  DECL_ACQUIRE_GETTER(raw_source_position_table, Tagged<Object>)
 
   // Indicates that an attempt was made to collect source positions, but that it
-  // failed most likely due to stack exhaustion. When in this state
-  // |SourcePositionTable| will return an empty byte array rather than crashing
-  // as it would if no attempt was ever made to collect source positions.
+  // failed, most likely due to stack exhaustion. When in this state
+  // |SourcePositionTable| will return an empty byte array.
   inline void SetSourcePositionsFailedToCollect();
 
   inline int BytecodeArraySize() const;
@@ -111,14 +126,17 @@ class BytecodeArray : public ExposedTrustedObject {
 
 #define FIELD_LIST(V)                                                   \
   V(kLengthOffset, kTaggedSize)                                         \
-  V(kConstantPoolOffset, kTaggedSize)                                   \
-  V(kHandlerTableOffset, kTaggedSize)                                   \
+  V(kWrapperOffset, kTaggedSize)                                        \
   V(kSourcePositionTableOffset, kTaggedSize)                            \
+  V(kHandlerTableOffset, kTaggedSize)                                   \
+  V(kConstantPoolOffset, kTaggedSize)                                   \
   V(kFrameSizeOffset, kInt32Size)                                       \
   V(kParameterSizeOffset, kInt32Size)                                   \
   V(kIncomingNewTargetOrGeneratorRegisterOffset, kInt32Size)            \
+  V(kOptionalPaddingOffset, 0)                                          \
   V(kUnalignedHeaderSize, OBJECT_POINTER_PADDING(kUnalignedHeaderSize)) \
-  V(kHeaderSize, 0)
+  V(kHeaderSize, 0)                                                     \
+  V(kBytesOffset, 0)
 
   DEFINE_FIELD_OFFSET_CONSTANTS(ExposedTrustedObject::kHeaderSize, FIELD_LIST)
 #undef FIELD_LIST
@@ -126,6 +144,38 @@ class BytecodeArray : public ExposedTrustedObject {
   class BodyDescriptor;
 
   OBJECT_CONSTRUCTORS(BytecodeArray, ExposedTrustedObject);
+};
+
+// A BytecodeWrapper wraps a BytecodeArray but lives inside the sandbox. This
+// can be useful for example when a reference to a BytecodeArray needs to be
+// stored along other tagged pointers inside an array or similar datastructure.
+class BytecodeWrapper : public Struct {
+ public:
+  DECL_TRUSTED_POINTER_ACCESSORS(bytecode, BytecodeArray)
+
+  DECL_CAST(BytecodeWrapper)
+  DECL_PRINTER(BytecodeWrapper)
+  DECL_VERIFIER(BytecodeWrapper)
+
+  // When flushing bytecode, we in-place convert the wrapper object to an
+  // UncompiledData object (we cannot convert the BytecodeArray itself as that
+  // lives in trusted space). As such, the wrapper object must be at least as
+  // large as an UncompiledData object and therefore requires padding.
+#define FIELD_LIST(V)                     \
+  V(kBytecodeOffset, kTrustedPointerSize) \
+  V(kPadding1Offset, kInt32Size)          \
+  V(kPadding2Offset, kInt32Size)          \
+  V(kHeaderSize, 0)                       \
+  V(kSize, 0)
+
+  DEFINE_FIELD_OFFSET_CONSTANTS(Struct::kHeaderSize, FIELD_LIST)
+#undef FIELD_LIST
+
+  inline void clear_padding();
+
+  class BodyDescriptor;
+
+  OBJECT_CONSTRUCTORS(BytecodeWrapper, Struct);
 };
 
 }  // namespace internal

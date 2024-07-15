@@ -78,10 +78,10 @@ namespace {
 Tagged<Object> ThrowNotSuperConstructor(Isolate* isolate,
                                         Handle<Object> constructor,
                                         Handle<JSFunction> function) {
-  Handle<String> super_name;
+  DirectHandle<String> super_name;
   if (IsJSFunction(*constructor)) {
-    super_name = handle(Handle<JSFunction>::cast(constructor)->shared()->Name(),
-                        isolate);
+    super_name = direct_handle(
+        Handle<JSFunction>::cast(constructor)->shared()->Name(), isolate);
   } else if (IsOddball(*constructor)) {
     DCHECK(IsNull(*constructor, isolate));
     super_name = isolate->factory()->null_string();
@@ -356,10 +356,9 @@ bool AddDescriptorsByTemplate(
 
       property_array->set(field_index, value);
       field_index++;
-      descriptors->Set(i, name, MaybeObject::FromObject(FieldType::Any()),
-                       details);
+      descriptors->Set(i, name, FieldType::Any(), details);
     } else {
-      descriptors->Set(i, name, MaybeObject::FromObject(value), details);
+      descriptors->Set(i, name, value, details);
     }
   }
 
@@ -492,6 +491,7 @@ bool InitClassPrototype(Isolate* isolate,
   map = Map::CopyDropDescriptors(isolate, map);
   map->set_is_prototype_map(true);
   Map::SetPrototype(isolate, map, prototype_parent);
+  isolate->UpdateProtectorsOnSetPrototype(prototype, prototype_parent);
   constructor->set_prototype_or_initial_map(*prototype, kReleaseStore);
   map->SetConstructor(*constructor);
   Handle<FixedArray> computed_properties(
@@ -519,19 +519,11 @@ bool InitClassPrototype(Isolate* isolate,
     map->set_may_have_interesting_properties(true);
     map->set_construction_counter(Map::kNoSlackTracking);
 
-    if constexpr (V8_ENABLE_SWISS_NAME_DICTIONARY_BOOL) {
-      Handle<SwissNameDictionary> properties_dictionary_template =
-          Handle<SwissNameDictionary>::cast(properties_template);
-      return AddDescriptorsByTemplate(
-          isolate, map, properties_dictionary_template,
-          elements_dictionary_template, computed_properties, prototype, args);
-    } else {
-      Handle<NameDictionary> properties_dictionary_template =
-          Handle<NameDictionary>::cast(properties_template);
-      return AddDescriptorsByTemplate(
-          isolate, map, properties_dictionary_template,
-          elements_dictionary_template, computed_properties, prototype, args);
-    }
+    Handle<PropertyDictionary> properties_dictionary_template =
+        Handle<PropertyDictionary>::cast(properties_template);
+    return AddDescriptorsByTemplate(
+        isolate, map, properties_dictionary_template,
+        elements_dictionary_template, computed_properties, prototype, args);
   }
 }
 
@@ -648,7 +640,7 @@ MaybeHandle<Object> DefineClass(Isolate* isolate,
       !InitClassPrototype(isolate, class_boilerplate, prototype,
                           Handle<HeapObject>::cast(prototype_parent),
                           constructor, args)) {
-    DCHECK(isolate->has_pending_exception());
+    DCHECK(isolate->has_exception());
     return MaybeHandle<Object>();
   }
   if (v8_flags.log_maps) {

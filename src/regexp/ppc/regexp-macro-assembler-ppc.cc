@@ -1072,6 +1072,7 @@ Handle<HeapObject> RegExpMacroAssemblerPPC::GetCode(Handle<String> source) {
   Handle<Code> code =
       Factory::CodeBuilder(isolate(), code_desc, CodeKind::REGEXP)
           .set_self_reference(masm_->CodeObject())
+          .set_empty_source_position_table()
           .Build();
   PROFILE(masm_->isolate(),
           RegExpCodeCreateEvent(Handle<AbstractCode>::cast(code), source));
@@ -1245,11 +1246,11 @@ void RegExpMacroAssemblerPPC::CallCheckStackGuardState(Register scratch,
   __ StoreU64WithUpdate(r0, MemOperand(sp, -stack_space * kSystemPointerSize));
 
   // Extra space for variables to consider in stack check.
-  __ mov(arg_reg_4, extra_space);
+  __ mov(kCArgRegs[3], extra_space);
   // RegExp code frame pointer.
-  __ mr(arg_reg_3, frame_pointer());
+  __ mr(kCArgRegs[2], frame_pointer());
   // InstructionStream of self.
-  __ mov(arg_reg_2, Operand(masm_->CodeObject()));
+  __ mov(kCArgRegs[1], Operand(masm_->CodeObject()));
   // r3 will point to the return address, placed by DirectCEntry.
   __ addi(r3, sp, Operand(kStackFrameExtraParamSlot * kSystemPointerSize));
 
@@ -1324,8 +1325,7 @@ void RegExpMacroAssemblerPPC::CallCFunctionFromIrregexpCode(
   //    fail.
   //
   // See also: crbug.com/v8/12670#c17.
-  __ CallCFunction(function, num_arguments,
-                   MacroAssembler::SetIsolateDataSlots::kNo);
+  __ CallCFunction(function, num_arguments, SetIsolateDataSlots::kNo);
 }
 
 void RegExpMacroAssemblerPPC::CheckPosition(int cp_offset,

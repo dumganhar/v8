@@ -37,6 +37,8 @@
   'fail/modules-skip*': [SKIP],
 
   # Tests that need to run sequentially (e.g. due to memory consumption).
+  'fail/map-grow-failed': [PASS, HEAVY],
+  'fail/set-grow-failed': [PASS, HEAVY],
   'wasm-trace-memory64*': [PASS, HEAVY],
 }],  # ALWAYS
 
@@ -130,6 +132,12 @@
   # Maglev doesn't support inlining of Wasm code.
   'wasm-inlining-into-js': [FAIL],
 }],  # variant in (stress_maglev, stress_maglev_future, stress_maglev_no_turbofan, maglev_no_turbofan)
+
+##############################################################################
+['arch != x64', {
+  # TODO(42204618): Missing support for wasm deopts on other platforms.
+  'wasm-trace-deopt': [SKIP],
+}],
 
 ##############################################################################
 ['verify_predictable', {

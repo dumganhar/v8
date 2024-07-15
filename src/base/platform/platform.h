@@ -64,13 +64,11 @@ extern "C" unsigned long __readfsdword(unsigned long);  // NOLINT(runtime/int)
 #endif                                       // V8_CC_MSVC && V8_HOST_ARCH_IA32
 #endif                                       // V8_NO_FAST_TLS
 
-namespace v8 {
-
-namespace internal {
-class HandleHelper;
+namespace heap::base {
+class Stack;
 }
 
-namespace base {
+namespace v8::base {
 
 // ----------------------------------------------------------------------------
 // Fast TLS support
@@ -417,16 +415,16 @@ class V8_BASE_EXPORT OS {
   DISALLOW_IMPLICIT_CONSTRUCTORS(OS);
 };
 
-#if (defined(_WIN32) || defined(_WIN64))
+#if defined(V8_OS_WIN)
 V8_BASE_EXPORT void EnsureConsoleOutputWin32();
-#endif  // (defined(_WIN32) || defined(_WIN64))
+#endif  // defined(V8_OS_WIN)
 
 inline void EnsureConsoleOutput() {
-#if (defined(_WIN32) || defined(_WIN64))
+#if defined(V8_OS_WIN)
   // Windows requires extra calls to send assert output to the console
   // rather than a dialog box.
   EnsureConsoleOutputWin32();
-#endif  // (defined(_WIN32) || defined(_WIN64))
+#endif  // defined(V8_OS_WIN)
 }
 
 // ----------------------------------------------------------------------------
@@ -684,14 +682,13 @@ class V8_BASE_EXPORT Stack {
   static StackSlot GetStackStartUnchecked();
   static Stack::StackSlot ObtainCurrentThreadStackStart();
 
-  friend v8::internal::HandleHelper;
+  friend class heap::base::Stack;
 };
 
 #if V8_HAS_PTHREAD_JIT_WRITE_PROTECT
 V8_BASE_EXPORT void SetJitWriteProtected(int enable);
 #endif
 
-}  // namespace base
-}  // namespace v8
+}  // namespace v8::base
 
 #endif  // V8_BASE_PLATFORM_PLATFORM_H_

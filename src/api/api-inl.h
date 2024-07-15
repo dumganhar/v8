@@ -8,7 +8,6 @@
 #include "include/v8-fast-api-calls.h"
 #include "src/api/api.h"
 #include "src/common/assert-scope.h"
-#include "src/execution/interrupts-scope.h"
 #include "src/execution/microtask-queue.h"
 #include "src/flags/flags.h"
 #include "src/handles/handles-inl.h"
@@ -23,14 +22,16 @@ inline T ToCData(v8::internal::Tagged<v8::internal::Object> obj) {
   static_assert(sizeof(T) == sizeof(v8::internal::Address));
   if (obj == v8::internal::Smi::zero()) return nullptr;
   return reinterpret_cast<T>(
-      v8::internal::Foreign::cast(obj)->foreign_address());
+      v8::internal::Foreign::cast(obj)
+          ->foreign_address<internal::kGenericForeignTag>());
 }
 
 template <>
 inline v8::internal::Address ToCData(
     v8::internal::Tagged<v8::internal::Object> obj) {
   if (obj == v8::internal::Smi::zero()) return v8::internal::kNullAddress;
-  return v8::internal::Foreign::cast(obj)->foreign_address();
+  return v8::internal::Foreign::cast(obj)
+      ->foreign_address<internal::kGenericForeignTag>();
 }
 
 template <typename T>
@@ -38,7 +39,7 @@ inline v8::internal::Handle<v8::internal::Object> FromCData(
     v8::internal::Isolate* isolate, T obj) {
   static_assert(sizeof(T) == sizeof(v8::internal::Address));
   if (obj == nullptr) return handle(v8::internal::Smi::zero(), isolate);
-  return isolate->factory()->NewForeign(
+  return isolate->factory()->NewForeign<internal::kGenericForeignTag>(
       reinterpret_cast<v8::internal::Address>(obj));
 }
 
@@ -48,7 +49,7 @@ inline v8::internal::Handle<v8::internal::Object> FromCData(
   if (obj == v8::internal::kNullAddress) {
     return handle(v8::internal::Smi::zero(), isolate);
   }
-  return isolate->factory()->NewForeign(obj);
+  return isolate->factory()->NewForeign<internal::kGenericForeignTag>(obj);
 }
 
 template <class From, class To>
@@ -67,6 +68,7 @@ inline Local<To> Utils::Convert(v8::internal::DirectHandle<From> obj,
   DCHECK(obj.is_null() || (IsSmi(*obj) || !IsTheHole(*obj)));
   return Local<To>::FromAddress(obj.address());
 #elif defined(V8_ENABLE_DIRECT_HANDLE)
+  if (obj.is_null()) return Local<To>();
   return Convert<From, To>(v8::internal::Handle<From>(*obj, isolate));
 #else
   return Convert<From, To>(obj);
@@ -177,44 +179,27 @@ template <bool do_callback>
 class V8_NODISCARD CallDepthScope {
  public:
   CallDepthScope(i::Isolate* isolate, Local<Context> context)
-      : isolate_(isolate),
-        context_(context),
-        did_enter_context_(false),
-        escaped_(false),
-        safe_for_termination_(isolate->next_v8_call_is_safe_for_termination()),
-        interrupts_scope_(isolate_, i::StackGuard::TERMINATE_EXECUTION,
-                          isolate_->only_terminate_in_safe_scope()
-                              ? (safe_for_termination_
-                                     ? i::InterruptsScope::kRunInterrupts
-                                     : i::InterruptsScope::kPostponeInterrupts)
-                              : i::InterruptsScope::kNoop) {
-    isolate_->thread_local_top()->IncrementCallDepth(this);
-    isolate_->set_next_v8_call_is_safe_for_termination(false);
-    if (!context.IsEmpty()) {
-      i::DisallowGarbageCollection no_gc;
-      i::Tagged<i::Context> env = *Utils::OpenHandle(*context);
-      i::HandleScopeImplementer* impl = isolate->handle_scope_implementer();
-      if (isolate->context().is_null() ||
-          isolate->context()->native_context() != env->native_context()) {
-        impl->SaveContext(isolate->context());
-        isolate->set_context(env);
-        did_enter_context_ = true;
-      }
-    }
+      : isolate_(isolate), saved_context_(isolate->context(), isolate_) {
+    isolate_->thread_local_top()->IncrementCallDepth<do_callback>(this);
+    i::Tagged<i::NativeContext> env = *Utils::OpenDirectHandle(*context);
+    isolate->set_context(env);
+
     if (do_callback) isolate_->FireBeforeCallEnteredCallback();
   }
   ~CallDepthScope() {
-    i::MicrotaskQueue* microtask_queue = isolate_->default_microtask_queue();
-    if (!context_.IsEmpty()) {
-      if (did_enter_context_) {
-        i::HandleScopeImplementer* impl = isolate_->handle_scope_implementer();
-        isolate_->set_context(impl->RestoreContext());
-      }
+    i::MicrotaskQueue* microtask_queue =
+        i::NativeContext::cast(isolate_->context())->microtask_queue();
 
-      i::Handle<i::Context> env = Utils::OpenHandle(*context_);
-      microtask_queue = env->native_context()->microtask_queue();
+    isolate_->thread_local_top()->DecrementCallDepth(this);
+    // Clear the exception when exiting V8 to avoid memory leaks.
+    // Also clear termination exceptions iff there's no TryCatch handler.
+    // TODO(verwaest): Drop this once we propagate exceptions to external
+    // TryCatch on Throw. This should be debug-only.
+    if (isolate_->thread_local_top()->CallDepthIsZero() &&
+        (isolate_->thread_local_top()->try_catch_handler_ == nullptr ||
+         !isolate_->is_execution_terminating())) {
+      isolate_->clear_internal_exception();
     }
-    if (!escaped_) isolate_->thread_local_top()->DecrementCallDepth(this);
     if (do_callback) isolate_->FireCallCompletedCallback(microtask_queue);
 #ifdef DEBUG
     if (do_callback) {
@@ -226,21 +211,12 @@ class V8_NODISCARD CallDepthScope {
     }
     DCHECK(CheckKeptObjectsClearedAfterMicrotaskCheckpoint(microtask_queue));
 #endif
-    isolate_->set_next_v8_call_is_safe_for_termination(safe_for_termination_);
+
+    isolate_->set_context(*saved_context_);
   }
 
   CallDepthScope(const CallDepthScope&) = delete;
   CallDepthScope& operator=(const CallDepthScope&) = delete;
-
-  void Escape() {
-    DCHECK(!escaped_);
-    escaped_ = true;
-    auto thread_local_top = isolate_->thread_local_top();
-    thread_local_top->DecrementCallDepth(this);
-    bool clear_exception = thread_local_top->CallDepthIsZero() &&
-                           thread_local_top->try_catch_handler_ == nullptr;
-    isolate_->OptionalRescheduleException(clear_exception);
-  }
 
  private:
 #ifdef DEBUG
@@ -257,11 +233,8 @@ class V8_NODISCARD CallDepthScope {
 #endif
 
   i::Isolate* const isolate_;
-  Local<Context> context_;
-  bool did_enter_context_ : 1;
-  bool escaped_ : 1;
-  bool safe_for_termination_ : 1;
-  i::InterruptsScope interrupts_scope_;
+  i::Handle<i::Context> saved_context_;
+
   i::Address previous_stack_height_;
 
   friend class i::ThreadLocalTop;
@@ -269,10 +242,31 @@ class V8_NODISCARD CallDepthScope {
   DISALLOW_NEW_AND_DELETE()
 };
 
-class V8_NODISCARD InternalEscapableScope : public EscapableHandleScope {
+class V8_NODISCARD InternalEscapableScope : public EscapableHandleScopeBase {
  public:
   explicit inline InternalEscapableScope(i::Isolate* isolate)
-      : EscapableHandleScope(reinterpret_cast<v8::Isolate*>(isolate)) {}
+      : EscapableHandleScopeBase(reinterpret_cast<v8::Isolate*>(isolate)) {}
+
+  /**
+   * Pushes the value into the previous scope and returns a handle to it.
+   * Cannot be called twice.
+   */
+  template <class T>
+  V8_INLINE Local<T> Escape(Local<T> value) {
+#ifdef V8_ENABLE_DIRECT_LOCAL
+    return value;
+#else
+    DCHECK(!value.IsEmpty());
+    return Local<T>::FromSlot(EscapeSlot(value.slot()));
+#endif
+  }
+
+  template <class T>
+  V8_INLINE MaybeLocal<T> EscapeMaybe(MaybeLocal<T> maybe_value) {
+    Local<T> value;
+    if (!maybe_value.ToLocal(&value)) return maybe_value;
+    return Escape(value);
+  }
 };
 
 template <typename T>
@@ -312,7 +306,7 @@ bool CopyAndConvertArrayToCppBuffer(Local<Array> src, T* dst,
   }
 
   i::DisallowGarbageCollection no_gc;
-  i::Tagged<i::JSArray> obj = *Utils::OpenHandle(*src);
+  i::Tagged<i::JSArray> obj = *Utils::OpenDirectHandle(*src);
   if (i::Object::IterationHasObservableEffects(obj)) {
     // The array has a custom iterator.
     return false;

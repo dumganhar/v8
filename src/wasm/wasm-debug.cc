@@ -15,6 +15,7 @@
 #include "src/heap/factory.h"
 #include "src/wasm/baseline/liftoff-compiler.h"
 #include "src/wasm/baseline/liftoff-register.h"
+#include "src/wasm/compilation-environment-inl.h"
 #include "src/wasm/module-decoder.h"
 #include "src/wasm/std-object-sizes.h"
 #include "src/wasm/value-type.h"
@@ -133,21 +134,21 @@ class DebugInfoImpl {
   DebugInfoImpl(const DebugInfoImpl&) = delete;
   DebugInfoImpl& operator=(const DebugInfoImpl&) = delete;
 
-  int GetNumLocals(Address pc) {
-    FrameInspectionScope scope(this, pc);
+  int GetNumLocals(Address pc, Isolate* isolate) {
+    FrameInspectionScope scope(this, pc, isolate);
     if (!scope.is_inspectable()) return 0;
     return scope.debug_side_table->num_locals();
   }
 
   WasmValue GetLocalValue(int local, Address pc, Address fp,
                           Address debug_break_fp, Isolate* isolate) {
-    FrameInspectionScope scope(this, pc);
+    FrameInspectionScope scope(this, pc, isolate);
     return GetValue(scope.debug_side_table, scope.debug_side_table_entry, local,
                     fp, debug_break_fp, isolate);
   }
 
-  int GetStackDepth(Address pc) {
-    FrameInspectionScope scope(this, pc);
+  int GetStackDepth(Address pc, Isolate* isolate) {
+    FrameInspectionScope scope(this, pc, isolate);
     if (!scope.is_inspectable()) return 0;
     int num_locals = scope.debug_side_table->num_locals();
     int stack_height = scope.debug_side_table_entry->stack_height();
@@ -156,7 +157,7 @@ class DebugInfoImpl {
 
   WasmValue GetStackValue(int index, Address pc, Address fp,
                           Address debug_break_fp, Isolate* isolate) {
-    FrameInspectionScope scope(this, pc);
+    FrameInspectionScope scope(this, pc, isolate);
     int num_locals = scope.debug_side_table->num_locals();
     int value_count = scope.debug_side_table_entry->stack_height();
     if (num_locals + index >= value_count) return {};
@@ -164,8 +165,8 @@ class DebugInfoImpl {
                     num_locals + index, fp, debug_break_fp, isolate);
   }
 
-  const WasmFunction& GetFunctionAtAddress(Address pc) {
-    FrameInspectionScope scope(this, pc);
+  const WasmFunction& GetFunctionAtAddress(Address pc, Isolate* isolate) {
+    FrameInspectionScope scope(this, pc, isolate);
     auto* module = native_module_->module();
     return module->functions[scope.code->index()];
   }
@@ -223,12 +224,14 @@ class DebugInfoImpl {
 
     // Recompile the function with Liftoff, setting the new breakpoints.
     // Not thread-safe. The caller is responsible for locking {mutex_}.
-    CompilationEnv env = native_module_->CreateCompilationEnv();
-    auto* function = &env.module->functions[func_index];
+    CompilationEnv env = CompilationEnv::ForModule(native_module_);
+    const WasmFunction* function = &env.module->functions[func_index];
     base::Vector<const uint8_t> wire_bytes = native_module_->wire_bytes();
+    bool is_shared = env.module->types[function->sig_index].is_shared;
     FunctionBody body{function->sig, function->code.offset(),
                       wire_bytes.begin() + function->code.offset(),
-                      wire_bytes.begin() + function->code.end_offset()};
+                      wire_bytes.begin() + function->code.end_offset(),
+                      is_shared};
     std::unique_ptr<DebugSideTable> debug_sidetable;
 
     // Debug side tables for stepping are generated lazily.
@@ -530,8 +533,9 @@ class DebugInfoImpl {
 
  private:
   struct FrameInspectionScope {
-    FrameInspectionScope(DebugInfoImpl* debug_info, Address pc)
-        : code(wasm::GetWasmCodeManager()->LookupCode(pc)),
+    FrameInspectionScope(DebugInfoImpl* debug_info, Address pc,
+                         Isolate* isolate)
+        : code(wasm::GetWasmCodeManager()->LookupCode(isolate, pc)),
           pc_offset(static_cast<int>(pc - code->instruction_start())),
           debug_side_table(code->is_inspectable()
                                ? debug_info->GetDebugSideTable(code)
@@ -720,8 +724,7 @@ class DebugInfoImpl {
   bool IsAtReturn(WasmFrame* frame) {
     DisallowGarbageCollection no_gc;
     int position = frame->position();
-    NativeModule* native_module =
-        frame->wasm_instance()->module_object()->native_module();
+    NativeModule* native_module = frame->native_module();
     uint8_t opcode = native_module->wire_bytes()[position];
     if (opcode == kExprReturn) return true;
     // Another implicit return is at the last kExprEnd in the function body.
@@ -775,22 +778,27 @@ DebugInfo::DebugInfo(NativeModule* native_module)
 
 DebugInfo::~DebugInfo() = default;
 
-int DebugInfo::GetNumLocals(Address pc) { return impl_->GetNumLocals(pc); }
+int DebugInfo::GetNumLocals(Address pc, Isolate* isolate) {
+  return impl_->GetNumLocals(pc, isolate);
+}
 
 WasmValue DebugInfo::GetLocalValue(int local, Address pc, Address fp,
                                    Address debug_break_fp, Isolate* isolate) {
   return impl_->GetLocalValue(local, pc, fp, debug_break_fp, isolate);
 }
 
-int DebugInfo::GetStackDepth(Address pc) { return impl_->GetStackDepth(pc); }
+int DebugInfo::GetStackDepth(Address pc, Isolate* isolate) {
+  return impl_->GetStackDepth(pc, isolate);
+}
 
 WasmValue DebugInfo::GetStackValue(int index, Address pc, Address fp,
                                    Address debug_break_fp, Isolate* isolate) {
   return impl_->GetStackValue(index, pc, fp, debug_break_fp, isolate);
 }
 
-const wasm::WasmFunction& DebugInfo::GetFunctionAtAddress(Address pc) {
-  return impl_->GetFunctionAtAddress(pc);
+const wasm::WasmFunction& DebugInfo::GetFunctionAtAddress(Address pc,
+                                                          Isolate* isolate) {
+  return impl_->GetFunctionAtAddress(pc, isolate);
 }
 
 void DebugInfo::SetBreakpoint(int func_index, int offset,
@@ -873,11 +881,12 @@ void SetBreakOnEntryFlag(Tagged<Script> script, bool enabled) {
   // Update the "break_on_entry" flag on all live instances.
   i::Tagged<i::WeakArrayList> weak_instance_list =
       script->wasm_weak_instance_list();
+  i::Isolate* isolate = script->GetIsolate();
   for (int i = 0; i < weak_instance_list->length(); ++i) {
-    if (weak_instance_list->Get(i)->IsCleared()) continue;
+    if (weak_instance_list->Get(i).IsCleared()) continue;
     i::Tagged<i::WasmInstanceObject> instance =
         i::WasmInstanceObject::cast(weak_instance_list->Get(i).GetHeapObject());
-    instance->set_break_on_entry(enabled);
+    instance->trusted_data(isolate)->set_break_on_entry(enabled);
   }
 }
 }  // namespace
@@ -1202,7 +1211,7 @@ bool CheckBreakPoint(Isolate* isolate, Handle<BreakPoint> break_point,
   if (!DebugEvaluate::Local(isolate, frame_id, inlined_jsframe_index, condition,
                             throw_on_side_effect)
            .ToHandle(&result)) {
-    isolate->clear_pending_exception();
+    isolate->clear_exception();
     return false;
   }
   return Object::BooleanValue(*result, isolate);

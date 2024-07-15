@@ -11,7 +11,7 @@
 #include "src/builtins/builtins-promise.h"
 #include "src/builtins/builtins-string-gen.h"
 #include "src/builtins/builtins-utils-inl.h"
-#include "src/codegen/code-stub-assembler.h"
+#include "src/codegen/code-stub-assembler-inl.h"
 #include "src/codegen/interface-descriptors-inl.h"
 #include "src/compiler/node.h"
 #include "src/debug/debug.h"
@@ -1109,10 +1109,10 @@ TEST(TransitionLookup) {
   }
 
   CHECK(IsTransitionArray(
-      root_map->raw_transitions()->GetHeapObjectAssumeStrong()));
+      root_map->raw_transitions().GetHeapObjectAssumeStrong()));
   Handle<TransitionArray> transitions(
       TransitionArray::cast(
-          root_map->raw_transitions()->GetHeapObjectAssumeStrong()),
+          root_map->raw_transitions().GetHeapObjectAssumeStrong()),
       isolate);
   DCHECK(transitions->IsSortedNoDuplicates());
 
@@ -1318,6 +1318,10 @@ TEST(TryHasOwnProperty) {
         factory->NewFunctionForTesting(factory->empty_string());
     JSFunction::EnsureHasInitialMap(function);
     function->initial_map()->set_instance_type(JS_GLOBAL_OBJECT_TYPE);
+    function->initial_map()->set_instance_size(JSGlobalObject::kHeaderSize);
+    function->initial_map()->SetInObjectUnusedPropertyFields(0);
+    function->initial_map()->SetInObjectPropertiesStartInWords(
+        function->initial_map()->instance_size_in_words());
     function->initial_map()->set_is_prototype_map(true);
     function->initial_map()->set_is_dictionary_map(true);
     function->initial_map()->set_may_have_interesting_properties(true);
@@ -2079,7 +2083,7 @@ TEST(PopAndReturnFromTFCBuiltinWithStackParameters) {
   // Setup CSA for creating TFC-style builtin with stack arguments.
   // For the testing purposes we need any interface descriptor that has at
   // least one argument passed on stack.
-  using Descriptor = FlatMapIntoArrayDescriptor;
+  using Descriptor = FlattenIntoArrayWithMapFnDescriptor;
   Descriptor descriptor;
   CHECK_LT(0, Descriptor::GetStackParameterCount());
 
@@ -3020,7 +3024,7 @@ TEST(AllocateFunctionWithMapAndContext) {
   CHECK_EQ(isolate->factory()
                ->promise_capability_default_resolve_shared_fun()
                ->GetCode(isolate),
-           fun->code());
+           fun->code(isolate));
 }
 
 TEST(CreatePromiseGetCapabilitiesExecutorContext) {
@@ -3971,12 +3975,11 @@ void TestCallJumpBuiltin(CallJumpMode mode,
 
     TNode<Smi> index = m.SmiConstant(2);
 
-    Callable callable = Builtins::CallableFor(isolate, Builtin::kStringRepeat);
     if (mode == kCall) {
-      m.Return(m.CallStub(callable, context, str, index));
+      m.Return(m.CallBuiltin(Builtin::kStringRepeat, context, str, index));
     } else {
       DCHECK_EQ(mode, kTailCall);
-      m.TailCallStub(callable, context, str, index);
+      m.TailCallBuiltin(Builtin::kStringRepeat, context, str, index);
     }
   }
   AssemblerOptions options = AssemblerOptions::Default(isolate);
@@ -4298,6 +4301,31 @@ TEST(SmiUntagLeftShiftOptimization) {
 
   AssemblerOptions options = AssemblerOptions::Default(isolate);
   FunctionTester ft(asm_tester.GenerateCode(options), kNumParams);
+}
+
+TEST(UnsignedSmiShiftLeft) {
+  Isolate* isolate(CcTest::InitIsolateOnce());
+
+  CodeAssemblerTester asm_tester(isolate);
+  CodeStubAssembler m(asm_tester.state());
+
+  int shift_bits = PropertyDetails::DictionaryStorageField::kShift;
+  int base = 1 << (kSmiValueSize - shift_bits - 1);
+  int target = SmiValuesAre32Bits() ? base << shift_bits
+                                    : (base << shift_bits) | 0x80000000;
+  {
+    TNode<Smi> a = m.SmiConstant(Smi::FromInt(base));
+    TNode<Smi> enum_index = m.UnsignedSmiShl(a, shift_bits);
+
+    TNode<Int32T> raw = m.TruncateIntPtrToInt32(m.SmiUntag(enum_index));
+    TNode<Int32T> expected = m.Int32Constant(target);
+
+    CSA_CHECK(&m, m.Word32Equal(raw, expected));
+    m.Return(m.UndefinedConstant());
+  }
+
+  FunctionTester ft(asm_tester.GenerateCode());
+  ft.Call();
 }
 
 TEST(SmiUntagComparisonOptimization) {

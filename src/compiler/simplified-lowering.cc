@@ -97,6 +97,8 @@ MachineRepresentation MachineRepresentationFromArrayType(
     case kExternalBigInt64Array:
     case kExternalBigUint64Array:
       return MachineRepresentation::kWord64;
+    case kExternalFloat16Array:
+      UNIMPLEMENTED();
   }
   UNREACHABLE();
 }
@@ -162,13 +164,13 @@ UseInfo TruncatingUseInfoFromRepresentation(MachineRepresentation rep) {
       return UseInfo::Bool();
     case MachineRepresentation::kCompressedPointer:
     case MachineRepresentation::kCompressed:
+    case MachineRepresentation::kProtectedPointer:
     case MachineRepresentation::kSandboxedPointer:
     case MachineRepresentation::kSimd128:
     case MachineRepresentation::kSimd256:
     case MachineRepresentation::kNone:
-      break;
+      UNREACHABLE();
   }
-  UNREACHABLE();
 }
 
 UseInfo UseInfoForBasePointer(const FieldAccess& access) {
@@ -760,7 +762,8 @@ class RepresentationSelector {
     TRACE("--{Verify Phase}--\n");
 
     // Patch pending type overrides.
-    for (auto [constant, uses] : verifier_->machine_uses_of_constants()) {
+    for (const auto& [constant, uses] :
+         verifier_->machine_uses_of_constants()) {
       Node* typed_constant =
           InsertTypeOverrideForVerifier(Type::Machine(), constant);
       for (auto use : uses) {
@@ -1714,7 +1717,6 @@ class RepresentationSelector {
         ChangeToInt32OverflowOp(node);
       }
     }
-    return;
   }
 
   template <Phase T>
@@ -1738,7 +1740,6 @@ class RepresentationSelector {
     if (lower<T>()) {
       ChangeToPureOp(node, Float64Op(node));
     }
-    return;
   }
 
   template <Phase T>
@@ -1853,7 +1854,6 @@ class RepresentationSelector {
     VisitBinop<T>(node, lhs_use, rhs_use, MachineRepresentation::kFloat64,
                   Type::Number());
     if (lower<T>()) ChangeToPureOp(node, Float64Op(node));
-    return;
   }
 
   // Just assert for Propagate and Retype. Lower specialized below.
@@ -2274,6 +2274,24 @@ class RepresentationSelector {
         return VisitPhi<T>(node, truncation, lowering);
       case IrOpcode::kCall:
         return VisitCall<T>(node, lowering);
+      case IrOpcode::kAssert: {
+        const auto& p = AssertParametersOf(node->op());
+        if (p.semantics() == BranchSemantics::kMachine) {
+          // If this is a machine condition already, we don't need to do
+          // anything.
+          ProcessInput<T>(node, 0, UseInfo::Any());
+        } else {
+          DCHECK(TypeOf(node->InputAt(0)).Is(Type::Boolean()));
+          ProcessInput<T>(node, 0, UseInfo::Bool());
+          if (lower<T>()) {
+            ChangeOp(node, common()->Assert(BranchSemantics::kMachine,
+                                            p.condition_string(), p.file(),
+                                            p.line()));
+          }
+        }
+        EnqueueInput<T>(node, NodeProperties::FirstControlIndex(node));
+        return;
+      }
 
       //------------------------------------------------------------------
       // JavaScript operators.
@@ -2371,6 +2389,11 @@ class RepresentationSelector {
           if (lower<T>()) ChangeOp(node, Int32Op(node));
           return;
         }
+        if (lhs_type.Is(Type::Boolean()) && rhs_type.Is(Type::Boolean())) {
+          VisitBinop<T>(node, UseInfo::Bool(), MachineRepresentation::kBit);
+          if (lower<T>()) ChangeOp(node, lowering->machine()->Word32Equal());
+          return;
+        }
         // => Float64Cmp
         VisitBinop<T>(node, UseInfo::TruncatingFloat64(kIdentifyZeros),
                       MachineRepresentation::kBit);
@@ -2435,6 +2458,12 @@ class RepresentationSelector {
                         MachineRepresentation::kBit);
           if (lower<T>()) ChangeToPureOp(node, Int32Op(node));
           return;
+        } else if (lhs_type.Is(Type::Boolean()) &&
+                   rhs_type.Is(Type::Boolean())) {
+          VisitBinop<T>(node, UseInfo::Bool(), MachineRepresentation::kBit);
+          if (lower<T>())
+            ChangeToPureOp(node, lowering->machine()->Word32Equal());
+          return;
         }
         // Try to use type feedback.
         NumberOperationHint hint = NumberOperationHintOf(node->op());
@@ -2475,7 +2504,7 @@ class RepresentationSelector {
             // on Oddballs, so make sure we don't accidentially sneak in a
             // hint with Oddball feedback here.
             DCHECK_NE(IrOpcode::kSpeculativeNumberEqual, node->opcode());
-            V8_FALLTHROUGH;
+            [[fallthrough]];
           case NumberOperationHint::kNumberOrBoolean:
           case NumberOperationHint::kNumber:
             VisitBinop<T>(node,
@@ -3708,6 +3737,20 @@ class RepresentationSelector {
         }
         return;
       }
+      case IrOpcode::kCheckStringOrStringWrapper: {
+        const CheckParameters& params = CheckParametersOf(node->op());
+        if (InputIs(node, Type::StringOrStringWrapper())) {
+          VisitUnop<T>(node, UseInfo::AnyTagged(),
+                       MachineRepresentation::kTaggedPointer);
+          if (lower<T>()) DeferReplacement(node, node->InputAt(0));
+        } else {
+          VisitUnop<T>(
+              node,
+              UseInfo::CheckedHeapObjectAsTaggedPointer(params.feedback()),
+              MachineRepresentation::kTaggedPointer);
+        }
+        return;
+      }
       case IrOpcode::kCheckSymbol: {
         VisitCheck<T>(node, Type::Symbol(), lowering);
         return;
@@ -3723,6 +3766,7 @@ class RepresentationSelector {
         SetOutput<T>(node, MachineType::PointerRepresentation());
         return;
       }
+#if V8_ENABLE_WEBASSEMBLY
       case IrOpcode::kLoadStackPointer: {
         SetOutput<T>(node, MachineType::PointerRepresentation());
         return;
@@ -3731,6 +3775,7 @@ class RepresentationSelector {
         SetOutput<T>(node, MachineRepresentation::kNone);
         return;
       }
+#endif  // V8_ENABLE_WEBASSEMBLY
       case IrOpcode::kLoadMessage: {
         if (truncation.IsUnused()) return VisitUnused<T>(node);
         VisitUnop<T>(node, UseInfo::Word(), MachineRepresentation::kTagged);
@@ -3916,14 +3961,17 @@ class RepresentationSelector {
       }
       case IrOpcode::kConvertReceiver: {
         Type input_type = TypeOf(node->InputAt(0));
-        VisitBinop<T>(node, UseInfo::AnyTagged(),
-                      MachineRepresentation::kTaggedPointer);
+        ProcessInput<T>(node, 0, UseInfo::AnyTagged());  // object
+        ProcessInput<T>(node, 1, UseInfo::AnyTagged());  // native_context
+        ProcessInput<T>(node, 2, UseInfo::AnyTagged());  // global_proxy
+        ProcessRemainingInputs<T>(node, 3);
+        SetOutput<T>(node, MachineRepresentation::kTaggedPointer);
         if (lower<T>()) {
           // Try to optimize the {node} based on the input type.
           if (input_type.Is(Type::Receiver())) {
             DeferReplacement(node, node->InputAt(0));
           } else if (input_type.Is(Type::NullOrUndefined())) {
-            DeferReplacement(node, node->InputAt(1));
+            DeferReplacement(node, node->InputAt(2));
           } else if (!input_type.Maybe(Type::NullOrUndefined())) {
             ChangeOp(node, lowering->simplified()->ConvertReceiver(
                                ConvertReceiverMode::kNotNullOrUndefined));
@@ -4272,6 +4320,21 @@ class RepresentationSelector {
         if (lower<T>() && input_type.Is(Type::Number())) {
           DeferReplacement(node, node->InputAt(0));
         }
+        return;
+      }
+      case IrOpcode::kChangeFloat64HoleToTagged: {
+        // If the {truncation} identifies NaN and undefined, we can just pass
+        // along the {truncation} and completely wipe the {node}.
+        if (truncation.IsUnused()) return VisitUnused<T>(node);
+        if (truncation.TruncatesOddballAndBigIntToNumber()) {
+          VisitUnop<T>(node, UseInfo::TruncatingFloat64(),
+                       MachineRepresentation::kFloat64);
+          if (lower<T>()) DeferReplacement(node, node->InputAt(0));
+          return;
+        }
+        VisitUnop<T>(
+            node, UseInfo(MachineRepresentation::kFloat64, Truncation::Any()),
+            MachineRepresentation::kTagged);
         return;
       }
       case IrOpcode::kCheckNotTaggedHole: {

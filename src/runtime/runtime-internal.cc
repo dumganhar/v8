@@ -106,7 +106,7 @@ Tagged<Object> NewError(Isolate* isolate, RuntimeArguments args,
   int message_id_smi = args.smi_value_at(0);
 
   constexpr int kMaxMessageArgs = 3;
-  Handle<Object> message_args[kMaxMessageArgs];
+  DirectHandle<Object> message_args[kMaxMessageArgs];
   int num_message_args = 0;
   while (num_message_args < kMaxMessageArgs &&
          args.length() > num_message_args + 1) {
@@ -207,10 +207,11 @@ RUNTIME_FUNCTION(Runtime_UnwindAndFindExceptionHandler) {
   return isolate->UnwindAndFindHandler();
 }
 
-RUNTIME_FUNCTION(Runtime_PromoteScheduledException) {
+RUNTIME_FUNCTION(Runtime_PropagateException) {
   SealHandleScope shs(isolate);
   DCHECK_EQ(0, args.length());
-  return isolate->PromoteScheduledException();
+  DCHECK(isolate->has_exception());
+  return ReadOnlyRoots(isolate).exception();
 }
 
 RUNTIME_FUNCTION(Runtime_ThrowReferenceError) {
@@ -242,7 +243,7 @@ RUNTIME_FUNCTION(Runtime_NewError) {
 RUNTIME_FUNCTION(Runtime_NewForeign) {
   HandleScope scope(isolate);
   DCHECK_EQ(0, args.length());
-  return *isolate->factory()->NewForeign(kNullAddress);
+  return *isolate->factory()->NewForeign<kGenericForeignTag>(kNullAddress);
 }
 
 RUNTIME_FUNCTION(Runtime_NewTypeError) {
@@ -483,6 +484,7 @@ class SaveAndClearThreadInWasmFlag {};
 
 RUNTIME_FUNCTION(Runtime_AllocateInYoungGeneration) {
   HandleScope scope(isolate);
+  DCHECK(isolate->IsOnCentralStack());
   DCHECK_EQ(2, args.length());
   // TODO(v8:13070): Align allocations in the builtins that call this.
   int size = ALIGN_TO_ALLOCATION_ALIGNMENT(args.smi_value_at(0));
@@ -774,13 +776,13 @@ RUNTIME_FUNCTION(Runtime_ReportMessageFromMicrotask) {
 
   Handle<Object> exception = args.at(0);
 
-  DCHECK(!isolate->has_pending_exception());
-  isolate->set_pending_exception(*exception);
+  DCHECK(!isolate->has_exception());
+  isolate->set_exception(*exception);
   MessageLocation* no_location = nullptr;
   Handle<JSMessageObject> message =
       isolate->CreateMessageOrAbort(exception, no_location);
   MessageHandler::ReportMessage(isolate, no_location, message);
-  isolate->clear_pending_exception();
+  isolate->clear_exception();
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
@@ -816,6 +818,17 @@ RUNTIME_FUNCTION(Runtime_SharedValueBarrierSlow) {
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, shared_value, Object::ShareSlow(isolate, value, kThrowOnError));
   return *shared_value;
+}
+
+RUNTIME_FUNCTION(Runtime_InvalidateDependentCodeForConstTrackingLet) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+  Handle<ConstTrackingLetCell> const_tracking_let_cell =
+      Handle<ConstTrackingLetCell>::cast(args.at<HeapObject>(0));
+  DependentCode::DeoptimizeDependencyGroups(
+      isolate, *const_tracking_let_cell,
+      DependentCode::kConstTrackingLetChangedGroup);
+  return ReadOnlyRoots(isolate).undefined_value();
 }
 
 }  // namespace internal

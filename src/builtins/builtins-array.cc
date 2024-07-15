@@ -51,7 +51,7 @@ inline bool HasOnlySimpleElements(Isolate* isolate,
   DisallowGarbageCollection no_gc;
   PrototypeIterator iter(isolate, receiver, kStartAtReceiver);
   for (; !iter.IsAtEnd(); iter.Advance()) {
-    if (IsJSProxy(iter.GetCurrent())) return false;
+    if (!IsJSObject(iter.GetCurrent())) return false;
     Tagged<JSObject> current = iter.GetCurrent<JSObject>();
     if (!HasSimpleElements(current)) return false;
   }
@@ -385,18 +385,20 @@ BUILTIN(ArrayPush) {
     return GenericArrayPush(isolate, &args);
   }
 
+  Handle<JSArray> array = Handle<JSArray>::cast(receiver);
+  bool has_read_only_length = JSArray::HasReadOnlyLength(array);
+
+  if (has_read_only_length) {
+    return GenericArrayPush(isolate, &args);
+  }
+
   // Fast Elements Path
   int to_add = args.length() - 1;
-  Handle<JSArray> array = Handle<JSArray>::cast(receiver);
   uint32_t len = static_cast<uint32_t>(Object::Number(array->length()));
   if (to_add == 0) return *isolate->factory()->NewNumberFromUint(len);
 
   // Currently fixed arrays cannot grow too big, so we should never hit this.
   DCHECK_LE(to_add, Smi::kMaxValue - Smi::ToInt(array->length()));
-
-  if (JSArray::HasReadOnlyLength(array)) {
-    return GenericArrayPush(isolate, &args);
-  }
 
   ElementsAccessor* accessor = array->GetElementsAccessor();
   uint32_t new_length;
@@ -697,14 +699,15 @@ class ArrayConcatVisitor {
       set_exceeds_array_limit(true);
       // Exception hasn't been thrown at this point. Return true to
       // break out, and caller will throw. !visit would imply that
-      // there is already a pending exception.
+      // there is already a exception.
       return true;
     }
 
     if (!is_fixed_array()) {
-      LookupIterator it(isolate_, storage_, index, LookupIterator::OWN);
-      MAYBE_RETURN(
-          JSReceiver::CreateDataProperty(&it, elm, Just(kThrowOnError)), false);
+      MAYBE_RETURN(JSReceiver::CreateDataProperty(isolate_, storage_,
+                                                  PropertyKey(isolate_, index),
+                                                  elm, Just(kThrowOnError)),
+                   false);
       return true;
     }
 
@@ -1071,6 +1074,8 @@ void CollectElementIndices(Isolate* isolate, Handle<JSObject> object,
   if (!iter.IsAtEnd()) {
     // The prototype will usually have no inherited element indices,
     // but we have to check.
+    // Casting to JSObject is safe because we ran {HasOnlySimpleElements} on
+    // the receiver before, which checks the prototype chain.
     CollectElementIndices(
         isolate, PrototypeIterator::GetCurrent<JSObject>(iter), range, indices);
   }
@@ -1571,8 +1576,7 @@ BUILTIN(ArrayConcat) {
     if (Fast_ArrayConcat(isolate, &args).ToHandle(&result_array)) {
       return *result_array;
     }
-    if (isolate->has_pending_exception())
-      return ReadOnlyRoots(isolate).exception();
+    if (isolate->has_exception()) return ReadOnlyRoots(isolate).exception();
   }
   // Reading @@species happens before anything else with a side effect, so
   // we can do it here to determine whether to take the fast path.
@@ -1583,8 +1587,7 @@ BUILTIN(ArrayConcat) {
     if (Fast_ArrayConcat(isolate, &args).ToHandle(&result_array)) {
       return *result_array;
     }
-    if (isolate->has_pending_exception())
-      return ReadOnlyRoots(isolate).exception();
+    if (isolate->has_exception()) return ReadOnlyRoots(isolate).exception();
   }
   return Slow_ArrayConcat(&args, species, isolate);
 }

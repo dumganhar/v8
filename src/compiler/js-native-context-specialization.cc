@@ -15,6 +15,7 @@
 #include "src/compiler/allocation-builder.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/compilation-dependencies.h"
+#include "src/compiler/const-tracking-let-helpers.h"
 #include "src/compiler/frame-states.h"
 #include "src/compiler/graph-assembler.h"
 #include "src/compiler/js-graph.h"
@@ -410,11 +411,10 @@ Handle<String> JSNativeContextSpecialization::Concatenate(
     created_strings_.insert(flat);
     DisallowGarbageCollection no_gc;
     String::WriteToFlat(*left, flat->GetChars(no_gc, access_guard), 0,
-                        left->length(), GetPtrComprCageBase(*left),
-                        access_guard);
-    String::WriteToFlat(
-        *right, flat->GetChars(no_gc, access_guard) + left->length(), 0,
-        right->length(), GetPtrComprCageBase(*right), access_guard);
+                        left->length(), access_guard);
+    String::WriteToFlat(*right,
+                        flat->GetChars(no_gc, access_guard) + left->length(), 0,
+                        right->length(), access_guard);
     return flat;
   } else {
     // One (or both) of {left} and {right} is 2-byte ==> the result will be
@@ -428,11 +428,10 @@ Handle<String> JSNativeContextSpecialization::Concatenate(
     created_strings_.insert(flat);
     DisallowGarbageCollection no_gc;
     String::WriteToFlat(*left, flat->GetChars(no_gc, access_guard), 0,
-                        left->length(), GetPtrComprCageBase(*left),
-                        access_guard);
-    String::WriteToFlat(
-        *right, flat->GetChars(no_gc, access_guard) + left->length(), 0,
-        right->length(), GetPtrComprCageBase(*right), access_guard);
+                        left->length(), access_guard);
+    String::WriteToFlat(*right,
+                        flat->GetChars(no_gc, access_guard) + left->length(), 0,
+                        right->length(), access_guard);
     return flat;
   }
 }
@@ -759,7 +758,8 @@ Reduction JSNativeContextSpecialization::ReduceJSInstanceOf(Node* node) {
     OptionalJSObjectRef holder = access_info.holder();
     bool found_on_proto = holder.has_value();
     JSObjectRef holder_ref = found_on_proto ? holder.value() : receiver.value();
-    OptionalObjectRef constant = holder_ref.GetOwnFastDataProperty(
+    if (access_info.field_representation().IsDouble()) return NoChange();
+    OptionalObjectRef constant = holder_ref.GetOwnFastConstantDataProperty(
         broker(), access_info.field_representation(), access_info.field_index(),
         dependencies());
     if (!constant.has_value() || !constant->IsHeapObject() ||
@@ -1345,10 +1345,22 @@ Reduction JSNativeContextSpecialization::ReduceJSStoreGlobal(Node* node) {
   GlobalAccessFeedback const& feedback = processed.AsGlobalAccess();
   if (feedback.IsScriptContextSlot()) {
     if (feedback.immutable()) return NoChange();
-    Effect effect = n.effect();
-    Control control = n.control();
+    Node* effect = n.effect();
+    Node* control = n.control();
     Node* script_context =
         jsgraph()->ConstantNoHole(feedback.script_context(), broker());
+
+    // StoreGlobal can store to `let` variables declared by another script.
+    // Thus, we must check the const tracking let side data and potentially
+    // invalidate the constness.
+    if (v8_flags.const_tracking_let) {
+      int side_data_index =
+          ConstTrackingLetSideDataIndexForAccess(feedback.slot_index());
+      GenerateCheckConstTrackingLetSideData(script_context, &effect, &control,
+                                            side_data_index, jsgraph_);
+      // If we're still here (not deopted) the side data implied that the
+      // variable was already not-a-constant, so we can just store into it.
+    }
     effect =
         graph()->NewNode(javascript()->StoreContext(0, feedback.slot_index()),
                          value, script_context, effect, control);
@@ -2215,6 +2227,18 @@ Reduction JSNativeContextSpecialization::ReduceElementAccess(
     }
   }
 
+  // Do not optimize Float16 typed arrays, since they are not yet supported by
+  // the rest of the compiler.
+  // TODO(v8:14012): We could lower further here and emit LoadTypedElement (like
+  // we do for other typed arrays). However, given the lack of hardware support
+  // for Float16 operations, it's not clear whether optimizing further would be
+  // really useful.
+  for (const ElementAccessInfo& access_info : access_infos) {
+    if (IsFloat16TypedArrayElementsKind(access_info.elements_kind())) {
+      return NoChange();
+    }
+  }
+
   // For holey stores or growing stores, we need to check that the prototype
   // chain contains no setters for elements, and we need to guard those checks
   // via code dependencies on the relevant prototype maps.
@@ -2231,7 +2255,7 @@ Reduction JSNativeContextSpecialization::ReduceElementAccess(
         // no element accessors and no throwing behavior for elements (and we
         // need to guard against changes to that below).
         if ((IsHoleyOrDictionaryElementsKind(receiver_map.elements_kind()) ||
-             IsGrowStoreMode(feedback.keyed_mode().store_mode())) &&
+             StoreModeCanGrow(feedback.keyed_mode().store_mode())) &&
             !receiver_map.PrototypesElementsDoNotHaveAccessorsOrThrow(
                 broker(), &prototype_maps)) {
           return NoChange();
@@ -2773,13 +2797,13 @@ Node* JSNativeContextSpecialization::InlineApiCall(
     Node* receiver, Node* api_holder, Node* frame_state, Node* value,
     Node** effect, Node** control,
     FunctionTemplateInfoRef function_template_info) {
-  if (!function_template_info.call_code(broker()).has_value()) {
+  compiler::OptionalObjectRef maybe_callback_data =
+      function_template_info.callback_data(broker());
+  if (!maybe_callback_data.has_value()) {
     TRACE_BROKER_MISSING(broker(), "call code for function template info "
                                        << function_template_info);
     return nullptr;
   }
-  CallHandlerInfoRef call_handler_info =
-      *function_template_info.call_code(broker());
 
   // Only setters have a value.
   int const argc = value == nullptr ? 0 : 1;
@@ -2796,9 +2820,8 @@ Node* JSNativeContextSpecialization::InlineApiCall(
           1 /* implicit receiver */,
       CallDescriptor::kNeedsFrameState);
 
-  Node* data =
-      jsgraph()->ConstantNoHole(call_handler_info.data(broker()), broker());
-  ApiFunction function(call_handler_info.callback(broker()));
+  Node* data = jsgraph()->ConstantNoHole(maybe_callback_data.value(), broker());
+  ApiFunction function(function_template_info.callback(broker()));
   Node* function_reference =
       graph()->NewNode(common()->ExternalConstant(ExternalReference::Create(
           &function, ExternalReference::DIRECT_API_CALL)));
@@ -2988,7 +3011,7 @@ JSNativeContextSpecialization::BuildPropertyStore(
         if (access_info.HasTransitionMap()) {
           // Allocate a HeapNumber for the new property.
           AllocationBuilder a(jsgraph(), broker(), effect, control);
-          a.Allocate(HeapNumber::kSize, AllocationType::kYoung,
+          a.Allocate(sizeof(HeapNumber), AllocationType::kYoung,
                      Type::OtherInternal());
           a.Store(AccessBuilder::ForMap(), broker()->heap_number_map());
           FieldAccess value_field_access = AccessBuilder::ForHeapNumberValue();
@@ -3015,9 +3038,11 @@ JSNativeContextSpecialization::BuildPropertyStore(
           storage = effect =
               graph()->NewNode(simplified()->LoadField(storage_access), storage,
                                effect, control);
-          field_access.offset = HeapNumber::kValueOffset;
-          field_access.name = MaybeHandle<Name>();
-          field_access.machine_type = MachineType::Float64();
+          FieldAccess value_field_access = AccessBuilder::ForHeapNumberValue();
+          value_field_access.const_field_info = field_access.const_field_info;
+          value_field_access.is_store_in_literal =
+              field_access.is_store_in_literal;
+          field_access = value_field_access;
         }
         break;
       }
@@ -3053,6 +3078,7 @@ JSNativeContextSpecialization::BuildPropertyStore(
       case MachineRepresentation::kBit:
       case MachineRepresentation::kCompressedPointer:
       case MachineRepresentation::kCompressed:
+      case MachineRepresentation::kProtectedPointer:
       case MachineRepresentation::kIndirectPointer:
       case MachineRepresentation::kSandboxedPointer:
       case MachineRepresentation::kWord8:
@@ -3160,24 +3186,6 @@ Reduction JSNativeContextSpecialization::ReduceJSToObject(Node* node) {
   return Replace(receiver);
 }
 
-namespace {
-
-ExternalArrayType GetArrayTypeFromElementsKind(ElementsKind kind) {
-  switch (kind) {
-#define TYPED_ARRAY_CASE(Type, type, TYPE, ctype) \
-  case TYPE##_ELEMENTS:                           \
-  case RAB_GSAB_##TYPE##_ELEMENTS:                \
-    return kExternal##Type##Array;
-    TYPED_ARRAYS(TYPED_ARRAY_CASE)
-#undef TYPED_ARRAY_CASE
-    default:
-      break;
-  }
-  UNREACHABLE();
-}
-
-}  // namespace
-
 JSNativeContextSpecialization::ValueEffectControl
 JSNativeContextSpecialization::BuildElementAccess(
     Node* receiver, Node* index, Node* value, Node* effect, Node* control,
@@ -3207,7 +3215,7 @@ JSNativeContextSpecialization::BuildElementAccess(
   // the store mode).
   if (IsAnyStore(keyed_mode.access_mode()) &&
       IsSmiOrObjectElementsKind(elements_kind) &&
-      !IsCOWHandlingStoreMode(keyed_mode.store_mode())) {
+      !StoreModeHandlesCOW(keyed_mode.store_mode())) {
     effect = graph()->NewNode(
         simplified()->CheckMaps(CheckMapsFlag::kNone,
                                 ZoneRefSet<Map>(broker()->fixed_array_map())),
@@ -3229,10 +3237,10 @@ JSNativeContextSpecialization::BuildElementAccess(
                 elements, effect, control);
 
   // Check if we might need to grow the {elements} backing store.
-  if (keyed_mode.IsStore() && IsGrowStoreMode(keyed_mode.store_mode())) {
+  if (keyed_mode.IsStore() && StoreModeCanGrow(keyed_mode.store_mode())) {
     // For growing stores we validate the {index} below.
   } else if (keyed_mode.IsLoad() &&
-             keyed_mode.load_mode() == LOAD_IGNORE_OUT_OF_BOUNDS &&
+             LoadModeHandlesOOB(keyed_mode.load_mode()) &&
              CanTreatHoleAsUndefined(receiver_maps)) {
     // Check that the {index} is a valid array index, we do the actual
     // bounds check below and just skip the store below if it's out of
@@ -3277,7 +3285,7 @@ JSNativeContextSpecialization::BuildElementAccess(
     }
 
     // Check if we can return undefined for out-of-bounds loads.
-    if (keyed_mode.load_mode() == LOAD_IGNORE_OUT_OF_BOUNDS &&
+    if (LoadModeHandlesOOB(keyed_mode.load_mode()) &&
         CanTreatHoleAsUndefined(receiver_maps)) {
       Node* check =
           graph()->NewNode(simplified()->NumberLessThan(), index, length);
@@ -3305,9 +3313,8 @@ JSNativeContextSpecialization::BuildElementAccess(
             graph()->NewNode(simplified()->LoadElement(element_access),
                              elements, index, etrue, if_true);
 
-        // Handle loading from holey backing stores correctly, by either
-        // mapping the hole to undefined if possible, or deoptimizing
-        // otherwise.
+        // Handle loading from holey backing stores correctly by mapping
+        // the hole to undefined.
         if (elements_kind == HOLEY_ELEMENTS ||
             elements_kind == HOLEY_SMI_ELEMENTS) {
           // Turn the hole into undefined.
@@ -3316,10 +3323,15 @@ JSNativeContextSpecialization::BuildElementAccess(
         } else if (elements_kind == HOLEY_DOUBLE_ELEMENTS) {
           // Return the signaling NaN hole directly if all uses are
           // truncating.
-          vtrue = etrue = graph()->NewNode(
-              simplified()->CheckFloat64Hole(
-                  CheckFloat64HoleMode::kAllowReturnHole, FeedbackSource()),
-              vtrue, etrue, if_true);
+          if (LoadModeHandlesHoles(keyed_mode.load_mode())) {
+            vtrue = graph()->NewNode(simplified()->ChangeFloat64HoleToTagged(),
+                                     vtrue);
+          } else {
+            vtrue = etrue = graph()->NewNode(
+                simplified()->CheckFloat64Hole(
+                    CheckFloat64HoleMode::kAllowReturnHole, FeedbackSource()),
+                vtrue, etrue, if_true);
+          }
         }
       }
 
@@ -3357,16 +3369,25 @@ JSNativeContextSpecialization::BuildElementAccess(
         }
       } else if (elements_kind == HOLEY_DOUBLE_ELEMENTS) {
         // Perform the hole check on the result.
-        CheckFloat64HoleMode mode = CheckFloat64HoleMode::kNeverReturnHole;
         // Check if we are allowed to return the hole directly.
         if (CanTreatHoleAsUndefined(receiver_maps)) {
-          // Return the signaling NaN hole directly if all uses are
-          // truncating.
-          mode = CheckFloat64HoleMode::kAllowReturnHole;
+          if (LoadModeHandlesHoles(keyed_mode.load_mode())) {
+            // Return the signaling NaN hole directly if all uses are
+            // truncating.
+            value = graph()->NewNode(simplified()->ChangeFloat64HoleToTagged(),
+                                     value);
+          } else {
+            value = effect = graph()->NewNode(
+                simplified()->CheckFloat64Hole(
+                    CheckFloat64HoleMode::kAllowReturnHole, FeedbackSource()),
+                value, effect, control);
+          }
+        } else {
+          value = effect = graph()->NewNode(
+              simplified()->CheckFloat64Hole(
+                  CheckFloat64HoleMode::kNeverReturnHole, FeedbackSource()),
+              value, effect, control);
         }
-        value = effect = graph()->NewNode(
-            simplified()->CheckFloat64Hole(mode, FeedbackSource()), value,
-            effect, control);
       }
     }
   } else if (keyed_mode.access_mode() == AccessMode::kHas) {
@@ -3457,11 +3478,11 @@ JSNativeContextSpecialization::BuildElementAccess(
 
     // Ensure that copy-on-write backing store is writable.
     if (IsSmiOrObjectElementsKind(elements_kind) &&
-        keyed_mode.store_mode() == STORE_HANDLE_COW) {
+        keyed_mode.store_mode() == KeyedAccessStoreMode::kHandleCOW) {
       elements = effect =
           graph()->NewNode(simplified()->EnsureWritableFastElements(), receiver,
                            elements, effect, control);
-    } else if (IsGrowStoreMode(keyed_mode.store_mode())) {
+    } else if (StoreModeCanGrow(keyed_mode.store_mode())) {
       // Determine the length of the {elements} backing store.
       Node* elements_length = effect = graph()->NewNode(
           simplified()->LoadField(AccessBuilder::ForFixedArrayLength()),
@@ -3506,7 +3527,7 @@ JSNativeContextSpecialization::BuildElementAccess(
       // If we didn't grow {elements}, it might still be COW, in which case we
       // copy it now.
       if (IsSmiOrObjectElementsKind(elements_kind) &&
-          keyed_mode.store_mode() == STORE_AND_GROW_HANDLE_COW) {
+          keyed_mode.store_mode() == KeyedAccessStoreMode::kGrowAndHandleCOW) {
         elements = effect =
             graph()->NewNode(simplified()->EnsureWritableFastElements(),
                              receiver, elements, effect, control);
@@ -3665,10 +3686,9 @@ JSNativeContextSpecialization::
   enum Situation { kBoundsCheckDone, kHandleOOB_SmiAndRangeCheckComputed };
   Situation situation;
   TNode<BoolT> check;
-  if ((keyed_mode.IsLoad() &&
-       keyed_mode.load_mode() == LOAD_IGNORE_OUT_OF_BOUNDS) ||
+  if ((keyed_mode.IsLoad() && LoadModeHandlesOOB(keyed_mode.load_mode())) ||
       (keyed_mode.IsStore() &&
-       keyed_mode.store_mode() == STORE_IGNORE_OUT_OF_BOUNDS)) {
+       StoreModeIgnoresTypeArrayOOB(keyed_mode.store_mode()))) {
     // Only check that the {index} is in SignedSmall range. We do the actual
     // bounds check below and just skip the property access if it's out of
     // bounds for the {receiver}.
@@ -3704,6 +3724,7 @@ JSNativeContextSpecialization::
   // Access the actual element.
   ExternalArrayType external_array_type =
       GetArrayTypeFromElementsKind(elements_kind);
+  DCHECK_NE(external_array_type, ExternalArrayType::kExternalFloat16Array);
   switch (keyed_mode.access_mode()) {
     case AccessMode::kLoad: {
       // Check if we can return undefined for out-of-bounds loads.
@@ -3865,7 +3886,7 @@ JSNativeContextSpecialization::
 Node* JSNativeContextSpecialization::BuildIndexedStringLoad(
     Node* receiver, Node* index, Node* length, Node** effect, Node** control,
     KeyedAccessLoadMode load_mode) {
-  if (load_mode == LOAD_IGNORE_OUT_OF_BOUNDS &&
+  if (LoadModeHandlesOOB(load_mode) &&
       dependencies()->DependOnNoElementsProtector()) {
     // Ensure that the {index} is a valid String length.
     index = *effect = graph()->NewNode(
@@ -3933,6 +3954,11 @@ Node* JSNativeContextSpecialization::BuildExtendPropertiesBackingStore(
   // it unclear what the best approach is here.
   DCHECK_EQ(map.UnusedPropertyFields(), 0);
   int length = map.NextFreePropertyIndex() - map.GetInObjectProperties();
+  // Under normal circumstances, NextFreePropertyIndex() will always be larger
+  // than GetInObjectProperties(). However, an attacker able to corrupt heap
+  // memory can break this invariant, in which case we'll get confused here,
+  // potentially causing a sandbox violation. This CHECK defends against that.
+  SBXCHECK_GE(length, 0);
   int new_length = length + JSObject::kFieldsAdded;
   // Collect the field values from the {properties}.
   ZoneVector<Node*> values(zone());

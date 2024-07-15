@@ -119,8 +119,7 @@ MaybeHandle<JSObject> JSObjectWalkVisitor<ContextObject>::StructureWalk(
               isolate, value, VisitElementOrProperty(copy, value), JSObject);
           if (copying) copy->FastPropertyAtPut(index, *value);
         } else if (copying && details.representation().IsDouble()) {
-          uint64_t double_value =
-              HeapNumber::cast(raw)->value_as_bits(kRelaxedLoad);
+          uint64_t double_value = HeapNumber::cast(raw)->value_as_bits();
           auto value = isolate->factory()->NewHeapNumberFromBits(double_value);
           copy->FastPropertyAtPut(index, *value);
         }
@@ -532,7 +531,7 @@ MaybeHandle<JSObject> CreateLiteral(Isolate* isolate,
   Handle<FeedbackVector> vector = Handle<FeedbackVector>::cast(maybe_vector);
   FeedbackSlot literals_slot(FeedbackVector::ToSlot(literals_index));
   CHECK(literals_slot.ToInt() < vector->length());
-  Handle<Object> literal_site(vector->Get(literals_slot)->cast<Object>(),
+  Handle<Object> literal_site(Tagged<Object>::cast(vector->Get(literals_slot)),
                               isolate);
   Handle<AllocationSite> site;
   Handle<JSObject> boilerplate;
@@ -620,7 +619,7 @@ RUNTIME_FUNCTION(Runtime_CreateRegExpLiteral) {
 
   Handle<FeedbackVector> vector = Handle<FeedbackVector>::cast(maybe_vector);
   FeedbackSlot literal_slot(FeedbackVector::ToSlot(index));
-  Handle<Object> literal_site(vector->Get(literal_slot)->cast<Object>(),
+  Handle<Object> literal_site(Tagged<Object>::cast(vector->Get(literal_slot)),
                               isolate);
 
   // This function must not be called when a boilerplate already exists (if it
@@ -649,7 +648,7 @@ RUNTIME_FUNCTION(Runtime_CreateRegExpLiteral) {
 
   vector->SynchronizedSet(literal_slot, *boilerplate);
   DCHECK(HasBoilerplate(
-      handle(vector->Get(literal_slot)->cast<Object>(), isolate)));
+      handle(Tagged<Object>::cast(vector->Get(literal_slot)), isolate)));
 
   return *regexp_instance;
 }

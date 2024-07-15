@@ -13,6 +13,7 @@
 #include "src/heap/linear-allocation-area.h"
 #include "src/roots/roots.h"
 #include "src/sandbox/code-pointer-table.h"
+#include "src/sandbox/external-buffer-table.h"
 #include "src/sandbox/external-pointer-table.h"
 #include "src/sandbox/trusted-pointer-table.h"
 #include "src/utils/utils.h"
@@ -23,48 +24,64 @@ namespace internal {
 
 class Isolate;
 
+#if V8_HOST_ARCH_64_BIT
+// No padding is currently required for fast_c_call_XXX and wasm64_oob_offset_
+// fields.
+#define ISOLATE_DATA_FAST_C_CALL_PADDING(V)
+#else
+// Aligns fast_c_call_XXX fields so that they stay in the same CPU cache line.
+#define ISOLATE_DATA_FAST_C_CALL_PADDING(V)               \
+  V(kFastCCallAlignmentPaddingOffset, kSystemPointerSize, \
+    fast_c_call_alignment_padding)
+#endif  // V8_HOST_ARCH_64_BIT
+
 // IsolateData fields, defined as: V(Offset, Size, Name)
-#define ISOLATE_DATA_FIELDS(V)                                                \
-  /* Misc. fields. */                                                         \
-  V(kCageBaseOffset, kSystemPointerSize, cage_base)                           \
-  V(kStackGuardOffset, StackGuard::kSizeInBytes, stack_guard)                 \
-  V(kIsMarkingFlag, kUInt8Size, is_marking_flag)                              \
-  V(kIsMinorMarkingFlag, kUInt8Size, is_minor_marking_flag)                   \
-  V(kIsSharedSpaceIsolateFlag, kUInt8Size, is_shared_space_isolate_flag)      \
-  V(kUsesSharedHeapFlag, kUInt8Size, uses_shared_heap_flag)                   \
-  V(kExecutionModeOffset, kUInt8Size, execution_mode)                         \
-  V(kStackIsIterableOffset, kUInt8Size, stack_is_iterable)                    \
-  V(kTablesAlignmentPaddingOffset, 2, tables_alignment_padding)               \
-  /* Tier 0 tables (small but fast access). */                                \
-  V(kBuiltinTier0EntryTableOffset,                                            \
-    Builtins::kBuiltinTier0Count* kSystemPointerSize,                         \
-    builtin_tier0_entry_table)                                                \
-  V(kBuiltinsTier0TableOffset,                                                \
-    Builtins::kBuiltinTier0Count* kSystemPointerSize, builtin_tier0_table)    \
-  /* Misc. fields. */                                                         \
-  V(kNewAllocationInfoOffset, LinearAllocationArea::kSize,                    \
-    new_allocation_info)                                                      \
-  V(kOldAllocationInfoOffset, LinearAllocationArea::kSize,                    \
-    old_allocation_info)                                                      \
-  V(kFastCCallCallerFPOffset, kSystemPointerSize, fast_c_call_caller_fp)      \
-  V(kFastCCallCallerPCOffset, kSystemPointerSize, fast_c_call_caller_pc)      \
-  V(kFastApiCallTargetOffset, kSystemPointerSize, fast_api_call_target)       \
-  V(kLongTaskStatsCounterOffset, kSizetSize, long_task_stats_counter)         \
-  V(kThreadLocalTopOffset, ThreadLocalTop::kSizeInBytes, thread_local_top)    \
-  V(kHandleScopeDataOffset, HandleScopeData::kSizeInBytes, handle_scope_data) \
-  V(kEmbedderDataOffset, Internals::kNumIsolateDataSlots* kSystemPointerSize, \
-    embedder_data)                                                            \
-  ISOLATE_DATA_FIELDS_POINTER_COMPRESSION(V)                                  \
-  V(kApiCallbackThunkArgumentOffset, kSystemPointerSize,                      \
-    api_callback_thunk_argument)                                              \
-  /* Full tables (arbitrary size, potentially slower access). */              \
-  V(kRootsTableOffset, RootsTable::kEntriesCount* kSystemPointerSize,         \
-    roots_table)                                                              \
-  V(kExternalReferenceTableOffset, ExternalReferenceTable::kSizeInBytes,      \
-    external_reference_table)                                                 \
-  V(kBuiltinEntryTableOffset, Builtins::kBuiltinCount* kSystemPointerSize,    \
-    builtin_entry_table)                                                      \
-  V(kBuiltinTableOffset, Builtins::kBuiltinCount* kSystemPointerSize,         \
+#define ISOLATE_DATA_FIELDS(V)                                                 \
+  /* Misc. fields. */                                                          \
+  V(kCageBaseOffset, kSystemPointerSize, cage_base)                            \
+  V(kStackGuardOffset, StackGuard::kSizeInBytes, stack_guard)                  \
+  V(kIsMarkingFlag, kUInt8Size, is_marking_flag)                               \
+  V(kIsMinorMarkingFlag, kUInt8Size, is_minor_marking_flag)                    \
+  V(kIsSharedSpaceIsolateFlag, kUInt8Size, is_shared_space_isolate_flag)       \
+  V(kUsesSharedHeapFlag, kUInt8Size, uses_shared_heap_flag)                    \
+  V(kExecutionModeOffset, kUInt8Size, execution_mode)                          \
+  V(kStackIsIterableOffset, kUInt8Size, stack_is_iterable)                     \
+  V(kErrorMessageParam, kUInt8Size, error_message_param)                       \
+  V(kTablesAlignmentPaddingOffset, 1, tables_alignment_padding)                \
+  /* Tier 0 tables (small but fast access). */                                 \
+  V(kBuiltinTier0EntryTableOffset,                                             \
+    Builtins::kBuiltinTier0Count* kSystemPointerSize,                          \
+    builtin_tier0_entry_table)                                                 \
+  V(kBuiltinsTier0TableOffset,                                                 \
+    Builtins::kBuiltinTier0Count* kSystemPointerSize, builtin_tier0_table)     \
+  /* Misc. fields. */                                                          \
+  V(kNewAllocationInfoOffset, LinearAllocationArea::kSize,                     \
+    new_allocation_info)                                                       \
+  V(kOldAllocationInfoOffset, LinearAllocationArea::kSize,                     \
+    old_allocation_info)                                                       \
+  ISOLATE_DATA_FAST_C_CALL_PADDING(V)                                          \
+  V(kFastCCallCallerFPOffset, kSystemPointerSize, fast_c_call_caller_fp)       \
+  V(kFastCCallCallerPCOffset, kSystemPointerSize, fast_c_call_caller_pc)       \
+  V(kFastApiCallTargetOffset, kSystemPointerSize, fast_api_call_target)        \
+  V(kLongTaskStatsCounterOffset, kSizetSize, long_task_stats_counter)          \
+  V(kThreadLocalTopOffset, ThreadLocalTop::kSizeInBytes, thread_local_top)     \
+  V(kHandleScopeDataOffset, HandleScopeData::kSizeInBytes, handle_scope_data)  \
+  V(kEmbedderDataOffset, Internals::kNumIsolateDataSlots* kSystemPointerSize,  \
+    embedder_data)                                                             \
+  ISOLATE_DATA_FIELDS_POINTER_COMPRESSION(V)                                   \
+  ISOLATE_DATA_FIELDS_SANDBOX(V)                                               \
+  V(kApiCallbackThunkArgumentOffset, kSystemPointerSize,                       \
+    api_callback_thunk_argument)                                               \
+  V(kContinuationPreservedEmbedderDataOffset, kSystemPointerSize,              \
+    continuation_preserved_embedder_data)                                      \
+  /* Full tables (arbitrary size, potentially slower access). */               \
+  V(kRootsTableOffset, RootsTable::kEntriesCount* kSystemPointerSize,          \
+    roots_table)                                                               \
+  V(kExternalReferenceTableOffset, ExternalReferenceTable::kSizeInBytes,       \
+    external_reference_table)                                                  \
+  V(kBuiltinEntryTableOffset, Builtins::kBuiltinCount* kSystemPointerSize,     \
+    builtin_entry_table)                                                       \
+  V(kBuiltinTableOffset, Builtins::kBuiltinCount* kSystemPointerSize,          \
     builtin_table)
 
 #ifdef V8_COMPRESS_POINTERS
@@ -73,11 +90,24 @@ class Isolate;
     external_pointer_table)                                   \
   V(kSharedExternalPointerTableOffset, kSystemPointerSize,    \
     shared_external_pointer_table)                            \
-  V(kTrustedPointerTableOffset, TrustedPointerTable::kSize,   \
-    trusted_pointer_table)
+  V(kCppHeapPointerTableOffset, ExternalPointerTable::kSize,  \
+    cpp_heap_pointer_table)
 #else
 #define ISOLATE_DATA_FIELDS_POINTER_COMPRESSION(V)
 #endif  // V8_COMPRESS_POINTERS
+
+#ifdef V8_ENABLE_SANDBOX
+#define ISOLATE_DATA_FIELDS_SANDBOX(V)                             \
+  V(kTrustedCageBaseOffset, kSystemPointerSize, trusted_cage_base) \
+  V(kTrustedPointerTableOffset, TrustedPointerTable::kSize,        \
+    trusted_pointer_table)                                         \
+  V(kExternalBufferTableOffset, ExternalBufferTable::kSize,        \
+    external_buffer_table)                                         \
+  V(kSharedExternalBufferTableOffset, kSystemPointerSize,          \
+    shared_external_buffer_table)
+#else
+#define ISOLATE_DATA_FIELDS_SANDBOX(V)
+#endif  // V8_ENABLE_SANDBOX
 
 // This class contains a collection of data accessible from both C++ runtime
 // and compiled code (including builtins, interpreter bytecode handlers and
@@ -85,8 +115,15 @@ class Isolate;
 // indirectly via the root register.
 class IsolateData final {
  public:
-  IsolateData(Isolate* isolate, Address cage_base)
-      : cage_base_(cage_base), stack_guard_(isolate) {}
+  IsolateData(Isolate* isolate, Address cage_base, Address trusted_cage_base)
+      : cage_base_(cage_base),
+        stack_guard_(isolate)
+#ifdef V8_ENABLE_SANDBOX
+        ,
+        trusted_cage_base_(trusted_cage_base)
+#endif
+  {
+  }
 
   IsolateData(const IsolateData&) = delete;
   IsolateData& operator=(const IsolateData&) = delete;
@@ -141,6 +178,11 @@ class IsolateData final {
   Address fast_c_call_caller_fp() const { return fast_c_call_caller_fp_; }
   Address fast_c_call_caller_pc() const { return fast_c_call_caller_pc_; }
   Address fast_api_call_target() const { return fast_api_call_target_; }
+
+  static constexpr int exception_offset() {
+    return thread_local_top_offset() + ThreadLocalTop::exception_offset();
+  }
+
   // The value of kPointerCageBaseRegister.
   Address cage_base() const { return cage_base_; }
   StackGuard* stack_guard() { return &stack_guard_; }
@@ -149,6 +191,12 @@ class IsolateData final {
   RootsTable& roots() { return roots_table_; }
   Address api_callback_thunk_argument() const {
     return api_callback_thunk_argument_;
+  }
+  Tagged<Object> continuation_preserved_embedder_data() const {
+    return continuation_preserved_embedder_data_;
+  }
+  void set_continuation_preserved_embedder_data(Tagged<Object> data) {
+    continuation_preserved_embedder_data_ = data;
   }
   const RootsTable& roots() const { return roots_table_; }
   ExternalReferenceTable* external_reference_table() {
@@ -171,6 +219,18 @@ class IsolateData final {
     Address start = reinterpret_cast<Address>(this);
     return (address - start) < sizeof(*this);
   }
+
+// Offset of a ThreadLocalTop member from {isolate_root()}.
+#define THREAD_LOCAL_TOP_MEMBER_OFFSET(Name)                              \
+  static uint32_t Name##_offset() {                                       \
+    return static_cast<uint32_t>(IsolateData::thread_local_top_offset() + \
+                                 OFFSET_OF(ThreadLocalTop, Name##_));     \
+  }
+
+  THREAD_LOCAL_TOP_MEMBER_OFFSET(topmost_script_having_context)
+  THREAD_LOCAL_TOP_MEMBER_OFFSET(is_on_central_stack_flag)
+  THREAD_LOCAL_TOP_MEMBER_OFFSET(context)
+#undef THREAD_LOCAL_TOP_MEMBER_OFFSET
 
  private:
   // Static layout definition.
@@ -223,6 +283,11 @@ class IsolateData final {
   // current stack. The only valid values are 0 or 1.
   uint8_t stack_is_iterable_ = 1;
 
+  // Field to pass value for error throwing builtins. Currently, it is used to
+  // pass the type of the `Dataview` operation to print out operation's name in
+  // case of an error.
+  uint8_t error_message_param_;
+
   // Ensure the following tables are kSystemPointerSize-byte aligned.
   static_assert(FIELD_SIZE(kTablesAlignmentPaddingOffset) > 0);
   uint8_t tables_alignment_padding_[FIELD_SIZE(kTablesAlignmentPaddingOffset)];
@@ -234,14 +299,20 @@ class IsolateData final {
   LinearAllocationArea new_allocation_info_;
   LinearAllocationArea old_allocation_info_;
 
+#if !V8_HOST_ARCH_64_BIT
+  // Aligns fast_c_call_XXX fields so that they stay in the same CPU cache line.
+  Address fast_c_call_alignment_padding_;
+#endif
+
   // Stores the state of the caller for MacroAssembler::CallCFunction so that
   // the sampling CPU profiler can iterate the stack during such calls. These
   // are stored on IsolateData so that they can be stored to with only one move
   // instruction in compiled code.
-  //
-  // The FP and PC that are saved right before MacroAssembler::CallCFunction.
-  Address fast_c_call_caller_fp_ = kNullAddress;
-  Address fast_c_call_caller_pc_ = kNullAddress;
+  struct {
+    // The FP and PC that are saved right before MacroAssembler::CallCFunction.
+    Address fast_c_call_caller_fp_ = kNullAddress;
+    Address fast_c_call_caller_pc_ = kNullAddress;
+  };
   // The address of the fast API callback right before it's executed from
   // generated code.
   Address fast_api_call_target_ = kNullAddress;
@@ -263,12 +334,23 @@ class IsolateData final {
 #ifdef V8_COMPRESS_POINTERS
   ExternalPointerTable external_pointer_table_;
   ExternalPointerTable* shared_external_pointer_table_;
+  ExternalPointerTable cpp_heap_pointer_table_;
+#endif  // V8_COMPRESS_POINTERS
+
+#ifdef V8_ENABLE_SANDBOX
+  const Address trusted_cage_base_;
+
   TrustedPointerTable trusted_pointer_table_;
-#endif
+  ExternalBufferTable external_buffer_table_;
+  ExternalBufferTable* shared_external_buffer_table_;
+#endif  // V8_ENABLE_SANDBOX
 
   // This is a storage for an additional argument for the Api callback thunk
   // functions, see InvokeAccessorGetterCallback and InvokeFunctionCallback.
   Address api_callback_thunk_argument_ = kNullAddress;
+
+  // This is data that should be preserved on newly created continuations.
+  Tagged<Object> continuation_preserved_embedder_data_ = Smi::zero();
 
   RootsTable roots_table_;
   ExternalReferenceTable external_reference_table_;
@@ -310,7 +392,9 @@ void IsolateData::AssertPredictableLayout() {
   static_assert(std::is_standard_layout<ExternalReferenceTable>::value);
   static_assert(std::is_standard_layout<IsolateData>::value);
   static_assert(std::is_standard_layout<LinearAllocationArea>::value);
-#define V(Offset, Size, Name) \
+#define V(Offset, Size, Name)                                          \
+  static_assert(                                                       \
+      std::is_standard_layout<decltype(IsolateData::Name##_)>::value); \
   static_assert(offsetof(IsolateData, Name##_) == Offset);
   ISOLATE_DATA_FIELDS(V)
 #undef V

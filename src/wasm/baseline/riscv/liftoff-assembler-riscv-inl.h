@@ -5,7 +5,7 @@
 #ifndef V8_WASM_BASELINE_RISCV_LIFTOFF_ASSEMBLER_RISCV_INL_H_
 #define V8_WASM_BASELINE_RISCV_LIFTOFF_ASSEMBLER_RISCV_INL_H_
 
-#include "src/heap/memory-chunk.h"
+#include "src/heap/mutable-page.h"
 #include "src/wasm/baseline/liftoff-assembler.h"
 #include "src/wasm/baseline/parallel-move-inl.h"
 #include "src/wasm/object-access.h"
@@ -15,13 +15,11 @@ namespace v8::internal::wasm {
 
 namespace liftoff {
 
-// fp-8 holds the stack marker, fp-16 is the instance parameter.
-constexpr int kInstanceOffset = 2 * kSystemPointerSize;
-constexpr int kFeedbackVectorOffset = 3 * kSystemPointerSize;
-
 inline MemOperand GetStackSlot(int offset) { return MemOperand(fp, -offset); }
 
-inline MemOperand GetInstanceOperand() { return GetStackSlot(kInstanceOffset); }
+inline MemOperand GetInstanceDataOperand() {
+  return GetStackSlot(WasmLiftoffFrameConstants::kInstanceDataOffset);
+}
 
 }  // namespace liftoff
 int LiftoffAssembler::PrepareStackFrame() {
@@ -65,16 +63,15 @@ void LiftoffAssembler::CheckTierUp(int declared_func_index, int budget_used,
                                    const FreezeCacheState& frozen) {
   UseScratchRegisterScope temps(this);
   Register budget_array = temps.Acquire();
-  Register instance = cache_state_.cached_instance;
-
-  if (instance == no_reg) {
-    instance = budget_array;  // Reuse the temp register.
-    LoadInstanceFromFrame(instance);
+  Register instance_data = cache_state_.cached_instance_data;
+  if (instance_data == no_reg) {
+    instance_data = budget_array;  // Reuse the scratch register.
+    LoadInstanceDataFromFrame(instance_data);
   }
 
   constexpr int kArrayOffset = wasm::ObjectAccess::ToTagged(
-      WasmInstanceObject::kTieringBudgetArrayOffset);
-  LoadWord(budget_array, MemOperand(instance, kArrayOffset));
+      WasmTrustedInstanceData::kTieringBudgetArrayOffset);
+  LoadWord(budget_array, MemOperand(instance_data, kArrayOffset));
 
   int budget_arr_offset = kInt32Size * declared_func_index;
   // Pick a random register from kLiftoffAssemblerGpCacheRegs.
@@ -173,7 +170,7 @@ void LiftoffAssembler::AbortCompilation() { AbortedCodeGeneration(); }
 
 // static
 constexpr int LiftoffAssembler::StaticStackFrameSize() {
-  return liftoff::kFeedbackVectorOffset;
+  return WasmLiftoffFrameConstants::kFeedbackVectorOffset;
 }
 
 int LiftoffAssembler::SlotSizeForType(ValueKind kind) {
@@ -195,8 +192,14 @@ bool LiftoffAssembler::NeedsAlignment(ValueKind kind) {
   }
 }
 
-void LiftoffAssembler::LoadInstanceFromFrame(Register dst) {
-  LoadWord(dst, liftoff::GetInstanceOperand());
+void LiftoffAssembler::LoadInstanceDataFromFrame(Register dst) {
+  LoadWord(dst, liftoff::GetInstanceDataOperand());
+}
+
+void LiftoffAssembler::LoadTrustedPointer(Register dst, Register src_addr,
+                                          int offset, IndirectPointerTag tag) {
+  MemOperand src{src_addr, offset};
+  LoadTrustedPointerField(dst, src, tag);
 }
 
 void LiftoffAssembler::LoadFromInstance(Register dst, Register instance,
@@ -225,23 +228,9 @@ void LiftoffAssembler::LoadTaggedPointerFromInstance(Register dst,
   LoadTaggedField(dst, MemOperand{instance, offset});
 }
 
-void LiftoffAssembler::LoadExternalPointer(Register dst, Register src_addr,
-                                           int offset, ExternalPointerTag tag,
-                                           Register /* scratch */) {
-  LoadFullPointer(dst, src_addr, offset);
-}
 
-#ifdef V8_ENABLE_SANDBOX
-void LiftoffAssembler::LoadExternalPointer(Register dst, Register instance,
-                                           int offset, ExternalPointerTag tag,
-                                           Register /* scratch */) {
-  LoadExternalPointerField(dst, FieldMemOperand(instance, offset), tag,
-                           kRootRegister);
-}
-#endif
-
-void LiftoffAssembler::SpillInstance(Register instance) {
-  StoreWord(instance, liftoff::GetInstanceOperand());
+void LiftoffAssembler::SpillInstanceData(Register instance) {
+  StoreWord(instance, liftoff::GetInstanceDataOperand());
 }
 
 void LiftoffAssembler::ResetOSRTarget() {}
@@ -457,7 +446,9 @@ void LiftoffAssembler::emit_i8x16_relaxed_swizzle(LiftoffRegister dst,
 void LiftoffAssembler::emit_s128_relaxed_laneselect(LiftoffRegister dst,
                                                     LiftoffRegister src1,
                                                     LiftoffRegister src2,
-                                                    LiftoffRegister mask) {
+                                                    LiftoffRegister mask,
+                                                    int lane_width) {
+  // RISC-V uses bytewise selection for all lane widths.
   emit_s128_select(dst, src1, src2, mask);
 }
 
@@ -2201,6 +2192,11 @@ void LiftoffAssembler::emit_f64x2_qfms(LiftoffRegister dst,
   VU.set(kScratchReg, E64, m1);
   vfnmsub_vv(src1.fp().toV(), src2.fp().toV(), src3.fp().toV());
   vmv_vv(dst.fp().toV(), src1.fp().toV());
+}
+
+void LiftoffAssembler::set_trap_on_oob_mem64(Register index, uint64_t oob_size,
+                                             uint64_t oob_index) {
+  UNREACHABLE();
 }
 
 void LiftoffAssembler::StackCheck(Label* ool_code) {

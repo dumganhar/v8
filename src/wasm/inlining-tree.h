@@ -13,6 +13,7 @@
 #include <queue>
 #include <vector>
 
+#include "src/utils/utils.h"
 #include "src/wasm/compilation-environment.h"
 #include "src/wasm/wasm-module.h"
 #include "src/zone/zone-containers.h"
@@ -21,21 +22,34 @@ namespace v8::internal::wasm {
 
 // Represents a tree of inlining decisions.
 // A node in the tree represents a function frame, and `function_calls_`
-// represent all function calls in this frame. If an element of
-// `function_calls_` has its `is_inlined_` field set, it should be inlined into
-// the caller. Note that since each element corresponds to a single call, we can
-// only represent one speculative call per call_ref.
+// represent all direct/call_ref/call_indirect function calls in this frame.
+// Each element of `function_calls_` is itself a `Vector` of `InliningTree`s,
+// corresponding to the different speculative candidates for a
+// call_ref/call_indirect; for a direct call, it has a single element.
+// If a transitive element of `function_calls_` has its `is_inlined_` field set,
+// it should be inlined into the caller.
+// We have this additional datastructure for Turboshaft, since nodes in the
+// Turboshaft IR aren't as easily expanded incrementally, so all the inlining
+// decisions are already done before graph building on this abstracted form of
+// the code.
 class InliningTree : public ZoneObject {
  public:
   using CasesPerCallSite = base::Vector<InliningTree*>;
 
   InliningTree(Zone* zone, const WasmModule* module, uint32_t function_index,
-               int call_count, int wire_byte_size)
+               int call_count, int wire_byte_size,
+               uint32_t topmost_caller_index, uint32_t caller_index,
+               int feedback_slot, int the_case, uint32_t depth)
       : zone_(zone),
         module_(module),
         function_index_(function_index),
         call_count_(call_count),
-        wire_byte_size_(wire_byte_size) {}
+        wire_byte_size_(wire_byte_size),
+        depth_(depth),
+        topmost_caller_index_(topmost_caller_index),
+        caller_index_(caller_index),
+        feedback_slot_(feedback_slot),
+        case_(the_case) {}
 
   int64_t score() const {
     // Note that the zero-point is arbitrary. Functions with negative score
@@ -76,6 +90,21 @@ class InliningTree : public ZoneObject {
   bool feedback_found_ = false;
 
   base::Vector<CasesPerCallSite> function_calls_{};
+
+  // Limit the nesting depth of inlining. Inlining decisions are based on call
+  // counts. A small function with high call counts that is called recursively
+  // would be inlined until all budget is used.
+  // TODO(14108): This still might not lead to ideal results. Other options
+  // could be explored like penalizing nested inlinees.
+  static constexpr uint32_t kMaxInliningNestingDepth = 7;
+  uint32_t depth_;
+
+  // For tracing.
+  // TODO(14108): Do not store all of these in every tree node.
+  uint32_t topmost_caller_index_;
+  uint32_t caller_index_;
+  int feedback_slot_;
+  int case_;
 };
 
 void InliningTree::Inline() {
@@ -100,7 +129,9 @@ void InliningTree::Inline() {
         // into the nested InliningTree, and weighting scores there accordingly.
         function_calls_[i][the_case] = zone_->New<InliningTree>(
             zone_, module_, callee_index, type_feedback[i].call_count(the_case),
-            module_->functions[callee_index].code.length());
+            module_->functions[callee_index].code.length(),
+            topmost_caller_index_, function_index_, static_cast<int>(i),
+            the_case, depth_ + 1);
       }
     }
   }
@@ -108,11 +139,15 @@ void InliningTree::Inline() {
 
 struct TreeNodeOrdering {
   bool operator()(InliningTree* t1, InliningTree* t2) {
-    return t1->score() < t2->score();
+    // Prefer callees with a higher score, and if the scores are equal,
+    // those with a lower function index (to make the queue ordering strict).
+    return std::make_pair(t1->score(), t2->function_index()) <
+           std::make_pair(t2->score(), t1->function_index());
   }
 };
 
 void InliningTree::FullyExpand(const size_t initial_graph_size) {
+  DCHECK_EQ(this->function_index_, this->topmost_caller_index_);
   size_t inlined_wire_byte_count = 0;
   std::priority_queue<InliningTree*, std::vector<InliningTree*>,
                       TreeNodeOrdering>
@@ -123,24 +158,79 @@ void InliningTree::FullyExpand(const size_t initial_graph_size) {
       &module_->type_feedback.mutex);
   while (!queue.empty() && inlined_count < kMaxInlinedCount) {
     InliningTree* top = queue.top();
+    if (v8_flags.trace_wasm_inlining) {
+      if (top != this) {
+        PrintF(
+            "[function %d: in function %d, considering call #%d, case #%d, to "
+            "function %d... ",
+            top->topmost_caller_index_, top->caller_index_, top->feedback_slot_,
+            static_cast<int>(top->case_),
+            static_cast<int>(top->function_index_));
+      } else {
+        PrintF("[function %d: expanding topmost caller... ",
+               top->topmost_caller_index_);
+      }
+    }
     queue.pop();
+    if (top->function_index_ < module_->num_imported_functions) {
+      if (v8_flags.trace_wasm_inlining && top != this) {
+        PrintF("imported function]\n");
+      }
+      continue;
+    }
+
+    int min_count_for_inlining = v8_flags.wasm_inlining_ignore_call_counts
+                                     ? 0
+                                     : top->wire_byte_size_ / 2;
+    if (top != this && top->wire_byte_size_ >= 12 &&
+        (top->call_count_ < min_count_for_inlining)) {
+      if (v8_flags.trace_wasm_inlining) {
+        PrintF("not called often enough]\n");
+      }
+      continue;
+    }
+
     if (!top->SmallEnoughToInline(initial_graph_size,
                                   inlined_wire_byte_count)) {
+      if (v8_flags.trace_wasm_inlining && top != this) {
+        PrintF("not enough inlining budget]\n");
+      }
       continue;
+    }
+    if (v8_flags.trace_wasm_inlining && top != this) {
+      PrintF("decided to inline! ");
     }
     top->Inline();
     inlined_count++;
     inlined_wire_byte_count += top->wire_byte_size_;
     if (top->feedback_found()) {
-      for (CasesPerCallSite cases : top->function_calls_) {
-        for (InliningTree* call : cases) {
-          if (call != nullptr) queue.push(call);
+      if (top->depth_ < kMaxInliningNestingDepth) {
+        if (v8_flags.trace_wasm_inlining) PrintF("queueing callees]\n");
+        for (CasesPerCallSite cases : top->function_calls_) {
+          for (InliningTree* call : cases) {
+            if (call != nullptr) {
+              queue.push(call);
+            }
+          }
         }
+      } else if (v8_flags.trace_wasm_inlining) {
+        PrintF("max inlining depth reached]\n");
       }
+    } else {
+      if (v8_flags.trace_wasm_inlining) PrintF("feedback not found]\n");
     }
+  }
+  if (v8_flags.trace_wasm_inlining && !queue.empty()) {
+    PrintF("[function %d: too many inlining candidates, stopping...]\n",
+           this->topmost_caller_index_);
   }
 }
 
+// Returns true if there is still enough budget left to inline the current
+// candidate given the initial graph size and the already inlined wire bytes.
+// TODO(mliedtke): The upper_budget calculation only depends on the module, not
+// on the callsite / callee. Consider moving this to a more central place and
+// propagating the information along the inlining tree.
 bool InliningTree::SmallEnoughToInline(size_t initial_graph_size,
                                        size_t inlined_wire_byte_count) {
   if (wire_byte_size_ > static_cast<int>(v8_flags.wasm_inlining_max_size)) {
@@ -154,13 +244,44 @@ bool InliningTree::SmallEnoughToInline(size_t initial_graph_size,
       inlined_wire_byte_count = 0;
     }
   }
-  size_t budget =
+  // For small-ish functions, the inlining budget is defined by the larger of
+  // 1) the wasm_inlining_budget and
+  // 2) the wasm_inlining_factor * initial_graph_size.
+  // Inlining a little bit should always be fine even for tiny functions (1),
+  // otherwise (2) makes sure that the budget scales in relation with the
+  // original function size to limit the compile time regressions caused by
+  // inlining.
+  size_t budget_small_function =
       std::max<size_t>(v8_flags.wasm_inlining_min_budget,
                        v8_flags.wasm_inlining_factor * initial_graph_size);
-  size_t full_budget =
-      std::max<size_t>(v8_flags.wasm_inlining_budget, initial_graph_size * 1.1);
-  return inlined_wire_byte_count + static_cast<size_t>(wire_byte_size_) <
-         std::min<size_t>(budget, full_budget);
+  // For large-ish functions, the inlining budget is mainly defined by the
+  // wasm_inlining_budget.
+  size_t upper_budget = v8_flags.wasm_inlining_budget;
+  double small_function_percentage =
+      module_->num_small_functions * 100.0 / module_->num_declared_functions;
+  if (small_function_percentage < 50) {
+    // If there are few small functions, it indicates that the toolchain already
+    // performed significant inlining. Reduce the budget significantly as
+    // inlining has a diminishing ROI.
+
+    // We also apply a linear progression of the budget in the interval [25, 50]
+    // for the small_function_percentage. This progression is just added to
+    // prevent performance cliffs (e.g. when just performing a sharp cutoff at
+    // the 50% point) and not based on actual data.
+    double smallishness = std::max(25.0, small_function_percentage) - 25.0;
+    size_t lower_budget = upper_budget / 10;
+    double step = (upper_budget - lower_budget) / 25.0;
+    upper_budget = lower_budget + smallishness * step;
+  }
+  // Independent of the wasm_inlining_budget, for large functions we should
+  // still allow some inlining which is why 10% of the graph size is the minimal
+  // budget even for large functions larger than the upper_budget.
+  size_t budget_large_function =
+      std::max<size_t>(upper_budget, initial_graph_size * 1.1);
+  size_t total_size = initial_graph_size + inlined_wire_byte_count +
+                      static_cast<size_t>(wire_byte_size_);
+  return total_size <
+         std::min<size_t>(budget_small_function, budget_large_function);
 }
 
 }  // namespace v8::internal::wasm

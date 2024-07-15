@@ -26,6 +26,7 @@ class RegExpMatchInfoShape final : public AllStatic {
  public:
   static constexpr int kElementSize = kTaggedSize;
   using ElementT = Smi;
+  using CompressionScheme = SmiCompressionScheme;
   static constexpr RootIndex kMapRootIndex = RootIndex::kRegExpMatchInfoMap;
   static constexpr bool kLengthEqualsCapacity = true;
 
@@ -81,9 +82,17 @@ class RegExpMatchInfo
   inline int capture(int index) const;
   inline void set_capture(int index, int value);
 
+  static constexpr int capture_start_index(int capture_index) {
+    return capture_index * 2;
+  }
+  static constexpr int capture_end_index(int capture_index) {
+    return capture_index * 2 + 1;
+  }
+
   static constexpr int kMinCapacity = 2;
 
   // Redeclare these here since they are used from generated code.
+  static constexpr int kLengthOffset = Shape::kCapacityOffset;
   static constexpr int kLastInputOffset = Shape::kLastInputOffset;
   static constexpr int kLastSubjectOffset = Shape::kLastSubjectOffset;
   static constexpr int kNumberOfCaptureRegistersOffset =

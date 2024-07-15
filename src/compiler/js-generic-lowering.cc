@@ -472,12 +472,20 @@ void JSGenericLowering::LowerJSSetNamedProperty(Node* node) {
     // the paths are controlled by feedback.
     // TODO(v8:12548): refactor SetNamedIC as a subclass of StoreIC, which can
     // be called here.
-    ReplaceWithBuiltinCall(node, Builtin::kStoreICTrampoline);
+    ReplaceWithBuiltinCall(
+        node, ShouldUseMegamorphicAccessBuiltin(p.feedback(), {},
+                                                AccessMode::kStore, broker())
+                  ? Builtin::kStoreICTrampoline_Megamorphic
+                  : Builtin::kStoreICTrampoline);
   } else {
     node->InsertInput(zone(), 1, jsgraph()->ConstantNoHole(p.name(), broker()));
     node->InsertInput(zone(), 3,
                       jsgraph()->TaggedIndexConstant(p.feedback().index()));
-    ReplaceWithBuiltinCall(node, Builtin::kStoreIC);
+    ReplaceWithBuiltinCall(
+        node, ShouldUseMegamorphicAccessBuiltin(p.feedback(), {},
+                                                AccessMode::kStore, broker())
+                  ? Builtin::kStoreIC_Megamorphic
+                  : Builtin::kStoreIC);
   }
 }
 
@@ -592,6 +600,9 @@ void JSGenericLowering::LowerJSStoreContext(Node* node) {
   UNREACHABLE();  // Eliminated in typed lowering.
 }
 
+void JSGenericLowering::LowerJSStoreScriptContext(Node* node) {
+  UNREACHABLE();  // Eliminated in context specialization.
+}
 
 void JSGenericLowering::LowerJSCreate(Node* node) {
   ReplaceWithBuiltinCall(node, Builtin::kFastNewObject);
@@ -751,7 +762,7 @@ void JSGenericLowering::LowerJSCreateLiteralArray(Node* node) {
       p.length() < ConstructorBuiltins::kMaximumClonedShallowArrayElements) {
     ReplaceWithBuiltinCall(node, Builtin::kCreateShallowArrayLiteral);
   } else {
-    ReplaceWithRuntimeCall(node, Runtime::kCreateArrayLiteral);
+    ReplaceWithBuiltinCall(node, Builtin::kCreateArrayFromSlowBoilerplate);
   }
 }
 
@@ -805,7 +816,7 @@ void JSGenericLowering::LowerJSCreateLiteralObject(Node* node) {
           ConstructorBuiltins::kMaximumClonedShallowObjectProperties) {
     ReplaceWithBuiltinCall(node, Builtin::kCreateShallowObjectLiteral);
   } else {
-    ReplaceWithRuntimeCall(node, Runtime::kCreateObjectLiteral);
+    ReplaceWithBuiltinCall(node, Builtin::kCreateObjectFromSlowBoilerplate);
   }
 }
 
@@ -875,6 +886,33 @@ void JSGenericLowering::LowerJSConstructForwardVarargs(Node* node) {
   node->InsertInput(zone(), 3, stub_arity);
   node->InsertInput(zone(), 4, start_index);
   node->InsertInput(zone(), 5, receiver);
+  NodeProperties::ChangeOp(node, common()->Call(call_descriptor));
+}
+
+void JSGenericLowering::LowerJSConstructForwardAllArgs(Node* node) {
+  // Inlined JSConstructForwardAllArgs are reduced earlier in the pipeline in
+  // JSCallReducer.
+  DCHECK(FrameState{NodeProperties::GetFrameStateInput(node)}
+             .outer_frame_state()
+             ->opcode() != IrOpcode::kFrameState);
+
+  JSConstructForwardAllArgsNode n(node);
+
+  // Call a builtin for forwarding the arguments of non-inlined (i.e. outermost)
+  // frames.
+  Callable callable =
+      Builtins::CallableFor(isolate(), Builtin::kConstructForwardAllArgs);
+  DCHECK_EQ(callable.descriptor().GetStackParameterCount(), 0);
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      zone(), callable.descriptor(), 0, CallDescriptor::kNeedsFrameState);
+
+  Node* stub_code = jsgraph()->HeapConstantNoHole(callable.code());
+
+  // Shuffling inputs.
+  // Before: {target, new target, feedback vector}
+  node->RemoveInput(n.FeedbackVectorIndex());
+  node->InsertInput(zone(), 0, stub_code);
+  // After: {code, target, new target}
   NodeProperties::ChangeOp(node, common()->Call(call_descriptor));
 }
 

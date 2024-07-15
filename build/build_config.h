@@ -16,13 +16,15 @@
 //
 //  Operating System:
 //    IS_AIX / IS_ANDROID / IS_ASMJS / IS_CHROMEOS / IS_FREEBSD / IS_FUCHSIA /
-//    IS_IOS / IS_IOS_MACCATALYST / IS_LINUX / IS_MAC / IS_NACL / IS_NETBSD /
-//    IS_OPENBSD / IS_QNX / IS_SOLARIS / IS_WIN
+//    IS_IOS / IS_IOS_MACCATALYST / IS_IOS_VISION / IS_IOS_WATCH / IS_LINUX /
+//    IS_MAC / IS_NACL / IS_NETBSD / IS_OPENBSD / IS_QNX / IS_SOLARIS / IS_WIN
 //  Operating System family:
-//    IS_APPLE: IOS or MAC or IOS_MACCATALYST
+//    IS_APPLE: MAC or IOS or IOS_MACCATALYST or IOS_VISION or IOS_WATCH
+//    IS_IOS: IOS or IOS_MACCATALYST or IOS_VISION or IOS_WATCH
 //    IS_BSD: FREEBSD or NETBSD or OPENBSD
-//    IS_POSIX: AIX or ANDROID or ASMJS or CHROMEOS or FREEBSD or IOS or LINUX
-//              or MAC or NACL or NETBSD or OPENBSD or QNX or SOLARIS
+//    IS_POSIX: AIX or ANDROID or ASMJS or CHROMEOS or FREEBSD or IOS
+//              or IOS_MACCATALYST or IOS_VISION or IOS_WATCH or LINUX or MAC
+//              or NACL or NETBSD or OPENBSD or QNX or SOLARIS
 
 // This file also adds defines specific to the platform, architecture etc.
 //
@@ -72,6 +74,12 @@
 #if defined(TARGET_OS_MACCATALYST) && TARGET_OS_MACCATALYST
 #define OS_IOS_MACCATALYST
 #endif  // defined(TARGET_OS_MACCATALYST) && TARGET_OS_MACCATALYST
+#if defined(TARGET_OS_VISION) && TARGET_OS_VISION
+#define OS_IOS_VISION 1
+#endif  // defined(TARGET_OS_VISION) && TARGET_OS_VISION
+#if defined(TARGET_OS_WATCH) && TARGET_OS_WATCH
+#define OS_IOS_WATCH 1
+#endif  // defined(TARGET_OS_WATCH) && TARGET_OS_WATCH
 #else
 #define OS_MAC 1
 #endif  // defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
@@ -192,6 +200,18 @@
 #define BUILDFLAG_INTERNAL_IS_IOS_MACCATALYST() (1)
 #else
 #define BUILDFLAG_INTERNAL_IS_IOS_MACCATALYST() (0)
+#endif
+
+#if defined(OS_IOS_VISION)
+#define BUILDFLAG_INTERNAL_IS_IOS_VISION() (1)
+#else
+#define BUILDFLAG_INTERNAL_IS_IOS_VISION() (0)
+#endif
+
+#if defined(OS_IOS_WATCH)
+#define BUILDFLAG_INTERNAL_IS_IOS_WATCH() (1)
+#else
+#define BUILDFLAG_INTERNAL_IS_IOS_WATCH() (0)
 #endif
 
 #if defined(OS_LINUX)
@@ -356,19 +376,19 @@
 
 // Type detection for wchar_t.
 #if defined(OS_WIN)
-#define WCHAR_T_IS_UTF16
+#define WCHAR_T_IS_16_BIT
 #elif defined(OS_FUCHSIA)
-#define WCHAR_T_IS_UTF32
+#define WCHAR_T_IS_32_BIT
 #elif defined(OS_POSIX) && defined(COMPILER_GCC) && defined(__WCHAR_MAX__) && \
     (__WCHAR_MAX__ == 0x7fffffff || __WCHAR_MAX__ == 0xffffffff)
-#define WCHAR_T_IS_UTF32
+#define WCHAR_T_IS_32_BIT
 #elif defined(OS_POSIX) && defined(COMPILER_GCC) && defined(__WCHAR_MAX__) && \
     (__WCHAR_MAX__ == 0x7fff || __WCHAR_MAX__ == 0xffff)
 // On Posix, we'll detect short wchar_t, but projects aren't guaranteed to
 // compile in this mode (in particular, Chrome doesn't). This is intended for
 // other projects using base who manage their own dependencies and make sure
 // short wchar works for them.
-#define WCHAR_T_IS_UTF16
+#define WCHAR_T_IS_16_BIT
 #else
 #error Please add support for your compiler in build/build_config.h
 #endif

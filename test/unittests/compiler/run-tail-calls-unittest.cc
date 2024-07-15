@@ -4,7 +4,7 @@
 
 #include "src/base/utils/random-number-generator.h"
 #include "src/codegen/assembler-inl.h"
-#include "src/codegen/code-stub-assembler.h"
+#include "src/codegen/code-stub-assembler-inl.h"
 #include "src/codegen/macro-assembler.h"
 #include "src/objects/code-inl.h"
 #include "test/common/code-assembler-tester.h"
@@ -95,6 +95,7 @@ CallDescriptor* CreateDescriptorForStackArguments(Zone* zone, int param_slots) {
 
   return zone->New<CallDescriptor>(
       CallDescriptor::kCallCodeObject,  // kind
+      kDefaultCodeEntrypointTag,        // tag
       MachineType::AnyTagged(),         // target MachineType
       LinkageLocation::ForAnyRegister(
           MachineType::AnyTagged()),  // target location

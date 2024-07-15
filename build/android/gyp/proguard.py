@@ -46,6 +46,8 @@ _IGNORE_WARNINGS = (
         r'com.no.real.class.needed.receiver',
         # Ignore Unused Rule Warnings for annotations.
         r'@',
+        # Ignore Unused Rule Warnings for * implements Foo (androidx has these).
+        r'class \*+ implements',
         # Ignore rules that opt out of this check.
         r'!cr_allowunused',
         # https://crbug.com/1441225
@@ -55,8 +57,18 @@ _IGNORE_WARNINGS = (
     ]) + ')',
     # TODO(agrieve): Remove once we update to U SDK.
     r'OnBackAnimationCallback',
+    # This class was added only in the U PrivacySandbox SDK: crbug.com/333713111
+    r'Missing class android.adservices.common.AdServicesOutcomeReceiver',
     # We enforce that this class is removed via -checkdiscard.
     r'FastServiceLoader\.class:.*Could not inline ServiceLoader\.load',
+
+    # Ignore MethodParameter attribute count isn't matching in espresso.
+    # This is a banner warning and each individual file affected will have
+    # its own warning.
+    r'Warning: Invalid parameter counts in MethodParameter attributes',
+    r'Warning in obj/third_party/androidx/androidx_test_espresso_espresso_core_java',  # pylint: disable=line-too-long
+    r'Warning in obj/third_party/androidx/androidx_test_espresso_espresso_web_java',  # pylint: disable=line-too-long
+
     # We are following up in b/290389974
     r'AppSearchDocumentClassMap\.class:.*Could not inline ServiceLoader\.load',
 )
@@ -76,6 +88,9 @@ def _ParseOptions():
   parser.add_argument('--r8-path',
                       required=True,
                       help='Path to the R8.jar to use.')
+  parser.add_argument('--custom-r8-path',
+                      required=True,
+                      help='Path to our custom R8 wrapepr to use.')
   parser.add_argument('--input-paths',
                       action='append',
                       required=True,
@@ -319,8 +334,8 @@ def _OptimizeWithR8(options, config_paths, libraries, dynamic_config_data):
       cmd += ['-Dcom.android.tools.r8.reportUnknownApiReferences=1']
     cmd += [
         '-cp',
-        options.r8_path,
-        'com.android.tools.r8.R8',
+        '{}:{}'.format(options.r8_path, options.custom_r8_path),
+        'org.chromium.build.CustomR8',
         '--no-data-resources',
         '--map-id-template',
         f'{options.source_file} ({options.package_name})',
@@ -331,6 +346,9 @@ def _OptimizeWithR8(options, config_paths, libraries, dynamic_config_data):
         '--pg-map-output',
         tmp_mapping_path,
     ]
+
+    if options.uses_split:
+      cmd += ['--isolated-splits']
 
     if options.disable_checks:
       cmd += ['--map-diagnostics:CheckDiscardDiagnostic', 'error', 'none']
@@ -467,7 +485,8 @@ def _CheckForMissingSymbols(r8_path, dex_files, classpath, warnings_as_errors,
 
         # Found in: com/facebook/fbui/textlayoutbuilder/StaticLayoutHelper
         'android.text.StaticLayout.<init>',
-        # TODO(crbug/1426964): Remove once chrome builds with Android U SDK.
+        # TODO(crbug.com/40261573): Remove once chrome builds with Android U
+        # SDK.
         ' android.',
 
         # Explicictly guarded by try (NoClassDefFoundError) in Flogger's

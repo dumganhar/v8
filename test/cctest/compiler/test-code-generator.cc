@@ -6,7 +6,7 @@
 
 #include "src/base/utils/random-number-generator.h"
 #include "src/codegen/assembler-inl.h"
-#include "src/codegen/code-stub-assembler.h"
+#include "src/codegen/code-stub-assembler-inl.h"
 #include "src/codegen/machine-type.h"
 #include "src/codegen/macro-assembler-inl.h"
 #include "src/codegen/optimized-compilation-info.h"
@@ -149,6 +149,7 @@ Handle<Code> BuildSetupFunction(Isolate* isolate,
       case MachineRepresentation::kFloat64:
         element = __ LoadHeapNumberValue(__ CAST(element));
         break;
+#if V8_ENABLE_WEBASSEMBLY
       case MachineRepresentation::kSimd128: {
         Node* vector = tester.raw_assembler_for_testing()->AddNode(
             tester.raw_assembler_for_testing()->machine()->I32x4Splat(),
@@ -164,6 +165,7 @@ Handle<Code> BuildSetupFunction(Isolate* isolate,
         element = vector;
         break;
       }
+#endif  // V8_ENABLE_WEBASSEMBLY
       default:
         UNREACHABLE();
     }
@@ -237,13 +239,13 @@ Handle<Code> BuildTeardownFunction(
       case MachineRepresentation::kFloat32:
         param =
             tester.raw_assembler_for_testing()->ChangeFloat32ToFloat64(param);
-        V8_FALLTHROUGH;
+        [[fallthrough]];
       case MachineRepresentation::kFloat64: {
-        __ StoreObjectFieldNoWriteBarrier(
+        __ StoreHeapNumberValue(
             __ Cast(__ LoadFixedArrayElement(result_array, i)),
-            __ IntPtrConstant(HeapNumber::kValueOffset),
             __ UncheckedCast<Float64T>(param));
       } break;
+#if V8_ENABLE_WEBASSEMBLY
       case MachineRepresentation::kSimd128: {
         TNode<FixedArray> vector =
             __ Cast(__ LoadFixedArrayElement(result_array, i));
@@ -259,6 +261,7 @@ Handle<Code> BuildTeardownFunction(
         }
         break;
       }
+#endif  // V8_ENABLE_WEBASSEMBLY
       default:
         UNREACHABLE();
     }
@@ -615,6 +618,7 @@ class TestEnvironment : public HandleAndZoneScope {
     const int kTotalStackParameterCount = stack_slot_count_ + 1;
     return main_zone()->New<CallDescriptor>(
         CallDescriptor::kCallCodeObject,  // kind
+        kDefaultCodeEntrypointTag,        // tag
         MachineType::AnyTagged(),         // target MachineType
         LinkageLocation::ForAnyRegister(
             MachineType::AnyTagged()),  // target location
@@ -1112,7 +1116,8 @@ class CodeGeneratorTester {
               CodeKind::FOR_TESTING),
         linkage_(environment->test_descriptor()),
         frame_(environment->test_descriptor()->CalculateFixedFrameSize(
-            CodeKind::FOR_TESTING)) {
+                   CodeKind::FOR_TESTING),
+               environment->main_zone()) {
     // Pick half of the stack parameters at random and move them into spill
     // slots, separated by `extra_stack_space` bytes.
     // When testing a move with stack slots using CheckAssembleMove or
@@ -1297,6 +1302,9 @@ class CodeGeneratorTester {
         AllocatedOperand(LocationOperand::REGISTER,
                          MachineRepresentation::kTagged,
                          kReturnRegister0.code()),
+        ImmediateOperand(
+            ImmediateOperand::INLINE_INT32,
+            (kDefaultCodeEntrypointTag >> kCodeEntrypointTagShift)),
         ImmediateOperand(ImmediateOperand::INLINE_INT32, optional_padding_slot),
         ImmediateOperand(ImmediateOperand::INLINE_INT32,
                          first_unused_stack_slot)};
@@ -1617,7 +1625,8 @@ std::shared_ptr<wasm::NativeModule> AllocateNativeModule(Isolate* isolate,
   // WasmCallDescriptor assumes that code is on the native heap and not
   // within a code object.
   auto native_module = wasm::GetWasmEngine()->NewNativeModule(
-      isolate, wasm::WasmFeatures::All(), std::move(module), code_size);
+      isolate, wasm::WasmFeatures::All(), wasm::CompileTimeImports{},
+      std::move(module), code_size);
   native_module->SetWireBytes({});
   return native_module;
 }

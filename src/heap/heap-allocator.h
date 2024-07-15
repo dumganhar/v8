@@ -16,8 +16,8 @@ namespace internal {
 
 class AllocationObserver;
 class CodeLargeObjectSpace;
-class ConcurrentAllocator;
 class Heap;
+class LocalHeap;
 class LinearAllocationArea;
 class MainAllocator;
 class NewSpace;
@@ -25,16 +25,19 @@ class NewLargeObjectSpace;
 class OldLargeObjectSpace;
 class PagedSpace;
 class ReadOnlySpace;
+class SharedTrustedLargeObjectSpace;
 class Space;
 
 // Allocator for the main thread. All exposed functions internally call the
 // right bottleneck.
 class V8_EXPORT_PRIVATE HeapAllocator final {
  public:
-  explicit HeapAllocator(Heap*);
+  explicit HeapAllocator(LocalHeap*);
 
-  void Setup(LinearAllocationArea& new_allocation_info,
-             LinearAllocationArea& old_allocation_info);
+  // Set up all LABs for this LocalHeap.
+  void Setup(LinearAllocationArea* new_allocation_info = nullptr,
+             LinearAllocationArea* old_allocation_info = nullptr);
+
   void SetReadOnlySpace(ReadOnlySpace*);
 
   // Supports all `AllocationType` types.
@@ -79,6 +82,8 @@ class V8_EXPORT_PRIVATE HeapAllocator final {
 
   static void SetAllocationGcInterval(int allocation_gc_interval);
   static void InitializeOncePerProcess();
+
+  int get_allocation_timeout_for_testing() const { return allocation_timeout_; }
 #endif  // V8_ENABLE_ALLOCATION_TIMEOUT
 
   // Give up all LABs. Used for e.g. full GCs.
@@ -119,8 +124,8 @@ class V8_EXPORT_PRIVATE HeapAllocator final {
   MainAllocator* code_space_allocator() {
     return &code_space_allocator_.value();
   }
-  ConcurrentAllocator* shared_space_allocator() {
-    return shared_space_allocator_.get();
+  MainAllocator* shared_space_allocator() {
+    return &shared_space_allocator_.value();
   }
 
  private:
@@ -130,6 +135,7 @@ class V8_EXPORT_PRIVATE HeapAllocator final {
   V8_INLINE NewLargeObjectSpace* new_lo_space() const;
   V8_INLINE OldLargeObjectSpace* lo_space() const;
   V8_INLINE OldLargeObjectSpace* shared_lo_space() const;
+  V8_INLINE OldLargeObjectSpace* shared_trusted_lo_space() const;
   V8_INLINE PagedSpace* old_space() const;
   V8_INLINE ReadOnlySpace* read_only_space() const;
   V8_INLINE PagedSpace* trusted_space() const;
@@ -151,6 +157,7 @@ class V8_EXPORT_PRIVATE HeapAllocator final {
   void IncrementObjectCounters();
 #endif  // DEBUG
 
+  LocalHeap* local_heap_;
   Heap* const heap_;
   Space* spaces_[LAST_SPACE + 1];
   ReadOnlySpace* read_only_space_;
@@ -161,8 +168,10 @@ class V8_EXPORT_PRIVATE HeapAllocator final {
   base::Optional<MainAllocator> code_space_allocator_;
 
   // Allocators for the shared spaces.
-  std::unique_ptr<ConcurrentAllocator> shared_space_allocator_;
+  base::Optional<MainAllocator> shared_space_allocator_;
+  base::Optional<MainAllocator> shared_trusted_space_allocator_;
   OldLargeObjectSpace* shared_lo_space_;
+  SharedTrustedLargeObjectSpace* shared_trusted_lo_space_;
 
 #ifdef V8_ENABLE_ALLOCATION_TIMEOUT
   // Specifies how many allocations should be performed until returning

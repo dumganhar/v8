@@ -8,11 +8,11 @@
 
 namespace v8::internal::compiler::turboshaft {
 
-UseMap::UseMap(const Graph& graph, Zone* zone)
+UseMap::UseMap(const Graph& graph, Zone* zone, FunctionType filter)
     : table_(graph.op_id_count(), zone, &graph),
       uses_(zone),
       saturated_uses_(zone) {
-  std::vector<std::pair<OpIndex, OpIndex>> delayed_phi_uses;
+  ZoneVector<std::pair<OpIndex, OpIndex>> delayed_phi_uses(zone);
 
   // We preallocate for 2 uses per operation.
   uses_.reserve(graph.op_id_count() * 2);
@@ -40,6 +40,8 @@ UseMap::UseMap(const Graph& graph, Zone* zone)
         offset += op.saturated_use_count.Get();
         uses_.resize(offset);
       }
+
+      if (filter(op, zone)) continue;
 
       if (block.IsLoop()) {
         if (op.Is<PhiOp>()) {

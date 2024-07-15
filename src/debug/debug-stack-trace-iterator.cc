@@ -160,9 +160,8 @@ debug::Location DebugStackTraceIterator::GetFunctionLocation() const {
 #if V8_ENABLE_WEBASSEMBLY
   if (iterator_.frame()->is_wasm()) {
     auto frame = WasmFrame::cast(iterator_.frame());
-    Handle<WasmInstanceObject> instance(frame->wasm_instance(), isolate_);
-    auto offset =
-        instance->module()->functions[frame->function_index()].code.offset();
+    const wasm::WasmModule* module = frame->trusted_instance_data()->module();
+    auto offset = module->functions[frame->function_index()].code.offset();
     return v8::debug::Location(0, offset);
   }
 #endif
@@ -248,7 +247,6 @@ v8::MaybeLocal<v8::Value> DebugStackTraceIterator::Evaluate(
                             inlined_frame_index_, Utils::OpenHandle(*source),
                             throw_on_side_effect)
            .ToHandle(&value)) {
-    isolate_->OptionalRescheduleException(false);
     return v8::MaybeLocal<v8::Value>();
   }
   return Utils::ToLocal(value);

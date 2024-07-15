@@ -19,7 +19,6 @@
 #include "src/handles/handles.h"
 #include "src/handles/local-handles-inl.h"
 #include "src/handles/persistent-handles.h"
-#include "src/heap/concurrent-allocator-inl.h"
 #include "src/heap/heap.h"
 #include "src/heap/local-heap-inl.h"
 #include "src/heap/marking-state-inl.h"
@@ -558,7 +557,8 @@ UNINITIALIZED_TEST(ConcurrentRecordRelocSlot) {
       heap::AbandonCurrentlyFreeMemory(heap->old_space());
       Handle<HeapNumber> value_handle(
           i_isolate->factory()->NewHeapNumber<AllocationType::kOld>(1.1));
-      heap::ForceEvacuationCandidate(Page::FromHeapObject(*value_handle));
+      heap::ForceEvacuationCandidate(
+          PageMetadata::FromHeapObject(*value_handle));
       code = *code_handle;
       value = *value_handle;
     }

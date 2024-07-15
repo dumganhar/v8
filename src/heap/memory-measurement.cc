@@ -153,7 +153,7 @@ void MeasureMemoryDelegate::MeasurementComplete(Result result) {
   DCHECK_EQ(result.contexts.size(), result.sizes_in_bytes.size());
   for (size_t i = 0; i < result.contexts.size(); ++i) {
     total_size += result.sizes_in_bytes[i];
-    if (*Utils::OpenHandle(*result.contexts[i]) == *context_) {
+    if (*Utils::OpenDirectHandle(*result.contexts[i]) == *context_) {
       current_size = result.sizes_in_bytes[i];
     }
   }
@@ -167,7 +167,7 @@ void MeasureMemoryDelegate::MeasurementComplete(Result result) {
     result_builder.AddCurrent(current_size, current_size,
                               current_size + shared_size);
     for (size_t i = 0; i < result.contexts.size(); ++i) {
-      if (*Utils::OpenHandle(*result.contexts[i]) != *context_) {
+      if (*Utils::OpenDirectHandle(*result.contexts[i]) != *context_) {
         size_t other_size = result.sizes_in_bytes[i];
         result_builder.AddOther(other_size, other_size,
                                 other_size + shared_size);
@@ -176,7 +176,9 @@ void MeasureMemoryDelegate::MeasurementComplete(Result result) {
   }
 
   Handle<JSObject> jsresult = result_builder.Build();
-  JSPromise::Resolve(promise_, jsresult).ToHandleChecked();
+  if (JSPromise::Resolve(promise_, jsresult).is_null()) {
+    CHECK(isolate_->is_execution_terminating());
+  }
 }
 
 MemoryMeasurement::MemoryMeasurement(Isolate* isolate)
@@ -196,7 +198,7 @@ bool MemoryMeasurement::EnqueueRequest(
   Handle<WeakFixedArray> weak_contexts =
       isolate_->factory()->NewWeakFixedArray(length);
   for (int i = 0; i < length; ++i) {
-    weak_contexts->set(i, HeapObjectReference::Weak(*contexts[i]));
+    weak_contexts->set(i, MakeWeak(*contexts[i]));
   }
   Handle<WeakFixedArray> global_weak_contexts =
       isolate_->global_handles()->Create(*weak_contexts);
@@ -340,9 +342,6 @@ void MemoryMeasurement::ReportResults() {
     v8::LocalVector<v8::Context> contexts(
         reinterpret_cast<v8::Isolate*>(isolate_));
     std::vector<size_t> size_in_bytes;
-    // TODO(chromium:1454114): The vector of pairs will be removed when
-    // deprecation is complete.
-    std::vector<std::pair<v8::Local<v8::Context>, size_t>> sizes;
     DCHECK_EQ(request.sizes.size(),
               static_cast<size_t>(request.contexts->length()));
     for (int i = 0; i < request.contexts->length(); i++) {
@@ -354,20 +353,13 @@ void MemoryMeasurement::ReportResults() {
           direct_handle(raw_context, isolate_), isolate_);
       contexts.push_back(context);
       size_in_bytes.push_back(request.sizes[i]);
-      sizes.emplace_back(context, request.sizes[i]);
     }
-    // Temporarily call both old and new callbacks.
-    START_ALLOW_USE_DEPRECATED()
-    request.delegate->MeasurementComplete(sizes, request.shared);
     request.delegate->MeasurementComplete(
-        {sizes,  // TODO(chromium:1454114): This will be removed when
-                 // deprecation is complete.
-         {contexts.begin(), contexts.end()},
+        {{contexts.begin(), contexts.end()},
          {size_in_bytes.begin(), size_in_bytes.end()},
          request.shared,
          request.wasm_code,
          request.wasm_metadata});
-    END_ALLOW_USE_DEPRECATED()
     isolate_->counters()->measure_memory_delay_ms()->AddSample(
         static_cast<int>(request.timer.Elapsed().InMilliseconds()));
   }
@@ -378,63 +370,6 @@ std::unique_ptr<v8::MeasureMemoryDelegate> MemoryMeasurement::DefaultDelegate(
     v8::MeasureMemoryMode mode) {
   return std::make_unique<MeasureMemoryDelegate>(isolate, context, promise,
                                                  mode);
-}
-
-bool NativeContextInferrer::InferForContext(PtrComprCageBase cage_base,
-
-                                            Tagged<Context> context,
-                                            Address* native_context) {
-  Tagged<Map> context_map = context->map(cage_base, kAcquireLoad);
-  Tagged<Object> maybe_native_context =
-      TaggedField<Object, Map::kConstructorOrBackPointerOrNativeContextOffset>::
-          Acquire_Load(cage_base, context_map);
-  if (IsNativeContext(maybe_native_context, cage_base)) {
-    *native_context = maybe_native_context.ptr();
-    return true;
-  }
-  return false;
-}
-
-bool NativeContextInferrer::InferForJSFunction(PtrComprCageBase cage_base,
-                                               Tagged<JSFunction> function,
-                                               Address* native_context) {
-  Tagged<Object> maybe_context =
-      TaggedField<Object, JSFunction::kContextOffset>::Acquire_Load(cage_base,
-                                                                    function);
-  // The context may be a smi during deserialization.
-  if (IsSmi(maybe_context)) {
-    DCHECK_EQ(maybe_context, Smi::uninitialized_deserialization_value());
-    return false;
-  }
-  if (!IsContext(maybe_context)) {
-    // The function does not have a context.
-    return false;
-  }
-  return InferForContext(cage_base, Context::cast(maybe_context),
-                         native_context);
-}
-
-bool NativeContextInferrer::InferForJSObject(PtrComprCageBase cage_base,
-                                             Tagged<Map> map,
-                                             Tagged<JSObject> object,
-                                             Address* native_context) {
-  if (map->instance_type() == JS_GLOBAL_OBJECT_TYPE) {
-    Tagged<Object> maybe_context =
-        JSGlobalObject::cast(object)->native_context_unchecked(cage_base);
-    if (IsNativeContext(maybe_context)) {
-      *native_context = maybe_context.ptr();
-      return true;
-    }
-  }
-  // The maximum number of steps to perform when looking for the context.
-  const int kMaxSteps = 3;
-  Tagged<Object> maybe_constructor =
-      map->TryGetConstructor(cage_base, kMaxSteps);
-  if (IsJSFunction(maybe_constructor)) {
-    return InferForJSFunction(cage_base, JSFunction::cast(maybe_constructor),
-                              native_context);
-  }
-  return false;
 }
 
 void NativeContextStats::Clear() { size_by_context_.clear(); }

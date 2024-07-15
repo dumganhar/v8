@@ -978,9 +978,9 @@ Handle<HeapObject> RegExpMacroAssemblerS390::GetCode(Handle<String> source) {
       }
 
       __ bind(&reload_string_start_minus_one);
-      // Prepare r2 to initialize registers with its value in the next run.
+      // Prepare r1 to initialize registers with its value in the next run.
       // Must be immediately before the jump to avoid clobbering.
-      __ LoadU64(r2, MemOperand(frame_pointer(), kStringStartMinusOneOffset));
+      __ LoadU64(r1, MemOperand(frame_pointer(), kStringStartMinusOneOffset));
 
       __ b(&load_char_start_regexp);
     } else {
@@ -1077,6 +1077,7 @@ Handle<HeapObject> RegExpMacroAssemblerS390::GetCode(Handle<String> source) {
   Handle<Code> code =
       Factory::CodeBuilder(isolate(), code_desc, CodeKind::REGEXP)
           .set_self_reference(masm_->CodeObject())
+          .set_empty_source_position_table()
           .Build();
   PROFILE(masm_->isolate(),
           RegExpCodeCreateEvent(Handle<AbstractCode>::cast(code), source));
@@ -1215,11 +1216,11 @@ void RegExpMacroAssemblerS390::CallCheckStackGuardState(Register scratch,
   static constexpr int num_arguments = 4;
   __ PrepareCallCFunction(num_arguments, scratch);
   // Extra space for variables to consider in stack check.
-  __ mov(arg_reg_4, extra_space);
+  __ mov(kCArgRegs[3], extra_space);
   // RegExp code frame pointer.
-  __ mov(arg_reg_3, frame_pointer());
+  __ mov(kCArgRegs[2], frame_pointer());
   // InstructionStream of self.
-  __ mov(arg_reg_2, Operand(masm_->CodeObject()));
+  __ mov(kCArgRegs[1], Operand(masm_->CodeObject()));
   // r2 becomes return address pointer.
   __ lay(r2, MemOperand(sp, kStackFrameRASlot * kSystemPointerSize));
   ExternalReference stack_guard_check =
@@ -1362,8 +1363,7 @@ void RegExpMacroAssemblerS390::CallCFunctionFromIrregexpCode(
   //    fail.
   //
   // See also: crbug.com/v8/12670#c17.
-  __ CallCFunction(function, num_arguments,
-                   MacroAssembler::SetIsolateDataSlots::kNo);
+  __ CallCFunction(function, num_arguments, SetIsolateDataSlots::kNo);
 }
 
 void RegExpMacroAssemblerS390::CheckPreemption() {

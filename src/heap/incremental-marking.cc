@@ -10,6 +10,7 @@
 
 #include "src/base/logging.h"
 #include "src/base/platform/time.h"
+#include "src/common/globals.h"
 #include "src/execution/vm-state-inl.h"
 #include "src/flags/flags.h"
 #include "src/handles/global-handles.h"
@@ -25,8 +26,8 @@
 #include "src/heap/marking-visitor-inl.h"
 #include "src/heap/marking-visitor.h"
 #include "src/heap/memory-chunk-layout.h"
-#include "src/heap/memory-chunk.h"
 #include "src/heap/minor-mark-sweep.h"
+#include "src/heap/mutable-page.h"
 #include "src/heap/objects-visiting-inl.h"
 #include "src/heap/objects-visiting.h"
 #include "src/heap/safepoint.h"
@@ -106,7 +107,7 @@ void IncrementalMarking::MarkBlackBackground(Tagged<HeapObject> obj,
                                              int object_size) {
   CHECK(marking_state()->TryMark(obj));
   base::MutexGuard guard(&background_live_bytes_mutex_);
-  background_live_bytes_[MemoryChunk::FromHeapObject(obj)] +=
+  background_live_bytes_[MutablePageMetadata::FromHeapObject(obj)] +=
       static_cast<intptr_t>(object_size);
 }
 
@@ -127,9 +128,12 @@ bool IncrementalMarking::IsBelowActivationThresholds() const {
 
 void IncrementalMarking::Start(GarbageCollector garbage_collector,
                                GarbageCollectionReason gc_reason) {
-  DCHECK(CanBeStarted());
-  DCHECK(!heap_->sweeping_in_progress());
-  DCHECK(IsStopped());
+  CHECK(IsStopped());
+  CHECK_IMPLIES(garbage_collector == GarbageCollector::MARK_COMPACTOR,
+                !heap_->sweeping_in_progress());
+  CHECK_IMPLIES(garbage_collector == GarbageCollector::MINOR_MARK_SWEEPER,
+                !heap_->minor_sweeping_in_progress());
+  CHECK(CanBeStarted());
 
   if (V8_UNLIKELY(v8_flags.trace_incremental_marking)) {
     const size_t old_generation_size_mb =
@@ -219,13 +223,13 @@ class IncrementalMarking::IncrementalMarkingRootMarkingVisitor final
       : heap_(heap), incremental_marking_(heap->incremental_marking()) {}
 
   void VisitRootPointer(Root root, const char* description,
-                        FullObjectSlot p) override {
+                        FullObjectSlot p) final {
     DCHECK(!MapWord::IsPacked((*p).ptr()));
     MarkObjectByPointer(root, p);
   }
 
   void VisitRootPointers(Root root, const char* description,
-                         FullObjectSlot start, FullObjectSlot end) override {
+                         FullObjectSlot start, FullObjectSlot end) final {
     for (FullObjectSlot p = start; p < end; ++p) {
       DCHECK(!MapWord::IsPacked((*p).ptr()));
       MarkObjectByPointer(root, p);
@@ -242,7 +246,7 @@ class IncrementalMarking::IncrementalMarkingRootMarkingVisitor final
     DCHECK(!MapWord::IsPacked(object.ptr()));
     Tagged<HeapObject> heap_object = HeapObject::cast(object);
 
-    if (heap_object.InAnySharedSpace() || heap_object.InReadOnlySpace()) return;
+    if (InAnySharedSpace(heap_object) || InReadOnlySpace(heap_object)) return;
 
     if (incremental_marking_->IsMajorMarking()) {
       if (incremental_marking_->WhiteToGreyAndPush(heap_object)) {
@@ -260,9 +264,6 @@ class IncrementalMarking::IncrementalMarkingRootMarkingVisitor final
 };
 
 void IncrementalMarking::MarkRoots() {
-  CodePageHeaderModificationScope rwx_write_scope(
-      "Marking of builtins table entries require write access to Code page "
-      "header");
   if (IsMajorMarking()) {
     IncrementalMarkingRootMarkingVisitor visitor(heap_);
     heap_->IterateRoots(
@@ -314,10 +315,6 @@ void IncrementalMarking::StartMarkingMajor() {
   is_compacting_ = major_collector_->StartCompaction(
       MarkCompactCollector::StartCompactionMode::kIncremental);
 
-#ifdef V8_COMPRESS_POINTERS
-  heap_->external_pointer_space()->StartCompactingIfNeeded();
-#endif  // V8_COMPRESS_POINTERS
-
   major_collector_->StartMarking();
   current_local_marking_worklists_ =
       major_collector_->local_marking_worklists();
@@ -353,10 +350,6 @@ void IncrementalMarking::StartMarkingMajor() {
   }
 
   heap_->InvokeIncrementalMarkingEpilogueCallbacks();
-
-  if (v8_flags.minor_ms && heap_->new_space()) {
-    heap_->paged_new_space()->ForceAllocationSuccessUntilNextGC();
-  }
 }
 
 void IncrementalMarking::StartMarkingMinor() {
@@ -367,7 +360,9 @@ void IncrementalMarking::StartMarkingMinor() {
         "[IncrementalMarking] (MinorMS) Start marking\n");
   }
 
-  minor_collector_->StartMarking();
+  // We only reach this code if Heap::ShouldUseBackgroundThreads() returned
+  // true. So we can force the use of background threads here.
+  minor_collector_->StartMarking(true);
   current_local_marking_worklists_ =
       minor_collector_->local_marking_worklists();
 
@@ -412,6 +407,7 @@ void IncrementalMarking::StartBlackAllocation() {
   heap()->safepoint()->IterateLocalHeaps([](LocalHeap* local_heap) {
     local_heap->MarkLinearAllocationAreasBlack();
   });
+  StartPointerTableBlackAllocation();
   if (v8_flags.trace_incremental_marking) {
     isolate()->PrintWithTimestamp(
         "[IncrementalMarking] Black allocation started\n");
@@ -429,6 +425,7 @@ void IncrementalMarking::PauseBlackAllocation() {
   }
   heap()->safepoint()->IterateLocalHeaps(
       [](LocalHeap* local_heap) { local_heap->UnmarkLinearAllocationsArea(); });
+  StopPointerTableBlackAllocation();
   if (v8_flags.trace_incremental_marking) {
     isolate()->PrintWithTimestamp(
         "[IncrementalMarking] Black allocation paused\n");
@@ -439,11 +436,26 @@ void IncrementalMarking::PauseBlackAllocation() {
 void IncrementalMarking::FinishBlackAllocation() {
   if (black_allocation_) {
     black_allocation_ = false;
+    StopPointerTableBlackAllocation();
     if (v8_flags.trace_incremental_marking) {
       isolate()->PrintWithTimestamp(
           "[IncrementalMarking] Black allocation finished\n");
     }
   }
+}
+
+void IncrementalMarking::StartPointerTableBlackAllocation() {
+#ifdef V8_ENABLE_SANDBOX
+  heap()->code_pointer_space()->set_allocate_black(true);
+  heap()->trusted_pointer_space()->set_allocate_black(true);
+#endif  // V8_ENABLE_SANDBOX
+}
+
+void IncrementalMarking::StopPointerTableBlackAllocation() {
+#ifdef V8_ENABLE_SANDBOX
+  heap()->code_pointer_space()->set_allocate_black(false);
+  heap()->trusted_pointer_space()->set_allocate_black(false);
+#endif  // V8_ENABLE_SANDBOX
 }
 
 void IncrementalMarking::UpdateMarkingWorklistAfterScavenge() {
@@ -486,7 +498,7 @@ void IncrementalMarking::UpdateMarkingWorklistAfterScavenge() {
       DCHECK(!Heap::IsLargeObject(obj));
       Tagged<HeapObject> dest = map_word.ToForwardingAddress(obj);
       DCHECK_IMPLIES(marking_state->IsUnmarked(obj), IsFreeSpaceOrFiller(obj));
-      if (dest.InWritableSharedSpace() &&
+      if (InWritableSharedSpace(dest) &&
           !isolate()->is_shared_space_isolate()) {
         // Object got promoted into the shared heap. Drop it from the client
         // heap marking worklist.
@@ -497,7 +509,7 @@ void IncrementalMarking::UpdateMarkingWorklistAfterScavenge() {
       // processed from to-be-processed. Decrement the counter for such objects
       // here.
       if (!IsDescriptorArray(dest)) {
-        MemoryChunk::FromHeapObject(dest)->IncrementLiveBytesAtomically(
+        MutablePageMetadata::FromHeapObject(dest)->IncrementLiveBytesAtomically(
             -ALIGN_TO_ALLOCATION_ALIGNMENT(dest->Size()));
       }
       *out = dest;
@@ -590,7 +602,7 @@ bool IncrementalMarking::Stop() {
 
   // Merge live bytes counters of background threads
   for (const auto& pair : background_live_bytes_) {
-    MemoryChunk* memory_chunk = pair.first;
+    MutablePageMetadata* memory_chunk = pair.first;
     intptr_t live_bytes = pair.second;
     if (live_bytes) {
       memory_chunk->IncrementLiveBytesAtomically(live_bytes);
@@ -847,6 +859,8 @@ void IncrementalMarking::Step(v8::base::TimeDelta max_duration,
     // before invoking an AllocationObserver. This allocation had no way to
     // escape and get marked though.
     local_marking_worklists()->MergeOnHold();
+
+    heap()->mark_compact_collector()->MaybeEnableBackgroundThreadsInCycle();
   }
   if (step_origin == StepOrigin::kTask) {
     // We cannot publish the pending allocations for V8 step origin because the

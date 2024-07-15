@@ -110,6 +110,7 @@ namespace compiler {
   V(PPC_DoubleToFloat32)             \
   V(PPC_DoubleExtractLowWord32)      \
   V(PPC_DoubleExtractHighWord32)     \
+  V(PPC_DoubleFromWord32Pair)        \
   V(PPC_DoubleInsertLowWord32)       \
   V(PPC_DoubleInsertHighWord32)      \
   V(PPC_DoubleConstruct)             \
@@ -404,6 +405,9 @@ namespace compiler {
   V(PPC_FReplaceLane)                \
   V(PPC_IReplaceLane)                \
   V(PPC_StoreCompressTagged)         \
+  V(PPC_StoreIndirectPointer)        \
+  V(PPC_LoadDecodeSandboxedPointer)  \
+  V(PPC_StoreEncodeSandboxedPointer) \
   V(PPC_LoadDecompressTaggedSigned)  \
   V(PPC_LoadDecompressTagged)
 

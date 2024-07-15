@@ -24,6 +24,7 @@ class ObjectBoilerplateDescriptionShape final : public AllStatic {
  public:
   static constexpr int kElementSize = kTaggedSize;
   using ElementT = Object;
+  using CompressionScheme = V8HeapCompressionScheme;
   static constexpr RootIndex kMapRootIndex =
       RootIndex::kObjectBoilerplateDescriptionMap;
   static constexpr bool kLengthEqualsCapacity = true;
@@ -78,6 +79,10 @@ class ObjectBoilerplateDescription
   DECL_PRINTER(ObjectBoilerplateDescription)
 
   class BodyDescriptor;
+
+  static constexpr int kBackingStoreSizeOffset = Shape::kBackingStoreSizeOffset;
+  static constexpr int kFlagsOffset = Shape::kFlagsOffset;
+  static constexpr int kRawEntriesOffset = Shape::kHeaderSize;
 
  private:
   static constexpr int kElementsPerEntry = 2;

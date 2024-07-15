@@ -19,8 +19,6 @@ this build script on Mac:
 3. sudo xcode-select --switch /Applications/Xcode.app
 """
 
-from __future__ import print_function
-
 import argparse
 import glob
 import io
@@ -86,7 +84,7 @@ def GetWinSDKDir():
     return win_sdk_dir
 
   # Don't let vs_toolchain overwrite our environment.
-  environ_bak = os.environ
+  environ_bak = dict(os.environ)
 
   sys.path.append(os.path.join(CHROMIUM_DIR, 'build'))
   import vs_toolchain
@@ -102,7 +100,8 @@ def GetWinSDKDir():
       vs_path = os.environ['GYP_MSVS_OVERRIDE_PATH']
     dia_path = os.path.join(vs_path, 'DIA SDK', 'bin', 'amd64')
 
-  os.environ = environ_bak
+  os.environ.clear()
+  os.environ.update(environ_bak)
   return win_sdk_dir
 
 
@@ -162,9 +161,10 @@ def CheckoutGitRepo(name, git_url, commit, dir):
   # Try updating the current repo if it exists and has no local diff.
   if os.path.isdir(dir):
     os.chdir(dir)
-    # git diff-index --quiet returns success when there is no diff.
+    # git diff-index --exit-code returns 0 when there is no diff.
     # Also check that the first commit is reachable.
-    if (RunCommand(['git', 'diff-index', '--quiet', 'HEAD'], fail_hard=False)
+    if (RunCommand(['git', 'diff-index', '--exit-code', 'HEAD'],
+                   fail_hard=False)
         and RunCommand(['git', 'fetch'], fail_hard=False)
         and RunCommand(['git', 'checkout', commit], fail_hard=False)
         and RunCommand(['git', 'clean', '-f'], fail_hard=False)):
@@ -576,7 +576,7 @@ def VerifyZStdSupport():
     print('OK')
 
 
-def DownloadDebianSysroot(platform_name):
+def DownloadDebianSysroot(platform_name, skip_download=False):
   # Download sysroots. This uses basically Chromium's sysroots, but with
   # minor changes:
   # - glibc version bumped to 2.18 to make __cxa_thread_atexit_impl
@@ -602,7 +602,8 @@ def DownloadDebianSysroot(platform_name):
   output = os.path.join(LLVM_BUILD_TOOLS_DIR, toolchain_name)
   U = toolchain_bucket + hashes[platform_name] + '/' + toolchain_name + \
       '.tar.xz'
-  DownloadAndUnpack(U, output)
+  if not skip_download:
+    DownloadAndUnpack(U, output)
 
   return output
 
@@ -615,6 +616,9 @@ def compiler_rt_cmake_flags(*, sanitizers, profile):
       # everywhere, even though we only need it on Linux.
       'COMPILER_RT_BUILD_CRT=ON',
       'COMPILER_RT_BUILD_LIBFUZZER=OFF',
+      # Turn off ctx_profile because it depends on the sanitizer libraries,
+      # which we don't always build.
+      'COMPILER_RT_BUILD_CTX_PROFILE=OFF',
       'COMPILER_RT_BUILD_MEMPROF=OFF',
       'COMPILER_RT_BUILD_ORC=OFF',
       'COMPILER_RT_BUILD_PROFILE=' + ('ON' if profile else 'OFF'),
@@ -699,9 +703,8 @@ def main():
                       type=gn_arg,
                       nargs='?',
                       const=True,
-                      help='build the Fuchsia runtimes (linux and mac only)',
-                      default=sys.platform.startswith('linux')
-                      or sys.platform.startswith('darwin'))
+                      help='build the Fuchsia runtimes (linux only)',
+                      default=sys.platform.startswith('linux'))
   parser.add_argument('--without-android', action='store_false',
                       help='don\'t build Android ASan runtime (linux only)',
                       dest='with_android')
@@ -842,23 +845,19 @@ def main():
       '-DLLVM_ENABLE_CURL=OFF',
       # Build libclang.a as well as libclang.so
       '-DLIBCLANG_BUILD_STATIC=ON',
+      # The Rust build (on Mac ARM at least if not others) depends on the
+      # FileCheck tool which is built but not installed by default, this
+      # puts it in the path for the Rust build to find and matches the
+      # `bootstrap` tool:
+      # https://github.com/rust-lang/rust/blob/021861aea8de20c76c7411eb8ada7e8235e3d9b5/src/bootstrap/src/core/build_steps/llvm.rs#L348
+      '-DLLVM_INSTALL_UTILS=ON',
       '-DLLVM_ENABLE_ZSTD=%s' % ('ON' if args.with_zstd else 'OFF'),
   ]
 
   if sys.platform == 'darwin':
     isysroot = subprocess.check_output(['xcrun', '--show-sdk-path'],
                                        universal_newlines=True).rstrip()
-  else:
-    base_cmake_args += ['-DLLVM_ENABLE_UNWIND_TABLES=OFF']
-
-  # See https://crbug.com/1302636#c49 - #c56 -- intercepting crypt_r() does not
-  # work with the sysroot for not fully understood reasons. Disable it.
-  sanitizers_override = [
-    '-DSANITIZER_OVERRIDE_INTERCEPTORS',
-    '-I' + os.path.join(THIS_DIR, 'sanitizers'),
-  ]
-  cflags += sanitizers_override
-  cxxflags += sanitizers_override
+  base_cmake_args += ['-DLLVM_ENABLE_UNWIND_TABLES=OFF']
 
   goma_cmake_args = []
   goma_ninja_args = []
@@ -874,7 +873,8 @@ def main():
     cc = args.host_cc
     cxx = args.host_cxx
   else:
-    DownloadPinnedClang()
+    if not args.skip_checkout:
+      DownloadPinnedClang()
     if sys.platform == 'win32':
       cc = os.path.join(PINNED_CLANG_DIR, 'bin', 'clang-cl.exe')
       cxx = os.path.join(PINNED_CLANG_DIR, 'bin', 'clang-cl.exe')
@@ -892,10 +892,10 @@ def main():
       base_cmake_args += [ '-DLLVM_STATIC_LINK_CXX_STDLIB=ON' ]
 
   if sys.platform.startswith('linux'):
-    sysroot_amd64 = DownloadDebianSysroot('amd64')
-    sysroot_i386 = DownloadDebianSysroot('i386')
-    sysroot_arm = DownloadDebianSysroot('arm')
-    sysroot_arm64 = DownloadDebianSysroot('arm64')
+    sysroot_amd64 = DownloadDebianSysroot('amd64', args.skip_checkout)
+    sysroot_i386 = DownloadDebianSysroot('i386', args.skip_checkout)
+    sysroot_arm = DownloadDebianSysroot('arm', args.skip_checkout)
+    sysroot_arm64 = DownloadDebianSysroot('arm64', args.skip_checkout)
 
     # Add the sysroot to base_cmake_args.
     if platform.machine() == 'aarch64':
@@ -937,6 +937,29 @@ def main():
     base_cmake_args += zstd_cmake_args
     cflags += zstd_cflags
     cxxflags += zstd_cflags
+
+  lit_excludes = []
+  if sys.platform.startswith('linux'):
+    lit_excludes += [
+        # fstat and sunrpc tests fail due to sysroot/host mismatches
+        # (crbug.com/1459187).
+        '^MemorySanitizer-.* f?stat(at)?(64)?.cpp$',
+        '^.*Sanitizer-.*sunrpc.*cpp$',
+        # sysroot/host glibc version mismatch, crbug.com/1506551
+        '^.*Sanitizer.*mallinfo2.cpp$',
+    ]
+  elif sys.platform == 'darwin':
+    lit_excludes += [
+        # Fails on macOS 14, crbug.com/332589870
+        '^.*Sanitizer.*Darwin/malloc_zone.cpp$',
+        # Fails with a recent ld, crbug.com/332589870
+        '^.*ContinuousSyncMode/darwin-proof-of-concept.c$',
+        '^.*instrprof-darwin-exports.c$',
+    ]
+  test_env = None
+  if lit_excludes:
+    test_env = os.environ.copy()
+    test_env['LIT_FILTER_OUT'] = '|'.join(lit_excludes)
 
   if args.bootstrap:
     print('Building bootstrap compiler')
@@ -994,7 +1017,7 @@ def main():
                setenv=True)
     RunCommand(['ninja'] + goma_ninja_args, setenv=True)
     if args.run_tests:
-      RunCommand(['ninja', 'check-all'], setenv=True)
+      RunCommand(['ninja', 'check-all'], env=test_env, setenv=True)
     RunCommand(['ninja', 'install'], setenv=True)
 
     if sys.platform == 'win32':
@@ -1178,7 +1201,7 @@ def main():
     runtimes_triples_args['i386-unknown-linux-gnu'] = {
         "args": [
             'CMAKE_SYSROOT=%s' % sysroot_i386,
-            # TODO(https://crbug.com/1374690): pass proper flags to i386 tests so they compile correctly
+            # TODO(crbug.com/40242553): pass proper flags to i386 tests so they compile correctly
             'LLVM_INCLUDE_TESTS=OFF',
         ],
         "profile":
@@ -1265,8 +1288,9 @@ def main():
             'SANITIZER_MIN_OSX_VERSION=' + deployment_target,
             'COMPILER_RT_ENABLE_MACCATALYST=ON',
             'COMPILER_RT_ENABLE_IOS=ON',
-            'COMPILER_RT_ENABLE_WATCHOS=OFF',
+            'COMPILER_RT_ENABLE_WATCHOS=ON',
             'COMPILER_RT_ENABLE_TVOS=OFF',
+            'COMPILER_RT_ENABLE_XROS=ON',
             'DARWIN_ios_ARCHS=arm64',
             'DARWIN_iossim_ARCHS=arm64;x86_64',
             'DARWIN_osx_ARCHS=arm64;x86_64',
@@ -1283,10 +1307,8 @@ def main():
       target_triple = target_arch
       if target_arch == 'arm':
         target_triple = 'armv7'
-      api_level = '19'
-      if target_arch == 'aarch64' or target_arch == 'x86_64':
-        api_level = '21'
-      elif target_arch == 'riscv64':
+      api_level = '21'
+      if target_arch == 'riscv64':
         api_level = '35'
         toolchain_dir = ANDROID_NDK_CANARY_TOOLCHAIN_DIR
       target_triple += '-linux-android' + api_level
@@ -1504,21 +1526,8 @@ def main():
     RunCommand(['ninja', '-C', LLVM_BUILD_DIR, 'cr-check-all'], setenv=True)
 
   if not args.build_mac_arm and args.run_tests:
-    env = None
-    if sys.platform.startswith('linux'):
-      env = os.environ.copy()
-      lit_excludes = [
-          # See SANITIZER_OVERRIDE_INTERCEPTORS above: We disable crypt_r()
-          # interception, so its tests can't pass.
-          '^SanitizerCommon-(a|l|m|ub|t)san-x86_64-Linux :: Linux/crypt_r.cpp$',
-          # fstat and sunrpc tests fail due to sysroot/host mismatches
-          # (crbug.com/1459187).
-          '^MemorySanitizer-.* f?stat(at)?(64)?.cpp$',
-          '^.*Sanitizer-.*sunrpc.*cpp$'
-      ]
-      env['LIT_FILTER_OUT'] = '|'.join(lit_excludes)
     RunCommand(['ninja', '-C', LLVM_BUILD_DIR, 'check-all'],
-               env=env,
+               env=test_env,
                setenv=True)
   if args.install_dir:
     RunCommand(['ninja', 'install'], setenv=True)

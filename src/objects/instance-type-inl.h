@@ -71,7 +71,9 @@ constexpr bool kHasUniqueMapOfInstanceType =
 
 template <InstanceType type>
 constexpr RootIndex kUniqueMapOfInstanceType =
-    UniqueMapOfInstanceType(type).value_or(RootIndex::kRootListLength);
+  kHasUniqueMapOfInstanceType<type>?
+    *UniqueMapOfInstanceType(type):
+    RootIndex::kRootListLength;
 
 // Manually curated list of instance type ranges which are associated with a
 // unique range of map addresses on the read only heap. Both ranges are
@@ -129,14 +131,17 @@ UniqueMapRangeOfInstanceTypeRange(InstanceType first, InstanceType last) {
   return {};
 }
 
+constexpr inline TaggedAddressRange NULL_ADDRESS_RANGE{kNullAddress, kNullAddress};
+
 template <InstanceType first, InstanceType last>
 constexpr bool kHasUniqueMapRangeOfInstanceTypeRange =
     UniqueMapRangeOfInstanceTypeRange(first, last).has_value();
 
 template <InstanceType first, InstanceType last>
 constexpr TaggedAddressRange kUniqueMapRangeOfInstanceTypeRange =
-    UniqueMapRangeOfInstanceTypeRange(first, last)
-        .value_or(TaggedAddressRange(kNullAddress, kNullAddress));
+  kHasUniqueMapRangeOfInstanceTypeRange<first, last>?
+    *UniqueMapRangeOfInstanceTypeRange(first, last):
+    NULL_ADDRESS_RANGE;
 
 inline constexpr base::Optional<TaggedAddressRange>
 UniqueMapRangeOfInstanceType(InstanceType type) {
@@ -149,8 +154,9 @@ constexpr bool kHasUniqueMapRangeOfInstanceType =
 
 template <InstanceType type>
 constexpr TaggedAddressRange kUniqueMapRangeOfInstanceType =
-    UniqueMapRangeOfInstanceType(type).value_or(
-        TaggedAddressRange(kNullAddress, kNullAddress));
+  kHasUniqueMapRangeOfInstanceType<type>?
+    *UniqueMapRangeOfInstanceType(type):
+    NULL_ADDRESS_RANGE;
 
 inline bool MayHaveMapCheckFastCase(InstanceType type) {
   if (UniqueMapOfInstanceType(type)) return true;
@@ -360,6 +366,42 @@ V8_INLINE constexpr bool IsFreeSpaceOrFiller(InstanceType instance_type) {
 
 V8_INLINE bool IsFreeSpaceOrFiller(Tagged<Map> map_object) {
   return IsFreeSpaceOrFiller(map_object->instance_type());
+}
+
+V8_INLINE constexpr bool IsPropertyDictionary(InstanceType instance_type) {
+  return instance_type == PROPERTY_DICTIONARY_TYPE;
+}
+
+V8_INLINE bool IsPropertyDictionary(Tagged<Map> map_object) {
+  return IsPropertyDictionary(map_object->instance_type());
+}
+
+// Returns true for those heap object types that must be tied to some native
+// context.
+V8_INLINE constexpr bool IsNativeContextSpecific(InstanceType instance_type) {
+  // All context map are tied to some native context.
+  if (IsContext(instance_type)) return true;
+  // All non-JSReceivers are never tied to any native context.
+  if (!IsJSReceiver(instance_type)) return false;
+
+  // Most of the JSReceivers are tied to some native context modulo the
+  // following exceptions.
+  if (instance_type == JS_MESSAGE_OBJECT_TYPE ||
+      instance_type == JS_EXTERNAL_OBJECT_TYPE) {
+    // These JSObject types are wrappers around a set of primitive values
+    // and exist only for the purpose of passing the data across V8 Api.
+    // Thus they are not tied to any native context.
+    return false;
+
+  } else if (InstanceTypeChecker::IsAlwaysSharedSpaceJSObject(instance_type)) {
+    // JSObjects allocated in shared space are never tied to a native context.
+    return false;
+  }
+  return true;
+}
+
+V8_INLINE bool IsNativeContextSpecificMap(Tagged<Map> map_object) {
+  return IsNativeContextSpecific(map_object->instance_type());
 }
 
 }  // namespace InstanceTypeChecker
