@@ -1619,7 +1619,7 @@ class EmbedderGraphBuilder : public v8::PersistentHandleVisitor {
     EmbedderGraphBuilder builder(isolate, graph);
     reinterpret_cast<i::Isolate*>(isolate)
         ->global_handles()
-        ->IterateAllRootsForTesting(&builder);
+        ->IterateAllRootsWithClassIds(&builder);
   }
 
   void VisitPersistentHandle(v8::Persistent<v8::Value>* value,

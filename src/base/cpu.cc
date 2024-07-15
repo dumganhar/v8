@@ -14,7 +14,7 @@
 #if V8_OS_LINUX
 #include <linux/auxvec.h>  // AT_HWCAP
 #endif
-#if V8_GLIBC_PREREQ(2, 16) || V8_OS_ANDROID
+#if V8_GLIBC_PREREQ(2, 16) || V8_OS_ANDROID || __OHOS__
 #include <sys/auxv.h>  // getauxval()
 #endif
 #if V8_OS_QNX
