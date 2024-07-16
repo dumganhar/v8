@@ -5,6 +5,8 @@
 #ifndef V8_SANDBOX_COMPACTIBLE_EXTERNAL_ENTITY_TABLE_H_
 #define V8_SANDBOX_COMPACTIBLE_EXTERNAL_ENTITY_TABLE_H_
 
+#include <vector>
+
 #include "include/v8config.h"
 #include "src/common/globals.h"
 #include "src/sandbox/external-entity-table.h"
