@@ -472,7 +472,7 @@ class ParallelMoveResolver {
       // The DecompressIfNeeded clause is redundant with the if-constexpr above,
       // but otherwise this code cannot be compiled by compilers not yet
       // implementing CWG2518.
-      static_assert(COMPRESS_POINTERS_BOOL);
+      static_assert(DecompressIfNeeded && COMPRESS_POINTERS_BOOL);
 
       if (targets.needs_decompression == kNeedsDecompression) {
         __ DecompressTagged(register_with_slot_value, register_with_slot_value);
