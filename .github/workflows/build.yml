@@ -554,10 +554,11 @@ jobs:
           # https://github.com/actions/runner-images/issues/9154
           choco upgrade visualstudio2022enterprise
           # https://community.chocolatey.org/packages/visualstudio2022community/117.9.7.0
-          choco install visualstudio2022community --version=117.9.7.0
+          # choco install visualstudio2022community --version=117.9.7.0
+          choco install visualstudio2022community-preview --package-parameters "--allWorkloads --includeRecommended --includeOptional --passive --locale en-US"
           # https://community.chocolatey.org/packages/visualstudio2022buildtools/117.9.7.0
           # choco install visualstudio2022buildtools --version=117.9.7.0 --package-parameters "--installPath C:\Program Files\Microsoft Visual Studio\2022\BuildTools"
-          choco install visualstudio2022-workload-nativedesktop
+          # choco install visualstudio2022-workload-nativedesktop
       
       - name: Disable the default VS2022 Enterprise 
         run: |
