@@ -954,7 +954,7 @@ class InstructionSelectorT<Adapter>::CachedStateValuesBuilder {
   InstructionSelectorT<Adapter>::CachedStateValues* Build(Zone* zone) {
     DCHECK(CanCache());
     DCHECK(values_->nested_count() == nested_start_);
-    return zone->New<InstructionSelectorT<Adapter>::CachedStateValues>(
+    return zone->New<typename InstructionSelectorT<Adapter>::CachedStateValues>(
         zone, values_, values_start_, inputs_, inputs_start_);
   }
 
