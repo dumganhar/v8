@@ -67,6 +67,7 @@
 !/third_party/cpu_features
 #/third_party/cpu_features/src
 !/third_party/inspector_protocol
+!/third_party/icu
 !/third_party/jsoncpp
 /third_party/jsoncpp/source
 !/third_party/colorama
