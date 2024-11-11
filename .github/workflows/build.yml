@@ -546,7 +546,7 @@ jobs:
           dir C:\depot_tools          
           set DEPOT_TOOLS_WIN_TOOLCHAIN=0
           set PATH=C:\depot_tools;%PATH%
-          set ARGS="is_clang=false is_debug=${{ env.IS_DEBUG }} target_cpu=""${{ matrix.arch }}"" v8_target_cpu=""${{ matrix.arch }}"" use_thin_lto=false use_lld=false clang_use_chrome_plugins=false chrome_pgo_phase=0 is_component_build=true use_custom_libcxx=false v8_use_external_startup_data=false is_official_build=false v8_enable_i18n_support=true icu_use_data_file=true treat_warnings_as_errors=false symbol_level=0 v8_enable_webassembly=true use_cxx17=true v8_enable_sandbox=false"
+          set ARGS="is_clang=false is_debug=${{ env.IS_DEBUG }} target_cpu=""${{ matrix.arch }}"" v8_target_cpu=""${{ matrix.arch }}"" use_thin_lto=false use_lld=false clang_use_chrome_plugins=false chrome_pgo_phase=0 is_component_build=true use_custom_libcxx=false v8_use_external_startup_data=false is_official_build=false v8_enable_i18n_support=false icu_use_data_file=true treat_warnings_as_errors=false symbol_level=0 v8_enable_webassembly=true use_cxx17=true v8_enable_sandbox=false"
           gn gen out/windows --args=%ARGS%
 
       - name: Build ${{ matrix.arch }}-${{ matrix.build_type }}
