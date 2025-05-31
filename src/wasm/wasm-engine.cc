@@ -245,7 +245,10 @@ class WeakScriptHandle {
       : script_id_(script->id()), isolate_(isolate) {
     DCHECK(IsString(script->name()) || IsUndefined(script->name()));
     if (IsString(script->name())) {
-      source_url_ = String::cast(script->name())->ToCString();
+      // source_url_ = String::cast(script->name())->ToCString();
+      std::unique_ptr<char[]> source_url = String::cast(script->name())->ToCString();
+      // Convert from {unique_ptr} to {shared_ptr}.
+      source_url_ = {source_url.release(), source_url.get_deleter()};
     }
     auto global_handle =
         script->GetIsolate()->global_handles()->Create(*script);
@@ -277,9 +280,11 @@ class WeakScriptHandle {
 
   int script_id() const { return script_id_; }
 
-  const std::shared_ptr<const char[]>& source_url() const {
-    return source_url_;
-  }
+  // const std::shared_ptr<const char[]>& source_url() const {
+  //   return source_url_;
+  // }
+
+  const std::shared_ptr<const char>& source_url() const { return source_url_; }
 
  private:
   // Store the location in a unique_ptr so that its address stays the same even
@@ -295,7 +300,8 @@ class WeakScriptHandle {
   // The shared pointer is kept alive by unlogged code, even if this entry is
   // collected in the meantime.
   // TODO(chromium:1132260): Revisit this for huge URLs.
-  std::shared_ptr<const char[]> source_url_;
+  // std::shared_ptr<const char[]> source_url_;
+  std::shared_ptr<const char> source_url_;
 
   // The Isolate that the handled script belongs to.
   Isolate* isolate_;
