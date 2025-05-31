@@ -300,8 +300,7 @@ class WeakScriptHandle {
   // The shared pointer is kept alive by unlogged code, even if this entry is
   // collected in the meantime.
   // TODO(chromium:1132260): Revisit this for huge URLs.
-  // std::shared_ptr<const char[]> source_url_;
-  std::shared_ptr<const char> source_url_;
+  std::shared_ptr<const char[]> source_url_;
 
   // The Isolate that the handled script belongs to.
   Isolate* isolate_;
