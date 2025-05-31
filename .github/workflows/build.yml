@@ -41,6 +41,7 @@ jobs:
             cd ..
             DEPOT_TOOLS_PATH=$(pwd)/depot_tools
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+            ./ensure_bootstrap
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
 
@@ -161,6 +162,7 @@ jobs:
             cd ..
             DEPOT_TOOLS_PATH=$(pwd)/depot_tools
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+            ./ensure_bootstrap
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
 
@@ -343,6 +345,7 @@ jobs:
             cd ..
             DEPOT_TOOLS_PATH=$(pwd)/depot_tools
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+            ./ensure_bootstrap
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
 
@@ -523,6 +526,7 @@ jobs:
         run: |
             cd /c
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+            ./ensure_bootstrap
             ls -l /c/depot_tools
 
       - name: Install gn
@@ -734,6 +738,7 @@ jobs:
             cd ..
             DEPOT_TOOLS_PATH=$(pwd)/depot_tools
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+            ./ensure_bootstrap
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
 
@@ -888,6 +893,7 @@ jobs:
             cd ..
             DEPOT_TOOLS_PATH=$(pwd)/depot_tools
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+            ./ensure_bootstrap
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
 
