@@ -503,11 +503,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.8'
-
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.8'
+          python-version: '3.11'
 
       - name: Check is_debug
         shell: bash
@@ -529,8 +525,6 @@ jobs:
         run: |
             cd /c
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-            cd depot_tools
-            ./ensure_bootstrap
             ls -l /c/depot_tools
 
       - name: Install gn
