@@ -501,9 +501,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      # - uses: actions/setup-python@v5
+      #   with:
+      #     python-version: '3.11'
 
       - name: Check is_debug
         shell: bash
@@ -517,15 +517,15 @@ jobs:
       - name: Print env
         run: |
           echo "env.IS_DEBUG=${{ env.IS_DEBUG }}"
-          echo "----- python version -----"
-          python --version
+          # echo "----- python version -----"
+          # python --version
           
       - name: Clone DepotTools
         shell: bash
         run: |
-            cp /c/hostedtoolcache/windows/Python/3.11.9/x64/python.exe /c/hostedtoolcache/windows/Python/3.11.9/x64/python3.exe
-            python3 --version
-            which python3
+            # ls -l /c/hostedtoolcache/windows/Python/3.11.9/x64/
+            # python3 --version
+            # which python3
             cd /c
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
             ls -l /c/depot_tools
