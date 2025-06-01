@@ -519,13 +519,18 @@ jobs:
           echo "env.IS_DEBUG=${{ env.IS_DEBUG }}"
           echo "----- python version -----"
           python --version
-
+          
       - name: Clone DepotTools
         shell: bash
         run: |
+            cp ${{ env.Python3_ROOT_DIR }}\python.exe ${{ env.Python3_ROOT_DIR }}\python3.exe
+            python3 --version
+            which python3
             cd /c
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
             ls -l /c/depot_tools
+            echo "C:\depot_tools" >> $GITHUB_PATH
+            echo "C:\depot_tools\python-bin" >> $GITHUB_PATH
 
       - name: Install gn
         run: |
