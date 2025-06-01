@@ -247,7 +247,7 @@ class WeakScriptHandle {
     if (IsString(script->name())) {
       std::unique_ptr<char[]> source_url = String::cast(script->name())->ToCString();
       // Convert from {unique_ptr} to {shared_ptr}.
-      source_url_ = {source_url.release(), source_url.get_deleter()};
+      source_url_ = {(char*)source_url.release(), source_url.get_deleter()};
     }
     auto global_handle =
         script->GetIsolate()->global_handles()->Create(*script);
@@ -279,7 +279,7 @@ class WeakScriptHandle {
 
   int script_id() const { return script_id_; }
 
-  const std::shared_ptr<const char[]>& source_url() const {
+  const std::shared_ptr<const char>& source_url() const {
     return source_url_;
   }
 
@@ -297,7 +297,7 @@ class WeakScriptHandle {
   // The shared pointer is kept alive by unlogged code, even if this entry is
   // collected in the meantime.
   // TODO(chromium:1132260): Revisit this for huge URLs.
-  std::shared_ptr<const char[]> source_url_;
+  std::shared_ptr<const char> source_url_;
 
   // The Isolate that the handled script belongs to.
   Isolate* isolate_;
@@ -521,7 +521,7 @@ struct WasmEngine::IsolateInfo {
   // the respective source URL.
   struct CodeToLogPerScript {
     std::vector<WasmCode*> code;
-    std::shared_ptr<const char[]> source_url;
+    std::shared_ptr<const char> source_url;
   };
   std::unordered_map<int, CodeToLogPerScript> code_to_log;
 
