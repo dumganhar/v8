@@ -5,7 +5,7 @@
 #ifndef THIRD_PARTY_ZLIB_CHROMECONF_H_
 #define THIRD_PARTY_ZLIB_CHROMECONF_H_
 
-#if defined(COMPONENT_BUILD)
+#if 0 //cjh defined(COMPONENT_BUILD)
 #if defined(WIN32)
 #if defined(ZLIB_IMPLEMENTATION)
 #define ZEXTERN __declspec(dllexport)
