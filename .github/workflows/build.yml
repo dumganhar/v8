@@ -573,7 +573,7 @@ jobs:
 
       - name: Build ${{ matrix.arch }}-${{ matrix.build_type }}
         run:
-          ninja -C out/windows v8_hello_world -v
+          ninja -C out/windows v8_hello_world
 
       - name: Copy to dist folder
         shell: bash

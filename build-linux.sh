@@ -41,4 +41,4 @@ v8_enable_sandbox=false"
 
 gn gen out/linux --args="${ARGS}"
 
-ninja -C out/linux v8_monolith d8 -v
+ninja -C out/linux v8_monolith d8 # -v

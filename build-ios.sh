@@ -45,4 +45,4 @@ echo "FINAL_ARGS:${FINAL_ARGS}"
 
 gn gen out/ios --args="${FINAL_ARGS}"
 
-ninja -C out/ios v8_monolith d8 -v
+ninja -C out/ios v8_monolith d8 # -v

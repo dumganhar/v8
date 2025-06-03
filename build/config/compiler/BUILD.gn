@@ -1845,6 +1845,10 @@ config("default_warnings") {
 
   if (is_clang) {
     cflags += [
+      "-Wno-unknown-warning-option",
+    ]
+
+    cflags += [
       "-Wloop-analysis",
 
       # TODO(thakis): This used to be implied by -Wno-unused-function,
@@ -1876,6 +1880,8 @@ config("default_warnings") {
       cflags += [
         # TODO(crbug.com/330524456): -Wcast-function-type is under -Wextra now.
         "-Wno-cast-function-type",
+
+        "-Wno-builtin-assume-aligned-alignment",
 
         # Ignore warnings about MSVC optimization pragmas.
         # TODO(thakis): Only for no_chromium_code? http://crbug.com/912662

@@ -55,4 +55,4 @@ llvm_android_mainline=true
 
 gn gen out/android --args="${ARGS}"
 
-ninja -C out/android v8_monolith d8 -v
+ninja -C out/android v8_monolith d8 # -v
