@@ -8,6 +8,7 @@
 #include "include/v8config.h"
 #include "src/common/globals.h"
 #include "src/sandbox/external-entity-table.h"
+#include <vector>
 
 #ifdef V8_COMPRESS_POINTERS
 
