@@ -2049,6 +2049,14 @@ Tagged<Object> Isolate::UnwindAndFindHandler() {
     return exception;
   };
 
+#if V8_ENABLE_WEBASSEMBLY
+  Tagged<Object> maybe_continuation = root(RootIndex::kActiveContinuation);
+  Tagged<WasmContinuationObject> continuation;
+  if (!IsUndefined(maybe_continuation)) {
+    continuation = WasmContinuationObject::cast(maybe_continuation);
+  }
+#endif
+
   // Special handling of termination exceptions, uncatchable by JavaScript and
   // Wasm code, we unwind the handlers until the top ENTRY handler is found.
   bool catchable_by_js = is_catchable_by_javascript(exception);
@@ -2067,15 +2075,25 @@ Tagged<Object> Isolate::UnwindAndFindHandler() {
   for (StackFrameIterator iter(this);; iter.Advance(), visited_frames++) {
 #if V8_ENABLE_WEBASSEMBLY
     if (iter.frame()->type() == StackFrame::STACK_SWITCH) {
-      Tagged<Code> code =
-          builtins()->code(Builtin::kWasmReturnPromiseOnSuspendAsm);
-      HandlerTable table(code);
-      Address instruction_start =
-          code->InstructionStart(this, iter.frame()->pc());
-      int handler_offset = table.LookupReturn(0);
-      return FoundHandler(Context(), instruction_start, handler_offset,
-                          kNullAddress, iter.frame()->sp(), iter.frame()->fp(),
-                          visited_frames);
+      if (catchable_by_js) {
+        Tagged<Code> code =
+            builtins()->code(Builtin::kWasmReturnPromiseOnSuspendAsm);
+        HandlerTable table(code);
+        Address instruction_start =
+            code->InstructionStart(this, iter.frame()->pc());
+        int handler_offset = table.LookupReturn(0);
+        return FoundHandler(Context(), instruction_start, handler_offset,
+                            kNullAddress, iter.frame()->sp(),
+                            iter.frame()->fp(), visited_frames);
+      } else {
+        // We reached the base of the wasm stack. Follow the chain of
+        // continuations to find the parent stack and reset the iterator.
+        DCHECK(!continuation.is_null());
+        continuation = WasmContinuationObject::cast(continuation->parent());
+        wasm::StackMemory* stack =
+            Managed<wasm::StackMemory>::cast(continuation->stack())->raw();
+        iter.Reset(thread_local_top(), stack);
+      }
     }
 #endif
     // Handler must exist.
@@ -2463,6 +2481,13 @@ HandlerTable::CatchPrediction PredictExceptionFromBytecode(
 
 HandlerTable::CatchPrediction PredictException(const FrameSummary& summary,
                                                Isolate* isolate) {
+  if (!summary.IsJavaScript()) {
+    // This can happen when WASM is inlined by TurboFan. For now we ignore
+    // frames that are not JavaScript.
+    // TODO(https://crbug.com/349588762): We should also check Wasm code
+    // for exception handling.
+    return HandlerTable::UNCAUGHT;
+  }
   PtrComprCageBase cage_base(isolate);
   Handle<AbstractCode> code = summary.AsJavaScript().abstract_code();
   if (code->kind(cage_base) == CodeKind::BUILTIN) {

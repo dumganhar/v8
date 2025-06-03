@@ -588,7 +588,7 @@ class WasmRevecReducer : public UniformReducerAdapter<WasmRevecReducer, Next> {
       // Emit revectorized op.
       if (!og_index.valid()) {
         const LoadOp* start = analyzer_.GetStartOperation(pnode, ig_index, load)
-                                  .template TryCast<LoadOp>();
+                                  .TryCast<LoadOp>();
         DCHECK_EQ(start->base(), load.base());
 
         auto base = __ MapToNewGraph(load.base());
@@ -617,7 +617,7 @@ class WasmRevecReducer : public UniformReducerAdapter<WasmRevecReducer, Next> {
       if (!og_index.valid()) {
         const StoreOp* start =
             (analyzer_.GetStartOperation(pnode, ig_index, store))
-                .template TryCast<StoreOp>();
+                .TryCast<StoreOp>();
         DCHECK_EQ(start->base(), store.base());
 
         auto base = __ MapToNewGraph(store.base());

@@ -5,8 +5,6 @@
 #ifndef V8_SANDBOX_COMPACTIBLE_EXTERNAL_ENTITY_TABLE_H_
 #define V8_SANDBOX_COMPACTIBLE_EXTERNAL_ENTITY_TABLE_H_
 
-#include <vector>
-
 #include "include/v8config.h"
 #include "src/common/globals.h"
 #include "src/sandbox/external-entity-table.h"
@@ -44,7 +42,7 @@ enum class ExternalEntityTableCompactionOutcome {
  *    compacted. This decision is mostly based on the absolute and relative
  *    size of the freelist.
  *  - If compaction is needed, this algorithm determines by how many segments
- *    it would like to shrink the space (N). It will then attempts to move all
+ *    it would like to shrink the space (N). It will then attempt to move all
  *    live entries out of these segments so that they can be deallocated
  *    afterwards during sweeping.
  *  - The algorithm then simply selects the last N segments for evacuation, and
