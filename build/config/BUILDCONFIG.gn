@@ -667,7 +667,7 @@ foreach(_target_type,
 # case by setting static_component_type to either "source_set" or
 # "static_library". If unset, the default will be used.
 template("component") {
-  if (is_component_build) {
+  if (is_component_build && target_name != "absl" && target_name != "zlib") {
     _component_mode = "shared_library"
 
     # Generate a unique output_name for a shared library if not set by invoker.

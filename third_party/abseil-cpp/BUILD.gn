@@ -21,10 +21,7 @@ assert(!is_nacl || is_nacl_saigo,
        "base must not be built in most nacl toolchains")
 
 
-#cjh component("absl") {
-#target("static_library", "absl") {
-static_library("absl") {
-  complete_static_lib = true
+component("absl") {
   public_deps = [ ":absl_component_deps" ]
   if (is_component_build) {
     #cjh public_configs = [ ":absl_component_build" ]

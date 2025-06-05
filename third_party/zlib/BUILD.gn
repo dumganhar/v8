@@ -280,9 +280,7 @@ config("zlib_warnings") {
   }
 }
 
-#component("zlib") {
-static_library("zlib") {
-  complete_static_lib = true
+component("zlib") {
   if (!is_win) {
     # Don't stomp on "libzlib" on other platforms.
     output_name = "chrome_zlib"
