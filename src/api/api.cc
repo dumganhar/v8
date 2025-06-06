@@ -2862,6 +2862,10 @@ ScriptCompiler::CachedData* ScriptCompiler::CreateCodeCacheForFunction(
   return i::CodeSerializer::Serialize(i_isolate, shared);
 }
 
+void ScriptCompiler::DestroyCodeCache(ScriptCompiler::CachedData* data) {
+  delete data;
+}
+
 MaybeLocal<Script> Script::Compile(Local<Context> context, Local<String> source,
                                    ScriptOrigin* origin) {
   if (origin) {

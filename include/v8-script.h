@@ -833,6 +833,8 @@ class V8_EXPORT ScriptCompiler {
    */
   static CachedData* CreateCodeCacheForFunction(Local<Function> function);
 
+  static void DestroyCodeCache(CachedData* data);
+
  private:
   static V8_WARN_UNUSED_RESULT MaybeLocal<UnboundScript> CompileUnboundInternal(
       Isolate* isolate, Source* source, CompileOptions options,

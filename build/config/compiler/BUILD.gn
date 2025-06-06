@@ -1784,6 +1784,8 @@ config("default_warnings") {
 #cjh      if (use_blink) {
       cflags += [ "-Wno-deprecated-declarations" ]
 #cjh      }
+    } else if (!is_win) {
+      cflags += [ "-Wno-deprecated-declarations" ]
     }
 
     # Suppress warnings about ABI changes on ARM (Clang doesn't give this
