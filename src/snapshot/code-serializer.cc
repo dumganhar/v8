@@ -480,6 +480,11 @@ MaybeHandle<SharedFunctionInfo> CodeSerializer::Deserialize(
     return MaybeHandle<SharedFunctionInfo>();
   }
 
+  std::cout << "\nStart SharedFunctionInfo\n";
+  result->SharedFunctionInfoPrint(std::cout);
+  std::cout << "\nEnd SharedFunctionInfo\n";
+  std::cout << std::flush;
+
   // Check whether the newly deserialized data should be merged into an
   // existing Script from the Isolate compilation cache. If so, perform
   // the merge in a single-threaded manner since this deserialization was
@@ -695,10 +700,11 @@ SerializedCodeData::SerializedCodeData(const std::vector<uint8_t>* payload,
 SerializedCodeSanityCheckResult SerializedCodeData::SanityCheck(
     uint32_t expected_ro_snapshot_checksum,
     uint32_t expected_source_hash) const {
-  SerializedCodeSanityCheckResult result =
-      SanityCheckWithoutSource(expected_ro_snapshot_checksum);
-  if (result != SerializedCodeSanityCheckResult::kSuccess) return result;
-  return SanityCheckJustSource(expected_source_hash);
+  // SerializedCodeSanityCheckResult result =
+  //     SanityCheckWithoutSource(expected_ro_snapshot_checksum);
+  // if (result != SerializedCodeSanityCheckResult::kSuccess) return result;
+  // return SanityCheckJustSource(expected_source_hash);
+  return SerializedCodeSanityCheckResult::kSuccess;
 }
 
 SerializedCodeSanityCheckResult SerializedCodeData::SanityCheckJustSource(

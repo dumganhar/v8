@@ -659,12 +659,12 @@ void String::StringShortPrint(StringStream* accumulator) {
   accumulator->Add("<String[%u]: ", len);
   accumulator->Add(PrefixForDebugPrint());
 
-  if (len > kMaxShortPrintLength) {
-    accumulator->Add("...<truncated>>");
-    accumulator->Add(SuffixForDebugPrint());
-    accumulator->Put('>');
-    return;
-  }
+  // if (len > kMaxShortPrintLength) {
+  //   accumulator->Add("...<truncated>>");
+  //   accumulator->Add(SuffixForDebugPrint());
+  //   accumulator->Put('>');
+  //   return;
+  // }
 
   PrintUC16(accumulator, 0, len);
   accumulator->Add(SuffixForDebugPrint());

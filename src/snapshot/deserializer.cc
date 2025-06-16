@@ -298,7 +298,7 @@ Deserializer<IsolateT>::Deserializer(IsolateT* isolate,
 #ifdef DEBUG
   num_api_references_ = GetNumApiReferences(isolate);
 #endif  // DEBUG
-  CHECK_EQ(magic_number_, SerializedData::kMagicNumber);
+  // CHECK_EQ(magic_number_, SerializedData::kMagicNumber);
 }
 
 template <typename IsolateT>

@@ -2062,7 +2062,7 @@ void SharedFunctionInfo::SharedFunctionInfoPrint(std::ostream& os) {
   } else {
     os << kUnavailableString;
   }
-  PrintSourceCode(os);
+  // PrintSourceCode(os);
   // Script files are often large, thus only print their {Brief} representation.
   os << "\n - script: " << Brief(script());
   os << "\n - function token position: " << function_token_position();
@@ -2083,6 +2083,11 @@ void SharedFunctionInfo::SharedFunctionInfoPrint(std::ostream& os) {
   os << "\n - unique_id: " << unique_id();
   os << "\n - age: " << age();
   os << "\n";
+
+  os << "\nStart BytecodeArray\n";
+  GetActiveBytecodeArray(isolate)->Disassemble(os);
+  os << "\nEnd BytecodeArray\n";
+  os << std::flush;
 }
 
 void SharedFunctionInfoWrapper::SharedFunctionInfoWrapperPrint(
@@ -3041,6 +3046,14 @@ void HeapObject::HeapObjectShortPrint(std::ostream& os) {
     os << accumulator.ToCString().get();
     return;
   }
+
+  // Print array literal members instead of only "<AsmWasmData>"
+  if (map(cage_base)->instance_type() == ASM_WASM_DATA_TYPE) {
+    os << "<ArrayBoilerplateDescription> ";
+    ArrayBoilerplateDescription::cast(*this)->constant_elements()->HeapObjectShortPrint(os);
+    return;
+  }
+
   switch (map(cage_base)->instance_type()) {
     case MAP_TYPE: {
       Tagged<Map> map = Map::cast(*this);
@@ -3133,14 +3146,23 @@ void HeapObject::HeapObjectShortPrint(std::ostream& os) {
       break;
     case FIXED_ARRAY_TYPE:
       os << "<FixedArray[" << FixedArray::cast(*this)->length() << "]>";
+      os << "\nStart FixedArray\n";
+      FixedArray::cast(*this)->FixedArrayPrint(os);
+      os << "\nEnd FixedArray\n";
       break;
     case OBJECT_BOILERPLATE_DESCRIPTION_TYPE:
       os << "<ObjectBoilerplateDescription["
          << ObjectBoilerplateDescription::cast(*this)->capacity() << "]>";
+      os << "\nStart ObjectBoilerplateDescription\n";
+      ObjectBoilerplateDescription::cast(*this)->ObjectBoilerplateDescriptionPrint(os);
+      os << "\nEnd ObjectBoilerplateDescription\n";
       break;
     case FIXED_DOUBLE_ARRAY_TYPE:
       os << "<FixedDoubleArray[" << FixedDoubleArray::cast(*this)->length()
          << "]>";
+      os << "\nStart FixedDoubleArray\n";
+      FixedDoubleArray::cast(*this)->FixedDoubleArrayPrint(os);
+      os << "\nEnd FixedDoubleArray\n";
       break;
     case BYTE_ARRAY_TYPE:
       os << "<ByteArray[" << ByteArray::cast(*this)->length() << "]>";
@@ -3223,6 +3245,9 @@ void HeapObject::HeapObjectShortPrint(std::ostream& os) {
       } else {
         os << "<SharedFunctionInfo>";
       }
+      os << "\nStart SharedFunctionInfo\n";
+      shared->SharedFunctionInfoPrint(os);
+      os << "\nEnd SharedFunctionInfo\n";
       break;
     }
     case JS_MESSAGE_OBJECT_TYPE:
