@@ -31,6 +31,7 @@ clang_use_chrome_plugins=false
 chrome_pgo_phase=0
 is_component_build=false
 v8_monolithic=true
+use_custom_libcxx_for_host=false
 use_custom_libcxx=false
 is_debug=false
 v8_use_external_startup_data=false
