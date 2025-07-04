@@ -47,6 +47,7 @@ is_official_build=true
 v8_enable_i18n_support=false
 treat_warnings_as_errors=false
 symbol_level=0
+v8_enable_fuzztest=false
 v8_enable_webassembly=true
 v8_enable_sandbox=false"
 

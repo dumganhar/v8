@@ -28,6 +28,7 @@ treat_warnings_as_errors=false
 symbol_level=0
 v8_enable_webassembly=false
 v8_enable_sandbox=false
+v8_enable_fuzztest=false
 ios_deployment_target=\"11.0\"
 ios_enable_code_signing=false"
 

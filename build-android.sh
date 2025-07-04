@@ -49,6 +49,7 @@ android64_ndk_api_level=21
 use_custom_libunwind=false
 use_ml_inliner=false
 llvm_android_mainline=true
+v8_enable_fuzztest=false
 "
 
 
