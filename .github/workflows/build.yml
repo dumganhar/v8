@@ -76,7 +76,7 @@ jobs:
           echo "XCODE_DEVELOPER_PATH: ${XCODE_DEVELOPER_PATH}"
           cd $XCODE_DEVELOPER_PATH/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang
           ls -l
-          ln -s 17 20
+          ln -s 16 20
 
       - name: Install llvm
         run: |
@@ -217,7 +217,7 @@ jobs:
           echo "XCODE_DEVELOPER_PATH: ${XCODE_DEVELOPER_PATH}"
           cd $XCODE_DEVELOPER_PATH/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang
           ls -l
-          ln -s 17 20
+          ln -s 16 20
 
       - name: Install llvm
         run: |
