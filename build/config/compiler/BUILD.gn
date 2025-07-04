@@ -600,20 +600,20 @@ config("compiler") {
     # TODO(crbug.com/40283598): This causes binary size growth and potentially
     # other problems.
     # TODO(crbug.com/40284925): This isn't supported by Cronet's mainline llvm version.
-    if (default_toolchain != "//build/toolchain/cros:target" &&
-        !llvm_android_mainline) {
-      cflags += [
-        "-mllvm",
-        "-split-threshold-for-reg-with-hint=0",
-      ]
-      if (use_thin_lto && is_a_target_toolchain) {
-        if (is_win) {
-          ldflags += [ "-mllvm:-split-threshold-for-reg-with-hint=0" ]
-        } else {
-          ldflags += [ "-Wl,-mllvm,-split-threshold-for-reg-with-hint=0" ]
-        }
-      }
-    }
+    # if (default_toolchain != "//build/toolchain/cros:target" &&
+    #     !llvm_android_mainline) {
+    #   cflags += [
+    #     "-mllvm",
+    #     "-split-threshold-for-reg-with-hint=0",
+    #   ]
+    #   if (use_thin_lto && is_a_target_toolchain) {
+    #     if (is_win) {
+    #       ldflags += [ "-mllvm:-split-threshold-for-reg-with-hint=0" ]
+    #     } else {
+    #       ldflags += [ "-Wl,-mllvm,-split-threshold-for-reg-with-hint=0" ]
+    #     }
+    #   }
+    # }
 
     # TODO(crbug.com/40192287): Investigate why/if this should be needed.
     if (is_win) {
@@ -1980,7 +1980,7 @@ config("default_warnings") {
         "-Wno-cast-function-type",
 
         # TODO(crbug.com/40284799): Fix and re-enable.
-        "-Wno-thread-safety-reference-return",
+        #"-Wno-thread-safety-reference-return",
       ]
 
       cflags_cc += [
@@ -1991,14 +1991,14 @@ config("default_warnings") {
       if (!is_nacl) {
         cflags_cc += [
           # TODO(crbug.com/41486292): Fix and re-enable.
-          "-Wno-c++11-narrowing-const-reference",
+          #"-Wno-c++11-narrowing-const-reference",
         ]
 
         # TODO(crbug.com/344680447): Fix and re-enable.
-        cflags_cc += [ "-Wno-missing-template-arg-list-after-template-kw" ]
+        #cflags_cc += [ "-Wno-missing-template-arg-list-after-template-kw" ]
 
         # TODO(crbug.com/356172342): Fix and re-enable.
-        cflags_cc += [ "-Wno-dangling-assignment-gsl" ]
+        #cflags_cc += [ "-Wno-dangling-assignment-gsl" ]
 
         if (llvm_force_head_revision) {
           # TODO(crbug.com/376641662): Fix and re-enable.
