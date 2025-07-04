@@ -66,7 +66,6 @@
 #include "src/parsing/parsing.h"
 #include "src/parsing/scanner-character-streams.h"
 #include "src/profiler/profile-generator.h"
-#include "src/sandbox/testing.h"
 #include "src/snapshot/snapshot.h"
 #include "src/tasks/cancelable-task.h"
 #include "src/utils/ostreams.h"
@@ -376,16 +375,19 @@ v8::Platform* g_default_platform;
 std::unique_ptr<v8::Platform> g_platform;
 
 template <int N>
-bool ThrowError(Isolate* isolate, const char (&message)[N]) {
-  if (isolate->IsExecutionTerminating()) return false;
+void ThrowError(Isolate* isolate, const char (&message)[N]) {
+  if (isolate->IsExecutionTerminating()) return;
   isolate->ThrowError(message);
-  return true;
 }
 
-bool ThrowError(Isolate* isolate, Local<String> message) {
-  if (isolate->IsExecutionTerminating()) return false;
+void ThrowError(Isolate* isolate, Local<String> message) {
+  if (isolate->IsExecutionTerminating()) return;
   isolate->ThrowError(message);
-  return true;
+}
+
+void ThrowException(Isolate* isolate, Local<Value> exception) {
+  if (isolate->IsExecutionTerminating()) return;
+  isolate->ThrowException(exception);
 }
 
 static MaybeLocal<Value> TryGetValue(v8::Isolate* isolate,
@@ -409,12 +411,13 @@ std::shared_ptr<Worker> GetWorkerFromInternalField(Isolate* isolate,
     return nullptr;
   }
 
-  i::Handle<i::Object> handle = Utils::OpenHandle(*object->GetInternalField(0));
+  i::DirectHandle<i::Object> handle =
+      Utils::OpenDirectHandle(*object->GetInternalField(0));
   if (IsSmi(*handle)) {
     ThrowError(isolate, "Worker is defunct because main thread is terminating");
     return nullptr;
   }
-  auto managed = i::Handle<i::Managed<Worker>>::cast(handle);
+  auto managed = i::Cast<i::Managed<Worker>>(handle);
   return managed->get();
 }
 
@@ -525,11 +528,10 @@ std::map<Isolate*, std::pair<Global<Function>, Global<Context>>>
     Shell::profiler_end_callback_;
 base::LazyMutex Shell::workers_mutex_;
 bool Shell::allow_new_workers_ = true;
+
 std::unordered_set<std::shared_ptr<Worker>> Shell::running_workers_;
 std::atomic<bool> Shell::script_executed_{false};
 std::atomic<bool> Shell::valid_fuzz_script_{false};
-base::LazyMutex Shell::isolate_status_lock_;
-std::map<v8::Isolate*, int> Shell::isolate_running_streaming_tasks_;
 base::LazyMutex Shell::cached_code_mutex_;
 std::map<std::string, std::unique_ptr<ScriptCompiler::CachedData>>
     Shell::cached_code_map_;
@@ -582,9 +584,10 @@ void Shell::StoreInCodeCache(Isolate* isolate, Local<Value> source,
 // TODO(leszeks): Also test chunking the data.
 class DummySourceStream : public v8::ScriptCompiler::ExternalSourceStream {
  public:
-  explicit DummySourceStream(Local<String> source) : done_(false) {
-    source_buffer_ = Utils::OpenDirectHandle(*source)->ToCString(
-        i::ALLOW_NULLS, i::FAST_STRING_TRAVERSAL, &source_length_);
+  DummySourceStream(Isolate* isolate, Local<String> source) : done_(false) {
+    source_length_ = source->Length();
+    source_buffer_ = std::make_unique<uint16_t[]>(source_length_);
+    source->Write(isolate, source_buffer_.get(), 0, source_length_);
   }
 
   size_t GetMoreData(const uint8_t** src) override {
@@ -594,12 +597,12 @@ class DummySourceStream : public v8::ScriptCompiler::ExternalSourceStream {
     *src = reinterpret_cast<uint8_t*>(source_buffer_.release());
     done_ = true;
 
-    return source_length_;
+    return source_length_ * 2;
   }
 
  private:
-  int source_length_;
-  std::unique_ptr<char[]> source_buffer_;
+  uint32_t source_length_;
+  std::unique_ptr<uint16_t[]> source_buffer_;
   bool done_;
 };
 
@@ -672,8 +675,8 @@ MaybeLocal<T> Shell::CompileString(Isolate* isolate, Local<Context> context,
                                    const ScriptOrigin& origin) {
   if (options.streaming_compile) {
     v8::ScriptCompiler::StreamedSource streamed_source(
-        std::make_unique<DummySourceStream>(source),
-        v8::ScriptCompiler::StreamedSource::UTF8);
+        std::make_unique<DummySourceStream>(isolate, source),
+        v8::ScriptCompiler::StreamedSource::TWO_BYTE);
     std::unique_ptr<v8::ScriptCompiler::ScriptStreamingTask> streaming_task(
         v8::ScriptCompiler::StartStreaming(isolate, &streamed_source,
                                            std::is_same<T, Module>::value
@@ -684,7 +687,7 @@ MaybeLocal<T> Shell::CompileString(Isolate* isolate, Local<Context> context,
   }
 
   ScriptCompiler::CachedData* cached_code = nullptr;
-  if (options.compile_options == ScriptCompiler::kConsumeCodeCache) {
+  if (options.compile_options & ScriptCompiler::kConsumeCodeCache) {
     cached_code = LookupCodeCache(isolate, source);
   }
   ScriptCompiler::Source script_source(source, origin, cached_code);
@@ -700,6 +703,8 @@ namespace {
 // For testing.
 const int kHostDefinedOptionsLength = 2;
 const uint32_t kHostDefinedOptionsMagicConstant = 0xF1F2F3F0;
+
+const char kDataURLPrefix[] = "data:text/javascript,";
 
 std::string ToSTLString(Isolate* isolate, Local<String> v8_str) {
   String::Utf8Value utf8(isolate, v8_str);
@@ -727,13 +732,42 @@ class ModuleEmbedderData {
   static constexpr i::ExternalPointerTag kManagedTag = i::kGenericManagedTag;
 
   explicit ModuleEmbedderData(Isolate* isolate)
-      : module_to_specifier_map(10, ModuleGlobalHash(isolate)),
+      : isolate_(isolate),
+        module_to_specifier_map(10, ModuleGlobalHash(isolate)),
         json_module_to_parsed_json_map(
             10, module_to_specifier_map.hash_function()) {}
 
-  static ModuleType ModuleTypeFromImportAttributes(
-      Local<Context> context, Local<FixedArray> import_attributes,
-      bool hasPositions) {
+  std::string GetModuleSpecifier(Local<Module> module) {
+    Global<Module> global_module(isolate_, module);
+    auto specifier_it = module_to_specifier_map.find(global_module);
+    CHECK(specifier_it != module_to_specifier_map.end());
+    return specifier_it->second;
+  }
+
+  Local<Module> GetModule(
+      std::pair<std::string, ModuleType> module_specifier_and_type) {
+    auto module_it = module_map.find(module_specifier_and_type);
+    CHECK(module_it != module_map.end());
+    return module_it->second.Get(isolate_);
+  }
+
+  Local<Object> GetModuleSource(
+      std::pair<std::string, ModuleType> module_specifier_and_type) {
+    auto module_source_it = module_source_map.find(module_specifier_and_type);
+    CHECK(module_source_it != module_source_map.end());
+    return module_source_it->second.Get(isolate_);
+  }
+
+  Local<Value> GetJsonModuleValue(Local<Module> module) {
+    auto json_value_it =
+        json_module_to_parsed_json_map.find(Global<Module>(isolate_, module));
+    CHECK(json_value_it != json_module_to_parsed_json_map.end());
+    return json_value_it->second.Get(isolate_);
+  }
+
+  static ModuleType ModuleTypeFromImportSpecifierAndAttributes(
+      Local<Context> context, const std::string& specifier,
+      Local<FixedArray> import_attributes, bool hasPositions) {
     Isolate* isolate = context->GetIsolate();
     const int kV8AssertionEntrySize = hasPositions ? 3 : 2;
     for (int i = 0; i < import_attributes->Length();
@@ -749,18 +783,25 @@ class ModuleEmbedderData {
         if (assertion_value == "json") {
           return ModuleType::kJSON;
         } else {
-          // JSON is currently the only supported non-JS type
+          // JSON and WebAssembly are currently the only supported non-JS types
           return ModuleType::kInvalid;
         }
       }
     }
 
-    // If no type is asserted, default to JS.
+    // If no type is asserted, check for the extension. Otherwise default to JS.
+    if (specifier.ends_with(".wasm")) {
+      return ModuleType::kWebAssembly;
+    }
     return ModuleType::kJavaScript;
   }
 
+  Isolate* isolate_;
   // Map from (normalized module specifier, module type) pair to Module.
   std::map<std::pair<std::string, ModuleType>, Global<Module>> module_map;
+  // Map from (normalized module specifier, module type) pair to ModuleSource.
+  std::map<std::pair<std::string, ModuleType>, Global<Object>>
+      module_source_map;
   // Map from Module to its URL as defined in the ScriptOrigin
   std::unordered_map<Global<Module>, std::string, ModuleGlobalHash>
       module_to_specifier_map;
@@ -780,8 +821,9 @@ std::shared_ptr<ModuleEmbedderData> InitializeModuleEmbedderData(
   i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(context->GetIsolate());
   const size_t kModuleEmbedderDataEstimate = 4 * 1024;  // module map.
   i::Handle<i::Managed<ModuleEmbedderData>> module_data_managed =
-      i::Managed<ModuleEmbedderData>::Allocate(
-          i_isolate, kModuleEmbedderDataEstimate, context->GetIsolate());
+      i::Managed<ModuleEmbedderData>::From(
+          i_isolate, kModuleEmbedderDataEstimate,
+          std::make_shared<ModuleEmbedderData>(context->GetIsolate()));
   v8::Local<v8::Value> module_data = Utils::ToLocal(module_data_managed);
   context->SetEmbedderData(kModuleEmbedderDataIndex, module_data);
   return module_data_managed->get();
@@ -791,9 +833,9 @@ std::shared_ptr<ModuleEmbedderData> GetModuleDataFromContext(
     Local<Context> context) {
   v8::Local<v8::Value> module_data =
       context->GetEmbedderData(kModuleEmbedderDataIndex);
-  i::Handle<i::Managed<ModuleEmbedderData>> module_data_managed =
-      i::Handle<i::Managed<ModuleEmbedderData>>::cast(
-          Utils::OpenHandle<Value, i::Object>(module_data));
+  i::DirectHandle<i::Managed<ModuleEmbedderData>> module_data_managed =
+      i::Cast<i::Managed<ModuleEmbedderData>>(
+          Utils::OpenDirectHandle<Value, i::Object>(module_data));
   return module_data_managed->get();
 }
 
@@ -837,6 +879,7 @@ class D8WasmAsyncResolvePromiseTask : public v8::Task {
   void Run() override {
     v8::HandleScope scope(isolate_);
     v8::Local<v8::Context> context = context_.Get(isolate_);
+    v8::Context::Scope context_scope(context);
     MicrotasksScope microtasks_scope(context,
                                      MicrotasksScope::kDoNotRunMicrotasks);
     v8::Local<v8::Promise::Resolver> resolver = resolver_.Get(isolate_);
@@ -878,6 +921,7 @@ bool Shell::ExecuteString(Isolate* isolate, Local<String> source,
                           ReportExceptions report_exceptions,
                           Global<Value>* out_result) {
   i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
+  if (i_isolate->is_execution_terminating()) return true;
   if (i::v8_flags.parse_only) {
     i::VMState<PARSER> state(i_isolate);
     i::Handle<i::String> str = Utils::OpenHandle(*(source));
@@ -891,7 +935,7 @@ bool Shell::ExecuteString(Isolate* isolate, Local<String> source,
             i_isolate, true, i::construct_language_mode(i::v8_flags.use_strict),
             i::REPLMode::kNo, ScriptType::kClassic, i::v8_flags.lazy);
 
-    if (options.compile_options == v8::ScriptCompiler::kEagerCompile) {
+    if (options.compile_options & v8::ScriptCompiler::kEagerCompile) {
       flags.set_is_eager(true);
     }
 
@@ -955,12 +999,13 @@ bool Shell::ExecuteString(Isolate* isolate, Local<String> source,
     delete cached_data;
   }
   if (options.compile_only) return true;
-  if (options.compile_options == ScriptCompiler::kConsumeCodeCache) {
-    i::Handle<i::Script> i_script(
-        i::Script::cast(Utils::OpenDirectHandle(*script)->shared()->script()),
+  if (options.compile_options & ScriptCompiler::kConsumeCodeCache) {
+    i::DirectHandle<i::Script> i_script(
+        i::Cast<i::Script>(
+            Utils::OpenDirectHandle(*script)->shared()->script()),
         i_isolate);
     // TODO(cbruni, chromium:1244145): remove once context-allocated.
-    i_script->set_host_defined_options(i::FixedArray::cast(
+    i_script->set_host_defined_options(i::Cast<i::FixedArray>(
         *Utils::OpenDirectHandle(*(origin.GetHostDefinedOptions()))));
   }
 
@@ -978,6 +1023,7 @@ bool Shell::ExecuteString(Isolate* isolate, Local<String> source,
 
   Local<Value> result;
   if (!maybe_result.ToLocal(&result)) {
+    if (try_catch.HasTerminated()) return true;
     DCHECK(try_catch.HasCaught());
     return false;
   } else if (out_result != nullptr) {
@@ -1058,6 +1104,17 @@ std::string NormalizePath(const std::string& path,
   return os.str();
 }
 
+// Resolves specifier to an absolute path if necessary, and does some
+// normalization (eliding references to the current directory
+// and replacing backslashes with slashes).
+//
+// If specifier is a data url, returns it unchanged.
+std::string NormalizeModuleSpecifier(const std::string& specifier,
+                                     const std::string& dir_name) {
+  if (specifier.starts_with(kDataURLPrefix)) return specifier;
+  return NormalizePath(specifier, dir_name);
+}
+
 MaybeLocal<Module> ResolveModuleCallback(Local<Context> context,
                                          Local<String> specifier,
                                          Local<FixedArray> import_attributes,
@@ -1065,46 +1122,123 @@ MaybeLocal<Module> ResolveModuleCallback(Local<Context> context,
   Isolate* isolate = context->GetIsolate();
   std::shared_ptr<ModuleEmbedderData> module_data =
       GetModuleDataFromContext(context);
-  auto specifier_it = module_data->module_to_specifier_map.find(
-      Global<Module>(isolate, referrer));
-  CHECK(specifier_it != module_data->module_to_specifier_map.end());
-  std::string absolute_path = NormalizePath(ToSTLString(isolate, specifier),
-                                            DirName(specifier_it->second));
-  ModuleType module_type = ModuleEmbedderData::ModuleTypeFromImportAttributes(
-      context, import_attributes, true);
-  auto module_it =
-      module_data->module_map.find(std::make_pair(absolute_path, module_type));
-  CHECK(module_it != module_data->module_map.end());
-  return module_it->second.Get(isolate);
+  std::string referrer_specifier = module_data->GetModuleSpecifier(referrer);
+
+  std::string stl_specifier = ToSTLString(isolate, specifier);
+  std::string absolute_path =
+      NormalizeModuleSpecifier(stl_specifier, DirName(referrer_specifier));
+  ModuleType module_type =
+      ModuleEmbedderData::ModuleTypeFromImportSpecifierAndAttributes(
+          context, stl_specifier, import_attributes, true);
+  return module_data->GetModule(std::make_pair(absolute_path, module_type));
+}
+
+MaybeLocal<Object> ResolveModuleSourceCallback(
+    Local<Context> context, Local<String> specifier,
+    Local<FixedArray> import_attributes, Local<Module> referrer) {
+  Isolate* isolate = context->GetIsolate();
+  std::shared_ptr<ModuleEmbedderData> module_data =
+      GetModuleDataFromContext(context);
+  std::string referrer_specifier = module_data->GetModuleSpecifier(referrer);
+
+  std::string stl_specifier = ToSTLString(isolate, specifier);
+  std::string absolute_path =
+      NormalizeModuleSpecifier(stl_specifier, DirName(referrer_specifier));
+  ModuleType module_type =
+      ModuleEmbedderData::ModuleTypeFromImportSpecifierAndAttributes(
+          context, stl_specifier, import_attributes, true);
+
+  return module_data->GetModuleSource(
+      std::make_pair(absolute_path, module_type));
 }
 
 }  // anonymous namespace
 
+MaybeLocal<Object> Shell::FetchModuleSource(Local<Module> referrer,
+                                            Local<Context> context,
+                                            const std::string& module_specifier,
+                                            ModuleType module_type) {
+  Isolate* isolate = context->GetIsolate();
+  DCHECK(IsAbsolutePath(module_specifier));
+  auto file = ReadFileData(isolate, module_specifier.c_str());
+
+  std::shared_ptr<ModuleEmbedderData> module_data =
+      GetModuleDataFromContext(context);
+  if (!file) {
+    std::string msg = "d8: Error reading module from " + module_specifier;
+    if (!referrer.IsEmpty()) {
+      std::string referrer_specifier =
+          module_data->GetModuleSpecifier(referrer);
+      msg += "\n    imported by " + referrer_specifier;
+    }
+    ThrowError(isolate,
+               v8::String::NewFromUtf8(isolate, msg.c_str()).ToLocalChecked());
+    return MaybeLocal<Object>();
+  }
+
+  Local<Object> module_source;
+  switch (module_type) {
+    case ModuleType::kWebAssembly: {
+      if (!v8::WasmModuleObject::Compile(
+               isolate,
+               MemorySpan<const uint8_t>(static_cast<uint8_t*>(file->memory()),
+                                         file->size()))
+               .ToLocal(&module_source)) {
+        return MaybeLocal<Object>();
+      }
+      break;
+    }
+    default:
+      // https://tc39.es/proposal-source-phase-imports/#table-abstract-methods-of-module-records
+      // For Module Records that do not have a source representation,
+      // GetModuleSource() must always return a throw completion whose [[Value]]
+      // is a ReferenceError.
+      ThrowException(
+          isolate, v8::Exception::ReferenceError(String::NewFromUtf8Literal(
+                       isolate, "Module source can not be imported for type")));
+      return MaybeLocal<Object>();
+  }
+
+  CHECK(
+      module_data->module_source_map
+          .insert(std::make_pair(std::make_pair(module_specifier, module_type),
+                                 Global<Object>(isolate, module_source)))
+          .second);
+  return module_source;
+}
+
+// file_name must be either an absolute path to the filesystem or a data URL.
 MaybeLocal<Module> Shell::FetchModuleTree(Local<Module> referrer,
                                           Local<Context> context,
-                                          const std::string& file_name,
+                                          const std::string& module_specifier,
                                           ModuleType module_type) {
-  DCHECK(IsAbsolutePath(file_name));
   Isolate* isolate = context->GetIsolate();
-  MaybeLocal<String> source_text = ReadFile(isolate, file_name.c_str(), false);
-  if (source_text.IsEmpty() && options.fuzzy_module_file_extensions) {
-    std::string fallback_file_name = file_name + ".js";
-    source_text = ReadFile(isolate, fallback_file_name.c_str(), false);
-    if (source_text.IsEmpty()) {
-      fallback_file_name = file_name + ".mjs";
-      source_text = ReadFile(isolate, fallback_file_name.c_str());
+  const bool is_data_url = module_specifier.starts_with(kDataURLPrefix);
+  MaybeLocal<String> source_text;
+  if (is_data_url) {
+    source_text = String::NewFromUtf8(
+        isolate, module_specifier.c_str() + strlen(kDataURLPrefix));
+  } else {
+    DCHECK(IsAbsolutePath(module_specifier));
+    source_text = ReadFile(isolate, module_specifier.c_str(), false);
+    if (source_text.IsEmpty() && options.fuzzy_module_file_extensions) {
+      std::string fallback_file_name = module_specifier + ".js";
+      source_text = ReadFile(isolate, fallback_file_name.c_str(), false);
+      if (source_text.IsEmpty()) {
+        fallback_file_name = module_specifier + ".mjs";
+        source_text = ReadFile(isolate, fallback_file_name.c_str());
+      }
     }
   }
 
   std::shared_ptr<ModuleEmbedderData> module_data =
       GetModuleDataFromContext(context);
   if (source_text.IsEmpty()) {
-    std::string msg = "d8: Error reading  module from " + file_name;
+    std::string msg = "d8: Error reading module from " + module_specifier;
     if (!referrer.IsEmpty()) {
-      auto specifier_it = module_data->module_to_specifier_map.find(
-          Global<Module>(isolate, referrer));
-      CHECK(specifier_it != module_data->module_to_specifier_map.end());
-      msg += "\n    imported by " + specifier_it->second;
+      std::string referrer_specifier =
+          module_data->GetModuleSpecifier(referrer);
+      msg += "\n    imported by " + referrer_specifier;
     }
     ThrowError(isolate,
                v8::String::NewFromUtf8(isolate, msg.c_str()).ToLocalChecked());
@@ -1112,7 +1246,7 @@ MaybeLocal<Module> Shell::FetchModuleTree(Local<Module> referrer,
   }
 
   Local<String> resource_name =
-      String::NewFromUtf8(isolate, file_name.c_str()).ToLocalChecked();
+      String::NewFromUtf8(isolate, module_specifier.c_str()).ToLocalChecked();
   ScriptOrigin origin =
       CreateScriptOrigin(isolate, resource_name, ScriptType::kModule);
 
@@ -1136,7 +1270,7 @@ MaybeLocal<Module> Shell::FetchModuleTree(Local<Module> referrer,
 
     module = v8::Module::CreateSyntheticModule(
         isolate,
-        String::NewFromUtf8(isolate, file_name.c_str()).ToLocalChecked(),
+        String::NewFromUtf8(isolate, module_specifier.c_str()).ToLocalChecked(),
         export_names, Shell::JSONModuleEvaluationSteps);
 
     CHECK(module_data->json_module_to_parsed_json_map
@@ -1147,41 +1281,61 @@ MaybeLocal<Module> Shell::FetchModuleTree(Local<Module> referrer,
     UNREACHABLE();
   }
 
-  CHECK(module_data->module_map
-            .insert(std::make_pair(std::make_pair(file_name, module_type),
-                                   Global<Module>(isolate, module)))
-            .second);
+  CHECK(
+      module_data->module_map
+          .insert(std::make_pair(std::make_pair(module_specifier, module_type),
+                                 Global<Module>(isolate, module)))
+          .second);
   CHECK(module_data->module_to_specifier_map
-            .insert(std::make_pair(Global<Module>(isolate, module), file_name))
+            .insert(std::make_pair(Global<Module>(isolate, module),
+                                   module_specifier))
             .second);
 
-  std::string dir_name = DirName(file_name);
+  // data URLs don't support further imports, so we're done.
+  if (is_data_url) return module;
+
+  std::string dir_name = DirName(module_specifier);
 
   Local<FixedArray> module_requests = module->GetModuleRequests();
   for (int i = 0, length = module_requests->Length(); i < length; ++i) {
     Local<ModuleRequest> module_request =
         module_requests->Get(context, i).As<ModuleRequest>();
-    Local<String> name = module_request->GetSpecifier();
-    std::string absolute_path =
-        NormalizePath(ToSTLString(isolate, name), dir_name);
+    std::string specifier =
+        ToSTLString(isolate, module_request->GetSpecifier());
+    std::string normalized_specifier =
+        NormalizeModuleSpecifier(specifier, dir_name);
     Local<FixedArray> import_attributes = module_request->GetImportAttributes();
     ModuleType request_module_type =
-        ModuleEmbedderData::ModuleTypeFromImportAttributes(
-            context, import_attributes, true);
+        ModuleEmbedderData::ModuleTypeFromImportSpecifierAndAttributes(
+            context, normalized_specifier, import_attributes, true);
 
     if (request_module_type == ModuleType::kInvalid) {
       ThrowError(isolate, "Invalid module type was asserted");
       return MaybeLocal<Module>();
     }
 
-    if (module_data->module_map.count(
-            std::make_pair(absolute_path, request_module_type))) {
-      continue;
-    }
+    if (module_request->GetPhase() == ModuleImportPhase::kSource) {
+      if (module_data->module_source_map.count(
+              std::make_pair(normalized_specifier, request_module_type))) {
+        continue;
+      }
 
-    if (FetchModuleTree(module, context, absolute_path, request_module_type)
-            .IsEmpty()) {
-      return MaybeLocal<Module>();
+      if (FetchModuleSource(module, context, normalized_specifier,
+                            request_module_type)
+              .IsEmpty()) {
+        return MaybeLocal<Module>();
+      }
+    } else {
+      if (module_data->module_map.count(
+              std::make_pair(normalized_specifier, request_module_type))) {
+        continue;
+      }
+
+      if (FetchModuleTree(module, context, normalized_specifier,
+                          request_module_type)
+              .IsEmpty()) {
+        return MaybeLocal<Module>();
+      }
     }
   }
 
@@ -1194,10 +1348,7 @@ MaybeLocal<Value> Shell::JSONModuleEvaluationSteps(Local<Context> context,
 
   std::shared_ptr<ModuleEmbedderData> module_data =
       GetModuleDataFromContext(context);
-  auto json_value_it = module_data->json_module_to_parsed_json_map.find(
-      Global<Module>(isolate, module));
-  CHECK(json_value_it != module_data->json_module_to_parsed_json_map.end());
-  Local<Value> json_value = json_value_it->second.Get(isolate);
+  Local<Value> json_value = module_data->GetJsonModuleValue(module);
 
   TryCatch try_catch(isolate);
   Maybe<bool> result = module->SetSyntheticModuleExport(
@@ -1219,9 +1370,10 @@ MaybeLocal<Value> Shell::JSONModuleEvaluationSteps(Local<Context> context,
 struct DynamicImportData {
   DynamicImportData(Isolate* isolate_, Local<Context> context_,
                     Local<Value> referrer_, Local<String> specifier_,
+                    ModuleImportPhase phase_,
                     Local<FixedArray> import_attributes_,
                     Local<Promise::Resolver> resolver_)
-      : isolate(isolate_) {
+      : isolate(isolate_), phase(phase_) {
     context.Reset(isolate, context_);
     referrer.Reset(isolate, referrer_);
     specifier.Reset(isolate, specifier_);
@@ -1235,22 +1387,16 @@ struct DynamicImportData {
   Global<Context> context;
   Global<Value> referrer;
   Global<String> specifier;
+  ModuleImportPhase phase;
   Global<FixedArray> import_attributes;
   Global<Promise::Resolver> resolver;
 };
 
 namespace {
-struct ModuleResolutionData {
-  ModuleResolutionData(Isolate* isolate_, Local<Value> module_namespace_,
-                       Local<Promise::Resolver> resolver_)
-      : isolate(isolate_) {
-    module_namespace.Reset(isolate, module_namespace_);
-    resolver.Reset(isolate, resolver_);
-  }
 
-  Isolate* isolate;
-  Global<Value> module_namespace;
-  Global<Promise::Resolver> resolver;
+enum ModuleResolutionDataIndex : uint32_t {
+  kResolver = 0,
+  kNamespaceOrSource = 1,
 };
 
 }  // namespace
@@ -1258,35 +1404,39 @@ struct ModuleResolutionData {
 void Shell::ModuleResolutionSuccessCallback(
     const FunctionCallbackInfo<Value>& info) {
   DCHECK(i::ValidateCallbackInfo(info));
-  std::unique_ptr<ModuleResolutionData> module_resolution_data(
-      static_cast<ModuleResolutionData*>(
-          info.Data().As<v8::External>()->Value()));
-  Isolate* isolate(module_resolution_data->isolate);
+  Isolate* isolate(info.GetIsolate());
   HandleScope handle_scope(isolate);
+  Local<Array> module_resolution_data(info.Data().As<Array>());
+  Local<Context> context(isolate->GetCurrentContext());
 
   Local<Promise::Resolver> resolver(
-      module_resolution_data->resolver.Get(isolate));
-  Local<Value> module_namespace(
-      module_resolution_data->module_namespace.Get(isolate));
+      module_resolution_data->Get(context, ModuleResolutionDataIndex::kResolver)
+          .ToLocalChecked()
+          .As<Promise::Resolver>());
+  Local<Value> namespace_or_source(
+      module_resolution_data
+          ->Get(context, ModuleResolutionDataIndex::kNamespaceOrSource)
+          .ToLocalChecked());
 
   PerIsolateData* data = PerIsolateData::Get(isolate);
   Local<Context> realm = data->realms_[data->realm_current_].Get(isolate);
   Context::Scope context_scope(realm);
 
-  resolver->Resolve(realm, module_namespace).ToChecked();
+  resolver->Resolve(realm, namespace_or_source).ToChecked();
 }
 
 void Shell::ModuleResolutionFailureCallback(
     const FunctionCallbackInfo<Value>& info) {
   DCHECK(i::ValidateCallbackInfo(info));
-  std::unique_ptr<ModuleResolutionData> module_resolution_data(
-      static_cast<ModuleResolutionData*>(
-          info.Data().As<v8::External>()->Value()));
-  Isolate* isolate(module_resolution_data->isolate);
+  Isolate* isolate(info.GetIsolate());
   HandleScope handle_scope(isolate);
+  Local<Array> module_resolution_data(info.Data().As<Array>());
+  Local<Context> context(isolate->GetCurrentContext());
 
   Local<Promise::Resolver> resolver(
-      module_resolution_data->resolver.Get(isolate));
+      module_resolution_data->Get(context, ModuleResolutionDataIndex::kResolver)
+          .ToLocalChecked()
+          .As<Promise::Resolver>());
 
   PerIsolateData* data = PerIsolateData::Get(isolate);
   Local<Context> realm = data->realms_[data->realm_current_].Get(isolate);
@@ -1300,6 +1450,15 @@ MaybeLocal<Promise> Shell::HostImportModuleDynamically(
     Local<Context> context, Local<Data> host_defined_options,
     Local<Value> resource_name, Local<String> specifier,
     Local<FixedArray> import_attributes) {
+  return HostImportModuleWithPhaseDynamically(
+      context, host_defined_options, resource_name, specifier,
+      ModuleImportPhase::kEvaluation, import_attributes);
+}
+
+MaybeLocal<Promise> Shell::HostImportModuleWithPhaseDynamically(
+    Local<Context> context, Local<Data> host_defined_options,
+    Local<Value> resource_name, Local<String> specifier,
+    ModuleImportPhase phase, Local<FixedArray> import_attributes) {
   Isolate* isolate = context->GetIsolate();
 
   MaybeLocal<Promise::Resolver> maybe_resolver =
@@ -1316,7 +1475,7 @@ MaybeLocal<Promise> Shell::HostImportModuleDynamically(
         .ToChecked();
   } else {
     DynamicImportData* data =
-        new DynamicImportData(isolate, context, resource_name, specifier,
+        new DynamicImportData(isolate, context, resource_name, specifier, phase,
                               import_attributes, resolver);
     PerIsolateData::Get(isolate)->AddDynamicImportData(data);
     isolate->EnqueueMicrotask(Shell::DoHostImportModuleDynamically, data);
@@ -1332,14 +1491,12 @@ void Shell::HostInitializeImportMetaObject(Local<Context> context,
 
   std::shared_ptr<ModuleEmbedderData> module_data =
       GetModuleDataFromContext(context);
-  auto specifier_it = module_data->module_to_specifier_map.find(
-      Global<Module>(isolate, module));
-  CHECK(specifier_it != module_data->module_to_specifier_map.end());
+  std::string specifier = module_data->GetModuleSpecifier(module);
 
   Local<String> url_key =
       String::NewFromUtf8Literal(isolate, "url", NewStringType::kInternalized);
-  Local<String> url = String::NewFromUtf8(isolate, specifier_it->second.c_str())
-                          .ToLocalChecked();
+  Local<String> url =
+      String::NewFromUtf8(isolate, specifier.c_str()).ToLocalChecked();
   meta->CreateDataProperty(context, url_key, url).ToChecked();
 }
 
@@ -1366,8 +1523,8 @@ void Shell::DoHostImportModuleDynamically(void* import_data) {
   Isolate* isolate(import_data_->isolate);
   Global<Context> global_realm;
   Global<Promise::Resolver> global_resolver;
-  Global<Module> global_root_module;
-  Global<Value> global_result;
+  Global<Promise> global_result_promise;
+  Global<Value> global_namespace_or_source;
 
   TryCatch try_catch(isolate);
   try_catch.SetVerbose(true);
@@ -1376,7 +1533,8 @@ void Shell::DoHostImportModuleDynamically(void* import_data) {
     HandleScope handle_scope(isolate);
     Local<Context> realm = import_data_->context.Get(isolate);
     Local<Value> referrer = import_data_->referrer.Get(isolate);
-    Local<String> specifier = import_data_->specifier.Get(isolate);
+    Local<String> v8_specifier = import_data_->specifier.Get(isolate);
+    ModuleImportPhase phase = import_data_->phase;
     Local<FixedArray> import_attributes =
         import_data_->import_attributes.Get(isolate);
     Local<Promise::Resolver> resolver = import_data_->resolver.Get(isolate);
@@ -1388,9 +1546,11 @@ void Shell::DoHostImportModuleDynamically(void* import_data) {
     data->DeleteDynamicImportData(import_data_);
 
     Context::Scope context_scope(realm);
+    std::string specifier = ToSTLString(isolate, v8_specifier);
 
-    ModuleType module_type = ModuleEmbedderData::ModuleTypeFromImportAttributes(
-        realm, import_attributes, false);
+    ModuleType module_type =
+        ModuleEmbedderData::ModuleTypeFromImportSpecifierAndAttributes(
+            realm, specifier, import_attributes, false);
 
     if (module_type == ModuleType::kInvalid) {
       ThrowError(isolate, "Invalid module type was asserted");
@@ -1407,46 +1567,72 @@ void Shell::DoHostImportModuleDynamically(void* import_data) {
                                  : ToSTLString(isolate, referrer.As<String>());
     std::string dir_name =
         DirName(NormalizePath(source_url, GetWorkingDirectory()));
-    std::string file_name = ToSTLString(isolate, specifier);
-    std::string absolute_path = NormalizePath(file_name, dir_name);
+    std::string absolute_path = NormalizeModuleSpecifier(specifier, dir_name);
 
-    Local<Module> root_module;
-    auto module_it = module_data->module_map.find(
-        std::make_pair(absolute_path, module_type));
-    if (module_it != module_data->module_map.end()) {
-      root_module = module_it->second.Get(isolate);
-    } else if (!FetchModuleTree(Local<Module>(), realm, absolute_path,
-                                module_type)
-                    .ToLocal(&root_module)) {
-      CHECK(try_catch.HasCaught());
-      if (isolate->IsExecutionTerminating()) {
-        Shell::ReportException(isolate, try_catch);
-      } else {
-        resolver->Reject(realm, try_catch.Exception()).ToChecked();
+    switch (phase) {
+      case ModuleImportPhase::kSource: {
+        Local<Object> module_source;
+        auto module_it = module_data->module_source_map.find(
+            std::make_pair(absolute_path, module_type));
+        if (module_it != module_data->module_source_map.end()) {
+          module_source = module_it->second.Get(isolate);
+        } else if (!FetchModuleSource(Local<Module>(), realm, absolute_path,
+                                      module_type)
+                        .ToLocal(&module_source)) {
+          CHECK(try_catch.HasCaught());
+          if (isolate->IsExecutionTerminating()) {
+            Shell::ReportException(isolate, try_catch);
+          } else {
+            resolver->Reject(realm, try_catch.Exception()).ToChecked();
+          }
+          return;
+        }
+        Local<Promise::Resolver> module_resolver =
+            Promise::Resolver::New(realm).ToLocalChecked();
+        module_resolver->Resolve(realm, module_source).ToChecked();
+
+        global_namespace_or_source.Reset(isolate, module_source);
+        global_result_promise.Reset(isolate, module_resolver->GetPromise());
+        break;
       }
-      return;
-    }
-    global_root_module.Reset(isolate, root_module);
+      case v8::ModuleImportPhase::kEvaluation: {
+        Local<Module> root_module;
+        auto module_it = module_data->module_map.find(
+            std::make_pair(absolute_path, module_type));
+        if (module_it != module_data->module_map.end()) {
+          root_module = module_it->second.Get(isolate);
+        } else if (!FetchModuleTree(Local<Module>(), realm, absolute_path,
+                                    module_type)
+                        .ToLocal(&root_module)) {
+          CHECK(try_catch.HasCaught());
+          if (isolate->IsExecutionTerminating()) {
+            Shell::ReportException(isolate, try_catch);
+          } else {
+            resolver->Reject(realm, try_catch.Exception()).ToChecked();
+          }
+          return;
+        }
 
-    if (root_module->InstantiateModule(realm, ResolveModuleCallback)
-            .FromMaybe(false)) {
-      MaybeLocal<Value> maybe_result = root_module->Evaluate(realm);
-      CHECK(!maybe_result.IsEmpty());
-      global_result.Reset(isolate, maybe_result.ToLocalChecked());
+        if (root_module
+                ->InstantiateModule(realm, ResolveModuleCallback,
+                                    ResolveModuleSourceCallback)
+                .FromMaybe(false)) {
+          MaybeLocal<Value> maybe_result = root_module->Evaluate(realm);
+          CHECK(!maybe_result.IsEmpty());
+          global_result_promise.Reset(
+              isolate, maybe_result.ToLocalChecked().As<Promise>());
+          global_namespace_or_source.Reset(isolate,
+                                           root_module->GetModuleNamespace());
+        }
+        break;
+      }
+      default: {
+        UNREACHABLE();
+      }
     }
   }
 
-  if (!global_result.IsEmpty()) {
-    // This method is invoked from a microtask, where in general we may have an
-    // non-trivial stack. Emptying the message queue below may trigger the
-    // execution of a stackless GC. We need to override the embedder stack
-    // state, to force scanning the stack, if this happens.
-    i::Heap* heap = reinterpret_cast<i::Isolate*>(isolate)->heap();
-    i::EmbedderStackStateScope scope(
-        heap, i::EmbedderStackStateOrigin::kExplicitInvocation,
-        StackState::kMayContainHeapPointers);
-    EmptyMessageQueues(isolate);
-  } else {
+  if (global_result_promise.IsEmpty()) {
     DCHECK(try_catch.HasCaught());
     HandleScope handle_scope(isolate);
     Local<Context> realm = global_realm.Get(isolate);
@@ -1455,24 +1641,41 @@ void Shell::DoHostImportModuleDynamically(void* import_data) {
     return;
   }
 
-  HandleScope handle_scope(isolate);
-  Local<Context> realm = global_realm.Get(isolate);
-  Local<Module> root_module = global_root_module.Get(isolate);
-  Local<Promise::Resolver> resolver = global_resolver.Get(isolate);
-  Local<Value> result = global_result.Get(isolate);
-  Local<Value> module_namespace = root_module->GetModuleNamespace();
-  Local<Promise> result_promise = result.As<Promise>();
+  {
+    // This method is invoked from a microtask, where in general we may have
+    // an non-trivial stack. Emptying the message queue below may trigger the
+    // execution of a stackless GC. We need to override the embedder stack
+    // state, to force scanning the stack, if this happens.
+    i::Heap* heap = reinterpret_cast<i::Isolate*>(isolate)->heap();
+    i::EmbedderStackStateScope scope(
+        heap, i::EmbedderStackStateOrigin::kExplicitInvocation,
+        StackState::kMayContainHeapPointers);
+    EmptyMessageQueues(isolate);
+  }
 
   // Setup callbacks, and then chain them to the result promise.
-  // ModuleResolutionData will be deleted by the callbacks.
-  auto module_resolution_data =
-      new ModuleResolutionData(isolate, module_namespace, resolver);
-  Local<v8::External> edata = External::New(isolate, module_resolution_data);
+  HandleScope handle_scope(isolate);
+  Local<Context> realm = global_realm.Get(isolate);
+  Local<Promise::Resolver> resolver = global_resolver.Get(isolate);
+  Local<Promise> result_promise = global_result_promise.Get(isolate);
+  Local<Value> namespace_or_source = global_namespace_or_source.Get(isolate);
+
+  Local<Array> module_resolution_data = v8::Array::New(isolate);
+  module_resolution_data->SetPrototypeV2(realm, v8::Null(isolate)).ToChecked();
+  module_resolution_data
+      ->Set(realm, ModuleResolutionDataIndex::kResolver, resolver)
+      .ToChecked();
+  module_resolution_data
+      ->Set(realm, ModuleResolutionDataIndex::kNamespaceOrSource,
+            namespace_or_source)
+      .ToChecked();
   Local<Function> callback_success;
-  CHECK(Function::New(realm, ModuleResolutionSuccessCallback, edata)
+  CHECK(Function::New(realm, ModuleResolutionSuccessCallback,
+                      module_resolution_data)
             .ToLocal(&callback_success));
   Local<Function> callback_failure;
-  CHECK(Function::New(realm, ModuleResolutionFailureCallback, edata)
+  CHECK(Function::New(realm, ModuleResolutionFailureCallback,
+                      module_resolution_data)
             .ToLocal(&callback_failure));
   result_promise->Then(realm, callback_success, callback_failure)
       .ToLocalChecked();
@@ -1494,7 +1697,8 @@ bool Shell::ExecuteModule(Isolate* isolate, const char* file_name) {
     Local<Context> realm = data->realms_[data->realm_current_].Get(isolate);
     Context::Scope context_scope(realm);
 
-    std::string absolute_path = NormalizePath(file_name, GetWorkingDirectory());
+    std::string absolute_path =
+        NormalizeModuleSpecifier(file_name, GetWorkingDirectory());
 
     std::shared_ptr<ModuleEmbedderData> module_data =
         GetModuleDataFromContext(realm);
@@ -1515,7 +1719,9 @@ bool Shell::ExecuteModule(Isolate* isolate, const char* file_name) {
     module_data->origin = absolute_path;
 
     MaybeLocal<Value> maybe_result;
-    if (root_module->InstantiateModule(realm, ResolveModuleCallback)
+    if (root_module
+            ->InstantiateModule(realm, ResolveModuleCallback,
+                                ResolveModuleSourceCallback)
             .FromMaybe(false)) {
       maybe_result = root_module->Evaluate(realm);
       CHECK(!maybe_result.IsEmpty());
@@ -1630,26 +1836,6 @@ PerIsolateData::~PerIsolateData() {
 #endif
 }
 
-void PerIsolateData::SetTimeout(Local<Function> callback,
-                                Local<Context> context) {
-  set_timeout_callbacks_.emplace(isolate_, callback);
-  set_timeout_contexts_.emplace(isolate_, context);
-}
-
-MaybeLocal<Function> PerIsolateData::GetTimeoutCallback() {
-  if (set_timeout_callbacks_.empty()) return MaybeLocal<Function>();
-  Local<Function> result = set_timeout_callbacks_.front().Get(isolate_);
-  set_timeout_callbacks_.pop();
-  return result;
-}
-
-MaybeLocal<Context> PerIsolateData::GetTimeoutContext() {
-  if (set_timeout_contexts_.empty()) return MaybeLocal<Context>();
-  Local<Context> result = set_timeout_contexts_.front().Get(isolate_);
-  set_timeout_contexts_.pop();
-  return result;
-}
-
 void PerIsolateData::RemoveUnhandledPromise(Local<Promise> promise) {
   if (ignore_unhandled_promises_) return;
   // Remove handled promises from the list
@@ -1718,6 +1904,47 @@ Local<FunctionTemplate> PerIsolateData::GetDomNodeCtor() const {
 
 void PerIsolateData::SetDomNodeCtor(Local<FunctionTemplate> ctor) {
   dom_node_ctor_.Reset(isolate_, ctor);
+}
+
+bool PerIsolateData::HasRunningSubscribedWorkers() {
+  // Only consider subscribed workers, so that code that spawns a worker and
+  // never subscribes to message events will quit.
+  return !worker_message_callbacks_.empty();
+}
+
+void PerIsolateData::RegisterWorker(std::shared_ptr<Worker> worker) {
+  registered_workers_.insert(std::move(worker));
+}
+
+void PerIsolateData::SubscribeWorkerOnMessage(
+    const std::shared_ptr<Worker>& worker, Local<Context> context,
+    Local<Function> callback) {
+  if (!registered_workers_.contains(worker)) {
+    // The worker has already terminated, so it won't be posting any more
+    // messages. Don't try to subscribe to its events.
+    fprintf(
+        stderr,
+        "Trying to subscribe to message events from a terminated worker -- "
+        "consider registering the event handler before the event loop runs.\n");
+    return;
+  }
+  worker_message_callbacks_.emplace(
+      worker, std::make_pair(Global<Context>(isolate_, context),
+                             Global<Function>(isolate_, callback)));
+}
+
+std::pair<Local<Context>, Local<Function>> PerIsolateData::GetWorkerOnMessage(
+    const std::shared_ptr<Worker>& worker) const {
+  auto it = worker_message_callbacks_.find(worker);
+  if (it == worker_message_callbacks_.end()) {
+    return {};
+  }
+  return {it->second.first.Get(isolate_), it->second.second.Get(isolate_)};
+}
+
+void PerIsolateData::UnregisterWorker(const std::shared_ptr<Worker>& worker) {
+  registered_workers_.erase(worker);
+  worker_message_callbacks_.erase(worker);
 }
 
 PerIsolateData::RealmScope::RealmScope(Isolate* isolate,
@@ -2011,11 +2238,11 @@ void Shell::RealmOwner(const v8::FunctionCallbackInfo<v8::Value>& info) {
       info[0]->ToObject(isolate->GetCurrentContext()).ToLocalChecked();
   i::Handle<i::JSReceiver> i_object = Utils::OpenHandle(*object);
   if (IsJSGlobalProxy(*i_object) &&
-      i::Handle<i::JSGlobalProxy>::cast(i_object)->IsDetached()) {
+      i::Cast<i::JSGlobalProxy>(i_object)->IsDetached()) {
     return;
   }
   Local<Context> creation_context;
-  if (!object->GetCreationContext().ToLocal(&creation_context)) {
+  if (!object->GetCreationContext(isolate).ToLocal(&creation_context)) {
     ThrowError(info.GetIsolate(), "object doesn't have creation context");
     return;
   }
@@ -2042,8 +2269,7 @@ void Shell::RealmGlobal(const v8::FunctionCallbackInfo<v8::Value>& info) {
   if (IsJSGlobalObject(*i_global)) {
     i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(info.GetIsolate());
     i::Handle<i::JSObject> i_global_proxy =
-        handle(i::Handle<i::JSGlobalObject>::cast(i_global)->global_proxy(),
-               i_isolate);
+        handle(i::Cast<i::JSGlobalObject>(i_global)->global_proxy(), i_isolate);
     global = Utils::ToLocal(i_global_proxy);
   }
   info.GetReturnValue().Set(global);
@@ -2209,6 +2435,7 @@ void Shell::RealmEval(const v8::FunctionCallbackInfo<v8::Value>& info) {
       CreateScriptOrigin(isolate, String::NewFromUtf8Literal(isolate, "(d8)"),
                          ScriptType::kClassic);
 
+  if (isolate->IsExecutionTerminating()) return;
   ScriptCompiler::Source script_source(source, origin);
   Local<UnboundScript> script;
   if (!ScriptCompiler::CompileUnboundScript(isolate, &script_source)
@@ -2295,7 +2522,7 @@ void Shell::TestVerifySourcePositions(
   auto arg_handle = Utils::OpenHandle(*info[0]);
   if (!IsHeapObject(*arg_handle) ||
       !IsJSFunctionOrBoundFunctionOrWrappedFunction(
-          *i::Handle<i::HeapObject>::cast(arg_handle))) {
+          *i::Cast<i::HeapObject>(arg_handle))) {
     ThrowError(isolate, "Expected function as single argument.");
     return;
   }
@@ -2304,11 +2531,10 @@ void Shell::TestVerifySourcePositions(
   HandleScope handle_scope(isolate);
 
   auto callable =
-      i::Handle<i::JSFunctionOrBoundFunctionOrWrappedFunction>::cast(
-          arg_handle);
+      i::Cast<i::JSFunctionOrBoundFunctionOrWrappedFunction>(arg_handle);
   while (IsJSBoundFunction(*callable)) {
     internal::DisallowGarbageCollection no_gc;
-    auto bound_function = i::Handle<i::JSBoundFunction>::cast(callable);
+    auto bound_function = i::Cast<i::JSBoundFunction>(callable);
     auto bound_target = bound_function->bound_target_function();
     if (!IsJSFunctionOrBoundFunctionOrWrappedFunction(bound_target)) {
       internal::AllowGarbageCollection allow_gc;
@@ -2316,11 +2542,11 @@ void Shell::TestVerifySourcePositions(
       return;
     }
     callable = handle(
-        i::JSFunctionOrBoundFunctionOrWrappedFunction::cast(bound_target),
+        i::Cast<i::JSFunctionOrBoundFunctionOrWrappedFunction>(bound_target),
         i_isolate);
   }
 
-  i::Handle<i::JSFunction> function = i::Handle<i::JSFunction>::cast(callable);
+  i::DirectHandle<i::JSFunction> function = i::Cast<i::JSFunction>(callable);
   if (!function->shared()->HasBytecodeArray()) {
     ThrowError(isolate, "Function has no BytecodeArray attached.");
     return;
@@ -2333,7 +2559,7 @@ void Shell::TestVerifySourcePositions(
   std::unique_ptr<i::baseline::BytecodeOffsetIterator> offset_iterator;
   if (has_baseline) {
     bytecode_offsets = handle(
-        i::TrustedByteArray::cast(
+        i::Cast<i::TrustedByteArray>(
             function->shared()->GetCode(i_isolate)->bytecode_offset_table()),
         i_isolate);
     offset_iterator = std::make_unique<i::baseline::BytecodeOffsetIterator>(
@@ -2436,7 +2662,7 @@ void Shell::SetPromiseHooks(const v8::FunctionCallbackInfo<v8::Value>& info) {
   DCHECK(i::ValidateCallbackInfo(info));
   Isolate* isolate = info.GetIsolate();
   if (i::v8_flags.correctness_fuzzer_suppressions) {
-    // Setting promise hoooks dynamically has unexpected timing side-effects
+    // Setting promise hooks dynamically has unexpected timing side-effects
     // with certain promise optimizations. We might not get all callbacks for
     // previously scheduled Promises or optimized code-paths that skip Promise
     // creation.
@@ -2764,6 +2990,30 @@ void Shell::ExecuteFile(const v8::FunctionCallbackInfo<v8::Value>& info) {
   }
 }
 
+class SetTimeoutTask : public v8::Task {
+ public:
+  SetTimeoutTask(v8::Isolate* isolate, v8::Local<v8::Context> context,
+                 v8::Local<v8::Function> callback)
+      : isolate_(isolate),
+        context_(isolate, context),
+        callback_(isolate, callback) {}
+
+  void Run() override {
+    HandleScope scope(isolate_);
+    Local<Context> context = context_.Get(isolate_);
+    Local<Function> callback = callback_.Get(isolate_);
+    Context::Scope context_scope(context);
+    MaybeLocal<Value> result =
+        callback->Call(context, Undefined(isolate_), 0, nullptr);
+    USE(result);
+  }
+
+ private:
+  v8::Isolate* isolate_;
+  v8::Global<v8::Context> context_;
+  v8::Global<v8::Function> callback_;
+};
+
 void Shell::SetTimeout(const v8::FunctionCallbackInfo<v8::Value>& info) {
   DCHECK(i::ValidateCallbackInfo(info));
   Isolate* isolate = info.GetIsolate();
@@ -2771,7 +3021,22 @@ void Shell::SetTimeout(const v8::FunctionCallbackInfo<v8::Value>& info) {
   if (info.Length() == 0 || !info[0]->IsFunction()) return;
   Local<Function> callback = info[0].As<Function>();
   Local<Context> context = isolate->GetCurrentContext();
-  PerIsolateData::Get(isolate)->SetTimeout(callback, context);
+  g_platform->GetForegroundTaskRunner(isolate)->PostTask(
+      std::make_unique<SetTimeoutTask>(isolate, context, callback));
+}
+
+#ifdef V8_ENABLE_CONTINUATION_PRESERVED_EMBEDDER_DATA
+void Shell::GetContinuationPreservedEmbedderData(
+    const v8::FunctionCallbackInfo<v8::Value>& info) {
+  info.GetReturnValue().Set(
+      info.GetIsolate()->GetContinuationPreservedEmbedderData());
+}
+#endif  // V8_ENABLE_CONTINUATION_PRESERVED_EMBEDDER_DATA
+
+void Shell::GetExtrasBindingObject(
+    const v8::FunctionCallbackInfo<v8::Value>& info) {
+  Local<Context> context = info.GetIsolate()->GetCurrentContext();
+  info.GetReturnValue().Set(context->GetExtrasBindingObject());
 }
 
 void Shell::ReadCodeTypeAndArguments(
@@ -2949,19 +3214,20 @@ void Shell::WorkerNew(const v8::FunctionCallbackInfo<v8::Value>& info) {
     // The C++ worker object's lifetime is shared between the Managed<Worker>
     // object on the heap, which the JavaScript object points to, and an
     // internal std::shared_ptr in the worker thread itself.
-    auto worker = std::make_shared<Worker>(*script);
+    auto worker = std::make_shared<Worker>(isolate, *script);
     i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
     const size_t kWorkerSizeEstimate = 4 * 1024 * 1024;  // stack + heap.
-    i::Handle<i::Object> managed = i::Managed<Worker>::FromSharedPtr(
-        i_isolate, kWorkerSizeEstimate, worker);
+    i::Handle<i::Object> managed =
+        i::Managed<Worker>::From(i_isolate, kWorkerSizeEstimate, worker);
     info.This()->SetInternalField(0, Utils::ToLocal(managed));
     base::Thread::Priority priority =
         options.apply_priority ? base::Thread::Priority::kUserBlocking
                                : base::Thread::Priority::kDefault;
-    if (!Worker::StartWorkerThread(isolate, std::move(worker), priority)) {
+    if (!Worker::StartWorkerThread(isolate, worker, priority)) {
       ThrowError(isolate, "Can't start thread");
       return;
     }
+    PerIsolateData::Get(isolate)->RegisterWorker(worker);
   }
 }
 
@@ -3010,6 +3276,158 @@ void Shell::WorkerGetMessage(const v8::FunctionCallbackInfo<v8::Value>& info) {
   }
 }
 
+// Task processing one onmessage event received from a Worker.
+class OnMessageFromWorkerTask : public v8::Task {
+ public:
+  OnMessageFromWorkerTask(v8::Isolate* isolate, v8::Local<v8::Context> context,
+                          v8::Local<v8::Value> callback,
+                          std::unique_ptr<SerializationData> data)
+      : isolate_(isolate),
+        context_(isolate, context),
+        callback_(isolate, callback),
+        data_(std::move(data)) {}
+
+  void Run() override {
+    HandleScope scope(isolate_);
+    Local<Context> context = context_.Get(isolate_);
+    Context::Scope context_scope(context);
+    MicrotasksScope microtasks_scope(context,
+                                     MicrotasksScope::kDoNotRunMicrotasks);
+
+    Local<Object> global = context->Global();
+
+    // Get the message handler.
+    Local<Value> onmessage = callback_.Get(isolate_);
+    if (!onmessage->IsFunction()) return;
+    Local<Function> onmessage_fun = onmessage.As<Function>();
+
+    v8::TryCatch try_catch(isolate_);
+    try_catch.SetVerbose(true);
+    Local<Value> value;
+    if (Shell::DeserializeValue(isolate_, std::move(data_)).ToLocal(&value)) {
+      DCHECK(!isolate_->IsExecutionTerminating());
+      Local<Object> event = v8::Object::New(isolate_);
+      event
+          ->CreateDataProperty(
+              context,
+              String::NewFromUtf8Literal(isolate_, "data",
+                                         NewStringType::kInternalized),
+              value)
+          .ToChecked();
+      Local<Value> argv[] = {event};
+      MaybeLocal<Value> result = onmessage_fun->Call(context, global, 1, argv);
+      USE(result);
+    }
+  }
+
+ private:
+  v8::Isolate* isolate_;
+  v8::Global<v8::Context> context_;
+  v8::Global<v8::Value> callback_;
+  std::unique_ptr<SerializationData> data_;
+};
+
+// Check, on the main thread, whether a worker has any enqueued any message
+// events. Workers post this task when posting a message, instead of posting
+// OnMessageFromWorkerTask directly, to avoid races between message posting
+// and onmessage subscription.
+class CheckMessageFromWorkerTask : public v8::Task {
+ public:
+  CheckMessageFromWorkerTask(v8::Isolate* isolate,
+                             std::shared_ptr<Worker> worker)
+      : isolate_(isolate), worker_(std::move(worker)) {}
+
+  void Run() override {
+    HandleScope scope(isolate_);
+
+    // Get the callback for onmessage events from this worker. It's important to
+    // do this here, and not in OnMessageFromWorkerTask, because we may get a
+    // CleanUpWorkerTask scheduled before the posted OnMessageFromWorkerTask
+    // executes, which will
+    auto callback_pair =
+        PerIsolateData::Get(isolate_)->GetWorkerOnMessage(worker_);
+    // Bail out if there's no callback -- leave the message queue untouched so
+    // that we don't lose the messages and can read them with GetMessage later.
+    // This is slightly different to browser behaviour, where events can be
+    // missed, but it's helpful for d8's GetMessage behaviour.
+    if (callback_pair.second.IsEmpty()) return;
+
+    std::unique_ptr<SerializationData> result;
+    while ((result = worker_->TryGetMessage())) {
+      // Each onmessage callback call is posted as a separate task.
+      g_platform->GetForegroundTaskRunner(isolate_)->PostTask(
+          std::make_unique<OnMessageFromWorkerTask>(
+              isolate_, callback_pair.first, callback_pair.second,
+              std::move(result)));
+    }
+  }
+
+ private:
+  v8::Isolate* isolate_;
+  std::shared_ptr<Worker> worker_;
+};
+
+// Unregister the given isolate from message events from the given worker.
+// This must be done before the isolate or worker are destroyed, so that the
+// global handles for context and callback are cleaned up correctly -- thus the
+// event loop blocks until all workers are unregistered.
+class CleanUpWorkerTask : public v8::Task {
+ public:
+  CleanUpWorkerTask(v8::Isolate* isolate, std::shared_ptr<Worker> worker)
+      : isolate_(isolate), worker_(std::move(worker)) {}
+
+  void Run() override {
+    PerIsolateData::Get(isolate_)->UnregisterWorker(std::move(worker_));
+  }
+
+ private:
+  v8::Isolate* isolate_;
+  std::shared_ptr<Worker> worker_;
+};
+
+void Shell::WorkerOnMessageGetter(
+    const v8::FunctionCallbackInfo<v8::Value>& info) {
+  DCHECK(i::ValidateCallbackInfo(info));
+  Isolate* isolate = info.GetIsolate();
+  HandleScope handle_scope(isolate);
+
+  std::shared_ptr<Worker> worker =
+      GetWorkerFromInternalField(isolate, info.This());
+  if (!worker.get()) {
+    return;
+  }
+  Local<Function> callback =
+      PerIsolateData::Get(isolate)->GetWorkerOnMessage(worker).second;
+
+  if (!callback.IsEmpty()) {
+    info.GetReturnValue().Set(callback);
+  }
+}
+
+void Shell::WorkerOnMessageSetter(
+    const v8::FunctionCallbackInfo<v8::Value>& info) {
+  DCHECK(i::ValidateCallbackInfo(info));
+  Isolate* isolate = info.GetIsolate();
+  HandleScope handle_scope(isolate);
+
+  if (info.Length() < 1) {
+    ThrowError(isolate, "Invalid argument");
+    return;
+  }
+
+  std::shared_ptr<Worker> worker =
+      GetWorkerFromInternalField(isolate, info.This());
+  if (!worker.get()) {
+    return;
+  }
+
+  Local<Value> callback = info[0];
+  if (!callback->IsFunction()) return;
+
+  PerIsolateData::Get(isolate)->SubscribeWorkerOnMessage(
+      worker, isolate->GetCurrentContext(), Local<Function>::Cast(callback));
+}
+
 void Shell::WorkerTerminate(const v8::FunctionCallbackInfo<v8::Value>& info) {
   DCHECK(i::ValidateCallbackInfo(info));
   Isolate* isolate = info.GetIsolate();
@@ -3033,7 +3451,7 @@ void Shell::WorkerTerminateAndWait(
 
   reinterpret_cast<i::Isolate*>(isolate)
       ->main_thread_local_isolate()
-      ->BlockMainThreadWhileParked([worker](const i::ParkedScope& parked) {
+      ->ExecuteMainThreadWhileParked([worker](const i::ParkedScope& parked) {
         worker->TerminateAndWaitForThread(parked);
       });
 }
@@ -3057,7 +3475,7 @@ void Shell::QuitOnce(v8::FunctionCallbackInfo<v8::Value>* info) {
   // When disposing the shared space isolate, the workers (client isolates) need
   // to be terminated first.
   if (i_isolate->is_shared_space_isolate()) {
-    i_isolate->main_thread_local_isolate()->BlockMainThreadWhileParked(
+    i_isolate->main_thread_local_isolate()->ExecuteMainThreadWhileParked(
         [](const i::ParkedScope& parked) { WaitForRunningWorkers(parked); });
   }
 
@@ -3425,6 +3843,13 @@ Local<FunctionTemplate> Shell::CreateWorkerTemplate(Isolate* isolate) {
       isolate, "getMessage",
       FunctionTemplate::New(isolate, WorkerGetMessage, Local<Value>(),
                             worker_signature));
+  worker_fun_template->PrototypeTemplate()->SetAccessorProperty(
+      String::NewFromUtf8(isolate, "onmessage", NewStringType::kInternalized)
+          .ToLocalChecked(),
+      FunctionTemplate::New(isolate, WorkerOnMessageGetter, Local<Value>(),
+                            worker_signature),
+      FunctionTemplate::New(isolate, WorkerOnMessageSetter, Local<Value>(),
+                            worker_signature));
   worker_fun_template->InstanceTemplate()->SetInternalFieldCount(1);
   return worker_fun_template;
 }
@@ -3594,8 +4019,15 @@ Local<ObjectTemplate> Shell::CreateD8Template(Isolate* isolate) {
         FunctionTemplate::New(isolate, ProfilerTriggerSample));
     d8_template->Set(isolate, "profiler", profiler_template);
   }
+#ifdef V8_ENABLE_CONTINUATION_PRESERVED_EMBEDDER_DATA
+  d8_template->Set(
+      isolate, "getContinuationPreservedEmbedderDataViaAPIForTesting",
+      FunctionTemplate::New(isolate, GetContinuationPreservedEmbedderData));
+#endif  // V8_ENABLE_CONTINUATION_PRESERVED_EMBEDDER_DATA
   d8_template->Set(isolate, "terminate",
                    FunctionTemplate::New(isolate, Terminate));
+  d8_template->Set(isolate, "getExtrasBindingObject",
+                   FunctionTemplate::New(isolate, GetExtrasBindingObject));
   if (!options.omit_quit) {
     d8_template->Set(isolate, "quit", FunctionTemplate::New(isolate, Quit));
   }
@@ -3694,6 +4126,8 @@ void Shell::Initialize(Isolate* isolate, D8Console* console,
 
   isolate->SetHostImportModuleDynamicallyCallback(
       Shell::HostImportModuleDynamically);
+  isolate->SetHostImportModuleWithPhaseDynamicallyCallback(
+      Shell::HostImportModuleWithPhaseDynamically);
   isolate->SetHostInitializeImportMetaObjectCallback(
       Shell::HostInitializeImportMetaObject);
   isolate->SetHostCreateShadowRealmContextCallback(
@@ -4117,9 +4551,9 @@ void Shell::ReadLine(const v8::FunctionCallbackInfo<v8::Value>& info) {
   info.GetReturnValue().Set(ReadFromStdin(info.GetIsolate()));
 }
 
-// Reads a file into a v8 string.
-MaybeLocal<String> Shell::ReadFile(Isolate* isolate, const char* name,
-                                   bool should_throw) {
+// Reads a file into a memory blob.
+std::unique_ptr<base::OS::MemoryMappedFile> Shell::ReadFileData(
+    Isolate* isolate, const char* name, bool should_throw) {
   std::unique_ptr<base::OS::MemoryMappedFile> file(
       base::OS::MemoryMappedFile::open(
           name, base::OS::MemoryMappedFile::FileMode::kReadOnly));
@@ -4132,9 +4566,18 @@ MaybeLocal<String> Shell::ReadFile(Isolate* isolate, const char* name,
                      isolate, oss.str().substr(0, String::kMaxLength).c_str())
                      .ToLocalChecked());
     }
+    return nullptr;
+  }
+  return file;
+}
+
+// Reads a file into a v8 string.
+MaybeLocal<String> Shell::ReadFile(Isolate* isolate, const char* name,
+                                   bool should_throw) {
+  auto file = ReadFileData(isolate, name, should_throw);
+  if (!file) {
     return MaybeLocal<String>();
   }
-
   int size = static_cast<int>(file->size());
   char* chars = static_cast<char*>(file->memory());
   if (i::v8_flags.use_external_strings && i::String::IsAscii(chars, size)) {
@@ -4572,7 +5015,8 @@ void SerializationDataQueue::Clear() {
   data_.clear();
 }
 
-Worker::Worker(const char* script) : script_(i::StrDup(script)) {
+Worker::Worker(Isolate* parent_isolate, const char* script)
+    : script_(i::StrDup(script)), parent_isolate_(parent_isolate) {
   state_.store(State::kReady);
 }
 
@@ -4667,6 +5111,14 @@ std::unique_ptr<SerializationData> Worker::GetMessage(Isolate* requester) {
   return result;
 }
 
+std::unique_ptr<SerializationData> Worker::TryGetMessage() {
+  std::unique_ptr<SerializationData> result;
+  if (!out_queue_.Dequeue(&result)) {
+    return nullptr;
+  }
+  return result;
+}
+
 void Worker::TerminateAndWaitForThread(const i::ParkedScope& parked) {
   USE(parked);
   Terminate();
@@ -4721,9 +5173,22 @@ void Worker::ProcessMessage(std::unique_ptr<SerializationData> data) {
   Local<Value> value;
   if (Shell::DeserializeValue(isolate_, std::move(data)).ToLocal(&value)) {
     DCHECK(!isolate_->IsExecutionTerminating());
-    Local<Value> argv[] = {value};
+    Local<Object> event = Object::New(isolate_);
+    event
+        ->CreateDataProperty(
+            context,
+            String::NewFromUtf8Literal(isolate_, "data",
+                                       NewStringType::kInternalized),
+            value)
+        .ToChecked();
+    Local<Value> argv[] = {event};
     MaybeLocal<Value> result = onmessage_fun->Call(context, global, 1, argv);
     USE(result);
+  }
+  if (isolate_->IsExecutionTerminating()) {
+    // Re-schedule an interrupt in case the worker is going to run more code
+    // and never return to the event queue.
+    isolate_->TerminateExecution();
   }
 }
 
@@ -4731,9 +5196,14 @@ void Worker::ProcessMessages() {
   i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate_);
   i::SaveAndSwitchContext saved_context(i_isolate, i::Context());
   SealHandleScope shs(isolate_);
+
+  TryCatch try_catch(isolate_);
+  try_catch.SetVerbose(true);
+
   while (is_running() && v8::platform::PumpMessageLoop(
                              g_default_platform, isolate_,
                              platform::MessageLoopBehavior::kWaitForWork)) {
+    if (try_catch.HasCaught()) return;
     if (is_running()) {
       MicrotasksScope::PerformCheckpoint(isolate_);
     }
@@ -4795,9 +5265,10 @@ void Worker::ExecuteInThread() {
 
           Local<Object> global = context->Global();
           Local<Value> this_value = External::New(isolate_, this);
-          Local<FunctionTemplate> postmessage_fun_template =
-              FunctionTemplate::New(isolate_, PostMessageOut, this_value);
 
+          Local<FunctionTemplate> postmessage_fun_template =
+              FunctionTemplate::New(isolate_, Worker::PostMessageOut,
+                                    this_value);
           Local<Function> postmessage_fun;
           if (postmessage_fun_template->GetFunction(context).ToLocal(
                   &postmessage_fun)) {
@@ -4807,6 +5278,33 @@ void Worker::ExecuteInThread() {
                     v8::String::NewFromUtf8Literal(
                         isolate_, "postMessage", NewStringType::kInternalized),
                     postmessage_fun)
+                .FromJust();
+          }
+
+          Local<FunctionTemplate> close_fun_template =
+              FunctionTemplate::New(isolate_, Worker::Close, this_value);
+          Local<Function> close_fun;
+          if (close_fun_template->GetFunction(context).ToLocal(&close_fun)) {
+            global
+                ->Set(context,
+                      v8::String::NewFromUtf8Literal(
+                          isolate_, "close", NewStringType::kInternalized),
+                      close_fun)
+                .FromJust();
+          }
+
+          Local<FunctionTemplate> importScripts_fun_template =
+              FunctionTemplate::New(isolate_, Worker::ImportScripts,
+                                    this_value);
+          Local<Function> importScripts_fun;
+          if (importScripts_fun_template->GetFunction(context).ToLocal(
+                  &importScripts_fun)) {
+            global
+                ->Set(context,
+                      v8::String::NewFromUtf8Literal(
+                          isolate_, "importScripts",
+                          NewStringType::kInternalized),
+                      importScripts_fun)
                 .FromJust();
           }
 
@@ -4857,6 +5355,11 @@ void Worker::ExecuteInThread() {
   // Post nullptr to wake the thread waiting on GetMessage() if there is one.
   out_queue_.Enqueue(nullptr);
   out_semaphore_.Signal();
+  // Also post an cleanup task to the parent isolate, so that it sees that this
+  // worker is terminated and can clean it up in a thread-safe way.
+  g_platform->GetForegroundTaskRunner(parent_isolate_)
+      ->PostTask(std::make_unique<CleanUpWorkerTask>(parent_isolate_,
+                                                     this->shared_from_this()));
 }
 
 void Worker::PostMessageOut(const v8::FunctionCallbackInfo<v8::Value>& info) {
@@ -4877,9 +5380,27 @@ void Worker::PostMessageOut(const v8::FunctionCallbackInfo<v8::Value>& info) {
     DCHECK(info.Data()->IsExternal());
     Local<External> this_value = info.Data().As<External>();
     Worker* worker = static_cast<Worker*>(this_value->Value());
+
     worker->out_queue_.Enqueue(std::move(data));
     worker->out_semaphore_.Signal();
+    g_platform->GetForegroundTaskRunner(worker->parent_isolate_)
+        ->PostTask(std::make_unique<CheckMessageFromWorkerTask>(
+            worker->parent_isolate_, worker->shared_from_this()));
   }
+}
+
+void Worker::ImportScripts(const v8::FunctionCallbackInfo<v8::Value>& info) {
+  Shell::ExecuteFile(info);
+}
+
+void Worker::Close(const v8::FunctionCallbackInfo<v8::Value>& info) {
+  DCHECK(i::ValidateCallbackInfo(info));
+  Isolate* isolate = info.GetIsolate();
+  HandleScope handle_scope(isolate);
+  DCHECK(info.Data()->IsExternal());
+  Local<External> this_value = info.Data().As<External>();
+  Worker* worker = static_cast<Worker*>(this_value->Value());
+  worker->Terminate();
 }
 
 #ifdef V8_TARGET_OS_WIN
@@ -5201,6 +5722,7 @@ bool Shell::SetOptions(int argc, char* argv[]) {
 
   // Set up isolated source groups.
   options.isolate_sources = new SourceGroup[options.num_isolates];
+  internal::g_num_isolates_for_testing = options.num_isolates;
   SourceGroup* current = options.isolate_sources;
   current->Begin(argv, 1);
   for (int i = 1; i < argc; i++) {
@@ -5247,7 +5769,7 @@ int Shell::RunMain(v8::Isolate* isolate, bool last_run) {
 
   // Park the main thread here to prevent deadlocks in shared GCs when
   // waiting in JoinThread.
-  i_isolate->main_thread_local_heap()->BlockMainThreadWhileParked(
+  i_isolate->main_thread_local_heap()->ExecuteMainThreadWhileParked(
       [last_run](const i::ParkedScope& parked) {
         for (int i = 1; i < options.num_isolates; ++i) {
           if (last_run) {
@@ -5265,7 +5787,7 @@ int Shell::RunMain(v8::Isolate* isolate, bool last_run) {
     HandleScope handle_scope(isolate);
     static constexpr bool kClearRecompilableData = true;
     auto context = v8::Local<v8::Context>::New(isolate, evaluation_context_);
-    i::Handle<i::Context> i_context = Utils::OpenHandle(*context);
+    i::DirectHandle<i::Context> i_context = Utils::OpenDirectHandle(*context);
     // Stop concurrent compiles before mutating the heap.
     if (i_isolate->concurrent_recompilation_enabled()) {
       i_isolate->optimizing_compile_dispatcher()->Stop();
@@ -5317,7 +5839,7 @@ bool Shell::RunMainIsolate(v8::Isolate* isolate, bool keep_context_alive) {
       // testcase sent by Fuzzilli to be skipped, which will desynchronize the
       // communication between d8 and Fuzzilli, leading to a crash.
       DCHECK(!fuzzilli_reprl);
-      return false;
+      return true;
     }
     global_context.Reset(isolate, context);
     if (keep_context_alive) {
@@ -5353,87 +5875,65 @@ void Shell::CollectGarbage(Isolate* isolate) {
   }
 }
 
-void Shell::NotifyStartStreamingTask(Isolate* isolate) {
-  DCHECK(options.streaming_compile);
-  base::MutexGuard guard(isolate_status_lock_.Pointer());
-  ++isolate_running_streaming_tasks_[isolate];
-}
-
-void Shell::NotifyFinishStreamingTask(Isolate* isolate) {
-  DCHECK(options.streaming_compile);
-  base::MutexGuard guard(isolate_status_lock_.Pointer());
-  --isolate_running_streaming_tasks_[isolate];
-  DCHECK_GE(isolate_running_streaming_tasks_[isolate], 0);
-}
-
 namespace {
-bool RunSetTimeoutCallback(Isolate* isolate, bool* did_run) {
-  PerIsolateData* data = PerIsolateData::Get(isolate);
-  HandleScope handle_scope(isolate);
-  Local<Function> callback;
-  if (!data->GetTimeoutCallback().ToLocal(&callback)) return true;
-  Local<Context> context;
-  if (!data->GetTimeoutContext().ToLocal(&context)) return true;
-  TryCatch try_catch(isolate);
-  try_catch.SetVerbose(true);
-  Context::Scope context_scope(context);
-  if (callback->Call(context, Undefined(isolate), 0, nullptr).IsEmpty()) {
-    return false;
-  }
-  *did_run = true;
-  return true;
-}
-
 bool ProcessMessages(
     Isolate* isolate,
     const std::function<platform::MessageLoopBehavior()>& behavior) {
-  while (true) {
-    i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
-    i::SaveAndSwitchContext saved_context(i_isolate, i::Context());
-    SealHandleScope shs(isolate);
-    for (bool ran_tasks = true; ran_tasks;) {
-      // Execute one foreground task (if one exists), then microtasks.
-      if (isolate->IsExecutionTerminating()) return false;
-      ran_tasks = v8::platform::PumpMessageLoop(g_default_platform, isolate,
-                                                behavior());
-      if (isolate->IsExecutionTerminating()) return false;
-      if (ran_tasks) MicrotasksScope::PerformCheckpoint(isolate);
+  i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
+  i::SaveAndSwitchContext saved_context(i_isolate, i::Context());
+  SealHandleScope shs(isolate);
 
-      // In predictable mode we push all background tasks into the foreground
-      // task queue of the {kProcessGlobalPredictablePlatformWorkerTaskQueue}
-      // isolate. We execute all background tasks after running one foreground
-      // task.
-      if (i::v8_flags.verify_predictable) {
-        if (isolate->IsExecutionTerminating()) return false;
-        while (v8::platform::PumpMessageLoop(
-            g_default_platform,
-            kProcessGlobalPredictablePlatformWorkerTaskQueue,
-            platform::MessageLoopBehavior::kDoNotWait)) {
-          ran_tasks = true;
-          if (isolate->IsExecutionTerminating()) return false;
-        }
+  if (isolate->IsExecutionTerminating()) return true;
+  TryCatch try_catch(isolate);
+  try_catch.SetVerbose(true);
+
+  while (true) {
+    bool ran_a_task;
+    ran_a_task =
+        v8::platform::PumpMessageLoop(g_default_platform, isolate, behavior());
+    if (isolate->IsExecutionTerminating()) return true;
+    if (try_catch.HasCaught()) return false;
+    if (ran_a_task) MicrotasksScope::PerformCheckpoint(isolate);
+    if (isolate->IsExecutionTerminating()) return true;
+
+    // In predictable mode we push all background tasks into the foreground
+    // task queue of the {kProcessGlobalPredictablePlatformWorkerTaskQueue}
+    // isolate. We execute all background tasks after running one foreground
+    // task.
+    if (i::v8_flags.verify_predictable) {
+      TryCatch try_catch(isolate);
+      try_catch.SetVerbose(true);
+      while (v8::platform::PumpMessageLoop(
+          g_default_platform, kProcessGlobalPredictablePlatformWorkerTaskQueue,
+          platform::MessageLoopBehavior::kDoNotWait)) {
+        ran_a_task = true;
+        if (try_catch.HasCaught()) return false;
+        if (isolate->IsExecutionTerminating()) return true;
       }
     }
-    if (g_default_platform->IdleTasksEnabled(isolate)) {
-      v8::platform::RunIdleTasks(g_default_platform, isolate,
-                                 50.0 / base::Time::kMillisecondsPerSecond);
-    }
-    if (isolate->IsExecutionTerminating()) return false;
-    bool ran_set_timeout = false;
-    if (!RunSetTimeoutCallback(isolate, &ran_set_timeout)) return false;
-    if (!ran_set_timeout) return true;
+
+    if (!ran_a_task) break;
   }
+  if (g_default_platform->IdleTasksEnabled(isolate)) {
+    v8::platform::RunIdleTasks(g_default_platform, isolate,
+                               50.0 / base::Time::kMillisecondsPerSecond);
+    if (try_catch.HasCaught()) return false;
+    if (isolate->IsExecutionTerminating()) return true;
+  }
+  return true;
 }
 }  // anonymous namespace
 
 bool Shell::CompleteMessageLoop(Isolate* isolate) {
   auto get_waiting_behaviour = [isolate]() {
-    base::MutexGuard guard(isolate_status_lock_.Pointer());
-    bool should_wait = (options.wait_for_background_tasks &&
-                        isolate->HasPendingBackgroundTasks()) ||
-                       isolate_running_streaming_tasks_[isolate] > 0;
-    return should_wait ? platform::MessageLoopBehavior::kWaitForWork
-                       : platform::MessageLoopBehavior::kDoNotWait;
+    if (options.wait_for_background_tasks &&
+        isolate->HasPendingBackgroundTasks()) {
+      return platform::MessageLoopBehavior::kWaitForWork;
+    }
+    if (PerIsolateData::Get(isolate)->HasRunningSubscribedWorkers()) {
+      return platform::MessageLoopBehavior::kWaitForWork;
+    }
+    return platform::MessageLoopBehavior::kDoNotWait;
   };
   if (i::v8_flags.verify_predictable) {
     bool ran_tasks = ProcessMessages(
@@ -5890,6 +6390,8 @@ int Shell::Main(int argc, char* argv[]) {
 #endif  // V8_USE_PERFETTO
   }
 
+  v8::SandboxHardwareSupport::InitializeBeforeThreadCreation();
+
   platform::tracing::TracingController* tracing_controller = tracing.get();
   if (i::v8_flags.single_threaded) {
     g_platform = v8::platform::NewSingleThreadedDefaultPlatform(
@@ -5977,23 +6479,6 @@ int Shell::Main(int argc, char* argv[]) {
     create_params.create_histogram_callback = CreateHistogram;
     create_params.add_histogram_sample_callback = AddHistogramSample;
   }
-
-#ifdef V8_ENABLE_SANDBOX
-  // Enable sandbox testing mode if requested.
-  //
-  // This will install the sandbox crash filter to ignore all crashes that do
-  // not represent sandbox violations.
-  //
-  // Note: this must happen before the Wasm trap handler is installed, so that
-  // the wasm trap handler is invoked first (and can handle Wasm OOB accesses),
-  // then forwards all "real" crashes to the sandbox crash filter.
-  if (i::v8_flags.sandbox_testing || i::v8_flags.sandbox_fuzzing) {
-    i::SandboxTesting::Mode mode = i::v8_flags.sandbox_testing
-                                       ? i::SandboxTesting::Mode::kForTesting
-                                       : i::SandboxTesting::Mode::kForFuzzing;
-    i::SandboxTesting::Enable(mode);
-  }
-#endif  // V8_ENABLE_SANDBOX
 
 #if V8_ENABLE_WEBASSEMBLY
   if (V8_TRAP_HANDLER_SUPPORTED && options.wasm_trap_handler) {
@@ -6090,7 +6575,7 @@ int Shell::Main(int argc, char* argv[]) {
         // a shared GC to prevent a deadlock.
         reinterpret_cast<i::Isolate*>(isolate)
             ->main_thread_local_isolate()
-            ->BlockMainThreadWhileParked([&result]() {
+            ->ExecuteMainThreadWhileParked([&result]() {
               printf("============ Run: Produce code cache ============\n");
               // First run to produce the cache
               Isolate::CreateParams create_params2;

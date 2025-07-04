@@ -14,6 +14,7 @@
 #include "src/common/globals.h"
 #include "src/handles/handles.h"
 #include "src/handles/traced-handles-inl.h"
+#include "src/heap/heap-layout-inl.h"
 #include "src/heap/heap-write-barrier-inl.h"
 #include "src/objects/objects.h"
 #include "src/objects/slots.h"
@@ -35,11 +36,13 @@ TracedNode::TracedNode(IndexType index, IndexType next_free_index)
   DCHECK(!is_droppable());
 }
 
-void TracedNode::Release() {
+void TracedNode::Release(Address zap_value) {
   DCHECK(is_in_use());
   // Clear all flags.
   flags_ = 0;
-  set_raw_object(kGlobalHandleZapValue);
+  clear_markbit();
+  set_raw_object(zap_value);
+  DCHECK(IsMetadataCleared());
 }
 
 // static
@@ -84,9 +87,9 @@ const TracedNodeBlock& TracedNodeBlock::From(const TracedNode& node) {
   return From(const_cast<TracedNode&>(node));
 }
 
-void TracedNodeBlock::FreeNode(TracedNode* node) {
+void TracedNodeBlock::FreeNode(TracedNode* node, Address zap_value) {
   DCHECK(node->is_in_use());
-  node->Release();
+  node->Release(zap_value);
   DCHECK(!node->is_in_use());
   node->set_next_free(first_free_node_);
   first_free_node_ = node->index();
@@ -116,13 +119,13 @@ void TracedHandles::RefillUsableNodeBlocks() {
   DCHECK(!usable_blocks_.empty());
 }
 
-void TracedHandles::FreeNode(TracedNode* node) {
+void TracedHandles::FreeNode(TracedNode* node, Address zap_value) {
   auto& block = TracedNodeBlock::From(*node);
   if (V8_UNLIKELY(block.IsFull())) {
     DCHECK(!usable_blocks_.ContainsSlow(&block));
     usable_blocks_.PushFront(&block);
   }
-  block.FreeNode(node);
+  block.FreeNode(node, zap_value);
   if (block.IsEmpty()) {
     usable_blocks_.Remove(&block);
     blocks_.Remove(&block);
@@ -184,7 +187,7 @@ void TracedHandles::Destroy(TracedNodeBlock& node_block, TracedNode& node) {
   // In case marking and sweeping are off, the handle may be freed immediately.
   // Note that this includes also the case when invoking the first pass
   // callbacks during the atomic pause which requires releasing a node fully.
-  FreeNode(&node);
+  FreeNode(&node, kTracedHandleEagerResetZapValue);
 }
 
 void TracedHandles::Copy(const TracedNode& from_node, Address** to) {
@@ -223,12 +226,12 @@ void TracedHandles::Move(TracedNode& from_node, Address** from, Address** to) {
   DCHECK_EQ(*from, *to);
   if (is_marking_) {
     // Write barrier needs to cover node as well as object.
-    to_node->set_markbit<AccessMode::ATOMIC>();
-    WriteBarrier::MarkingFromGlobalHandle(to_node->object());
+    to_node->set_markbit();
+    WriteBarrier::MarkingFromTracedHandle(to_node->object());
   } else if (auto* cpp_heap = GetCppHeapIfUnifiedYoungGC(isolate_)) {
     const bool object_is_young_and_not_yet_recorded =
         !from_node.has_old_host() &&
-        ObjectInYoungGeneration(from_node.object());
+        HeapLayout::InYoungGeneration(from_node.object());
     if (object_is_young_and_not_yet_recorded &&
         IsCppGCHostOld(*cpp_heap, reinterpret_cast<Address>(to))) {
       DCHECK(from_node.is_in_young_list());
@@ -274,7 +277,7 @@ void TracedHandles::UpdateListOfYoungNodes() {
     for (auto* node : *block) {
       if (!node->is_in_young_list()) continue;
       DCHECK(node->is_in_use());
-      if (ObjectInYoungGeneration(node->object())) {
+      if (HeapLayout::InYoungGeneration(node->object())) {
         contains_young_node = true;
         // The node was discovered through a cppgc object, which will be
         // immediately promoted. Remember the object.
@@ -318,7 +321,7 @@ void TracedHandles::ResetDeadNodes(
 
       // Detect unreachable nodes first.
       if (!node->markbit()) {
-        FreeNode(node);
+        FreeNode(node, kTracedHandleFullGCResetZapValue);
         continue;
       }
 
@@ -346,7 +349,7 @@ void TracedHandles::ResetYoungDeadNodes(
       DCHECK_IMPLIES(node->has_old_host(), node->markbit());
 
       if (!node->markbit()) {
-        FreeNode(node);
+        FreeNode(node, kTracedHandleMinorGCResetZapValue);
         continue;
       }
 
@@ -357,25 +360,6 @@ void TracedHandles::ResetYoungDeadNodes(
     }
   }
 }
-
-namespace {
-void ComputeWeaknessForYoungObject(
-    EmbedderRootsHandler* handler, TracedNode* node,
-    bool should_call_is_root_for_default_traced_reference) {
-  DCHECK(!node->is_weak());
-  bool is_unmodified_api_object =
-      JSObject::IsUnmodifiedApiObject(node->location());
-  if (is_unmodified_api_object) {
-    FullObjectSlot slot = node->location();
-    const bool is_weak =
-        node->is_droppable() ||
-        (should_call_is_root_for_default_traced_reference &&
-         !handler->IsRoot(
-             *reinterpret_cast<v8::TracedReference<v8::Value>*>(&slot)));
-    node->set_weak(is_weak);
-  }
-}
-}  // namespace
 
 void TracedHandles::ComputeWeaknessForYoungObjects() {
   if (!v8_flags.reclaim_unmodified_wrappers) return;
@@ -388,17 +372,16 @@ void TracedHandles::ComputeWeaknessForYoungObjects() {
   auto* const handler = isolate_->heap()->GetEmbedderRootsHandler();
   if (!handler) return;
 
-  const bool should_call_is_root_for_default_traced_reference =
-      handler->default_traced_reference_handling_ ==
-      EmbedderRootsHandler::RootHandling::
-          kQueryEmbedderForNonDroppableReferences;
   for (auto* block : young_blocks_) {
     DCHECK(block->InYoungList());
     for (auto* node : *block) {
       if (!node->is_in_young_list()) continue;
       DCHECK(node->is_in_use());
-      ComputeWeaknessForYoungObject(
-          handler, node, should_call_is_root_for_default_traced_reference);
+      DCHECK(!node->is_weak());
+      if (node->is_droppable() &&
+          JSObject::IsUnmodifiedApiObject(node->location())) {
+        node->set_weak(true);
+      }
     }
   }
 }
@@ -430,15 +413,15 @@ void TracedHandles::ProcessYoungObjects(
 
       bool should_reset =
           should_reset_handle(isolate_->heap(), node->location());
-      CHECK_IMPLIES(!node->is_weak(), !should_reset);
       if (should_reset) {
+        CHECK(node->is_weak());
         CHECK(!is_marking_);
         FullObjectSlot slot = node->location();
         handler->ResetRoot(
             *reinterpret_cast<v8::TracedReference<v8::Value>*>(&slot));
-        // We cannot check whether a node is in use here as the reset behavior
-        // depends on whether incremental marking is running when reclaiming
-        // young objects.
+        // Mark as cleared due to weak semantics.
+        node->set_raw_object(kTracedHandleMinorGCWeakResetZapValue);
+        CHECK(!node->is_in_use());
       } else {
         if (node->is_weak()) {
           node->set_weak(false);
@@ -509,7 +492,7 @@ void TracedHandles::IterateAndMarkYoungRootsWithOldHosts(RootVisitor* visitor) {
       if (node->is_weak()) continue;
 
       node->set_markbit();
-      CHECK(ObjectInYoungGeneration(node->object()));
+      CHECK(HeapLayout::InYoungGeneration(node->object()));
       visitor->VisitRootPointer(Root::kTracedHandles, nullptr,
                                 node->location());
     }
@@ -576,11 +559,11 @@ Tagged<Object> MarkObject(Tagged<Object> obj, TracedNode& node,
   if (mark_mode == TracedHandles::MarkMode::kOnlyYoung &&
       !node.is_in_young_list())
     return Smi::zero();
-  node.set_markbit<AccessMode::ATOMIC>();
+  node.set_markbit();
   // Being in the young list, the node may still point to an old object, in
   // which case we want to keep the node marked, but not follow the reference.
   if (mark_mode == TracedHandles::MarkMode::kOnlyYoung &&
-      !ObjectInYoungGeneration(obj))
+      !HeapLayout::InYoungGeneration(obj))
     return Smi::zero();
   return obj;
 }
@@ -594,7 +577,7 @@ Tagged<Object> TracedHandles::Mark(Address* location, MarkMode mark_mode) {
       Tagged<Object>(reinterpret_cast<std::atomic<Address>*>(location)->load(
           std::memory_order_acquire));
   auto* node = TracedNode::FromLocation(location);
-  DCHECK(node->is_in_use<AccessMode::ATOMIC>());
+  DCHECK(node->is_in_use());
   return MarkObject(object, *node, mark_mode);
 }
 
@@ -608,21 +591,18 @@ Tagged<Object> TracedHandles::MarkConservatively(
   const auto index = delta / sizeof(TracedNode);
   TracedNode& node =
       reinterpret_cast<TracedNode*>(traced_node_block_base)[index];
-  // `MarkConservatively()` runs concurrently with marking code. Reading
-  // state concurrently to setting the markbit is safe.
-  if (!node.is_in_use<AccessMode::ATOMIC>()) return Smi::zero();
+  if (!node.is_in_use()) return Smi::zero();
   return MarkObject(node.object(), node, mark_mode);
 }
 
-bool TracedHandles::IsValidInUseNode(Address* location) {
-  TracedNode* node = TracedNode::FromLocation(location);
+bool TracedHandles::IsValidInUseNode(const Address* location) {
+  const TracedNode* node = TracedNode::FromLocation(location);
   // This method is called after mark bits have been cleared.
-  DCHECK(!node->markbit<AccessMode::NON_ATOMIC>());
-  CHECK_IMPLIES(node->is_in_use<AccessMode::NON_ATOMIC>(),
-                node->raw_object() != kGlobalHandleZapValue);
-  CHECK_IMPLIES(!node->is_in_use<AccessMode::NON_ATOMIC>(),
+  DCHECK(!node->markbit());
+  CHECK_IMPLIES(node->is_in_use(), node->raw_object() != kGlobalHandleZapValue);
+  CHECK_IMPLIES(!node->is_in_use(),
                 node->raw_object() == kGlobalHandleZapValue);
-  return node->is_in_use<AccessMode::NON_ATOMIC>();
+  return node->is_in_use();
 }
 
 bool TracedHandles::HasYoung() const { return !young_blocks_.empty(); }

@@ -7,6 +7,8 @@
 
 #include <memory>
 
+#include "include/v8config.h"
+#include "src/api/api.h"
 #include "src/base/logging.h"
 #include "src/base/platform/mutex.h"
 #include "src/heap/sweeper.h"
@@ -22,11 +24,15 @@ class Heap;
 // Singly linked-list of ArrayBufferExtensions that stores head and tail of the
 // list to allow for concatenation of lists.
 struct ArrayBufferList final {
+  using Age = ArrayBufferExtension::Age;
+
+  explicit ArrayBufferList(Age age) : age_(age) {}
+
   bool IsEmpty() const;
   size_t ApproximateBytes() const { return bytes_; }
   size_t BytesSlow() const;
 
-  void Append(ArrayBufferExtension* extension);
+  size_t Append(ArrayBufferExtension* extension);
   void Append(ArrayBufferList& list);
 
   V8_EXPORT_PRIVATE bool ContainsSlow(ArrayBufferExtension* extension) const;
@@ -38,6 +44,7 @@ struct ArrayBufferList final {
   // `ArrayBufferExtension` is still in the list. The extension will only be
   // dropped on next sweep.
   size_t bytes_ = 0;
+  ArrayBufferExtension::Age age_;
 
   friend class ArrayBufferSweeper;
 };
@@ -59,8 +66,10 @@ class ArrayBufferSweeper final {
   // Track the given ArrayBufferExtension for the given JSArrayBuffer.
   void Append(Tagged<JSArrayBuffer> object, ArrayBufferExtension* extension);
 
-  // Detaches an ArrayBufferExtension from a JSArrayBuffer.
-  void Detach(Tagged<JSArrayBuffer> object, ArrayBufferExtension* extension);
+  void Resize(ArrayBufferExtension* extension, int64_t delta);
+
+  // Detaches an ArrayBufferExtension.
+  void Detach(ArrayBufferExtension* extension);
 
   const ArrayBufferList& young() const { return young_; }
   const ArrayBufferList& old() const { return old_; }
@@ -81,6 +90,8 @@ class ArrayBufferSweeper final {
   void FinishIfDone();
   void Finish();
 
+  void UpdateApproximateBytes(int64_t delta, ArrayBufferExtension::Age age);
+
   // Increments external memory counters outside of ArrayBufferSweeper.
   // Increment may trigger GC.
   void IncrementExternalMemoryCounters(size_t bytes);
@@ -97,8 +108,14 @@ class ArrayBufferSweeper final {
 
   Heap* const heap_;
   std::unique_ptr<SweepingState> state_;
-  ArrayBufferList young_;
-  ArrayBufferList old_;
+  ArrayBufferList young_{ArrayBufferList::Age::kYoung};
+  ArrayBufferList old_{ArrayBufferList::Age::kOld};
+  // Track accounting bytes adjustment during sweeping including freeing, and
+  // resizing. Adjustment are applied to the accounted bytes when sweeping
+  // finishes.
+  int64_t young_bytes_adjustment_while_sweeping_{0};
+  int64_t old_bytes_adjustment_while_sweeping_{0};
+  V8_NO_UNIQUE_ADDRESS ExternalMemoryAccounterBase external_memory_accounter_;
 };
 
 }  // namespace internal

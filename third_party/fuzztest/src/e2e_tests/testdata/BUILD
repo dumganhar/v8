@@ -38,11 +38,12 @@ cc_binary(
     ],
 )
 
-# This binary contains "puzzles" with proto inputs for benchmarking purposes.
-cc_binary(
-    name = "fuzz_tests_with_proto_inputs",
+# This library contains "puzzles" with proto inputs for benchmarking purposes.
+cc_library(
+    name = "fuzz_tests_with_proto_inputs_lib",
     testonly = 1,
     srcs = ["fuzz_tests_with_proto_inputs.cc"],
+    local_defines = ["FUZZTEST_INTERNAL_DO_NOT_CRASH_ON_TARGET"],
     deps = [
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -52,10 +53,20 @@ cc_binary(
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@com_google_fuzztest//fuzztest",
-        "@com_google_fuzztest//fuzztest:fuzztest_gtest_main",
         "@com_google_fuzztest//fuzztest:test_protobuf_cc_proto",
+        "@com_google_googletest//:gtest",
         "@com_google_protobuf//:protobuf",
         "@com_googlesource_code_re2//:re2",
+    ],
+    alwayslink = 1,
+)
+
+cc_binary(
+    name = "fuzz_tests_with_proto_inputs",
+    testonly = 1,
+    deps = [
+        ":fuzz_tests_with_proto_inputs_lib",
+        "@com_google_fuzztest//fuzztest:fuzztest_gtest_main",
     ],
 )
 
@@ -83,7 +94,6 @@ cc_binary(
         "@com_google_fuzztest//fuzztest",
         "@com_google_fuzztest//fuzztest:fuzztest_gtest_main",
         "@com_google_fuzztest//fuzztest:googletest_fixture_adapter",
-        "@com_google_fuzztest//fuzztest:init_fuzztest",
         "@com_google_fuzztest//fuzztest:logging",
         "@com_google_fuzztest//fuzztest:test_protobuf_cc_proto",
         "@com_google_protobuf//:protobuf",
@@ -97,7 +107,7 @@ cc_binary(
     testonly = 1,
     srcs = ["fuzz_tests_with_invalid_seeds.cc"],
     deps = [
-        "@com_google_fuzztest//fuzztest:fuzztest_core",
+        "@com_google_fuzztest//fuzztest",
         "@com_google_fuzztest//fuzztest:fuzztest_gtest_main",
     ],
 )
@@ -107,7 +117,7 @@ cc_binary(
     testonly = 1,
     srcs = ["dynamically_registered_fuzz_tests.cc"],
     deps = [
-        "@com_google_fuzztest//fuzztest:fuzztest_core",
+        "@com_google_fuzztest//fuzztest",
         "@com_google_fuzztest//fuzztest:fuzztest_gtest_main",
     ],
 )
@@ -118,7 +128,17 @@ cc_binary(
     srcs = ["domain_tests.cc"],
     deps = [
         "@com_google_absl//absl/strings:str_format",
-        "@com_google_fuzztest//fuzztest:fuzztest_core",
+        "@com_google_fuzztest//fuzztest",
+        "@com_google_fuzztest//fuzztest:fuzztest_gtest_main",
+    ],
+)
+
+cc_binary(
+    name = "unit_test_and_fuzz_tests",
+    testonly = 1,
+    srcs = ["unit_test_and_fuzz_tests.cc"],
+    deps = [
+        "@com_google_fuzztest//fuzztest",
         "@com_google_fuzztest//fuzztest:fuzztest_gtest_main",
     ],
 )

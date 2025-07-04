@@ -5,9 +5,10 @@
 #ifndef V8_HANDLES_MAYBE_HANDLES_INL_H_
 #define V8_HANDLES_MAYBE_HANDLES_INL_H_
 
-#include "src/handles/maybe-handles.h"
-
+#include "src/base/macros.h"
 #include "src/handles/handles-inl.h"
+#include "src/handles/maybe-handles.h"
+#include "src/objects/casting.h"
 #include "src/objects/maybe-object-inl.h"
 
 namespace v8 {
@@ -21,7 +22,16 @@ template <typename T>
 MaybeHandle<T>::MaybeHandle(Tagged<T> object, LocalHeap* local_heap)
     : MaybeHandle(handle(object, local_heap)) {}
 
-#ifdef V8_ENABLE_DIRECT_HANDLE
+template <typename T, typename U>
+inline bool Is(MaybeHandle<U> value) {
+  Handle<U> handle;
+  return !value.ToHandle(&handle) || Is<T>(handle);
+}
+template <typename To, typename From>
+inline MaybeHandle<To> UncheckedCast(MaybeHandle<From> value) {
+  return MaybeHandle<To>(value.location_);
+}
+
 template <typename T>
 template <typename S>
 bool MaybeHandle<T>::ToHandle(DirectHandle<S>* out) const {
@@ -33,7 +43,6 @@ bool MaybeHandle<T>::ToHandle(DirectHandle<S>* out) const {
     return true;
   }
 }
-#endif
 
 MaybeObjectHandle::MaybeObjectHandle(Tagged<MaybeObject> object,
                                      Isolate* isolate) {
@@ -43,7 +52,7 @@ MaybeObjectHandle::MaybeObjectHandle(Tagged<MaybeObject> object,
     handle_ = handle(heap_object, isolate);
     reference_type_ = HeapObjectReferenceType::WEAK;
   } else {
-    handle_ = handle(Tagged<Object>::cast(object), isolate);
+    handle_ = handle(Cast<Object>(object), isolate);
     reference_type_ = HeapObjectReferenceType::STRONG;
   }
 }
@@ -56,7 +65,7 @@ MaybeObjectHandle::MaybeObjectHandle(Tagged<MaybeObject> object,
     handle_ = handle(heap_object, local_heap);
     reference_type_ = HeapObjectReferenceType::WEAK;
   } else {
-    handle_ = handle(Tagged<Object>::cast(object), local_heap);
+    handle_ = handle(Cast<Object>(object), local_heap);
     reference_type_ = HeapObjectReferenceType::STRONG;
   }
 }
@@ -153,11 +162,37 @@ template <typename T>
 MaybeDirectHandle<T>::MaybeDirectHandle(Tagged<T> object, LocalHeap* local_heap)
     : MaybeDirectHandle(direct_handle(object, local_heap)) {}
 
+template <typename T, typename U>
+inline bool Is(MaybeDirectHandle<U> value) {
+  DirectHandle<U> handle;
+  return !value.ToHandle(&handle) || Is<T>(handle);
+}
+
+template <typename To, typename From>
+inline MaybeDirectHandle<To> UncheckedCast(MaybeDirectHandle<From> value) {
+  return MaybeDirectHandle<To>(value.location_);
+}
+
 template <typename T>
 inline std::ostream& operator<<(std::ostream& os, MaybeDirectHandle<T> handle) {
   if (handle.is_null()) return os << "null";
   return os << handle.ToHandleChecked();
 }
+
+#else
+
+template <typename T, typename U>
+inline bool Is(MaybeDirectHandle<U> value) {
+  DirectHandle<U> handle;
+  return !value.ToHandle(&handle) || Is<T>(handle);
+}
+
+template <typename To, typename From>
+inline MaybeDirectHandle<To> UncheckedCast(MaybeDirectHandle<From> value) {
+  return MaybeDirectHandle<To>(UncheckedCast<To>(value.handle_));
+}
+
+#endif  // V8_ENABLE_DIRECT_HANDLE
 
 MaybeObjectDirectHandle::MaybeObjectDirectHandle(Tagged<MaybeObject> object,
                                                  Isolate* isolate) {
@@ -167,7 +202,7 @@ MaybeObjectDirectHandle::MaybeObjectDirectHandle(Tagged<MaybeObject> object,
     handle_ = direct_handle(heap_object, isolate);
     reference_type_ = HeapObjectReferenceType::WEAK;
   } else {
-    handle_ = direct_handle(Tagged<Object>::cast(object), isolate);
+    handle_ = direct_handle(Cast<Object>(object), isolate);
     reference_type_ = HeapObjectReferenceType::STRONG;
   }
 }
@@ -180,7 +215,7 @@ MaybeObjectDirectHandle::MaybeObjectDirectHandle(Tagged<MaybeObject> object,
     handle_ = direct_handle(heap_object, local_heap);
     reference_type_ = HeapObjectReferenceType::WEAK;
   } else {
-    handle_ = direct_handle(Tagged<Object>::cast(object), local_heap);
+    handle_ = direct_handle(Cast<Object>(object), local_heap);
     reference_type_ = HeapObjectReferenceType::STRONG;
   }
 }
@@ -193,7 +228,17 @@ MaybeObjectDirectHandle::MaybeObjectDirectHandle(Tagged<Object> object,
     : reference_type_(HeapObjectReferenceType::STRONG),
       handle_(object, isolate) {}
 
+MaybeObjectDirectHandle::MaybeObjectDirectHandle(Tagged<Smi> object,
+                                                 Isolate* isolate)
+    : reference_type_(HeapObjectReferenceType::STRONG),
+      handle_(object, isolate) {}
+
 MaybeObjectDirectHandle::MaybeObjectDirectHandle(Tagged<Object> object,
+                                                 LocalHeap* local_heap)
+    : reference_type_(HeapObjectReferenceType::STRONG),
+      handle_(object, local_heap) {}
+
+MaybeObjectDirectHandle::MaybeObjectDirectHandle(Tagged<Smi> object,
                                                  LocalHeap* local_heap)
     : reference_type_(HeapObjectReferenceType::STRONG),
       handle_(object, local_heap) {}
@@ -248,29 +293,27 @@ DirectHandle<Object> MaybeObjectDirectHandle::object() const {
   return handle_.ToHandleChecked();
 }
 
-#endif  // V8_ENABLE_DIRECT_HANDLE
-
 template <typename T>
-V8_INLINE MaybeHandle<T> indirect_handle(MaybeDirectHandle<T> maybe_handle,
-                                         Isolate* isolate) {
+V8_INLINE MaybeIndirectHandle<T> indirect_handle(
+    MaybeDirectHandle<T> maybe_handle, Isolate* isolate) {
 #ifdef V8_ENABLE_DIRECT_HANDLE
   if (DirectHandle<T> handle; maybe_handle.ToHandle(&handle))
     return indirect_handle(handle, isolate);
   return {};
 #else
-  return maybe_handle;
+  return maybe_handle.handle_;
 #endif
 }
 
 template <typename T>
-V8_INLINE MaybeHandle<T> indirect_handle(MaybeDirectHandle<T> maybe_handle,
-                                         LocalIsolate* isolate) {
+V8_INLINE MaybeIndirectHandle<T> indirect_handle(
+    MaybeDirectHandle<T> maybe_handle, LocalIsolate* isolate) {
 #ifdef V8_ENABLE_DIRECT_HANDLE
   if (DirectHandle<T> handle; maybe_handle.ToHandle(&handle))
     return indirect_handle(handle, isolate);
   return {};
 #else
-  return maybe_handle;
+  return maybe_handle.handle_;
 #endif
 }
 

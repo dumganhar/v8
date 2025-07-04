@@ -220,6 +220,7 @@ Node* RepresentationChanger::GetRepresentationFor(
       DCHECK_EQ(TypeCheckKind::kNone, use_info.type_check());
       return GetTaggedRepresentationFor(node, output_rep, output_type,
                                         use_info.truncation());
+    case MachineRepresentation::kFloat16:
     case MachineRepresentation::kFloat32:
       DCHECK_EQ(TypeCheckKind::kNone, use_info.type_check());
       return GetFloat32RepresentationFor(node, output_rep, output_type,
@@ -1140,7 +1141,7 @@ Node* RepresentationChanger::GetWord64RepresentationFor(
     case IrOpcode::kHeapConstant: {
       HeapObjectMatcher m(node);
       if (m.HasResolvedValue() && m.Ref(broker_).IsBigInt() &&
-          use_info.truncation().IsUsedAsWord64()) {
+          (Is64() && use_info.truncation().IsUsedAsWord64())) {
         BigIntRef bigint = m.Ref(broker_).AsBigInt();
         return InsertTypeOverrideForVerifier(
             NodeProperties::GetType(node),
@@ -1241,13 +1242,18 @@ Node* RepresentationChanger::GetWord64RepresentationFor(
     }
   } else if (output_rep == MachineRepresentation::kTaggedSigned) {
     if (output_type.Is(Type::SignedSmall())) {
-      op = simplified()->ChangeTaggedSignedToInt64();
+      if (output_type.IsRange() && output_type.AsRange()->Min() >= 0) {
+        node = InsertChangeTaggedSignedToInt32(node);
+        op = machine()->ChangeUint32ToUint64();
+      } else {
+        op = simplified()->ChangeTaggedSignedToInt64();
+      }
     } else {
       return TypeError(node, output_rep, output_type,
                        MachineRepresentation::kWord64);
     }
   } else if (IsAnyTagged(output_rep) &&
-             ((use_info.truncation().IsUsedAsWord64() &&
+             ((Is64() && use_info.truncation().IsUsedAsWord64() &&
                (use_info.type_check() == TypeCheckKind::kBigInt ||
                 output_type.Is(Type::BigInt()))) ||
               use_info.type_check() == TypeCheckKind::kBigInt64)) {

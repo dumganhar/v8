@@ -75,7 +75,7 @@ class WasmGraphAssembler : public GraphAssembler {
   }
 
   Node* SmiConstant(Tagged_t value) {
-    Address tagged_value = Internals::IntToSmi(static_cast<int>(value));
+    Address tagged_value = Internals::IntegralToSmi(static_cast<int>(value));
     return kTaggedSize == kInt32Size
                ? Int32Constant(static_cast<int32_t>(tagged_value))
                : Int64Constant(static_cast<int64_t>(tagged_value));
@@ -132,8 +132,6 @@ class WasmGraphAssembler : public GraphAssembler {
     return LoadImmutableProtectedPointerFromObject(object,
                                                    IntPtrConstant(offset));
   }
-
-  Node* BuildDecompressProtectedPointer(Node* tagged);
 
   Node* LoadImmutableFromObject(MachineType type, Node* base, Node* offset);
 
@@ -228,10 +226,6 @@ class WasmGraphAssembler : public GraphAssembler {
   Node* LoadByteArrayElement(Node* byte_array, Node* index_intptr,
                              MachineType type);
 
-  Node* LoadExternalPointerArrayElement(Node* array, Node* index_intptr,
-                                        ExternalPointerTag tag,
-                                        Node* isolate_root);
-
   Node* StoreFixedArrayElement(Node* array, int index, Node* value,
                                ObjectAccess access);
 
@@ -247,8 +241,7 @@ class WasmGraphAssembler : public GraphAssembler {
         ObjectAccess(MachineType::AnyTagged(), kFullWriteBarrier));
   }
 
-  Node* LoadWeakArrayListElement(Node* fixed_array, Node* index_intptr,
-                                 MachineType type = MachineType::AnyTagged());
+  Node* LoadWeakFixedArrayElement(Node* fixed_array, Node* index_intptr);
 
   // Functions, SharedFunctionInfos, FunctionData.
 
@@ -260,7 +253,7 @@ class WasmGraphAssembler : public GraphAssembler {
 
   Node* LoadExportedFunctionIndexAsSmi(Node* exported_function_data);
 
-  Node* LoadExportedFunctionInstance(Node* exported_function_data);
+  Node* LoadExportedFunctionInstanceData(Node* exported_function_data);
 
   // JavaScript objects.
 
@@ -332,10 +325,6 @@ class WasmGraphAssembler : public GraphAssembler {
     AddNode(graph()->NewNode(
         mcgraph()->common()->TrapUnless(reason, has_frame_state), condition,
         effect(), control()));
-  }
-
-  Node* LoadRootRegister() {
-    return AddNode(graph()->NewNode(mcgraph()->machine()->LoadRootRegister()));
   }
 
   Node* LoadTrustedDataFromInstanceObject(Node* instance_object);

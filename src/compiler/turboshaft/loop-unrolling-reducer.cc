@@ -4,6 +4,8 @@
 
 #include "src/compiler/turboshaft/loop-unrolling-reducer.h"
 
+#include <optional>
+
 #include "src/base/bits.h"
 #include "src/compiler/turboshaft/index.h"
 #include "src/compiler/turboshaft/loop-finder.h"
@@ -290,9 +292,9 @@ std::ostream& operator<<(std::ostream& os, const BinOp& binop) {
 namespace {
 
 template <class Int>
-base::Optional<Int> Next(Int val, Int incr,
-                         StaticCanonicalForLoopMatcher::BinOp binop_op,
-                         WordRepresentation binop_rep) {
+std::optional<Int> Next(Int val, Int incr,
+                        StaticCanonicalForLoopMatcher::BinOp binop_op,
+                        WordRepresentation binop_rep) {
   switch (binop_op) {
     case BinOp::kBitwiseAnd:
       return val & incr;
@@ -310,14 +312,14 @@ base::Optional<Int> Next(Int val, Int incr,
       int32_t res;                                                            \
       if (base::bits::Signed##op##Overflow32(                                 \
               static_cast<int32_t>(val), static_cast<int32_t>(incr), &res)) { \
-        return base::nullopt;                                                 \
+        return std::nullopt;                                                  \
       }                                                                       \
       return static_cast<Int>(res);                                           \
     } else {                                                                  \
       DCHECK_EQ(binop_rep, WordRepresentation::Word64());                     \
       int64_t res;                                                            \
       if (base::bits::Signed##op##Overflow64(val, incr, &res)) {              \
-        return base::nullopt;                                                 \
+        return std::nullopt;                                                  \
       }                                                                       \
       return static_cast<Int>(res);                                           \
     }                                                                         \
@@ -362,10 +364,20 @@ bool SubWillOverflow(Int lhs, Int rhs) {
   }
 }
 
+template <class Int>
+bool DivWillOverflow(Int dividend, Int divisor) {
+  if constexpr (std::is_unsigned_v<Int>) {
+    return false;
+  } else {
+    return dividend == std::numeric_limits<Int>::min() && divisor == -1;
+  }
+}
+
 }  // namespace
 
-// Returns true if the loop `for (i = init, i cmp_op max; i = i binop_cst
-// binop_op)` has fewer than `max_iter_` iterations.
+// Returns true if the loop
+// `for (i = init, i cmp_op max; i = i binop_op binop_cst)` has fewer than
+// `max_iter_` iterations.
 template <class Int>
 IterationCount StaticCanonicalForLoopMatcher::CountIterationsImpl(
     Int init, Int max, CmpOp cmp_op, Int binop_cst, BinOp binop_op,
@@ -419,6 +431,7 @@ IterationCount StaticCanonicalForLoopMatcher::CountIterationsImpl(
         // eventually stop.
         return {};
       }
+      DCHECK(!DivWillOverflow(max - init, binop_cst));
       Int quotient = (max - init) / binop_cst;
       DCHECK_GE(quotient, 0);
       return IterationCount::Approx(quotient);
@@ -434,6 +447,7 @@ IterationCount StaticCanonicalForLoopMatcher::CountIterationsImpl(
         // eventually stop.
         return {};
       }
+      if (DivWillOverflow(max - init, binop_cst)) return {};
       Int quotient = (max - init) / binop_cst;
       DCHECK_GE(quotient, 0);
       return IterationCount::Approx(quotient);
@@ -469,8 +483,9 @@ IterationCount StaticCanonicalForLoopMatcher::CountIterationsImpl(
   return {};
 }
 
-// Returns true if the loop `for (i = init, i cmp_op max; i = i binop_cst
-// binop_op)` has fewer than `max_iter_` iterations.
+// Returns true if the loop
+// `for (i = initial_input, i cmp_op cmp_cst; i = i binop_op binop_cst)` has
+// fewer than `max_iter_` iterations.
 IterationCount StaticCanonicalForLoopMatcher::CountIterations(
     uint64_t cmp_cst, CmpOp cmp_op, uint64_t initial_input, uint64_t binop_cst,
     BinOp binop_op, WordRepresentation binop_rep, bool loop_if_cond_is) const {

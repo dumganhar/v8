@@ -116,12 +116,12 @@ class Accessors : public AllStatic {
 
   // Returns true for properties that are accessors to object fields.
   // If true, the matching FieldIndex is returned through |field_index|.
-  static bool IsJSObjectFieldAccessor(Isolate* isolate, Handle<Map> map,
+  static bool IsJSObjectFieldAccessor(Isolate* isolate, DirectHandle<Map> map,
                                       Handle<Name> name,
                                       FieldIndex* field_index);
 
   static MaybeHandle<Object> ReplaceAccessorWithDataProperty(
-      Isolate* isolate, Handle<Object> receiver, Handle<JSObject> holder,
+      Isolate* isolate, Handle<JSAny> receiver, Handle<JSObject> holder,
       Handle<Name> name, Handle<Object> value);
 
   // Create an AccessorInfo. The setter is optional (can be nullptr).

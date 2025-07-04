@@ -11,7 +11,7 @@ namespace internal {
 RUNTIME_FUNCTION(Runtime_ShadowRealmWrappedFunctionCreate) {
   DCHECK_EQ(2, args.length());
   HandleScope scope(isolate);
-  Handle<NativeContext> native_context = args.at<NativeContext>(0);
+  DirectHandle<NativeContext> native_context = args.at<NativeContext>(0);
   Handle<JSReceiver> value = args.at<JSReceiver>(1);
 
   RETURN_RESULT_OR_FAILURE(
@@ -30,8 +30,8 @@ RUNTIME_FUNCTION(Runtime_ShadowRealmImportValue) {
   MaybeHandle<Script> referrer;
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, inner_capability,
-      isolate->RunHostImportModuleDynamicallyCallback(referrer, specifier,
-                                                      import_options));
+      isolate->RunHostImportModuleDynamicallyCallback(
+          referrer, specifier, ModuleImportPhase::kEvaluation, import_options));
   // Check that the promise is created in the eval_context.
   DCHECK_EQ(inner_capability->GetCreationContext().value(),
             isolate->raw_native_context());
@@ -48,7 +48,8 @@ RUNTIME_FUNCTION(Runtime_ShadowRealmThrow) {
   MessageTemplate message_id = MessageTemplateFromInt(message_id_smi);
 
   DirectHandle<String> string = Object::NoSideEffectsToString(isolate, value);
-  THROW_NEW_ERROR_RETURN_FAILURE(isolate, NewTypeError(message_id, string));
+  THROW_NEW_ERROR_RETURN_FAILURE(
+      isolate, ShadowRealmNewTypeErrorCopy(value, message_id, string));
 }
 
 }  // namespace internal

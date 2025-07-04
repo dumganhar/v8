@@ -30,6 +30,7 @@ class LookupIterator;
 class PrimitiveHeapObject;
 class SharedFunctionInfo;
 class SourceInfo;
+class StackTraceInfo;
 class WasmInstanceObject;
 
 class V8_EXPORT_PRIVATE MessageLocation {
@@ -98,11 +99,15 @@ class ErrorUtils : public AllStatic {
       Isolate* isolate, Handle<JSFunction> constructor, MessageTemplate index,
       base::Vector<const DirectHandle<Object>> args, FrameSkipMode mode);
 
+  static Handle<JSObject> ShadowRealmConstructTypeErrorCopy(
+      Isolate* isolate, Handle<Object> original, MessageTemplate index,
+      base::Vector<const DirectHandle<Object>> args);
+
   // Formats a textual stack trace from the given structured stack trace.
   // Note that this can call arbitrary JS code through Error.prepareStackTrace.
   static MaybeHandle<Object> FormatStackTrace(Isolate* isolate,
                                               Handle<JSObject> error,
-                                              Handle<Object> stack_trace);
+                                              DirectHandle<Object> stack_trace);
 
   static Handle<JSObject> NewIteratorError(Isolate* isolate,
                                            Handle<Object> source);
@@ -164,7 +169,9 @@ class MessageHandler {
   // Returns a message object for the API to use.
   V8_EXPORT_PRIVATE static Handle<JSMessageObject> MakeMessageObject(
       Isolate* isolate, MessageTemplate type, const MessageLocation* location,
-      DirectHandle<Object> argument, DirectHandle<FixedArray> stack_frames);
+      DirectHandle<Object> argument,
+      DirectHandle<StackTraceInfo> stack_trace =
+          DirectHandle<StackTraceInfo>::null());
 
   // Report a formatted message (needs JS allocation).
   V8_EXPORT_PRIVATE static void ReportMessage(

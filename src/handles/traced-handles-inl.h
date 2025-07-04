@@ -6,6 +6,7 @@
 #define V8_HANDLES_TRACED_HANDLES_INL_H_
 
 #include "src/handles/traced-handles.h"
+#include "src/heap/heap-layout-inl.h"
 #include "src/heap/heap-write-barrier-inl.h"
 #include "src/objects/slots-inl.h"
 
@@ -27,7 +28,7 @@ std::pair<TracedNodeBlock*, TracedNode*> TracedHandles::AllocateNode() {
   }
   TracedNodeBlock* block = usable_blocks_.Front();
   auto* node = block->AllocateNode();
-  DCHECK(node->FlagsAreCleared());
+  DCHECK(node->IsMetadataCleared());
   if (V8_UNLIKELY(block->IsFull())) {
     usable_blocks_.Remove(block);
   }
@@ -38,7 +39,7 @@ std::pair<TracedNodeBlock*, TracedNode*> TracedHandles::AllocateNode() {
 bool TracedHandles::NeedsTrackingInYoungNodes(Tagged<Object> object,
                                               TracedNode* node) const {
   DCHECK(!node->is_in_young_list());
-  return ObjectInYoungGeneration(object);
+  return HeapLayout::InYoungGeneration(object);
 }
 
 CppHeap* TracedHandles::GetCppHeapIfUnifiedYoungGC(Isolate* isolate) const {
@@ -78,7 +79,7 @@ bool TracedHandles::NeedsToBeRemembered(
     // If marking is in progress, the marking barrier will be issued later.
     return false;
   }
-  if (!ObjectInYoungGeneration(object)) {
+  if (!HeapLayout::InYoungGeneration(object)) {
     return false;
   }
   return IsCppGCHostOld(*cpp_heap, reinterpret_cast<Address>(slot));
@@ -89,12 +90,12 @@ FullObjectSlot TracedNode::Publish(Tagged<Object> object,
                                    bool needs_young_bit_update,
                                    bool needs_black_allocation,
                                    bool has_old_host, bool is_droppable_value) {
-  DCHECK(FlagsAreCleared());
+  DCHECK(IsMetadataCleared());
 
   flags_ = needs_young_bit_update << IsInYoungList::kShift |
-           needs_black_allocation << Markbit::kShift |
            has_old_host << HasOldHost::kShift |
            is_droppable_value << IsDroppable::kShift | 1 << IsInUse::kShift;
+  if (needs_black_allocation) set_markbit();
   reinterpret_cast<std::atomic<Address>*>(&object_)->store(
       object.ptr(), std::memory_order_release);
   return FullObjectSlot(&object_);
@@ -123,7 +124,7 @@ FullObjectSlot TracedHandles::Create(
     DCHECK(block->InYoungList());
   }
   if (needs_black_allocation) {
-    WriteBarrier::MarkingFromGlobalHandle(object);
+    WriteBarrier::MarkingFromTracedHandle(object);
   }
 #ifdef VERIFY_HEAP
   if (i::v8_flags.verify_heap) {

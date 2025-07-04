@@ -14,13 +14,14 @@
 
 #include "./centipede/execution_metadata.h"
 
+#include <cstdint>
 #include <utility>
 #include <vector>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "./centipede/defs.h"
 #include "./centipede/shared_memory_blob_sequence.h"
+#include "./common/defs.h"
 
 namespace centipede {
 namespace {
@@ -96,8 +97,9 @@ TEST(ExecutionMetadata, AppendCmpEntryReturnsFalseAndSkipsOnBadArgs) {
 TEST(ExecutionMetadata, ReadAndWriteKeepsCmpEntries) {
   ExecutionMetadata metadata_in;
   ASSERT_TRUE(metadata_in.AppendCmpEntry({1, 2}, {3, 4}));
-  SharedMemoryBlobSequence blobseq("test", /*size=*/1024,
-                                   /*use_posix_shmem=*/false);
+  std::vector<uint8_t> blob_storage;
+  blob_storage.resize(1024);
+  BlobSequence blobseq(blob_storage.data(), blob_storage.size());
   EXPECT_TRUE(metadata_in.Write(/*tag=*/1, blobseq));
   blobseq.Reset();
   Blob blob = blobseq.Read();

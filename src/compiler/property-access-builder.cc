@@ -4,7 +4,8 @@
 
 #include "src/compiler/property-access-builder.h"
 
-#include "src/base/optional.h"
+#include <optional>
+
 #include "src/compiler/access-builder.h"
 #include "src/compiler/access-info.h"
 #include "src/compiler/compilation-dependencies.h"
@@ -36,6 +37,19 @@ SimplifiedOperatorBuilder* PropertyAccessBuilder::simplified() const {
 bool HasOnlyStringMaps(JSHeapBroker* broker, ZoneVector<MapRef> const& maps) {
   for (MapRef map : maps) {
     if (!map.IsStringMap()) return false;
+  }
+  return true;
+}
+
+bool HasOnlyStringWrapperMaps(JSHeapBroker* broker,
+                              ZoneVector<MapRef> const& maps) {
+  for (MapRef map : maps) {
+    if (!map.IsJSPrimitiveWrapperMap()) return false;
+    auto elements_kind = map.elements_kind();
+    if (elements_kind != FAST_STRING_WRAPPER_ELEMENTS &&
+        elements_kind != SLOW_STRING_WRAPPER_ELEMENTS) {
+      return false;
+    }
   }
   return true;
 }
@@ -146,7 +160,7 @@ MachineRepresentation PropertyAccessBuilder::ConvertRepresentation(
   }
 }
 
-base::Optional<Node*> PropertyAccessBuilder::FoldLoadDictPrototypeConstant(
+std::optional<Node*> PropertyAccessBuilder::FoldLoadDictPrototypeConstant(
     PropertyAccessInfo const& access_info) {
   DCHECK(V8_DICT_PROPERTY_CONST_TRACKING_BOOL);
   DCHECK(access_info.IsDictionaryProtoDataConstant());
@@ -157,7 +171,7 @@ base::Optional<Node*> PropertyAccessBuilder::FoldLoadDictPrototypeConstant(
   if (!value) return {};
 
   for (MapRef map : access_info.lookup_start_object_maps()) {
-    Handle<Map> map_handle = map.object();
+    DirectHandle<Map> map_handle = map.object();
     // Non-JSReceivers that passed AccessInfoFactory::ComputePropertyAccessInfo
     // must have different lookup start map.
     if (!IsJSReceiverMap(*map_handle)) {
@@ -190,6 +204,12 @@ Node* PropertyAccessBuilder::TryFoldLoadConstantDataField(
   // If {access_info} has a holder, just use it.
   if (!holder.has_value()) {
     // Otherwise, try to match the {lookup_start_object} as a constant.
+    if (lookup_start_object->opcode() == IrOpcode::kCheckString ||
+        lookup_start_object->opcode() ==
+            IrOpcode::kCheckStringOrStringWrapper) {
+      // Bypassing Check inputs in order to allow constant folding.
+      lookup_start_object = lookup_start_object->InputAt(0);
+    }
     HeapObjectMatcher m(lookup_start_object);
     if (!m.HasResolvedValue() || !m.Ref(broker()).IsJSObject()) return nullptr;
 
@@ -209,7 +229,7 @@ Node* PropertyAccessBuilder::TryFoldLoadConstantDataField(
   }
 
   if (access_info.field_representation().IsDouble()) {
-    base::Optional<Float64> value = holder->GetOwnFastConstantDoubleProperty(
+    std::optional<Float64> value = holder->GetOwnFastConstantDoubleProperty(
         broker(), access_info.field_index(), dependencies());
     return value.has_value() ? jsgraph()->ConstantNoHole(value->get_scalar())
                              : nullptr;
@@ -317,6 +337,7 @@ Node* PropertyAccessBuilder::BuildLoadDataField(
       if (field_map->is_stable()) {
         dependencies()->DependOnStableMap(field_map.value());
         field_access.map = field_map;
+        field_access.type = Type::For(*field_map, broker());
       }
     }
   }

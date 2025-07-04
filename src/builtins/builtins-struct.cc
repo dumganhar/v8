@@ -20,11 +20,11 @@ static_assert(kMaxJSStructFields <= kMaxNumberOfDescriptors);
 namespace {
 
 struct NameHandleHasher {
-  size_t operator()(Handle<Name> name) const { return name->hash(); }
+  size_t operator()(IndirectHandle<Name> name) const { return name->hash(); }
 };
 
 struct UniqueNameHandleEqual {
-  bool operator()(Handle<Name> x, Handle<Name> y) const {
+  bool operator()(IndirectHandle<Name> x, IndirectHandle<Name> y) const {
     DCHECK(IsUniqueName(*x));
     DCHECK(IsUniqueName(*y));
     return *x == *y;
@@ -32,7 +32,8 @@ struct UniqueNameHandleEqual {
 };
 
 using UniqueNameHandleSet =
-    std::unordered_set<Handle<Name>, NameHandleHasher, UniqueNameHandleEqual>;
+    std::unordered_set<IndirectHandle<Name>, NameHandleHasher,
+                       UniqueNameHandleEqual>;
 
 }  // namespace
 
@@ -46,9 +47,9 @@ BUILTIN(SharedSpaceJSObjectHasInstance) {
   bool result;
   MAYBE_ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, result,
-      AlwaysSharedSpaceJSObject::HasInstance(
-          isolate, Handle<JSFunction>::cast(constructor),
-          args.atOrUndefined(isolate, 1)));
+      AlwaysSharedSpaceJSObject::HasInstance(isolate,
+                                             Cast<JSFunction>(constructor),
+                                             args.atOrUndefined(isolate, 1)));
   return *isolate->factory()->ToBoolean(result);
 }
 
@@ -127,7 +128,7 @@ BUILTIN(SharedStructTypeConstructor) {
     ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
         isolate, raw_length_number,
         Object::GetLengthFromArrayLike(isolate, property_names_arg));
-    double num_properties_double = Object::Number(*raw_length_number);
+    double num_properties_double = Object::NumberValue(*raw_length_number);
     if (num_properties_double < 0 ||
         num_properties_double > kMaxJSStructFields) {
       THROW_NEW_ERROR_RETURN_FAILURE(
@@ -168,9 +169,7 @@ BUILTIN(SharedStructTypeConstructor) {
   Handle<SharedFunctionInfo> info =
       isolate->factory()->NewSharedFunctionInfoForBuiltin(
           isolate->factory()->empty_string(), Builtin::kSharedStructConstructor,
-          FunctionKind::kNormalFunction);
-  info->set_internal_formal_parameter_count(JSParameterCount(0));
-  info->set_length(0);
+          0, kAdapt);
 
   Handle<JSFunction> constructor =
       Factory::JSFunctionBuilder{isolate, info, isolate->native_context()}
@@ -189,8 +188,8 @@ BUILTIN(SharedStructTypeConstructor) {
 
 BUILTIN(SharedStructConstructor) {
   HandleScope scope(isolate);
-  Handle<JSFunction> constructor(args.target());
-  Handle<Map> instance_map(constructor->initial_map(), isolate);
+  DirectHandle<JSFunction> constructor(args.target());
+  DirectHandle<Map> instance_map(constructor->initial_map(), isolate);
   return *isolate->factory()->NewJSSharedStruct(
       args.target(),
       JSSharedStruct::GetElementsTemplate(isolate, *instance_map));

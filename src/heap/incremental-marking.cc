@@ -7,6 +7,7 @@
 #include <inttypes.h>
 
 #include <cmath>
+#include <optional>
 
 #include "src/base/logging.h"
 #include "src/base/platform/time.h"
@@ -19,6 +20,9 @@
 #include "src/heap/gc-tracer-inl.h"
 #include "src/heap/gc-tracer.h"
 #include "src/heap/heap-inl.h"
+#include "src/heap/heap-layout-inl.h"
+#include "src/heap/heap-visitor-inl.h"
+#include "src/heap/heap-visitor.h"
 #include "src/heap/heap.h"
 #include "src/heap/incremental-marking-job.h"
 #include "src/heap/mark-compact.h"
@@ -27,9 +31,7 @@
 #include "src/heap/marking-visitor.h"
 #include "src/heap/memory-chunk-layout.h"
 #include "src/heap/minor-mark-sweep.h"
-#include "src/heap/mutable-page.h"
-#include "src/heap/objects-visiting-inl.h"
-#include "src/heap/objects-visiting.h"
+#include "src/heap/mutable-page-metadata.h"
 #include "src/heap/safepoint.h"
 #include "src/init/v8.h"
 #include "src/logging/runtime-call-stats-scope.h"
@@ -111,6 +113,10 @@ void IncrementalMarking::MarkBlackBackground(Tagged<HeapObject> obj,
       static_cast<intptr_t>(object_size);
 }
 
+bool IncrementalMarking::CanAndShouldBeStarted() const {
+  return CanBeStarted() && heap_->ShouldUseIncrementalMarking();
+}
+
 bool IncrementalMarking::CanBeStarted() const {
   // Only start incremental marking in a safe state:
   //   1) when incremental marking is turned on
@@ -133,25 +139,35 @@ void IncrementalMarking::Start(GarbageCollector garbage_collector,
                 !heap_->sweeping_in_progress());
   CHECK_IMPLIES(garbage_collector == GarbageCollector::MINOR_MARK_SWEEPER,
                 !heap_->minor_sweeping_in_progress());
+  // Do not invoke CanAndShouldBeStarted() here again because its return value
+  // might change across multiple invocations (its internal state could be
+  // updated concurrently from another thread between invocations).
   CHECK(CanBeStarted());
 
   if (V8_UNLIKELY(v8_flags.trace_incremental_marking)) {
     const size_t old_generation_size_mb =
         heap()->OldGenerationSizeOfObjects() / MB;
+    const size_t old_generation_waste_mb =
+        heap()->OldGenerationWastedBytes() / MB;
     const size_t old_generation_limit_mb =
         heap()->old_generation_allocation_limit() / MB;
     const size_t global_size_mb = heap()->GlobalSizeOfObjects() / MB;
+    const size_t global_waste_mb = heap()->GlobalWastedBytes() / MB;
     const size_t global_limit_mb = heap()->global_allocation_limit() / MB;
     isolate()->PrintWithTimestamp(
-        "[IncrementalMarking] Start (%s): (size/limit/slack) v8: %zuMB / %zuMB "
-        "/ %zuMB global: %zuMB / %zuMB / %zuMB\n",
-        ToString(gc_reason), old_generation_size_mb, old_generation_limit_mb,
-        old_generation_size_mb > old_generation_limit_mb
+        "[IncrementalMarking] Start (%s): (size/waste/limit/slack) v8: %zuMB / "
+        "%zuMB / %zuMB "
+        "/ %zuMB global: %zuMB / %zuMB / %zuMB / %zuMB\n",
+        ToString(gc_reason), old_generation_size_mb, old_generation_waste_mb,
+        old_generation_limit_mb,
+        old_generation_size_mb + old_generation_waste_mb >
+                old_generation_limit_mb
             ? 0
             : old_generation_limit_mb - old_generation_size_mb,
-        global_size_mb, global_limit_mb,
-        global_size_mb > global_limit_mb ? 0
-                                         : global_limit_mb - global_size_mb);
+        global_size_mb, global_waste_mb, global_limit_mb,
+        global_size_mb + global_waste_mb > global_limit_mb
+            ? 0
+            : global_limit_mb - global_size_mb);
   }
 
   Counters* counters = isolate()->counters();
@@ -208,72 +224,18 @@ void IncrementalMarking::Start(GarbageCollector garbage_collector,
   }
 }
 
-bool IncrementalMarking::WhiteToGreyAndPush(Tagged<HeapObject> obj) {
-  if (marking_state()->TryMark(obj)) {
-    local_marking_worklists()->Push(obj);
-    return true;
-  }
-  return false;
-}
-
-class IncrementalMarking::IncrementalMarkingRootMarkingVisitor final
-    : public RootVisitor {
- public:
-  explicit IncrementalMarkingRootMarkingVisitor(Heap* heap)
-      : heap_(heap), incremental_marking_(heap->incremental_marking()) {}
-
-  void VisitRootPointer(Root root, const char* description,
-                        FullObjectSlot p) final {
-    DCHECK(!MapWord::IsPacked((*p).ptr()));
-    MarkObjectByPointer(root, p);
-  }
-
-  void VisitRootPointers(Root root, const char* description,
-                         FullObjectSlot start, FullObjectSlot end) final {
-    for (FullObjectSlot p = start; p < end; ++p) {
-      DCHECK(!MapWord::IsPacked((*p).ptr()));
-      MarkObjectByPointer(root, p);
-    }
-  }
-
- private:
-  void MarkObjectByPointer(Root root, FullObjectSlot p) {
-    Tagged<Object> object = *p;
-#ifdef V8_ENABLE_DIRECT_LOCAL
-    if (object.ptr() == kTaggedNullAddress) return;
-#endif
-    if (!IsHeapObject(object)) return;
-    DCHECK(!MapWord::IsPacked(object.ptr()));
-    Tagged<HeapObject> heap_object = HeapObject::cast(object);
-
-    if (InAnySharedSpace(heap_object) || InReadOnlySpace(heap_object)) return;
-
-    if (incremental_marking_->IsMajorMarking()) {
-      if (incremental_marking_->WhiteToGreyAndPush(heap_object)) {
-        if (V8_UNLIKELY(v8_flags.track_retaining_path)) {
-          heap_->AddRetainingRoot(root, heap_object);
-        }
-      }
-    } else if (Heap::InYoungGeneration(heap_object)) {
-      incremental_marking_->WhiteToGreyAndPush(heap_object);
-    }
-  }
-
-  Heap* const heap_;
-  IncrementalMarking* const incremental_marking_;
-};
-
 void IncrementalMarking::MarkRoots() {
   if (IsMajorMarking()) {
-    IncrementalMarkingRootMarkingVisitor visitor(heap_);
+    RootMarkingVisitor root_visitor(heap_->mark_compact_collector());
     heap_->IterateRoots(
-        &visitor,
+        &root_visitor,
         base::EnumSet<SkipRoot>{SkipRoot::kStack, SkipRoot::kMainThreadHandles,
                                 SkipRoot::kTracedHandles, SkipRoot::kWeak,
                                 SkipRoot::kReadOnlyBuiltins});
   } else {
+    DCHECK(IsMinorMarking());
     YoungGenerationRootMarkingVisitor root_visitor(
-        heap_->minor_mark_sweep_collector()->main_marking_visitor());
+        heap_->minor_mark_sweep_collector());
     heap_->IterateRoots(
         &root_visitor,
         base::EnumSet<SkipRoot>{
@@ -281,7 +243,6 @@ void IncrementalMarking::MarkRoots() {
             SkipRoot::kExternalStringTable, SkipRoot::kGlobalHandles,
             SkipRoot::kTracedHandles, SkipRoot::kOldGeneration,
             SkipRoot::kReadOnlyBuiltins});
-
     isolate()->global_handles()->IterateYoungStrongAndDependentRoots(
         &root_visitor);
   }
@@ -397,15 +358,31 @@ void IncrementalMarking::StartBlackAllocation() {
   DCHECK(!black_allocation_);
   DCHECK(IsMajorMarking());
   black_allocation_ = true;
-  heap()->allocator()->MarkLinearAllocationAreasBlack();
+  if (v8_flags.black_allocated_pages) {
+    heap()->allocator()->FreeLinearAllocationAreasAndResetFreeLists();
+  } else {
+    heap()->allocator()->MarkLinearAllocationAreasBlack();
+  }
   if (isolate()->is_shared_space_isolate()) {
     isolate()->global_safepoint()->IterateSharedSpaceAndClientIsolates(
         [](Isolate* client) {
-          client->heap()->MarkSharedLinearAllocationAreasBlack();
+          if (v8_flags.black_allocated_pages) {
+            client->heap()->FreeSharedLinearAllocationAreasAndResetFreeLists();
+          } else {
+            client->heap()->MarkSharedLinearAllocationAreasBlack();
+          }
         });
   }
   heap()->safepoint()->IterateLocalHeaps([](LocalHeap* local_heap) {
-    local_heap->MarkLinearAllocationAreasBlack();
+    if (v8_flags.black_allocated_pages) {
+      // The freelists of the underlying spaces must anyway be empty after the
+      // first call to FreeLinearAllocationAreasAndResetFreeLists(). However,
+      // don't call FreeLinearAllocationAreas(), since it also frees the
+      // shared-space areas.
+      local_heap->FreeLinearAllocationAreasAndResetFreeLists();
+    } else {
+      local_heap->MarkLinearAllocationAreasBlack();
+    }
   });
   StartPointerTableBlackAllocation();
   if (v8_flags.trace_incremental_marking) {
@@ -416,15 +393,20 @@ void IncrementalMarking::StartBlackAllocation() {
 
 void IncrementalMarking::PauseBlackAllocation() {
   DCHECK(IsMajorMarking());
-  heap()->allocator()->UnmarkLinearAllocationsArea();
-  if (isolate()->is_shared_space_isolate()) {
-    isolate()->global_safepoint()->IterateSharedSpaceAndClientIsolates(
-        [](Isolate* client) {
-          client->heap()->UnmarkSharedLinearAllocationAreas();
-        });
+  if (!v8_flags.black_allocated_pages) {
+    heap()->allocator()->UnmarkLinearAllocationsArea();
+
+    if (isolate()->is_shared_space_isolate()) {
+      isolate()->global_safepoint()->IterateSharedSpaceAndClientIsolates(
+          [](Isolate* client) {
+            client->heap()->UnmarkSharedLinearAllocationAreas();
+          });
+    }
+
+    heap()->safepoint()->IterateLocalHeaps([](LocalHeap* local_heap) {
+      local_heap->UnmarkLinearAllocationsArea();
+    });
   }
-  heap()->safepoint()->IterateLocalHeaps(
-      [](LocalHeap* local_heap) { local_heap->UnmarkLinearAllocationsArea(); });
   StopPointerTableBlackAllocation();
   if (v8_flags.trace_incremental_marking) {
     isolate()->PrintWithTimestamp(
@@ -434,28 +416,52 @@ void IncrementalMarking::PauseBlackAllocation() {
 }
 
 void IncrementalMarking::FinishBlackAllocation() {
-  if (black_allocation_) {
-    black_allocation_ = false;
-    StopPointerTableBlackAllocation();
-    if (v8_flags.trace_incremental_marking) {
-      isolate()->PrintWithTimestamp(
-          "[IncrementalMarking] Black allocation finished\n");
-    }
+  if (!black_allocation_) {
+    return;
+  }
+  // Don't fixup the marking bitmaps of the black allocated pages, since the
+  // concurrent marker may still be running and will access the page flags.
+  black_allocation_ = false;
+  StopPointerTableBlackAllocation();
+  if (v8_flags.trace_incremental_marking) {
+    isolate()->PrintWithTimestamp(
+        "[IncrementalMarking] Black allocation finished\n");
   }
 }
 
 void IncrementalMarking::StartPointerTableBlackAllocation() {
+#ifdef V8_COMPRESS_POINTERS
+  heap()->old_external_pointer_space()->set_allocate_black(true);
+  heap()->cpp_heap_pointer_space()->set_allocate_black(true);
+#endif  // V8_COMPRESS_POINTERS
 #ifdef V8_ENABLE_SANDBOX
   heap()->code_pointer_space()->set_allocate_black(true);
   heap()->trusted_pointer_space()->set_allocate_black(true);
+  if (isolate()->is_shared_space_isolate()) {
+    isolate()->shared_trusted_pointer_space()->set_allocate_black(true);
+  }
 #endif  // V8_ENABLE_SANDBOX
+#ifdef V8_ENABLE_LEAPTIERING
+  heap()->js_dispatch_table_space()->set_allocate_black(true);
+#endif  // V8_ENABLE_LEAPTIERING
 }
 
 void IncrementalMarking::StopPointerTableBlackAllocation() {
+#ifdef V8_COMPRESS_POINTERS
+  heap()->old_external_pointer_space()->set_allocate_black(false);
+  heap()->cpp_heap_pointer_space()->set_allocate_black(false);
+#endif  // V8_COMPRESS_POINTERS
 #ifdef V8_ENABLE_SANDBOX
   heap()->code_pointer_space()->set_allocate_black(false);
   heap()->trusted_pointer_space()->set_allocate_black(false);
+  if (isolate()->is_shared_space_isolate()) {
+    heap()->isolate()->shared_trusted_pointer_space()->set_allocate_black(
+        false);
+  }
 #endif  // V8_ENABLE_SANDBOX
+#ifdef V8_ENABLE_LEAPTIERING
+  heap()->js_dispatch_table_space()->set_allocate_black(false);
+#endif  // V8_ENABLE_LEAPTIERING
 }
 
 void IncrementalMarking::UpdateMarkingWorklistAfterScavenge() {
@@ -498,7 +504,7 @@ void IncrementalMarking::UpdateMarkingWorklistAfterScavenge() {
       DCHECK(!Heap::IsLargeObject(obj));
       Tagged<HeapObject> dest = map_word.ToForwardingAddress(obj);
       DCHECK_IMPLIES(marking_state->IsUnmarked(obj), IsFreeSpaceOrFiller(obj));
-      if (InWritableSharedSpace(dest) &&
+      if (HeapLayout::InWritableSharedSpace(dest) &&
           !isolate()->is_shared_space_isolate()) {
         // Object got promoted into the shared heap. Drop it from the client
         // heap marking worklist.
@@ -628,13 +634,18 @@ bool IncrementalMarking::Stop() {
   if (v8_flags.trace_incremental_marking) {
     int old_generation_size_mb =
         static_cast<int>(heap()->OldGenerationSizeOfObjects() / MB);
+    int old_generation_waste_mb =
+        static_cast<int>(heap()->OldGenerationWastedBytes() / MB);
     int old_generation_limit_mb =
         static_cast<int>(heap()->old_generation_allocation_limit() / MB);
     isolate()->PrintWithTimestamp(
-        "[IncrementalMarking] Stopping: old generation %dMB, limit %dMB, "
+        "[IncrementalMarking] Stopping: old generation size %dMB, waste %dMB, "
+        "limit %dMB, "
         "overshoot %dMB\n",
-        old_generation_size_mb, old_generation_limit_mb,
-        std::max(0, old_generation_size_mb - old_generation_limit_mb));
+        old_generation_size_mb, old_generation_waste_mb,
+        old_generation_limit_mb,
+        std::max(0, old_generation_size_mb + old_generation_waste_mb -
+                        old_generation_limit_mb));
   }
 
   if (IsMajorMarking()) {
@@ -759,6 +770,7 @@ bool IncrementalMarking::TryInitializeTaskTimeout() {
             : allowed_overshoot - optional_time_to_current_task.value();
     completion_task_timeout_ = now + delta;
   }
+  DCHECK_IMPLIES(!delaying, completion_task_timeout_ <= now);
   if (V8_UNLIKELY(v8_flags.trace_incremental_marking)) {
     isolate()->PrintWithTimestamp(
         "[IncrementalMarking] Completion: %s GC via stack guard, "
@@ -900,7 +912,7 @@ void IncrementalMarking::Step(v8::base::TimeDelta max_duration,
   DCHECK(IsMajorMarking());
   const auto start = v8::base::TimeTicks::Now();
 
-  base::Optional<SafepointScope> safepoint_scope;
+  std::optional<SafepointScope> safepoint_scope;
   // Conceptually an incremental marking step (even though it always runs on the
   // main thread) may introduce a form of concurrent marking when background
   // threads access the heap concurrently (e.g. concurrent compilation). On
@@ -910,8 +922,14 @@ void IncrementalMarking::Step(v8::base::TimeDelta max_duration,
   // marker doesn't rely on correct synchronization but e.g. on black allocation
   // and the on_hold worklist.
 #ifndef V8_ATOMIC_OBJECT_FIELD_WRITES
-  DCHECK(!v8_flags.concurrent_marking);
-  safepoint_scope.emplace(isolate(), SafepointKind::kIsolate);
+  {
+    DCHECK(!v8_flags.concurrent_marking);
+    // Ensure that the isolate has no shared heap. Otherwise a shared GC might
+    // happen when trying to enter the safepoint.
+    DCHECK(!isolate()->has_shared_space());
+    AllowGarbageCollection allow_gc;
+    safepoint_scope.emplace(isolate(), SafepointKind::kIsolate);
+  }
 #endif
 
   size_t v8_bytes_processed = 0;
@@ -926,7 +944,8 @@ void IncrementalMarking::Step(v8::base::TimeDelta max_duration,
     // escape and get marked though.
     local_marking_worklists()->MergeOnHold();
 
-    heap()->mark_compact_collector()->MaybeEnableBackgroundThreadsInCycle();
+    heap()->mark_compact_collector()->MaybeEnableBackgroundThreadsInCycle(
+        MarkCompactCollector::CallOrigin::kIncrementalMarkingStep);
   }
   if (step_origin == StepOrigin::kTask) {
     // We cannot publish the pending allocations for V8 step origin because the

@@ -38,25 +38,7 @@ namespace internal {
 
 #ifdef DEBUG
 
-static const char* NameForNativeContextIntrinsicIndex(uint32_t idx) {
-  switch (idx) {
-#define NATIVE_CONTEXT_FIELDS_IDX(NAME, Type, name) \
-  case Context::NAME:                               \
-    return #name;
-
-    NATIVE_CONTEXT_FIELDS(NATIVE_CONTEXT_FIELDS_IDX)
-#undef NATIVE_CONTEXT_FIELDS_IDX
-
-    default:
-      break;
-  }
-
-  return "UnknownIntrinsicIndex";
-}
-
-void AstNode::Print(Isolate* isolate) {
-  AstPrinter::PrintOut(isolate, this);
-}
+void AstNode::Print(Isolate* isolate) { AstPrinter::PrintOut(isolate, this); }
 
 #endif  // DEBUG
 
@@ -92,6 +74,10 @@ bool Expression::IsNumberLiteral() const {
 
 bool Expression::IsStringLiteral() const {
   return IsLiteral() && AsLiteral()->type() == Literal::kString;
+}
+
+bool Expression::IsConsStringLiteral() const {
+  return IsLiteral() && AsLiteral()->type() == Literal::kConsString;
 }
 
 bool Expression::IsPropertyName() const {
@@ -198,20 +184,26 @@ Assignment::Assignment(NodeType node_type, Token::Value op, Expression* target,
   bit_field_ |= TokenField::encode(op);
 }
 
-void FunctionLiteral::set_inferred_name(Handle<String> inferred_name) {
-  DCHECK(!inferred_name.is_null());
-  inferred_name_ = inferred_name;
-  DCHECK(raw_inferred_name_ == nullptr || raw_inferred_name_->IsEmpty());
-  raw_inferred_name_ = nullptr;
+void FunctionLiteral::set_raw_inferred_name(AstConsString* raw_inferred_name) {
+  DCHECK_NOT_NULL(raw_inferred_name);
+  DCHECK(shared_function_info_.is_null());
+  raw_inferred_name_ = raw_inferred_name;
   scope()->set_has_inferred_function_name(true);
 }
 
-void FunctionLiteral::set_raw_inferred_name(AstConsString* raw_inferred_name) {
-  DCHECK_NOT_NULL(raw_inferred_name);
-  raw_inferred_name_ = raw_inferred_name;
-  DCHECK(inferred_name_.is_null());
-  inferred_name_ = Handle<String>();
-  scope()->set_has_inferred_function_name(true);
+Handle<String> FunctionLiteral::GetInferredName(Isolate* isolate) {
+  if (raw_inferred_name_ != nullptr) {
+    return raw_inferred_name_->GetString(isolate);
+  }
+  DCHECK(!shared_function_info_.is_null());
+  return handle(shared_function_info_->inferred_name(), isolate);
+}
+
+void FunctionLiteral::set_shared_function_info(
+    Handle<SharedFunctionInfo> shared_function_info) {
+  DCHECK(shared_function_info_.is_null());
+  CHECK_EQ(shared_function_info->function_literal_id(), function_literal_id_);
+  shared_function_info_ = shared_function_info;
 }
 
 bool FunctionLiteral::ShouldEagerCompile() const {
@@ -244,8 +236,8 @@ std::unique_ptr<char[]> FunctionLiteral::GetDebugName() const {
     cons_string = raw_name_;
   } else if (raw_inferred_name_ != nullptr && !raw_inferred_name_->IsEmpty()) {
     cons_string = raw_inferred_name_;
-  } else if (!inferred_name_.is_null()) {
-    return inferred_name_->ToCString();
+  } else if (!shared_function_info_.is_null()) {
+    return shared_function_info_->inferred_name()->ToCString();
   } else {
     char* empty_str = new char[1];
     empty_str[0] = 0;
@@ -289,7 +281,7 @@ ObjectLiteralProperty::ObjectLiteralProperty(AstValueFactory* ast_value_factory,
                                              Expression* key, Expression* value,
                                              bool is_computed_name)
     : LiteralProperty(key, value, is_computed_name), emit_store_(true) {
-  if (!is_computed_name && key->AsLiteral()->IsString() &&
+  if (!is_computed_name && key->AsLiteral()->IsRawString() &&
       key->AsLiteral()->AsRawString() == ast_value_factory->proto_string()) {
     kind_ = PROTOTYPE;
   } else if (value_->AsMaterializedLiteral() != nullptr) {
@@ -315,7 +307,20 @@ ClassLiteralProperty::ClassLiteralProperty(Expression* key, Expression* value,
       kind_(kind),
       is_static_(is_static),
       is_private_(is_private),
-      private_or_computed_name_var_(nullptr) {}
+      private_or_computed_name_proxy_(nullptr) {}
+
+ClassLiteralProperty::ClassLiteralProperty(Expression* key, Expression* value,
+                                           AutoAccessorInfo* info,
+                                           bool is_static,
+                                           bool is_computed_name,
+                                           bool is_private)
+    : LiteralProperty(key, value, is_computed_name),
+      kind_(Kind::AUTO_ACCESSOR),
+      is_static_(is_static),
+      is_private_(is_private),
+      auto_accessor_info_(info) {
+  DCHECK_NOT_NULL(info);
+}
 
 bool ObjectLiteral::Property::IsCompileTimeValue() const {
   return kind_ == CONSTANT ||
@@ -512,13 +517,14 @@ void ObjectLiteralBoilerplateBuilder::BuildBoilerplateDescription(
     // in at runtime. The enumeration order is maintained.
     Literal* key_literal = property->key()->AsLiteral();
     uint32_t element_index = 0;
-    Handle<Object> key =
+    DirectHandle<Object> key =
         key_literal->AsArrayIndex(&element_index)
             ? isolate->factory()
                   ->template NewNumberFromUint<AllocationType::kOld>(
                       element_index)
-            : Handle<Object>::cast(key_literal->AsRawPropertyName()->string());
-    Handle<Object> value = GetBoilerplateValue(property->value(), isolate);
+            : Cast<Object>(key_literal->AsRawPropertyName()->string());
+    DirectHandle<Object> value =
+        GetBoilerplateValue(property->value(), isolate);
     boilerplate_description->set_key_value(position++, *key, *value);
   }
 
@@ -626,6 +632,7 @@ void ArrayLiteralBoilerplateBuilder::InitDepthAndFlags() {
             break;
           case Literal::kBigInt:
           case Literal::kString:
+          case Literal::kConsString:
           case Literal::kBoolean:
           case Literal::kUndefined:
           case Literal::kNull:
@@ -679,15 +686,15 @@ void ArrayLiteralBoilerplateBuilder::BuildBoilerplateDescription(
       if (literal && literal->type() == Literal::kTheHole) {
         DCHECK(IsHoleyElementsKind(kind));
         DCHECK(IsTheHole(*GetBoilerplateValue(element, isolate), isolate));
-        FixedDoubleArray::cast(*elements)->set_the_hole(array_index);
+        Cast<FixedDoubleArray>(*elements)->set_the_hole(array_index);
         continue;
       } else if (literal && literal->IsNumber()) {
-        FixedDoubleArray::cast(*elements)->set(array_index,
+        Cast<FixedDoubleArray>(*elements)->set(array_index,
                                                literal->AsNumber());
       } else {
         DCHECK(
             IsUninitialized(*GetBoilerplateValue(element, isolate), isolate));
-        FixedDoubleArray::cast(*elements)->set(array_index, 0);
+        Cast<FixedDoubleArray>(*elements)->set(array_index, 0);
       }
 
     } else {
@@ -717,7 +724,7 @@ void ArrayLiteralBoilerplateBuilder::BuildBoilerplateDescription(
                                     boilerplate_value,
                                     GetPtrComprCageBase(*elements))));
 
-      FixedArray::cast(*elements)->set(array_index, boilerplate_value);
+      Cast<FixedArray>(*elements)->set(array_index, boilerplate_value);
     }
   }  // namespace internal
 
@@ -726,7 +733,7 @@ void ArrayLiteralBoilerplateBuilder::BuildBoilerplateDescription(
   if (is_simple() && depth() == kShallow && array_index > 0 &&
       IsSmiOrObjectElementsKind(kind)) {
     elements->set_map_safe_transition(
-        ReadOnlyRoots(isolate).fixed_cow_array_map());
+        isolate, ReadOnlyRoots(isolate).fixed_cow_array_map(), kReleaseStore);
   }
 
   boilerplate_description_ =
@@ -1047,6 +1054,8 @@ Handle<Object> Literal::BuildValue(IsolateT* isolate) const {
           number_);
     case kString:
       return string_->string();
+    case kConsString:
+      return cons_string_->AllocateFlat(isolate);
     case kBoolean:
       return isolate->factory()->ToBoolean(boolean_);
     case kNull:
@@ -1075,6 +1084,8 @@ bool Literal::ToBooleanIsTrue() const {
       return DoubleToBoolean(number_);
     case kString:
       return !string_->IsEmpty();
+    case kConsString:
+      return !cons_string_->IsEmpty();
     case kNull:
     case kUndefined:
       return false;
@@ -1099,14 +1110,15 @@ bool Literal::ToBooleanIsTrue() const {
 }
 
 uint32_t Literal::Hash() {
+  DCHECK(IsRawString() || IsNumber());
   uint32_t index;
   if (AsArrayIndex(&index)) {
     // Treat array indices as numbers, so that array indices are de-duped
     // correctly even if one of them is a string and the other is a number.
     return ComputeLongHash(index);
   }
-  return IsString() ? AsRawString()->Hash()
-                    : ComputeLongHash(base::double_to_uint64(AsNumber()));
+  return IsRawString() ? AsRawString()->Hash()
+                       : ComputeLongHash(base::double_to_uint64(AsNumber()));
 }
 
 // static
@@ -1118,7 +1130,7 @@ bool Literal::Match(void* a, void* b) {
   if (x->AsArrayIndex(&index_x)) {
     return y->AsArrayIndex(&index_y) && index_x == index_y;
   }
-  return (x->IsString() && y->IsString() &&
+  return (x->IsRawString() && y->IsRawString() &&
           x->AsRawString() == y->AsRawString()) ||
          (x->IsNumber() && y->IsNumber() && x->AsNumber() == y->AsNumber());
 }
@@ -1129,15 +1141,6 @@ Literal* AstNodeFactory::NewNumberLiteral(double number, int pos) {
     return NewSmiLiteral(int_value, pos);
   }
   return zone_->New<Literal>(number, pos);
-}
-
-const char* CallRuntime::debug_name() {
-#ifdef DEBUG
-  return is_jsruntime() ? NameForNativeContextIntrinsicIndex(context_index_)
-                        : function_->name;
-#else
-  return is_jsruntime() ? "(context function)" : function_->name;
-#endif  // DEBUG
 }
 
 }  // namespace internal

@@ -6,9 +6,11 @@
 #define V8_OBJECTS_CONTEXTS_H_
 
 #include "include/v8-promise.h"
+#include "src/handles/handles.h"
 #include "src/objects/fixed-array.h"
 #include "src/objects/function-kind.h"
 #include "src/objects/ordered-hash-table.h"
+#include "src/objects/property-cell.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -16,7 +18,7 @@
 namespace v8 {
 namespace internal {
 
-class ConstTrackingLetCell;
+class ContextSidePropertyCell;
 class JSGlobalObject;
 class JSGlobalProxy;
 class MicrotaskQueue;
@@ -41,15 +43,6 @@ enum ContextLookupFlags {
 // must always be allocated via Heap::AllocateContext() or
 // Factory::NewContext.
 
-#define NATIVE_CONTEXT_INTRINSIC_FUNCTIONS(V)                     \
-  V(GENERATOR_NEXT_INTERNAL, JSFunction, generator_next_internal) \
-  V(ASYNC_MODULE_EVALUATE_INTERNAL, JSFunction,                   \
-    async_module_evaluate_internal)                               \
-  V(REFLECT_APPLY_INDEX, JSFunction, reflect_apply)               \
-  V(REFLECT_CONSTRUCT_INDEX, JSFunction, reflect_construct)       \
-  V(PROMISE_THEN_INDEX, JSFunction, promise_then)                 \
-  V(FUNCTION_PROTOTYPE_APPLY_INDEX, JSFunction, function_prototype_apply)
-
 #define NATIVE_CONTEXT_FIELDS(V)                                               \
   V(GLOBAL_PROXY_INDEX, JSGlobalProxy, global_proxy_object)                    \
   /* TODO(ishell): Actually we store exactly EmbedderDataArray here but */     \
@@ -58,7 +51,15 @@ enum ContextLookupFlags {
   V(EMBEDDER_DATA_INDEX, HeapObject, embedder_data)                            \
   V(CONTINUATION_PRESERVED_EMBEDDER_DATA_INDEX, HeapObject,                    \
     continuation_preserved_embedder_data)                                      \
-  NATIVE_CONTEXT_INTRINSIC_FUNCTIONS(V)                                        \
+  V(GENERATOR_NEXT_INTERNAL, JSFunction, generator_next_internal)              \
+  V(ASYNC_MODULE_EVALUATE_INTERNAL, JSFunction,                                \
+    async_module_evaluate_internal)                                            \
+  V(REFLECT_APPLY_INDEX, JSFunction, reflect_apply)                            \
+  V(REFLECT_CONSTRUCT_INDEX, JSFunction, reflect_construct)                    \
+  V(PERFORM_PROMISE_THEN_INDEX, JSFunction, perform_promise_then)              \
+  V(PROMISE_THEN_INDEX, JSFunction, promise_then)                              \
+  V(PROMISE_RESOLVE_INDEX, JSFunction, promise_resolve)                        \
+  V(FUNCTION_PROTOTYPE_APPLY_INDEX, JSFunction, function_prototype_apply)      \
   /* TypedArray constructors - these must stay in order! */                    \
   V(UINT8_ARRAY_FUN_INDEX, JSFunction, uint8_array_fun)                        \
   V(INT8_ARRAY_FUN_INDEX, JSFunction, int8_array_fun)                          \
@@ -66,11 +67,11 @@ enum ContextLookupFlags {
   V(INT16_ARRAY_FUN_INDEX, JSFunction, int16_array_fun)                        \
   V(UINT32_ARRAY_FUN_INDEX, JSFunction, uint32_array_fun)                      \
   V(INT32_ARRAY_FUN_INDEX, JSFunction, int32_array_fun)                        \
-  V(FLOAT32_ARRAY_FUN_INDEX, JSFunction, float32_array_fun)                    \
-  V(FLOAT64_ARRAY_FUN_INDEX, JSFunction, float64_array_fun)                    \
-  V(UINT8_CLAMPED_ARRAY_FUN_INDEX, JSFunction, uint8_clamped_array_fun)        \
   V(BIGUINT64_ARRAY_FUN_INDEX, JSFunction, biguint64_array_fun)                \
   V(BIGINT64_ARRAY_FUN_INDEX, JSFunction, bigint64_array_fun)                  \
+  V(UINT8_CLAMPED_ARRAY_FUN_INDEX, JSFunction, uint8_clamped_array_fun)        \
+  V(FLOAT32_ARRAY_FUN_INDEX, JSFunction, float32_array_fun)                    \
+  V(FLOAT64_ARRAY_FUN_INDEX, JSFunction, float64_array_fun)                    \
   V(FLOAT16_ARRAY_FUN_INDEX, JSFunction, float16_array_fun)                    \
   V(RAB_GSAB_UINT8_ARRAY_MAP_INDEX, Map, rab_gsab_uint8_array_map)             \
   V(RAB_GSAB_INT8_ARRAY_MAP_INDEX, Map, rab_gsab_int8_array_map)               \
@@ -78,14 +79,18 @@ enum ContextLookupFlags {
   V(RAB_GSAB_INT16_ARRAY_MAP_INDEX, Map, rab_gsab_int16_array_map)             \
   V(RAB_GSAB_UINT32_ARRAY_MAP_INDEX, Map, rab_gsab_uint32_array_map)           \
   V(RAB_GSAB_INT32_ARRAY_MAP_INDEX, Map, rab_gsab_int32_array_map)             \
-  V(RAB_GSAB_FLOAT32_ARRAY_MAP_INDEX, Map, rab_gsab_float32_array_map)         \
-  V(RAB_GSAB_FLOAT64_ARRAY_MAP_INDEX, Map, rab_gsab_float64_array_map)         \
-  V(RAB_GSAB_UINT8_CLAMPED_ARRAY_MAP_INDEX, Map,                               \
-    rab_gsab_uint8_clamped_array_map)                                          \
   V(RAB_GSAB_BIGUINT64_ARRAY_MAP_INDEX, Map, rab_gsab_biguint64_array_map)     \
   V(RAB_GSAB_BIGINT64_ARRAY_MAP_INDEX, Map, rab_gsab_bigint64_array_map)       \
+  V(RAB_GSAB_UINT8_CLAMPED_ARRAY_MAP_INDEX, Map,                               \
+    rab_gsab_uint8_clamped_array_map)                                          \
+  V(RAB_GSAB_FLOAT32_ARRAY_MAP_INDEX, Map, rab_gsab_float32_array_map)         \
+  V(RAB_GSAB_FLOAT64_ARRAY_MAP_INDEX, Map, rab_gsab_float64_array_map)         \
   V(RAB_GSAB_FLOAT16_ARRAY_MAP_INDEX, Map, rab_gsab_float16_array_map)         \
   /* Below is alpha-sorted */                                                  \
+  V(ABSTRACT_MODULE_SOURCE_FUNCTION_INDEX, JSFunction,                         \
+    abstract_module_source_function)                                           \
+  V(ABSTRACT_MODULE_SOURCE_PROTOTYPE_INDEX, JSObject,                          \
+    abstract_module_source_prototype)                                          \
   V(ACCESSOR_PROPERTY_DESCRIPTOR_MAP_INDEX, Map,                               \
     accessor_property_descriptor_map)                                          \
   V(ALLOW_CODE_GEN_FROM_STRINGS_INDEX, Object, allow_code_gen_from_strings)    \
@@ -114,7 +119,7 @@ enum ContextLookupFlags {
   V(DATA_PROPERTY_DESCRIPTOR_MAP_INDEX, Map, data_property_descriptor_map)     \
   V(DATA_VIEW_FUN_INDEX, JSFunction, data_view_fun)                            \
   V(DATE_FUNCTION_INDEX, JSFunction, date_function)                            \
-  V(DEBUG_CONTEXT_ID_INDEX, Object, debug_context_id)                          \
+  V(DEBUG_CONTEXT_ID_INDEX, (UnionOf<Smi, Undefined>), debug_context_id)       \
   V(EMPTY_FUNCTION_INDEX, JSFunction, empty_function)                          \
   V(ERROR_MESSAGE_FOR_CODE_GEN_FROM_STRINGS_INDEX, Object,                     \
     error_message_for_code_gen_from_strings)                                   \
@@ -199,6 +204,10 @@ enum ContextLookupFlags {
     js_array_holey_double_elements_map)                                        \
   V(JS_ARRAY_TEMPLATE_LITERAL_OBJECT_MAP, Map,                                 \
     js_array_template_literal_object_map)                                      \
+  V(JS_DISPOSABLE_STACK_FUNCTION_INDEX, JSFunction,                            \
+    js_disposable_stack_function)                                              \
+  V(JS_ASYNC_DISPOSABLE_STACK_FUNCTION_INDEX, JSFunction,                      \
+    js_async_disposable_stack_function)                                        \
   V(JS_DISPOSABLE_STACK_MAP_INDEX, Map, js_disposable_stack_map)               \
   V(JS_MAP_FUN_INDEX, JSFunction, js_map_fun)                                  \
   V(JS_MAP_MAP_INDEX, Map, js_map_map)                                         \
@@ -547,7 +556,7 @@ class Context : public TorqueGeneratedContext<Context, HeapObject> {
     WRAPPED_CONTEXT_INDEX = MIN_CONTEXT_EXTENDED_SLOTS,
 
     // This slot holds the const tracking let side data.
-    CONST_TRACKING_LET_SIDE_DATA_INDEX = MIN_CONTEXT_SLOTS,
+    CONTEXT_SIDE_TABLE_PROPERTY_INDEX = MIN_CONTEXT_SLOTS,
   };
 
   static const int kExtensionSize =
@@ -623,14 +632,11 @@ class Context : public TorqueGeneratedContext<Context, HeapObject> {
   Handle<Object> ErrorMessageForCodeGenerationFromStrings();
   Handle<Object> ErrorMessageForWasmCodeGeneration();
 
-  static int IntrinsicIndexForName(Handle<String> name);
-  static int IntrinsicIndexForName(const unsigned char* name, int length);
-
-#define NATIVE_CONTEXT_FIELD_ACCESSORS(index, type, name) \
-  inline void set_##name(Tagged<type> value);             \
-  inline bool is_##name(Tagged<type> value) const;        \
-  inline Tagged<type> name() const;                       \
-  inline Tagged<type> name(AcquireLoadTag) const;
+#define NATIVE_CONTEXT_FIELD_ACCESSORS(index, type, name)   \
+  inline void set_##name(Tagged<UNPAREN(type)> value);      \
+  inline bool is_##name(Tagged<UNPAREN(type)> value) const; \
+  inline Tagged<UNPAREN(type)> name() const;                \
+  inline Tagged<UNPAREN(type)> name(AcquireLoadTag) const;
   NATIVE_CONTEXT_FIELDS(NATIVE_CONTEXT_FIELD_ACCESSORS)
 #undef NATIVE_CONTEXT_FIELD_ACCESSORS
 
@@ -672,15 +678,20 @@ class Context : public TorqueGeneratedContext<Context, HeapObject> {
 
   inline Tagged<Map> GetInitialJSArrayMap(ElementsKind kind) const;
 
-  static Tagged<ConstTrackingLetCell> GetOrCreateConstTrackingLetCell(
-      Handle<Context> context, size_t index, Isolate* isolate);
+  static Tagged<ContextSidePropertyCell> GetOrCreateContextSidePropertyCell(
+      DirectHandle<Context> context, size_t index,
+      ContextSidePropertyCell::Property property, Isolate* isolate);
 
-  bool ConstTrackingLetSideDataIsConst(size_t index) const;
+  ContextSidePropertyCell::Property GetScriptContextSideProperty(
+      size_t index) const;
 
-  static void UpdateConstTrackingLetSideData(Handle<Context> script_context,
-                                             int index,
-                                             Handle<Object> new_value,
-                                             Isolate* isolate);
+  static DirectHandle<Object> LoadScriptContextElement(
+      DirectHandle<Context> script_context, int index,
+      DirectHandle<Object> new_value, Isolate* isolate);
+
+  static void StoreScriptContextAndUpdateSlotProperty(
+      DirectHandle<Context> script_context, int index,
+      DirectHandle<Object> new_value, Isolate* isolate);
 
   static const int kNotFound = -1;
 
@@ -710,7 +721,6 @@ class Context : public TorqueGeneratedContext<Context, HeapObject> {
 
 class NativeContext : public Context {
  public:
-  DECL_CAST(NativeContext)
   // TODO(neis): Move some stuff from Context here.
 
   // NativeContext fields are read concurrently from background threads; any
@@ -792,20 +802,15 @@ class NativeContext : public Context {
 
 class ScriptContextTableShape final : public AllStatic {
  public:
-  static constexpr int kElementSize = kTaggedSize;
   using ElementT = Context;
   using CompressionScheme = V8HeapCompressionScheme;
   static constexpr RootIndex kMapRootIndex = RootIndex::kScriptContextTableMap;
   static constexpr bool kLengthEqualsCapacity = false;
 
-#define FIELD_LIST(V)                                                   \
-  V(kCapacityOffset, kTaggedSize)                                       \
-  V(kLengthOffset, kTaggedSize)                                         \
-  V(kNamesToContextIndexOffset, kTaggedSize)                            \
-  V(kUnalignedHeaderSize, OBJECT_POINTER_PADDING(kUnalignedHeaderSize)) \
-  V(kHeaderSize, 0)
-  DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize, FIELD_LIST)
-#undef FIELD_LIST
+  V8_ARRAY_EXTRA_FIELDS({
+    TaggedMember<Smi> length_;
+    TaggedMember<NameToIndexHashTable> names_to_context_index_;
+  });
 };
 
 // A table of all script contexts. Every loaded top-level script with top-level
@@ -813,7 +818,6 @@ class ScriptContextTableShape final : public AllStatic {
 class ScriptContextTable
     : public TaggedArrayBase<ScriptContextTable, ScriptContextTableShape> {
   using Super = TaggedArrayBase<ScriptContextTable, ScriptContextTableShape>;
-  OBJECT_CONSTRUCTORS(ScriptContextTable, Super);
 
  public:
   using Shape = ScriptContextTableShape;
@@ -822,8 +826,13 @@ class ScriptContextTable
       Isolate* isolate, int capacity,
       AllocationType allocation = AllocationType::kYoung);
 
-  DECL_RELEASE_ACQUIRE_INT_ACCESSORS(length)
-  DECL_ACCESSORS(names_to_context_index, Tagged<NameToIndexHashTable>)
+  inline int length(AcquireLoadTag) const;
+  inline void set_length(int value, ReleaseStoreTag);
+
+  inline Tagged<NameToIndexHashTable> names_to_context_index() const;
+  inline void set_names_to_context_index(
+      Tagged<NameToIndexHashTable> value,
+      WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
   inline Tagged<Context> get(int index) const;
   inline Tagged<Context> get(int index, AcquireLoadTag) const;
@@ -839,17 +848,12 @@ class ScriptContextTable
   V8_WARN_UNUSED_RESULT
   V8_EXPORT_PRIVATE static Handle<ScriptContextTable> Add(
       Isolate* isolate, Handle<ScriptContextTable> table,
-      Handle<Context> script_context, bool ignore_duplicates);
+      DirectHandle<Context> script_context, bool ignore_duplicates);
 
-  DECL_CAST(ScriptContextTable)
   DECL_PRINTER(ScriptContextTable)
   DECL_VERIFIER(ScriptContextTable)
 
   class BodyDescriptor;
-
-  static constexpr int kLengthOffset = Shape::kLengthOffset;
-  static constexpr int kNamesToContextIndexOffset =
-      Shape::kNamesToContextIndexOffset;
 };
 
 using ContextField = Context::Field;

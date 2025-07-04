@@ -270,9 +270,10 @@ class CTypeInfo {
 
   enum class SequenceType : uint8_t {
     kScalar,
-    kIsSequence,    // sequence<T>
-    kIsTypedArray,  // TypedArray of T or any ArrayBufferView if T
-                    // is void
+    kIsSequence,  // sequence<T>
+    kIsTypedArray V8_DEPRECATE_SOON(
+        "TypedArrays are not supported directly anymore."),
+    // is void
     kIsArrayBuffer  // ArrayBuffer
   };
 
@@ -325,7 +326,9 @@ class CTypeInfo {
   Flags flags_;
 };
 
-struct FastApiTypedArrayBase {
+struct V8_DEPRECATE_SOON(
+    "With the removal of FastApiTypedArray this type is not needed "
+    "anymore.") FastApiTypedArrayBase {
  public:
   // Returns the length in number of elements.
   size_t V8_EXPORT length() const { return length_; }
@@ -337,7 +340,13 @@ struct FastApiTypedArrayBase {
 };
 
 template <typename T>
-struct FastApiTypedArray : public FastApiTypedArrayBase {
+struct V8_DEPRECATED(
+    "When an API function expects a TypedArray as a parameter, the type in the "
+    "signature should be `v8::Local<v8::Value>` instead of "
+    "FastApiTypedArray<>. The API function then has to type-check the "
+    "parameter and convert it to a `v8::Local<v8::TypedArray` to access the "
+    "data. In essence, the parameter should be handled the same as for a "
+    "regular API call.") FastApiTypedArray : public FastApiTypedArrayBase {
  public:
   V8_INLINE T get(size_t index) const {
 #ifdef DEBUG
@@ -366,18 +375,12 @@ struct FastApiTypedArray : public FastApiTypedArrayBase {
   void* data_;
 };
 
-// Any TypedArray. It uses kTypedArrayBit with base type void
-// Overloaded args of ArrayBufferView and TypedArray are not supported
-// (for now) because the generic “any” ArrayBufferView doesn’t have its
-// own instance type. It could be supported if we specify that
-// TypedArray<T> always has precedence over the generic ArrayBufferView,
-// but this complicates overload resolution.
-struct FastApiArrayBufferView {
+struct V8_DEPRECATE_SOON("This API is dead within V8") FastApiArrayBufferView {
   void* data;
   size_t byte_length;
 };
 
-struct FastApiArrayBuffer {
+struct V8_DEPRECATE_SOON("This API is dead within V8") FastApiArrayBuffer {
   void* data;
   size_t byte_length;
 };
@@ -458,13 +461,6 @@ union V8_TRIVIAL_ABI AnyCType {
   void* pointer_value;
   Local<Object> object_value;
   Local<Array> sequence_value;
-  const FastApiTypedArray<uint8_t>* uint8_ta_value;
-  const FastApiTypedArray<int32_t>* int32_ta_value;
-  const FastApiTypedArray<uint32_t>* uint32_ta_value;
-  const FastApiTypedArray<int64_t>* int64_ta_value;
-  const FastApiTypedArray<uint64_t>* uint64_ta_value;
-  const FastApiTypedArray<float>* float_ta_value;
-  const FastApiTypedArray<double>* double_ta_value;
   const FastOneByteString* string_value;
   FastApiCallbackOptions* options_value;
 };
@@ -497,6 +493,10 @@ class V8_EXPORT CFunction {
   // Returns whether an overload between this and the given CFunction can
   // be resolved at runtime by the RTTI available for the arguments or at
   // compile time for functions with different number of arguments.
+  V8_DEPRECATE_SOON(
+      "Overload resolution is only based on the parameter count. If the "
+      "parameter count is different, overload resolution is possible and "
+      "happens at compile time. Otherwise overload resolution is impossible.")
   OverloadResolution GetOverloadResolution(const CFunction* other) {
     // Runtime overload resolution can only deal with functions with the
     // same number of arguments. Functions with different arity are handled
@@ -529,16 +529,22 @@ class V8_EXPORT CFunction {
   }
 
   template <typename F>
-  static CFunction Make(F* func) {
-    return ArgUnwrap<F*>::Make(func);
+  static CFunction Make(F* func,
+                        CFunctionInfo::Int64Representation int64_rep =
+                            CFunctionInfo::Int64Representation::kNumber) {
+    CFunction result = ArgUnwrap<F*>::Make(func, int64_rep);
+    result.GetInt64Representation();
+    return result;
   }
 
   // Provided for testing purposes.
   template <typename R, typename... Args, typename R_Patch,
             typename... Args_Patch>
   static CFunction Make(R (*func)(Args...),
-                        R_Patch (*patching_func)(Args_Patch...)) {
-    CFunction c_func = ArgUnwrap<R (*)(Args...)>::Make(func);
+                        R_Patch (*patching_func)(Args_Patch...),
+                        CFunctionInfo::Int64Representation int64_rep =
+                            CFunctionInfo::Int64Representation::kNumber) {
+    CFunction c_func = ArgUnwrap<R (*)(Args...)>::Make(func, int64_rep);
     static_assert(
         sizeof...(Args_Patch) == sizeof...(Args),
         "The patching function must have the same number of arguments.");
@@ -561,7 +567,9 @@ class V8_EXPORT CFunction {
   template <typename R, typename... Args>
   class ArgUnwrap<R (*)(Args...)> {
    public:
-    static CFunction Make(R (*func)(Args...));
+    static CFunction Make(R (*func)(Args...),
+                          CFunctionInfo::Int64Representation int64_rep =
+                              CFunctionInfo::Int64Representation::kNumber);
   };
 };
 
@@ -577,35 +585,15 @@ struct FastApiCallbackOptions {
    * returned instance may be filled with mock data.
    */
   static FastApiCallbackOptions CreateForTesting(Isolate* isolate) {
-    return {false, {0}, nullptr};
+    return {};
   }
 
-  /**
-   * If the callback wants to signal an error condition or to perform an
-   * allocation, it must set options.fallback to true and do an early return
-   * from the fast method. Then V8 checks the value of options.fallback and if
-   * it's true, falls back to executing the SlowCallback, which is capable of
-   * reporting the error (either by throwing a JS exception or logging to the
-   * console) or doing the allocation. It's the embedder's responsibility to
-   * ensure that the fast callback is idempotent up to the point where error and
-   * fallback conditions are checked, because otherwise executing the slow
-   * callback might produce visible side-effects twice.
-   */
-  bool fallback;
+  v8::Isolate* isolate = nullptr;
 
   /**
    * The `data` passed to the FunctionTemplate constructor, or `undefined`.
-   * `data_ptr` allows for default constructing FastApiCallbackOptions.
    */
-  union {
-    uintptr_t data_ptr;
-    v8::Local<v8::Value> data;
-  };
-
-  /**
-   * When called from WebAssembly, a view of the calling module's memory.
-   */
-  FastApiTypedArray<uint8_t>* const wasm_memory;
+  v8::Local<v8::Value> data;
 };
 
 namespace internal {
@@ -712,17 +700,19 @@ PRIMITIVE_C_TYPES(DEFINE_TYPE_INFO_TRAITS)
 #undef PRIMITIVE_C_TYPES
 #undef ALL_C_TYPES
 
-#define SPECIALIZE_GET_TYPE_INFO_HELPER_FOR_TA(T, Enum)                       \
-  template <>                                                                 \
-  struct TypeInfoHelper<const FastApiTypedArray<T>&> {                        \
-    static constexpr CTypeInfo::Flags Flags() {                               \
-      return CTypeInfo::Flags::kNone;                                         \
-    }                                                                         \
-                                                                              \
-    static constexpr CTypeInfo::Type Type() { return CTypeInfo::Type::Enum; } \
-    static constexpr CTypeInfo::SequenceType SequenceType() {                 \
-      return CTypeInfo::SequenceType::kIsTypedArray;                          \
-    }                                                                         \
+#define SPECIALIZE_GET_TYPE_INFO_HELPER_FOR_TA(T, Enum)                        \
+  template <>                                                                  \
+  struct V8_DEPRECATE_SOON(                                                    \
+      "This struct is unnecessary now, because FastApiTypedArray has already " \
+      "been deprecated as well") TypeInfoHelper<const FastApiTypedArray<T>&> { \
+    static constexpr CTypeInfo::Flags Flags() {                                \
+      return CTypeInfo::Flags::kNone;                                          \
+    }                                                                          \
+                                                                               \
+    static constexpr CTypeInfo::Type Type() { return CTypeInfo::Type::Enum; }  \
+    static constexpr CTypeInfo::SequenceType SequenceType() {                  \
+      return CTypeInfo::SequenceType::kIsTypedArray;                           \
+    }                                                                          \
   };
 
 #define TYPED_ARRAY_C_TYPES(V) \
@@ -749,7 +739,9 @@ struct TypeInfoHelper<v8::Local<v8::Array>> {
 };
 
 template <>
-struct TypeInfoHelper<v8::Local<v8::Uint32Array>> {
+struct V8_DEPRECATE_SOON(
+    "TypedArrays are not supported directly anymore. Use Local<Value> instead.")
+    TypeInfoHelper<v8::Local<v8::Uint32Array>> {
   static constexpr CTypeInfo::Flags Flags() { return CTypeInfo::Flags::kNone; }
 
   static constexpr CTypeInfo::Type Type() { return CTypeInfo::Type::kUint32; }
@@ -792,6 +784,7 @@ class V8_EXPORT CTypeInfoBuilder {
  public:
   using BaseType = T;
 
+  START_ALLOW_USE_DEPRECATED()
   static constexpr CTypeInfo Build() {
     constexpr CTypeInfo::Flags kFlags =
         MergeFlags(internal::TypeInfoHelper<T>::Flags(), Flags...);
@@ -828,6 +821,7 @@ class V8_EXPORT CTypeInfoBuilder {
     return CTypeInfo(internal::TypeInfoHelper<T>::Type(),
                      internal::TypeInfoHelper<T>::SequenceType(), kFlags);
   }
+  END_ALLOW_USE_DEPRECATED()
 
  private:
   template <typename... Rest>
@@ -929,8 +923,14 @@ class CFunctionBuilder {
 
 // static
 template <typename R, typename... Args>
-CFunction CFunction::ArgUnwrap<R (*)(Args...)>::Make(R (*func)(Args...)) {
-  return internal::CFunctionBuilder().Fn(func).Build();
+CFunction CFunction::ArgUnwrap<R (*)(Args...)>::Make(
+    R (*func)(Args...), CFunctionInfo::Int64Representation int64_rep) {
+  if (int64_rep == CFunctionInfo::Int64Representation::kNumber) {
+    return internal::CFunctionBuilder().Fn(func).Build();
+  }
+  return internal::CFunctionBuilder()
+      .Fn(func)
+      .template Build<CFunctionInfo::Int64Representation::kBigInt>();
 }
 
 using CFunctionBuilder = internal::CFunctionBuilder;

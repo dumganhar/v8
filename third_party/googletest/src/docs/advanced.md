@@ -286,7 +286,7 @@ For example:
 ```c++
 TEST(SkipTest, DoesSkip) {
   GTEST_SKIP() << "Skipping single test";
-  EXPECT_EQ(0, 1);  // Won't fail; it won't be executed
+  FAIL();  // Won't fail; it won't be executed
 }
 
 class SkipFixture : public ::testing::Test {
@@ -298,7 +298,7 @@ class SkipFixture : public ::testing::Test {
 
 // Tests for SkipFixture won't be executed.
 TEST_F(SkipFixture, SkipsOneTest) {
-  EXPECT_EQ(5, 7);  // Won't fail
+  FAIL();  // Won't fail; it won't be executed
 }
 ```
 
@@ -1814,7 +1814,7 @@ and/or command line flags. For the flags to work, your programs must call
 `::testing::InitGoogleTest()` before calling `RUN_ALL_TESTS()`.
 
 To see a list of supported flags and their usage, please run your test program
-with the `--help` flag. You can also use `-h`, `-?`, or `/?` for short.
+with the `--help` flag.
 
 If an option is specified both by an environment variable and by a flag, the
 latter takes precedence.

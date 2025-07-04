@@ -8,6 +8,7 @@
 #include "include/v8-primitive.h"
 #include "include/v8-template.h"
 #include "src/api/api.h"
+#include "src/debug/debug-interface.h"
 #include "src/objects/objects-inl.h"
 #include "test/unittests/test-utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -31,7 +32,7 @@ TEST_F(DebugPropertyIteratorTest, WalksPrototypeChain) {
                   .FromMaybe(false));
 
   Local<Object> prototype = Object::New(isolate());
-  ASSERT_TRUE(object->SetPrototype(context(), prototype).FromMaybe(false));
+  ASSERT_TRUE(object->SetPrototypeV2(context(), prototype).FromMaybe(false));
   ASSERT_TRUE(prototype
                   ->CreateDataProperty(context(),
                                        String::NewFromUtf8Literal(

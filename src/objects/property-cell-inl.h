@@ -31,11 +31,11 @@ ACCESSORS(PropertyCell, value, Tagged<Object>, kValueOffset)
 RELEASE_ACQUIRE_ACCESSORS(PropertyCell, value, Tagged<Object>, kValueOffset)
 
 PropertyDetails PropertyCell::property_details() const {
-  return PropertyDetails(Smi::cast(property_details_raw()));
+  return PropertyDetails(Cast<Smi>(property_details_raw()));
 }
 
 PropertyDetails PropertyCell::property_details(AcquireLoadTag tag) const {
-  return PropertyDetails(Smi::cast(property_details_raw(tag)));
+  return PropertyDetails(Cast<Smi>(property_details_raw(tag)));
 }
 
 void PropertyCell::UpdatePropertyDetailsExceptCellType(
@@ -57,7 +57,7 @@ void PropertyCell::UpdatePropertyDetailsExceptCellType(
 }
 
 void PropertyCell::Transition(PropertyDetails new_details,
-                              Handle<Object> new_value) {
+                              DirectHandle<Object> new_value) {
   DCHECK(CanTransitionTo(new_details, *new_value));
   // This code must be in sync with its counterpart in
   // PropertyCellData::Serialize.
@@ -68,15 +68,17 @@ void PropertyCell::Transition(PropertyDetails new_details,
   set_property_details_raw(new_details.AsSmi(), kReleaseStore);
 }
 
-TQ_OBJECT_CONSTRUCTORS_IMPL(ConstTrackingLetCell)
+TQ_OBJECT_CONSTRUCTORS_IMPL(ContextSidePropertyCell)
 
-ACCESSORS(ConstTrackingLetCell, dependent_code, Tagged<DependentCode>,
+RELEASE_ACQUIRE_ACCESSORS(ContextSidePropertyCell, context_side_property_raw,
+                          Tagged<Smi>, kPropertyDetailsRawOffset)
+
+ACCESSORS(ContextSidePropertyCell, dependent_code, Tagged<DependentCode>,
           kDependentCodeOffset)
 
-bool ConstTrackingLetCell::IsNotConst(Tagged<Object> object) {
-  DCHECK(IsConstTrackingLetCell(object) ||
-         (object == kNonConstMarker || object == kConstMarker));
-  return object == kNonConstMarker;
+ContextSidePropertyCell::Property
+ContextSidePropertyCell::context_side_property() const {
+  return FromSmi(context_side_property_raw(kAcquireLoad));
 }
 
 }  // namespace internal

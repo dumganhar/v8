@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <optional>
+
 #include "src/builtins/builtins-utils-inl.h"
 #include "src/builtins/builtins.h"
 #include "src/heap/heap-inl.h"  // For ToBoolean. TODO(jkummerow): Drop.
@@ -28,12 +30,14 @@ bool IsValidCodePoint(Isolate* isolate, Handle<Object> value) {
     return false;
   }
 
-  if (Object::Number(*Object::ToInteger(isolate, value).ToHandleChecked()) !=
-      Object::Number(*value)) {
+  if (Object::NumberValue(
+          *Object::ToInteger(isolate, value).ToHandleChecked()) !=
+      Object::NumberValue(*value)) {
     return false;
   }
 
-  if (Object::Number(*value) < 0 || Object::Number(*value) > 0x10FFFF) {
+  if (Object::NumberValue(*value) < 0 ||
+      Object::NumberValue(*value) > 0x10FFFF) {
     return false;
   }
 
@@ -51,7 +55,7 @@ base::uc32 NextCodePoint(Isolate* isolate, BuiltinArguments args, int index) {
         MessageTemplate::kInvalidCodePoint, value));
     return kInvalidCodePoint;
   }
-  return DoubleToUint32(Object::Number(*value));
+  return DoubleToUint32(Object::NumberValue(*value));
 }
 
 }  // namespace
@@ -131,30 +135,18 @@ BUILTIN(StringPrototypeLastIndexOf) {
                              args.atOrUndefined(isolate, 2));
 }
 
+#ifndef V8_INTL_SUPPORT
 // ES6 section 21.1.3.10 String.prototype.localeCompare ( that )
 //
-// This function is implementation specific.  For now, we do not
-// do anything locale specific.
+// For now, we do not do anything locale specific.
+// If internationalization is enabled, then intl.js will override this function
+// and provide the proper functionality, so this is just a fallback.
 BUILTIN(StringPrototypeLocaleCompare) {
   HandleScope handle_scope(isolate);
 
   isolate->CountUsage(v8::Isolate::UseCounterFeature::kStringLocaleCompare);
   static const char* const kMethod = "String.prototype.localeCompare";
 
-#ifdef V8_INTL_SUPPORT
-  TO_THIS_STRING(str1, kMethod);
-  Handle<String> str2;
-  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-      isolate, str2, Object::ToString(isolate, args.atOrUndefined(isolate, 1)));
-  base::Optional<int> result = Intl::StringLocaleCompare(
-      isolate, str1, str2, args.atOrUndefined(isolate, 2),
-      args.atOrUndefined(isolate, 3), kMethod);
-  if (!result.has_value()) {
-    DCHECK(isolate->has_exception());
-    return ReadOnlyRoots(isolate).exception();
-  }
-  return Smi::FromInt(result.value());
-#else
   DCHECK_LE(2, args.length());
 
   TO_THIS_STRING(str1, kMethod);
@@ -196,10 +188,8 @@ BUILTIN(StringPrototypeLocaleCompare) {
   }
 
   return Smi::FromInt(str1_length - str2_length);
-#endif  // !V8_INTL_SUPPORT
 }
 
-#ifndef V8_INTL_SUPPORT
 // ES6 section 21.1.3.12 String.prototype.normalize ( [form] )
 //
 // Simply checks the argument is valid and returns the string itself.
@@ -246,7 +236,7 @@ inline bool ToUpperOverflows(base::uc32 character) {
 template <class Converter>
 V8_WARN_UNUSED_RESULT static Tagged<Object> ConvertCaseHelper(
     Isolate* isolate, Tagged<String> string, Tagged<SeqString> result,
-    int result_length, unibrow::Mapping<Converter, 128>* mapping) {
+    uint32_t result_length, unibrow::Mapping<Converter, 128>* mapping) {
   DisallowGarbageCollection no_gc;
   // We try this twice, once with the assumption that the result is no longer
   // than the input and, if that assumption breaks, again with the exact
@@ -266,10 +256,10 @@ V8_WARN_UNUSED_RESULT static Tagged<Object> ConvertCaseHelper(
   // We can assume that the string is not empty
   base::uc32 current = stream.GetNext();
   bool ignore_overflow = Converter::kIsToLower || IsSeqTwoByteString(result);
-  for (int i = 0; i < result_length;) {
+  for (uint32_t i = 0; i < result_length;) {
     bool has_next = stream.HasMore();
     base::uc32 next = has_next ? stream.GetNext() : 0;
-    int char_length = mapping->get(current, next, chars);
+    uint32_t char_length = mapping->get(current, next, chars);
     if (char_length == 0) {
       // The case conversion of this character is the character itself.
       result->Set(i, current);
@@ -294,12 +284,12 @@ V8_WARN_UNUSED_RESULT static Tagged<Object> ConvertCaseHelper(
       // "realloc" it and probably, in the vast majority of cases,
       // extend the existing string to be able to hold the full
       // result.
-      int next_length = 0;
+      uint32_t next_length = 0;
       if (has_next) {
         next_length = mapping->get(next, 0, chars);
         if (next_length == 0) next_length = 1;
       }
-      int current_length = i + char_length + next_length;
+      uint32_t current_length = i + char_length + next_length;
       while (stream.HasMore()) {
         current = stream.GetNext();
         overflows |= ToUpperOverflows(current);
@@ -321,7 +311,7 @@ V8_WARN_UNUSED_RESULT static Tagged<Object> ConvertCaseHelper(
       return (overflows && !ignore_overflow) ? Smi::FromInt(-current_length)
                                              : Smi::FromInt(current_length);
     } else {
-      for (int j = 0; j < char_length; j++) {
+      for (uint32_t j = 0; j < char_length; j++) {
         result->Set(i, chars[j]);
         i++;
       }
@@ -345,7 +335,7 @@ V8_WARN_UNUSED_RESULT static Tagged<Object> ConvertCase(
     Handle<String> s, Isolate* isolate,
     unibrow::Mapping<Converter, 128>* mapping) {
   s = String::Flatten(isolate, s);
-  int length = s->length();
+  uint32_t length = s->length();
   // Assume that the string is not empty; we need this assumption later
   if (length == 0) return *s;
 
@@ -363,10 +353,12 @@ V8_WARN_UNUSED_RESULT static Tagged<Object> ConvertCase(
     String::FlatContent flat_content = s->GetFlatContent(no_gc);
     DCHECK(flat_content.IsFlat());
     bool has_changed_character = false;
-    int index_to_first_unprocessed = FastAsciiConvert<Converter::kIsToLower>(
-        reinterpret_cast<char*>(result->GetChars(no_gc)),
-        reinterpret_cast<const char*>(flat_content.ToOneByteVector().begin()),
-        length, &has_changed_character);
+    uint32_t index_to_first_unprocessed =
+        FastAsciiConvert<Converter::kIsToLower>(
+            reinterpret_cast<char*>(result->GetChars(no_gc)),
+            reinterpret_cast<const char*>(
+                flat_content.ToOneByteVector().begin()),
+            length, &has_changed_character);
     // If not ASCII, we discard the result and take the 2 byte path.
     if (index_to_first_unprocessed == length)
       return has_changed_character ? *result : *s;
@@ -384,12 +376,15 @@ V8_WARN_UNUSED_RESULT static Tagged<Object> ConvertCase(
   if (IsException(answer, isolate) || IsString(answer)) return answer;
 
   DCHECK(IsSmi(answer));
-  length = Smi::ToInt(answer);
-  if (s->IsOneByteRepresentation() && length > 0) {
+  // In this case we need to retry with a new string of the given length.
+  // If the value is negative, the string must be a two-byte string.
+  int int_answer = Smi::ToInt(answer);
+  if (s->IsOneByteRepresentation() && int_answer > 0) {
+    length = int_answer;
     ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
         isolate, result, isolate->factory()->NewRawOneByteString(length));
   } else {
-    if (length < 0) length = -length;
+    length = abs(int_answer);
     ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
         isolate, result, isolate->factory()->NewRawTwoByteString(length));
   }
@@ -435,13 +430,14 @@ BUILTIN(StringRaw) {
   Handle<String> raw_string =
       isolate->factory()->NewStringFromAsciiChecked("raw");
 
-  Handle<Object> cooked;
+  Handle<JSReceiver> cooked;
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, cooked,
                                      Object::ToObject(isolate, templ));
 
-  Handle<Object> raw;
+  Handle<JSAny> raw;
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-      isolate, raw, Object::GetProperty(isolate, cooked, raw_string));
+      isolate, raw,
+      Cast<JSAny>(Object::GetProperty(isolate, cooked, raw_string)));
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, raw,
                                      Object::ToObject(isolate, raw));
   Handle<Object> raw_len;
@@ -455,7 +451,7 @@ BUILTIN(StringRaw) {
   IncrementalStringBuilder result_builder(isolate);
   // Intentional spec violation: we ignore {length} values >= 2^32, because
   // assuming non-empty chunks they would generate too-long strings anyway.
-  const double raw_len_number = Object::Number(*raw_len);
+  const double raw_len_number = Object::NumberValue(*raw_len);
   const uint32_t length = raw_len_number > std::numeric_limits<uint32_t>::max()
                               ? std::numeric_limits<uint32_t>::max()
                               : static_cast<uint32_t>(raw_len_number);

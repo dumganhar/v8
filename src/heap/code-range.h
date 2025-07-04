@@ -97,7 +97,11 @@ class CodeRange final : public VirtualMemoryCage {
     return embedded_blob_code_copy_.load(std::memory_order_acquire);
   }
 
-  bool InitReservation(v8::PageAllocator* page_allocator, size_t requested);
+  // Initialize the address space reservation for the code range. The immutable
+  // flag specifies if the reservation will live until the end of the process
+  // and can be sealed.
+  bool InitReservation(v8::PageAllocator* page_allocator, size_t requested,
+                       bool immutable);
 
   V8_EXPORT_PRIVATE void Free();
 
@@ -115,13 +119,6 @@ class CodeRange final : public VirtualMemoryCage {
                                  const uint8_t* embedded_blob_code,
                                  size_t embedded_blob_code_size);
 
-  V8_EXPORT_PRIVATE static CodeRange* EnsureProcessWideCodeRange(
-      v8::PageAllocator* page_allocator, size_t requested_size);
-
-  // If InitializeProcessWideCodeRangeOnce has been called, returns the
-  // initialized CodeRange. Otherwise returns a null pointer.
-  V8_EXPORT_PRIVATE static CodeRange* GetProcessWideCodeRange();
-
  private:
   static base::AddressRegion GetPreferredRegion(size_t radius_in_megabytes,
                                                 size_t allocate_page_size);
@@ -133,6 +130,10 @@ class CodeRange final : public VirtualMemoryCage {
   // When sharing a CodeRange among Isolates, calls to RemapEmbeddedBuiltins may
   // race during Isolate::Init.
   base::Mutex remap_embedded_builtins_mutex_;
+
+#ifdef DEBUG
+  bool immutable_ = false;
+#endif
 };
 
 }  // namespace internal

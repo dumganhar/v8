@@ -32,7 +32,7 @@
 #include <random>
 #include <string>
 #include <system_error>  // NOLINT
-#include <thread>        // NOLINT
+#include <thread>        // NOLINT: For thread::get_id() only.
 #include <utility>
 #include <vector>
 
@@ -51,7 +51,6 @@
 #include "absl/types/span.h"
 #include "./centipede/centipede_callbacks.h"
 #include "./centipede/centipede_interface.h"
-#include "./centipede/defs.h"
 #include "./centipede/early_exit.h"
 #include "./centipede/environment.h"
 #include "./centipede/mutation_input.h"
@@ -59,6 +58,7 @@
 #include "./centipede/runner_result.h"
 #include "./centipede/shared_memory_blob_sequence.h"
 #include "./centipede/workdir.h"
+#include "./common/defs.h"
 #include "./fuzztest/internal/any.h"
 #include "./fuzztest/internal/configuration.h"
 #include "./fuzztest/internal/corpus_database.h"
@@ -118,17 +118,18 @@ centipede::Environment CreateDefaultCentipedeEnvironment() {
 }
 
 centipede::Environment CreateCentipedeEnvironmentFromFuzzTestFlags(
-    const Runtime& runtime, absl::string_view workdir,
+    const Configuration& configuration, absl::string_view workdir,
     absl::string_view test_name) {
   centipede::Environment env = CreateDefaultCentipedeEnvironment();
   env.workdir = workdir;
   env.exit_on_crash = true;
   // Populating the PC table in single-process mode is not implemented.
   env.require_pc_table = false;
-  if (runtime.fuzz_time_limit() != absl::InfiniteDuration()) {
+  const auto time_limit_per_test = configuration.GetTimeLimitPerTest();
+  if (time_limit_per_test != absl::InfiniteDuration()) {
     absl::FPrintF(GetStderr(), "[.] Fuzzing timeout set to: %s\n",
-                  absl::FormatDuration(runtime.fuzz_time_limit()));
-    env.stop_at = absl::Now() + runtime.fuzz_time_limit();
+                  absl::FormatDuration(time_limit_per_test));
+    env.stop_at = absl::Now() + time_limit_per_test;
   }
   env.first_corpus_dir_output_only = true;
   if (const char* corpus_out_dir_chars = getenv("FUZZTEST_TESTSUITE_OUT_DIR")) {
@@ -170,8 +171,9 @@ class CentipedeAdaptorRunnerCallbacks : public centipede::RunnerCallbacks {
   }
 
   bool Execute(centipede::ByteSpan input) override {
-    if (auto parsed_input =
-            fuzzer_impl_.TryParse({(char*)input.data(), input.size()})) {
+    auto parsed_input =
+        fuzzer_impl_.TryParse({(char*)input.data(), input.size()});
+    if (parsed_input.ok()) {
       fuzzer_impl_.RunOneInput({*std::move(parsed_input)});
       return true;
     }
@@ -183,13 +185,12 @@ class CentipedeAdaptorRunnerCallbacks : public centipede::RunnerCallbacks {
     std::vector<GenericDomainCorpusType> seeds =
         fuzzer_impl_.fixture_driver_->GetSeeds();
     CorpusDatabase corpus_database(configuration_);
-    for (const std::string& corpus_file :
-         corpus_database.GetCoverageInputsIfAny(
-             fuzzer_impl_.test_.full_name())) {
-      auto corpus_value = fuzzer_impl_.GetCorpusValueFromFile(corpus_file);
-      if (!corpus_value) continue;
-      seeds.push_back(*corpus_value);
-    }
+    fuzzer_impl_.ForEachInput(
+        corpus_database.GetCoverageInputsIfAny(fuzzer_impl_.test_.full_name()),
+        [&](absl::string_view /*file_path*/, std::optional<int> /*blob_idx*/,
+            FuzzTestFuzzerImpl::Input input) {
+          seeds.push_back(std::move(input.args));
+        });
     constexpr int kInitialValuesInSeeds = 32;
     for (int i = 0; i < kInitialValuesInSeeds; ++i) {
       seeds.push_back(fuzzer_impl_.params_domain_.Init(prng_));
@@ -204,6 +205,29 @@ class CentipedeAdaptorRunnerCallbacks : public centipede::RunnerCallbacks {
 
   std::string GetSerializedTargetConfig() override {
     return configuration_.Serialize();
+  }
+
+  void OnFailure(std::function<void(std::string_view)>
+                     failure_description_callback) override {
+    // We register the callback only once. This is because `runtime_` is a
+    // global singleton object, and hence previously registered callbacks remain
+    // in the registry. In normal circumstances, there should be only one
+    // runner callback object and a single call to this method, but there are
+    // corner cases when multiple runner callback objects are created, e.g.,
+    // when Centipede runs multiple fuzz tests in the multi-process mode.
+    [[maybe_unused]] static bool callback_registered =
+        [this, failure_description_callback =
+                   std::move(failure_description_callback)]() mutable {
+          runtime_.RegisterCrashMetadataListener(
+              [failure_description_callback =
+                   std::move(failure_description_callback)](
+                  absl::string_view crash_type,
+                  absl::Span<const std::string> /*stack_frames*/) {
+                failure_description_callback(
+                    {crash_type.data(), crash_type.size()});
+              });
+          return true;
+        }();
   }
 
   bool Mutate(
@@ -226,9 +250,10 @@ class CentipedeAdaptorRunnerCallbacks : public centipede::RunnerCallbacks {
             inputs[absl::Uniform<size_t>(prng_, 0, inputs.size())].data;
         auto parsed_origin =
             fuzzer_impl_.TryParse({(const char*)origin.data(), origin.size()});
-        if (!parsed_origin)
+        if (!parsed_origin.ok()) {
           parsed_origin = fuzzer_impl_.params_domain_.Init(prng_);
-        auto mutant = FuzzTestFuzzerImpl::Input{*parsed_origin};
+        }
+        auto mutant = FuzzTestFuzzerImpl::Input{*std::move(parsed_origin)};
         fuzzer_impl_.MutateValue(mutant, prng_);
         mutant_data =
             fuzzer_impl_.params_domain_.SerializeCorpus(mutant.args).ToString();
@@ -403,7 +428,9 @@ class CentipedeAdaptorEngineCallbacksFactory
                                                configuration_);
   }
 
-  void destroy(centipede::CentipedeCallbacks* callbacks) { delete callbacks; }
+  void destroy(centipede::CentipedeCallbacks* callbacks) override {
+    delete callbacks;
+  }
 
  private:
   Runtime* runtime_;
@@ -445,8 +472,10 @@ void PopulateTestLimitsToCentipedeRunner(const Configuration& configuration) {
 class CentipedeFixtureDriver : public UntypedFixtureDriver {
  public:
   CentipedeFixtureDriver(
+      Runtime& runtime,
       std::unique_ptr<UntypedFixtureDriver> orig_fixture_driver)
-      : orig_fixture_driver_(std::move(orig_fixture_driver)) {}
+      : runtime_(runtime),
+        orig_fixture_driver_(std::move(orig_fixture_driver)) {}
 
   void SetUpFuzzTest() override {
     orig_fixture_driver_->SetUpFuzzTest();
@@ -462,6 +491,9 @@ class CentipedeFixtureDriver : public UntypedFixtureDriver {
 
   void TearDownIteration() override {
     orig_fixture_driver_->TearDownIteration();
+    if (runtime_.skipping_requested()) {
+      CentipedeSetExecutionResult(nullptr, 0);
+    }
     if (!runner_mode) CentipedeFinalizeProcessing();
   }
 
@@ -485,6 +517,7 @@ class CentipedeFixtureDriver : public UntypedFixtureDriver {
 
  private:
   const Configuration* configuration_ = nullptr;
+  Runtime& runtime_;
   const bool runner_mode = getenv("CENTIPEDE_RUNNER_FLAGS") != nullptr;
   std::unique_ptr<UntypedFixtureDriver> orig_fixture_driver_;
 };
@@ -493,7 +526,7 @@ CentipedeFuzzerAdaptor::CentipedeFuzzerAdaptor(
     const FuzzTest& test, std::unique_ptr<UntypedFixtureDriver> fixture_driver)
     : test_(test),
       centipede_fixture_driver_(
-          new CentipedeFixtureDriver(std::move(fixture_driver))),
+          new CentipedeFixtureDriver(runtime_, std::move(fixture_driver))),
       fuzzer_impl_(test_, absl::WrapUnique(centipede_fixture_driver_)) {
   FUZZTEST_INTERNAL_CHECK(centipede_fixture_driver_ != nullptr,
                           "Invalid fixture driver!");
@@ -511,6 +544,7 @@ int CentipedeFuzzerAdaptor::RunInFuzzingMode(
     int* argc, char*** argv, const Configuration& configuration) {
   centipede_fixture_driver_->set_configuration(&configuration);
   runtime_.SetRunMode(RunMode::kFuzz);
+  runtime_.SetSkippingRequested(false);
   runtime_.SetCurrentTest(&test_, &configuration);
   if (IsSilenceTargetEnabled()) SilenceTargetStdoutAndStderr();
   runtime_.EnableReporter(&fuzzer_impl_.stats_, [] { return absl::Now(); });
@@ -525,6 +559,12 @@ int CentipedeFuzzerAdaptor::RunInFuzzingMode(
   // and we should not run CentipedeMain in this process.
   const bool runner_mode = getenv("CENTIPEDE_RUNNER_FLAGS");
   const int result = ([&]() {
+    if (runtime_.skipping_requested()) {
+      absl::FPrintF(GetStderr(),
+                    "[.] Skipping %s per request from the test setup.\n",
+                    test_.full_name());
+      return 0;
+    }
     if (runner_mode) {
       CentipedeAdaptorRunnerCallbacks runner_callbacks(&runtime_, &fuzzer_impl_,
                                                        &configuration);
@@ -540,7 +580,7 @@ int CentipedeFuzzerAdaptor::RunInFuzzingMode(
     // Run as the fuzzing engine.
     TempDir workdir("/tmp/fuzztest-workdir-");
     const auto env = CreateCentipedeEnvironmentFromFuzzTestFlags(
-        runtime_, workdir.path(), test_.full_name());
+        configuration, workdir.path(), test_.full_name());
     CentipedeAdaptorEngineCallbacksFactory factory(&runtime_, &fuzzer_impl_,
                                                    &configuration);
     if (const char* minimize_dir_chars =

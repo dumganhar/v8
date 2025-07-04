@@ -62,8 +62,8 @@ class DescriptorArray
   void ClearEnumCache();
   inline void CopyEnumCacheFrom(Tagged<DescriptorArray> array);
   static void InitializeOrChangeEnumCache(
-      Handle<DescriptorArray> descriptors, Isolate* isolate,
-      Handle<FixedArray> keys, Handle<FixedArray> indices,
+      DirectHandle<DescriptorArray> descriptors, Isolate* isolate,
+      DirectHandle<FixedArray> keys, DirectHandle<FixedArray> indices,
       AllocationType allocation_if_initialize);
 
   // Accessors for fetching instance descriptor at descriptor number.
@@ -103,12 +103,12 @@ class DescriptorArray
   inline void Append(Descriptor* desc);
 
   static Handle<DescriptorArray> CopyUpTo(Isolate* isolate,
-                                          Handle<DescriptorArray> desc,
+                                          DirectHandle<DescriptorArray> desc,
                                           int enumeration_index, int slack = 0);
 
   static Handle<DescriptorArray> CopyUpToAddAttributes(
-      Isolate* isolate, Handle<DescriptorArray> desc, int enumeration_index,
-      PropertyAttributes attributes, int slack = 0);
+      Isolate* isolate, DirectHandle<DescriptorArray> desc,
+      int enumeration_index, PropertyAttributes attributes, int slack = 0);
 
   // Sort the instance descriptors by the hash codes of their keys.
   V8_EXPORT_PRIVATE void Sort();
@@ -231,6 +231,11 @@ class DescriptorArray
                        Tagged<MaybeObject> value);
   inline void SetDetails(InternalIndex descriptor_number,
                          PropertyDetails details);
+
+  V8_INLINE InternalIndex BinarySearch(Tagged<Name> name,
+                                       int number_of_own_descriptors);
+  V8_INLINE InternalIndex LinearSearch(Tagged<Name> name,
+                                       int number_of_own_descriptors);
 
   // Transfer a complete descriptor from the src descriptor array to this
   // descriptor array.

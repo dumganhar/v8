@@ -5,10 +5,11 @@
 #include "src/heap/paged-spaces.h"
 
 #include <atomic>
+#include <iterator>
 
 #include "src/base/logging.h"
-#include "src/base/optional.h"
 #include "src/base/platform/mutex.h"
+#include "src/base/safe_conversions.h"
 #include "src/common/globals.h"
 #include "src/execution/isolate.h"
 #include "src/execution/vm-state-inl.h"
@@ -23,8 +24,8 @@
 #include "src/heap/marking-state-inl.h"
 #include "src/heap/memory-allocator.h"
 #include "src/heap/memory-chunk-layout.h"
-#include "src/heap/mutable-page-inl.h"
-#include "src/heap/page-inl.h"
+#include "src/heap/mutable-page-metadata-inl.h"
+#include "src/heap/page-metadata-inl.h"
 #include "src/heap/paged-spaces-inl.h"
 #include "src/heap/read-only-heap.h"
 #include "src/heap/safepoint.h"
@@ -128,9 +129,16 @@ void PagedSpaceBase::MergeCompactionSpace(CompactionSpace* other) {
     // We'll have to come up with a better solution for allocation stepping
     // before shipping, which will likely be using LocalHeap.
   }
+  const bool is_from_client_heap =
+      (other->destination_heap() ==
+       CompactionSpace::DestinationHeap::kSharedSpaceHeap);
+  DCHECK_IMPLIES(is_from_client_heap, identity() == SHARED_SPACE);
   for (auto p : other->GetNewPages()) {
-    heap()->NotifyOldGenerationExpansion(heap()->main_thread_local_heap(),
-                                         identity(), p);
+    heap()->NotifyOldGenerationExpansion(
+        heap()->main_thread_local_heap(), identity(), p,
+        is_from_client_heap
+            ? Heap::OldGenerationExpansionNotificationOrigin::kFromClientHeap
+            : Heap::OldGenerationExpansionNotificationOrigin::kFromSameHeap);
   }
 
   DCHECK_EQ(0u, other->Size());
@@ -175,9 +183,9 @@ void PagedSpaceBase::VerifyCommittedPhysicalMemory() const {
 #endif  // DEBUG
 
 bool PagedSpaceBase::ContainsSlow(Address addr) const {
-  PageMetadata* p = PageMetadata::FromAddress(addr);
+  MemoryChunk* chunk = MemoryChunk::FromAddress(addr);
   for (const PageMetadata* page : *this) {
-    if (page == p) return true;
+    if (page->Chunk() == chunk) return true;
   }
   return false;
 }
@@ -317,17 +325,16 @@ bool PagedSpaceBase::TryExpand(LocalHeap* local_heap, AllocationOrigin origin) {
 }
 
 int PagedSpaceBase::CountTotalPages() const {
-  int count = 0;
-  for (const PageMetadata* page : *this) {
-    count++;
-    USE(page);
-  }
-  return count;
+  return base::checked_cast<int>(std::distance(begin(), end()));
 }
 
 size_t PagedSpaceBase::Available() const {
   ConcurrentAllocationMutex guard(this);
   return free_list_->Available();
+}
+
+size_t PagedSpaceBase::Waste() const {
+  return free_list_->wasted_bytes();
 }
 
 void PagedSpaceBase::ReleasePage(PageMetadata* page) {
@@ -398,7 +405,7 @@ void PagedSpaceBase::Verify(Isolate* isolate,
       end_of_previous_object = object.address() + size;
 
       if (IsExternalString(object, cage_base)) {
-        Tagged<ExternalString> external_string = ExternalString::cast(object);
+        Tagged<ExternalString> external_string = Cast<ExternalString>(object);
         size_t payload_size = external_string->ExternalPayloadSize();
         external_page_bytes[static_cast<int>(
             ExternalBackingStoreType::kExternalString)] += payload_size;
@@ -428,7 +435,7 @@ void PagedSpaceBase::Verify(Isolate* isolate,
       CHECK_EQ(bytes, ExternalBackingStoreBytes(
                           ExternalBackingStoreType::kArrayBuffer));
     } else if (identity() == NEW_SPACE) {
-      DCHECK(v8_flags.minor_ms);
+      CHECK(v8_flags.minor_ms);
       size_t bytes = heap()->array_buffer_sweeper()->young().BytesSlow();
       CHECK_EQ(bytes, ExternalBackingStoreBytes(
                           ExternalBackingStoreType::kArrayBuffer));
@@ -542,20 +549,6 @@ size_t PagedSpaceBase::RelinkFreeListCategories(PageMetadata* page) {
   return added;
 }
 
-namespace {
-
-void DropFreeListCategories(PageMetadata* page, FreeList* free_list) {
-  size_t previously_available = 0;
-  page->ForAllFreeListCategories(
-      [free_list, &previously_available](FreeListCategory* category) {
-        previously_available += category->available();
-        category->Reset(free_list);
-      });
-  page->add_wasted_memory(previously_available);
-}
-
-}  // namespace
-
 void PagedSpaceBase::RefillFreeList() {
   // Any PagedSpace might invoke RefillFreeList.
   DCHECK(identity() == OLD_SPACE || identity() == CODE_SPACE ||
@@ -568,7 +561,7 @@ void PagedSpaceBase::RefillFreeList() {
     // We regularly sweep NEVER_ALLOCATE_ON_PAGE pages. We drop the freelist
     // entries here to make them unavailable for allocations.
     if (p->Chunk()->IsFlagSet(MemoryChunk::NEVER_ALLOCATE_ON_PAGE)) {
-      DropFreeListCategories(p, free_list());
+      free_list_->EvictFreeListItems(p);
     }
 
     ConcurrentAllocationMutex guard(this);
@@ -586,6 +579,13 @@ AllocatorPolicy* PagedSpace::CreateAllocatorPolicy(MainAllocator* allocator) {
 // CompactionSpace implementation
 
 void CompactionSpace::NotifyNewPage(PageMetadata* page) {
+  // Incremental marking can be running on the main thread isolate, so when
+  // allocating a new page for the client's compaction space we can get a black
+  // allocated page. This is fine, since the page is not observed the main
+  // isolate until it's merged.
+  DCHECK_IMPLIES(identity() != SHARED_SPACE ||
+                     destination_heap() != DestinationHeap::kSharedSpaceHeap,
+                 !page->Chunk()->IsFlagSet(MemoryChunk::BLACK_ALLOCATED));
   new_pages_.push_back(page);
 }
 
@@ -600,7 +600,7 @@ void CompactionSpace::RefillFreeList() {
     // We regularly sweep NEVER_ALLOCATE_ON_PAGE pages. We drop the freelist
     // entries here to make them unavailable for allocations.
     if (p->Chunk()->IsFlagSet(MemoryChunk::NEVER_ALLOCATE_ON_PAGE)) {
-      DropFreeListCategories(p, free_list());
+      free_list()->EvictFreeListItems(p);
     }
 
     // Only during compaction pages can actually change ownership. This is
@@ -619,13 +619,24 @@ void CompactionSpace::RefillFreeList() {
 CompactionSpaceCollection::CompactionSpaceCollection(
     Heap* heap, CompactionSpaceKind compaction_space_kind)
     : old_space_(heap, OLD_SPACE, Executability::NOT_EXECUTABLE,
-                 compaction_space_kind),
+                 compaction_space_kind,
+                 CompactionSpace::DestinationHeap::kSameHeap),
       code_space_(heap, CODE_SPACE, Executability::EXECUTABLE,
-                  compaction_space_kind),
-      shared_space_(heap, SHARED_SPACE, Executability::NOT_EXECUTABLE,
-                    compaction_space_kind),
+                  compaction_space_kind,
+                  CompactionSpace::DestinationHeap::kSameHeap),
       trusted_space_(heap, TRUSTED_SPACE, Executability::NOT_EXECUTABLE,
-                     compaction_space_kind) {}
+                     compaction_space_kind,
+                     CompactionSpace::DestinationHeap::kSameHeap) {
+  if (heap->isolate()->has_shared_space()) {
+    const CompactionSpace::DestinationHeap dest_heap =
+        heap->isolate()->is_shared_space_isolate()
+            ? CompactionSpace::DestinationHeap::kSameHeap
+            : CompactionSpace::DestinationHeap::kSharedSpaceHeap;
+    shared_space_.emplace(heap->isolate()->shared_space_isolate()->heap(),
+                          SHARED_SPACE, Executability::NOT_EXECUTABLE,
+                          compaction_space_kind, dest_heap);
+  }
+}
 
 // -----------------------------------------------------------------------------
 // OldSpace implementation

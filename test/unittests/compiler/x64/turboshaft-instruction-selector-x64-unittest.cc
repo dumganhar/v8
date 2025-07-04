@@ -964,7 +964,7 @@ TEST_F(TurboshaftInstructionSelectorTest, Int32AddMinNegativeDisplacement) {
   // https://crbug.com/1091892. The key here is that we match on a
   // sequence like: Word32Add(Word32Sub(-524288, -2147483648), -26048), which
   // matches on an EmitLea, with -2147483648 as the displacement. Since we
-  // have a Int32Sub node, it sets kNegativeDisplacement, and later we try to
+  // have an Int32Sub node, it sets kNegativeDisplacement, and later we try to
   // negate -2147483648, which overflows.
   StreamBuilder m(this, MachineType::Int32());
   OpIndex const c0 = m.Int32Constant(-524288);
@@ -2319,15 +2319,14 @@ INSTANTIATE_TEST_SUITE_P(TurboshaftInstructionSelectorTest,
                          TurboshaftInstructionSelectorSIMDSwizzleConstantTest,
                          ::testing::ValuesIn(kSwizzleConstants));
 
-#if 0
 TEST_F(TurboshaftInstructionSelectorTest,
        F64x2PromoteLowF32x4WithS128Load64Zero) {
   StreamBuilder m(this, MachineType::Simd128(), MachineType::Int64());
-  OpIndex const load = m.Simd128LoadTransform(
-      m.Int64Constant(2), m.Parameter(0),
+  V<Simd128> const load = m.Simd128LoadTransform(
+      m.Parameter(0), m.Int64Constant(2),
       Simd128LoadTransformOp::LoadKind::RawAligned().Protected(),
       Simd128LoadTransformOp::TransformKind::k64Zero, 0);
-  OpIndex const promote = m.F64x2PromoteLowF32x4(load);
+  V<Simd128> const promote = m.F64x2PromoteLowF32x4(load);
   m.Return(promote);
   Stream s = m.Build();
   ASSERT_EQ(1U, s.size());
@@ -2336,7 +2335,23 @@ TEST_F(TurboshaftInstructionSelectorTest,
   EXPECT_EQ(2U, s[0]->InputCount());
   EXPECT_EQ(1U, s[0]->OutputCount());
 }
-#endif
+
+TEST_F(TurboshaftInstructionSelectorTest, SIMDF32x4SConvert) {
+  // Test optimization for F32x4UConvertI32x4.
+  // If the input of F32x4UConvertI32x4 is zero-extend from I16x8,
+  // F32x4SConvertI32x4 can be used, it's more efficient.
+  StreamBuilder m(this, MachineType::Simd128());
+  V<Simd128> const splat = m.I16x8Splat(m.Int32Constant(0xFFFF));
+  V<Simd128> const extend = m.I32x4UConvertI16x8Low(splat);
+  V<Simd128> const convert = m.F32x4UConvertI32x4(extend);
+  m.Return(convert);
+  Stream s = m.Build();
+  ASSERT_EQ(3U, s.size());
+  EXPECT_EQ(kX64F32x4SConvertI32x4, s[2]->arch_opcode());
+  ASSERT_EQ(1U, s[2]->InputCount());
+  EXPECT_EQ(1U, s[2]->OutputCount());
+}
+
 #endif  // V8_ENABLE_WEBASSEMBLY
 
 }  // namespace v8::internal::compiler::turboshaft

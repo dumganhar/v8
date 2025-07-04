@@ -5,8 +5,10 @@
 #ifndef V8_FLAGS_FLAGS_IMPL_H_
 #define V8_FLAGS_FLAGS_IMPL_H_
 
+#include <optional>
+#include <unordered_set>
+
 #include "src/base/macros.h"
-#include "src/base/optional.h"
 #include "src/base/vector.h"
 #include "src/flags/flags.h"
 
@@ -92,9 +94,12 @@ struct Flag {
 #ifdef DEBUG
   bool ImpliedBy(const void* ptr) const {
     const Flag* current = this->implied_by_ptr_;
+    std::unordered_set<const Flag*> visited_flags;
     while (current != nullptr) {
+      visited_flags.insert(current);
       if (current->PointsTo(ptr)) return true;
       current = current->implied_by_ptr_;
+      if (visited_flags.contains(current)) break;
     }
     return false;
   }
@@ -106,12 +111,12 @@ struct Flag {
     SetValue<TYPE_BOOL, bool>(value, set_by);
   }
 
-  base::Optional<bool> maybe_bool_variable() const {
-    return GetValue<TYPE_MAYBE_BOOL, base::Optional<bool>>();
+  std::optional<bool> maybe_bool_variable() const {
+    return GetValue<TYPE_MAYBE_BOOL, std::optional<bool>>();
   }
 
-  void set_maybe_bool_variable(base::Optional<bool> value, SetBy set_by) {
-    SetValue<TYPE_MAYBE_BOOL, base::Optional<bool>>(value, set_by);
+  void set_maybe_bool_variable(std::optional<bool> value, SetBy set_by) {
+    SetValue<TYPE_MAYBE_BOOL, std::optional<bool>>(value, set_by);
   }
 
   int int_variable() const { return GetValue<TYPE_INT, int>(); }
@@ -230,7 +235,7 @@ struct Flag {
 
   void ReleaseDynamicAllocations();
 
-  // Set a flag back to it's default value.
+  // Set a flag back to its default value.
   V8_EXPORT_PRIVATE void Reset();
 
   void AllowOverwriting() { set_by_ = SetBy::kDefault; }

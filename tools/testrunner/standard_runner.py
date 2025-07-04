@@ -22,7 +22,7 @@ import testrunner.base_runner as base_runner
 from testrunner.local.variants import ALL_VARIANTS
 from testrunner.objects import predictable
 from testrunner.testproc.execution import ExecutionProc
-from testrunner.testproc.filter import StatusFileFilterProc, NameFilterProc
+from testrunner.testproc.filter import NameFilterProc, StatusFileFilterProc
 from testrunner.testproc.loader import LoadProc
 from testrunner.testproc.seed import SeedProc
 from testrunner.testproc.sequence import SequenceProc
@@ -51,7 +51,7 @@ VARIANT_ALIASES = {
     # Additional variants, run on a subset of bots.
     'extra': [
         'jitless', 'nooptimization', 'no_wasm_traps', 'instruction_scheduling',
-        'always_sparkplug', 'turboshaft'
+        'always_sparkplug_and_stress_regexp_jit', 'turboshaft'
     ],
 }
 
@@ -196,6 +196,7 @@ class StandardTestRunner(base_runner.BaseTestRunner):
       self.options.extra_flags.append('--predictable')
       self.options.extra_flags.append('--verify-predictable')
       self.options.extra_flags.append('--no-inline-new')
+      self.options.extra_flags.append('--omit-quit')
       # Add predictable wrapper to command prefix.
       self.options.command_prefix = (
           [sys.executable, self._predictable_wrapper()] + self.options.command_prefix)
@@ -265,8 +266,9 @@ class StandardTestRunner(base_runner.BaseTestRunner):
         'allow_user_segv_handler=1',
       ])
 
-  def _get_statusfile_variables(self):
-    variables = super(StandardTestRunner, self)._get_statusfile_variables()
+  def _get_statusfile_variables(self, context):
+    variables = super(
+        StandardTestRunner, self)._get_statusfile_variables(context)
     variables.update({
       'gc_stress': self.options.gc_stress or self.options.random_gc_stress,
       'gc_fuzzer': self.options.random_gc_stress,

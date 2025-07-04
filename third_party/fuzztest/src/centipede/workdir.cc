@@ -29,7 +29,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "./centipede/environment.h"
-#include "./centipede/logging.h"
+#include "./common/logging.h"
 
 namespace centipede {
 
@@ -138,6 +138,10 @@ std::string WorkDir::CoverageDirPath() const {
 
 std::string WorkDir::CrashReproducerDirPath() const {
   return std::filesystem::path(workdir_) / "crashes";
+}
+
+std::string WorkDir::CrashMetadataDirPath() const {
+  return std::filesystem::path(workdir_) / "crash-metadata";
 }
 
 std::string WorkDir::BinaryInfoDirPath() const {

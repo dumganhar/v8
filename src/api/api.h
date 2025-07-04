@@ -48,20 +48,23 @@ class Script;
 class EphemeronTable;
 }  // namespace debug
 
-template <typename T>
-inline T ToCData(v8::internal::Tagged<v8::internal::Object> obj);
-
-template <>
+template <typename T, internal::ExternalPointerTag tag>
+inline T ToCData(i::Isolate* isolate,
+                 v8::internal::Tagged<v8::internal::Object> obj);
+template <internal::ExternalPointerTag tag>
 inline v8::internal::Address ToCData(
+    v8::internal::Isolate* isolate,
     v8::internal::Tagged<v8::internal::Object> obj);
 
-template <typename T>
-inline v8::internal::Handle<v8::internal::Object> FromCData(
-    v8::internal::Isolate* isolate, T obj);
+template <internal::ExternalPointerTag tag, typename T>
+inline v8::internal::Handle<
+    v8::internal::UnionOf<v8::internal::Smi, v8::internal::Foreign>>
+FromCData(v8::internal::Isolate* isolate, T obj);
 
-template <>
-inline v8::internal::Handle<v8::internal::Object> FromCData(
-    v8::internal::Isolate* isolate, v8::internal::Address obj);
+template <internal::ExternalPointerTag tag>
+inline v8::internal::Handle<
+    v8::internal::UnionOf<v8::internal::Smi, v8::internal::Foreign>>
+FromCData(v8::internal::Isolate* isolate, v8::internal::Address obj);
 
 class ApiFunction {
  public:
@@ -116,7 +119,7 @@ class RegisteredExtension {
   V(SignatureToLocal, FunctionTemplateInfo, Signature)   \
   V(MessageToLocal, Object, Message)                     \
   V(PromiseToLocal, JSObject, Promise)                   \
-  V(StackTraceToLocal, FixedArray, StackTrace)           \
+  V(StackTraceToLocal, StackTraceInfo, StackTrace)       \
   V(StackFrameToLocal, StackFrameInfo, StackFrame)       \
   V(NumberToLocal, Object, Number)                       \
   V(IntegerToLocal, Object, Integer)                     \
@@ -130,6 +133,23 @@ class RegisteredExtension {
   V(ToLocal, ScriptOrModule, ScriptOrModule)             \
   IF_WASM(V, ToLocal, WasmModuleObject, WasmModuleObject)
 
+#define TO_LOCAL_NAME_LIST(V) \
+  V(ToLocal)                  \
+  V(ToLocalShared)            \
+  V(SignatureToLocal)         \
+  V(MessageToLocal)           \
+  V(PromiseToLocal)           \
+  V(StackTraceToLocal)        \
+  V(StackFrameToLocal)        \
+  V(NumberToLocal)            \
+  V(IntegerToLocal)           \
+  V(Uint32ToLocal)            \
+  V(ExternalToLocal)          \
+  V(CallableToLocal)          \
+  V(ToLocalPrimitive)         \
+  V(FixedArrayToLocal)        \
+  V(PrimitiveArrayToLocal)
+
 #define OPEN_HANDLE_LIST(V)                     \
   V(Template, TemplateInfo)                     \
   V(FunctionTemplate, FunctionTemplateInfo)     \
@@ -137,6 +157,7 @@ class RegisteredExtension {
   V(DictionaryTemplate, DictionaryTemplateInfo) \
   V(Signature, FunctionTemplateInfo)            \
   V(Data, Object)                               \
+  V(Number, Number)                             \
   V(RegExp, JSRegExp)                           \
   V(Object, JSReceiver)                         \
   V(Array, JSArray)                             \
@@ -169,7 +190,7 @@ class RegisteredExtension {
   V(Message, JSMessageObject)                   \
   V(Context, NativeContext)                     \
   V(External, Object)                           \
-  V(StackTrace, FixedArray)                     \
+  V(StackTrace, StackTraceInfo)                 \
   V(StackFrame, StackFrameInfo)                 \
   V(Proxy, JSProxy)                             \
   V(debug::GeneratorObject, JSGeneratorObject)  \
@@ -198,21 +219,23 @@ class Utils {
   static void ReportOOMFailure(v8::internal::Isolate* isolate,
                                const char* location, const OOMDetails& details);
 
-#define DECLARE_TO_LOCAL(Name, From, To)                  \
-  static inline Local<v8::To> Name(                       \
-      v8::internal::Handle<v8::internal::From> obj);      \
-  static inline Local<v8::To> Name(                       \
-      v8::internal::DirectHandle<v8::internal::From> obj, \
-      v8::internal::Isolate* isolate);
+  // TODO(42203211): It would be nice if we could keep only a version with
+  // direct handles. But the implicit conversion from handles to direct handles
+  // combined with the heterogeneous copy constructor for direct handles make
+  // this ambiguous.
+  // TODO(42203211): Use C++20 concepts instead of the enable_if trait, when
+  // they are fully supported in V8.
+#define DECLARE_TO_LOCAL(Name)                                   \
+  template <template <typename> typename HandleType, typename T, \
+            typename = std::enable_if_t<std::is_convertible_v<   \
+                HandleType<T>, v8::internal::DirectHandle<T>>>>  \
+  static inline auto Name(HandleType<T> obj);
 
-  TO_LOCAL_LIST(DECLARE_TO_LOCAL)
+  TO_LOCAL_NAME_LIST(DECLARE_TO_LOCAL)
 
 #define DECLARE_TO_LOCAL_TYPED_ARRAY(Type, typeName, TYPE, ctype) \
   static inline Local<v8::Type##Array> ToLocal##Type##Array(      \
-      v8::internal::Handle<v8::internal::JSTypedArray> obj);      \
-  static inline Local<v8::Type##Array> ToLocal##Type##Array(      \
-      v8::internal::DirectHandle<v8::internal::JSTypedArray> obj, \
-      v8::internal::Isolate* isolate);
+      v8::internal::DirectHandle<v8::internal::JSTypedArray> obj);
 
   TYPED_ARRAYS(DECLARE_TO_LOCAL_TYPED_ARRAY)
 
@@ -231,11 +254,7 @@ class Utils {
 #undef DECLARE_TO_LOCAL
 
   template <class From, class To>
-  static inline Local<To> Convert(v8::internal::Handle<From> obj);
-
-  template <class From, class To>
-  static inline Local<To> Convert(v8::internal::DirectHandle<From> obj,
-                                  v8::internal::Isolate* isolate);
+  static inline Local<To> Convert(v8::internal::DirectHandle<From> obj);
 
   template <class T>
   static inline v8::internal::Handle<v8::internal::Object> OpenPersistent(
@@ -263,6 +282,13 @@ class Utils {
  private:
   V8_NOINLINE V8_PRESERVE_MOST static void ReportApiFailure(
       const char* location, const char* message);
+
+#define DECLARE_TO_LOCAL_PRIVATE(Name, From, To) \
+  static inline Local<v8::To> Name##_helper(     \
+      v8::internal::DirectHandle<v8::internal::From> obj);
+
+  TO_LOCAL_LIST(DECLARE_TO_LOCAL_PRIVATE)
+#undef DECLARE_TO_LOCAL_PRIVATE
 };
 
 template <class T>
@@ -272,15 +298,8 @@ inline T* ToApi(v8::internal::Handle<v8::internal::Object> obj) {
 
 template <class T>
 inline v8::Local<T> ToApiHandle(
-    v8::internal::Handle<v8::internal::Object> obj) {
+    v8::internal::DirectHandle<v8::internal::Object> obj) {
   return Utils::Convert<v8::internal::Object, T>(obj);
-}
-
-template <class T>
-inline v8::Local<T> ToApiHandle(
-    v8::internal::DirectHandle<v8::internal::Object> obj,
-    v8::internal::Isolate* isolate) {
-  return Utils::Convert<v8::internal::Object, T>(obj, isolate);
 }
 
 template <class T>
@@ -326,9 +345,7 @@ class HandleScopeImplementer {
   };
 
   explicit HandleScopeImplementer(Isolate* isolate)
-      : isolate_(isolate),
-        spare_(nullptr),
-        last_handle_before_deferred_block_(nullptr) {}
+      : isolate_(isolate), spare_(nullptr) {}
 
   ~HandleScopeImplementer() { DeleteArray(spare_); }
 
@@ -379,7 +396,7 @@ class HandleScopeImplementer {
     entered_contexts_.detach();
     saved_contexts_.detach();
     spare_ = nullptr;
-    last_handle_before_deferred_block_ = nullptr;
+    last_handle_before_persistent_block_.reset();
   }
 
   void Free() {
@@ -397,7 +414,13 @@ class HandleScopeImplementer {
     DCHECK(isolate_->thread_local_top()->CallDepthIsZero());
   }
 
-  void BeginDeferredScope();
+  void BeginPersistentScope() {
+    DCHECK(!last_handle_before_persistent_block_.has_value());
+    last_handle_before_persistent_block_ = isolate()->handle_scope_data()->next;
+  }
+  bool HasPersistentScope() const {
+    return last_handle_before_persistent_block_.has_value();
+  }
   std::unique_ptr<PersistentHandles> DetachPersistent(Address* first_block);
 
   Isolate* isolate_;
@@ -409,7 +432,7 @@ class HandleScopeImplementer {
   // Used as a stack to keep track of saved contexts.
   DetachableVector<Tagged<Context>> saved_contexts_;
   Address* spare_;
-  Address* last_handle_before_deferred_block_;
+  std::optional<Address*> last_handle_before_persistent_block_;
   // This is only used for threading support.
   HandleScopeData handle_scope_data_;
 
@@ -462,9 +485,9 @@ void HandleScopeImplementer::DeleteExtensions(internal::Address* prev_limit) {
     internal::Address* block_limit = block_start + kHandleBlockSize;
 
     // SealHandleScope may make the prev_limit to point inside the block.
-    // Cast possibly-unrelated pointers to plain Addres before comparing them
+    // Cast possibly-unrelated pointers to plain Address before comparing them
     // to avoid undefined behavior.
-    if (reinterpret_cast<Address>(block_start) <=
+    if (reinterpret_cast<Address>(block_start) <
             reinterpret_cast<Address>(prev_limit) &&
         reinterpret_cast<Address>(prev_limit) <=
             reinterpret_cast<Address>(block_limit)) {
@@ -526,6 +549,31 @@ EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
 bool ValidateCallbackInfo(const PropertyCallbackInfo<T>& info);
 
 DECLARE_CONTEXTUAL_VARIABLE_WITH_DEFAULT(StackAllocatedCheck, const bool, true);
+
+// TODO(crbug.com/42203776): This should move to the API and be integrated into
+// `AdjustAmountOfExternalAllocatedMemory()` to make sure there are no
+// unbalanced bytes floating around.
+class V8_EXPORT_PRIVATE ExternalMemoryAccounterBase {
+ public:
+  ExternalMemoryAccounterBase() = default;
+  ~ExternalMemoryAccounterBase();
+  ExternalMemoryAccounterBase(ExternalMemoryAccounterBase&&) V8_NOEXCEPT;
+  ExternalMemoryAccounterBase& operator=(ExternalMemoryAccounterBase&&)
+      V8_NOEXCEPT;
+  ExternalMemoryAccounterBase(const ExternalMemoryAccounterBase&) = delete;
+  ExternalMemoryAccounterBase& operator=(const ExternalMemoryAccounterBase&) =
+      delete;
+
+  void Increase(Isolate* isolate, size_t size);
+  void Update(Isolate* isolate, int64_t delta);
+  void Decrease(Isolate* isolate, size_t size);
+
+ private:
+#ifdef DEBUG
+  size_t amount_of_external_memory_ = 0;
+  Isolate* isolate_ = nullptr;
+#endif
+};
 
 }  // namespace internal
 }  // namespace v8

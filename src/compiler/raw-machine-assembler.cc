@@ -4,6 +4,8 @@
 
 #include "src/compiler/raw-machine-assembler.h"
 
+#include <optional>
+
 #include "src/base/small-vector.h"
 #include "src/compiler/compiler-source-position-table.h"
 #include "src/compiler/node-properties.h"
@@ -26,6 +28,7 @@ RawMachineAssembler::RawMachineAssembler(
       common_(zone()),
       simplified_(zone()),
       call_descriptor_(call_descriptor),
+      dynamic_js_parameter_count_(nullptr),
       target_parameter_(nullptr),
       parameters_(parameter_count(), zone()),
       current_block_(schedule()->start()) {
@@ -49,7 +52,7 @@ void RawMachineAssembler::SetCurrentExternalSourcePosition(
   int file_id =
       isolate()->LookupOrAddExternallyCompiledFilename(file_and_line.first);
   SourcePosition p = SourcePosition::External(file_and_line.second, file_id);
-  DCHECK(p.ExternalLine() == file_and_line.second);
+  DCHECK_EQ(p.ExternalLine(), file_and_line.second);
   source_positions()->SetCurrentPosition(p);
 }
 
@@ -626,7 +629,7 @@ void RawMachineAssembler::Return(int count, Node* vs[]) {
 }
 
 void RawMachineAssembler::PopAndReturn(Node* pop, Node* value) {
-  // PopAndReturn is supposed to be using ONLY in CSA/Torque builtins for
+  // PopAndReturn is supposed to be used ONLY in CSA/Torque builtins for
   // dropping ALL JS arguments that are currently located on the stack.
   // The check below ensures that there are no directly accessible stack
   // parameters from current builtin, which implies that the builtin with
@@ -726,7 +729,7 @@ enum FunctionDescriptorMode { kHasFunctionDescriptor, kNoFunctionDescriptor };
 
 Node* CallCFunctionImpl(
     RawMachineAssembler* rasm, Node* function,
-    base::Optional<MachineType> return_type,
+    std::optional<MachineType> return_type,
     std::initializer_list<RawMachineAssembler::CFunctionArg> args,
     bool caller_saved_regs, SaveFPRegsMode mode,
     FunctionDescriptorMode no_function_descriptor) {
@@ -746,7 +749,7 @@ Node* CallCFunctionImpl(
   if (caller_saved_fp_regs) flags |= CallDescriptor::kCallerSavedFPRegisters;
   if (no_function_descriptor) flags |= CallDescriptor::kNoFunctionDescriptor;
   auto call_descriptor =
-      Linkage::GetSimplifiedCDescriptor(rasm->zone(), builder.Build(), flags);
+      Linkage::GetSimplifiedCDescriptor(rasm->zone(), builder.Get(), flags);
 
   base::SmallVector<Node*, kNumCArgs> nodes(args.size() + 1);
   nodes[0] = function;
@@ -762,7 +765,7 @@ Node* CallCFunctionImpl(
 }  // namespace
 
 Node* RawMachineAssembler::CallCFunction(
-    Node* function, base::Optional<MachineType> return_type,
+    Node* function, std::optional<MachineType> return_type,
     std::initializer_list<RawMachineAssembler::CFunctionArg> args) {
   return CallCFunctionImpl(this, function, return_type, args, false,
                            SaveFPRegsMode::kIgnore, kHasFunctionDescriptor);

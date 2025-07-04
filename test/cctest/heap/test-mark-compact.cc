@@ -41,6 +41,7 @@
 
 #include "include/v8-locker.h"
 #include "src/handles/global-handles.h"
+#include "src/heap/live-object-range-inl.h"
 #include "src/heap/mark-compact-inl.h"
 #include "src/heap/mark-compact.h"
 #include "src/heap/marking-inl.h"
@@ -66,7 +67,8 @@ TEST(Promotion) {
     heap::SealCurrentObjects(heap);
 
     int array_length = heap::FixedArrayLenFromSize(kMaxRegularHeapObjectSize);
-    Handle<FixedArray> array = isolate->factory()->NewFixedArray(array_length);
+    DirectHandle<FixedArray> array =
+        isolate->factory()->NewFixedArray(array_length);
 
     // Array should be in the new space.
     CHECK(heap->InSpace(*array, NEW_SPACE));
@@ -84,9 +86,9 @@ AllocationResult HeapTester::AllocateMapForTest(Isolate* isolate) {
   AllocationResult alloc = heap->AllocateRaw(Map::kSize, AllocationType::kMap);
   if (!alloc.To(&obj)) return alloc;
   ReadOnlyRoots roots(isolate);
-  obj->set_map_after_allocation(*isolate->meta_map());
+  obj->set_map_after_allocation(isolate, *isolate->meta_map());
   return AllocationResult::FromObject(isolate->factory()->InitializeMap(
-      Map::cast(obj), JS_OBJECT_TYPE, JSObject::kHeaderSize,
+      Cast<Map>(obj), JS_OBJECT_TYPE, JSObject::kHeaderSize,
       TERMINAL_FAST_ELEMENTS_KIND, 0, roots));
 }
 
@@ -101,9 +103,10 @@ AllocationResult HeapTester::AllocateFixedArrayForTest(
     AllocationResult result = heap->AllocateRaw(size, allocation);
     if (!result.To(&obj)) return result;
   }
-  obj->set_map_after_allocation(ReadOnlyRoots(heap).fixed_array_map(),
+  obj->set_map_after_allocation(heap->isolate(),
+                                ReadOnlyRoots(heap).fixed_array_map(),
                                 SKIP_WRITE_BARRIER);
-  Tagged<FixedArray> array = FixedArray::cast(obj);
+  Tagged<FixedArray> array = Cast<FixedArray>(obj);
   array->set_length(length);
   MemsetTagged(array->RawFieldOfFirstElement(),
                ReadOnlyRoots(heap).undefined_value(), length);
@@ -161,7 +164,7 @@ HEAP_TEST(MarkCompactCollector) {
     Handle<Object> func_value =
         Object::GetProperty(isolate, global, func_name).ToHandleChecked();
     CHECK(IsJSFunction(*func_value));
-    Handle<JSFunction> function = Handle<JSFunction>::cast(func_value);
+    Handle<JSFunction> function = Cast<JSFunction>(func_value);
     Handle<JSObject> obj = factory->NewJSObject(function);
 
     Handle<String> obj_name = factory->InternalizeUtf8String("theObject");
@@ -180,7 +183,8 @@ HEAP_TEST(MarkCompactCollector) {
         Object::GetProperty(isolate, global, obj_name).ToHandleChecked();
     CHECK(IsJSObject(*object));
     Handle<String> prop_name = factory->InternalizeUtf8String("theSlot");
-    CHECK_EQ(*Object::GetProperty(isolate, object, prop_name).ToHandleChecked(),
+    CHECK_EQ(*Object::GetProperty(isolate, Cast<JSObject>(object), prop_name)
+                  .ToHandleChecked(),
              Smi::FromInt(23));
   }
 }
@@ -198,9 +202,10 @@ HEAP_TEST(DoNotEvacuatePinnedPages) {
 
   heap::SealCurrentObjects(heap);
 
-  auto handles = heap::CreatePadding(
+  DirectHandleVector<FixedArray> handles(isolate);
+  heap::CreatePadding(
       heap, static_cast<int>(MemoryChunkLayout::AllocatableMemoryInDataPage()),
-      AllocationType::kOld);
+      AllocationType::kOld, &handles);
 
   MemoryChunk* chunk = MemoryChunk::FromHeapObject(*handles.front());
 
@@ -211,7 +216,7 @@ HEAP_TEST(DoNotEvacuatePinnedPages) {
   heap->EnsureSweepingCompleted(Heap::SweepingForcedFinalizationMode::kV8Only);
 
   // The pinned flag should prevent the page from moving.
-  for (Handle<FixedArray> object : handles) {
+  for (DirectHandle<FixedArray> object : handles) {
     CHECK_EQ(chunk, MemoryChunk::FromHeapObject(*object));
   }
 
@@ -222,7 +227,7 @@ HEAP_TEST(DoNotEvacuatePinnedPages) {
 
   // `compact_on_every_full_gc` ensures that this page is an evacuation
   // candidate, so with the pin flag cleared compaction should now move it.
-  for (Handle<FixedArray> object : handles) {
+  for (DirectHandle<FixedArray> object : handles) {
     CHECK_NE(chunk, MemoryChunk::FromHeapObject(*object));
   }
 }
@@ -350,7 +355,7 @@ TEST(Regress5829) {
   }
   CHECK(marking->IsMarking());
   CHECK(marking->black_allocation());
-  Handle<FixedArray> array =
+  DirectHandle<FixedArray> array =
       isolate->factory()->NewFixedArray(10, AllocationType::kOld);
   Address old_end = array->address() + array->Size();
   // Right trim the array without clearing the mark bits.

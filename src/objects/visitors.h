@@ -6,9 +6,9 @@
 #define V8_OBJECTS_VISITORS_H_
 
 #include "src/common/globals.h"
+#include "src/objects/casting.h"
 #include "src/objects/code.h"
 #include "src/objects/compressed-slots.h"
-#include "src/objects/foreign.h"
 #include "src/objects/instruction-stream.h"
 #include "src/objects/slots.h"
 
@@ -137,7 +137,7 @@ class ObjectVisitor {
                              ObjectSlot end) = 0;
   virtual void VisitPointers(Tagged<HeapObject> host, MaybeObjectSlot start,
                              MaybeObjectSlot end) = 0;
-  // When V8_EXTERNAL_CODE_SPACE is enabled, visits a InstructionStream pointer
+  // When V8_EXTERNAL_CODE_SPACE is enabled, visits an InstructionStream pointer
   // slot. The values may be modified on return. Not used when
   // V8_EXTERNAL_CODE_SPACE is not enabled (the InstructionStream pointer slots
   // are visited as a part of on-heap slot visitation - via VisitPointers()).
@@ -203,6 +203,9 @@ class ObjectVisitor {
   virtual void VisitTrustedPointerTableEntry(Tagged<HeapObject> host,
                                              IndirectPointerSlot slot) {}
 
+  virtual void VisitJSDispatchTableEntry(Tagged<HeapObject> host,
+                                         JSDispatchHandle handle) {}
+
   virtual void VisitMapPointer(Tagged<HeapObject> host) { UNREACHABLE(); }
 };
 
@@ -259,7 +262,7 @@ class ClientRootVisitor final : public RootVisitor {
                          FullObjectSlot start, FullObjectSlot end) final {
     for (FullObjectSlot p = start; p < end; ++p) {
       Tagged<Object> object = *p;
-#ifdef V8_ENABLE_DIRECT_LOCAL
+#ifdef V8_ENABLE_DIRECT_HANDLE
       if (object.ptr() == ValueHelper::kTaggedNullAddress) continue;
 #endif
       if (!IsSharedHeapObject(object)) continue;
@@ -280,10 +283,7 @@ class ClientRootVisitor final : public RootVisitor {
   }
 
  private:
-  V8_INLINE static bool IsSharedHeapObject(Tagged<Object> object) {
-    return IsHeapObject(object) &&
-           InWritableSharedSpace(HeapObject::cast(object));
-  }
+  V8_INLINE static bool IsSharedHeapObject(Tagged<Object> object);
 
   Visitor* const actual_visitor_;
 };
@@ -318,16 +318,8 @@ class ClientObjectVisitor final : public ObjectVisitorWithCageBases {
     }
   }
 
-  void VisitInstructionStreamPointer(Tagged<Code> host,
-                                     InstructionStreamSlot slot) final {
-#if DEBUG
-    Tagged<Object> istream_object = slot.load(code_cage_base());
-    Tagged<InstructionStream> istream;
-    if (istream_object.GetHeapObject(&istream)) {
-      DCHECK(!InWritableSharedSpace(istream));
-    }
-#endif
-  }
+  inline void VisitInstructionStreamPointer(Tagged<Code> host,
+                                            InstructionStreamSlot slot) final;
 
   void VisitPointers(Tagged<HeapObject> host, MaybeObjectSlot start,
                      MaybeObjectSlot end) final {
@@ -342,10 +334,7 @@ class ClientObjectVisitor final : public ObjectVisitorWithCageBases {
                                    RelocInfo* rinfo) final;
 
  private:
-  V8_INLINE static bool IsSharedHeapObject(Tagged<Object> object) {
-    return IsHeapObject(object) &&
-           InWritableSharedSpace(HeapObject::cast(object));
-  }
+  V8_INLINE static bool IsSharedHeapObject(Tagged<Object> object);
 
   Visitor* const actual_visitor_;
 };

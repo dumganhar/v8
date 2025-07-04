@@ -18,9 +18,11 @@ template <typename TMixin>
 class WithInnerPointerResolutionMixin : public TMixin {
  public:
   Address ResolveInnerPointer(Address maybe_inner_ptr) {
+    // This can only resolve inner pointers in the regular cage.
+    PtrComprCageBase cage_base{this->isolate()};
     return ConservativeStackVisitor::ForTesting(
                this->isolate(), GarbageCollector::MARK_COMPACTOR)
-        .FindBasePtr(maybe_inner_ptr);
+        .FindBasePtr(maybe_inner_ptr, cage_base);
   }
 };
 
@@ -200,9 +202,10 @@ class InnerPointerResolutionTest
         DCHECK_LE(2 * kTaggedSize, object.size);
         ReadOnlyRoots roots(heap());
         Tagged<HeapObject> heap_object(HeapObject::FromAddress(object.address));
-        heap_object->set_map_after_allocation(roots.unchecked_fixed_array_map(),
+        heap_object->set_map_after_allocation(heap()->isolate(),
+                                              roots.unchecked_fixed_array_map(),
                                               SKIP_WRITE_BARRIER);
-        Tagged<FixedArray> arr(FixedArray::cast(heap_object));
+        Tagged<FixedArray> arr(Cast<FixedArray>(heap_object));
         arr->set_length((object.size - FixedArray::SizeFor(0)) / kTaggedSize);
         DCHECK_EQ(object.size, arr->AllocatedSize());
         break;
@@ -275,7 +278,6 @@ class InnerPointerResolutionTest
 }  // namespace
 
 TEST_F(InnerPointerResolutionTest, EmptyPage) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({});
   TestAll();
 }
@@ -283,7 +285,6 @@ TEST_F(InnerPointerResolutionTest, EmptyPage) {
 // Tests with some objects laid out randomly.
 
 TEST_F(InnerPointerResolutionTest, NothingMarked) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {16 * kTaggedSize},
       {12 * kTaggedSize},
@@ -299,7 +300,6 @@ TEST_F(InnerPointerResolutionTest, NothingMarked) {
 }
 
 TEST_F(InnerPointerResolutionTest, AllMarked) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {16 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::MARKED},
       {12 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::MARKED},
@@ -315,7 +315,6 @@ TEST_F(InnerPointerResolutionTest, AllMarked) {
 }
 
 TEST_F(InnerPointerResolutionTest, SomeMarked) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {16 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::UNMARKED},
       {12 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::UNMARKED},
@@ -331,7 +330,6 @@ TEST_F(InnerPointerResolutionTest, SomeMarked) {
 }
 
 TEST_F(InnerPointerResolutionTest, MarkedAreas) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {16 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::UNMARKED},
       {12 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::MARKED_AREA},
@@ -349,7 +347,6 @@ TEST_F(InnerPointerResolutionTest, MarkedAreas) {
 // Tests with specific object layout, to cover interesting and corner cases.
 
 TEST_F(InnerPointerResolutionTest, ThreeMarkedObjectsInSameCell) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       // Some initial large unmarked object, followed by a small marked object
       // towards the end of the cell.
@@ -369,7 +366,6 @@ TEST_F(InnerPointerResolutionTest, ThreeMarkedObjectsInSameCell) {
 }
 
 TEST_F(InnerPointerResolutionTest, ThreeMarkedAreasInSameCell) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       // Some initial large unmarked object, followed by a small marked area
       // towards the end of the cell.
@@ -390,7 +386,6 @@ TEST_F(InnerPointerResolutionTest, ThreeMarkedAreasInSameCell) {
 }
 
 TEST_F(InnerPointerResolutionTest, SmallMarkedAreaAtPageStart) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {16 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::UNMARKED, 30,
        ObjectRequest::PAD_MARKED},
@@ -400,7 +395,6 @@ TEST_F(InnerPointerResolutionTest, SmallMarkedAreaAtPageStart) {
 
 TEST_F(InnerPointerResolutionTest,
        SmallMarkedAreaAtPageStartUntilCellBoundary) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {2 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::MARKED_AREA},
       {16 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::UNMARKED, 0,
@@ -410,7 +404,6 @@ TEST_F(InnerPointerResolutionTest,
 }
 
 TEST_F(InnerPointerResolutionTest, LargeMarkedAreaAtPageStart) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {42 * FullCell, ObjectRequest::REGULAR, ObjectRequest::MARKED_AREA},
       {16 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::UNMARKED, 30,
@@ -421,7 +414,6 @@ TEST_F(InnerPointerResolutionTest, LargeMarkedAreaAtPageStart) {
 
 TEST_F(InnerPointerResolutionTest,
        LargeMarkedAreaAtPageStartUntilCellBoundary) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {42 * FullCell, ObjectRequest::REGULAR, ObjectRequest::MARKED_AREA},
       {16 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::UNMARKED, 0,
@@ -431,7 +423,6 @@ TEST_F(InnerPointerResolutionTest,
 }
 
 TEST_F(InnerPointerResolutionTest, SmallMarkedAreaStartingAtCellBoundary) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {128 * kTaggedSize},
       {5 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::MARKED_AREA, 0,
@@ -441,7 +432,6 @@ TEST_F(InnerPointerResolutionTest, SmallMarkedAreaStartingAtCellBoundary) {
 }
 
 TEST_F(InnerPointerResolutionTest, LargeMarkedAreaStartingAtCellBoundary) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {128 * kTaggedSize},
       {42 * FullCell + 16 * kTaggedSize, ObjectRequest::REGULAR,
@@ -451,7 +441,6 @@ TEST_F(InnerPointerResolutionTest, LargeMarkedAreaStartingAtCellBoundary) {
 }
 
 TEST_F(InnerPointerResolutionTest, SmallMarkedAreaEndingAtCellBoundary) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {128 * kTaggedSize},
       {2 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::MARKED_AREA, 13,
@@ -463,7 +452,6 @@ TEST_F(InnerPointerResolutionTest, SmallMarkedAreaEndingAtCellBoundary) {
 }
 
 TEST_F(InnerPointerResolutionTest, LargeMarkedAreaEndingAtCellBoundary) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {128 * kTaggedSize},
       {42 * FullCell + 16 * kTaggedSize, ObjectRequest::REGULAR,
@@ -475,7 +463,6 @@ TEST_F(InnerPointerResolutionTest, LargeMarkedAreaEndingAtCellBoundary) {
 }
 
 TEST_F(InnerPointerResolutionTest, TwoSmallMarkedAreasAtCellBoundaries) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {128 * kTaggedSize},
       {6 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::MARKED_AREA, 0,
@@ -489,7 +476,6 @@ TEST_F(InnerPointerResolutionTest, TwoSmallMarkedAreasAtCellBoundaries) {
 }
 
 TEST_F(InnerPointerResolutionTest, MarkedAreaOfOneCell) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {128 * kTaggedSize},
       {1 * FullCell, ObjectRequest::REGULAR, ObjectRequest::MARKED_AREA, 0,
@@ -499,7 +485,6 @@ TEST_F(InnerPointerResolutionTest, MarkedAreaOfOneCell) {
 }
 
 TEST_F(InnerPointerResolutionTest, MarkedAreaOfManyCells) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {128 * kTaggedSize},
       {17 * FullCell, ObjectRequest::REGULAR, ObjectRequest::MARKED_AREA, 0,
@@ -511,7 +496,6 @@ TEST_F(InnerPointerResolutionTest, MarkedAreaOfManyCells) {
 // Test with more pages, normal and large.
 
 TEST_F(InnerPointerResolutionTest, TwoPages) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {16 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::UNMARKED},
       {13 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::MARKED},
@@ -533,7 +517,6 @@ TEST_F(InnerPointerResolutionTest, TwoPages) {
 }
 
 TEST_F(InnerPointerResolutionTest, OneLargePage) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateLargeObjects({
       {1 * MB, ObjectRequest::LARGE, ObjectRequest::UNMARKED},
   });
@@ -541,7 +524,6 @@ TEST_F(InnerPointerResolutionTest, OneLargePage) {
 }
 
 TEST_F(InnerPointerResolutionTest, SeveralLargePages) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateLargeObjects({
       {1 * MB, ObjectRequest::LARGE, ObjectRequest::UNMARKED},
       {32 * MB, ObjectRequest::LARGE, ObjectRequest::MARKED},
@@ -550,7 +532,6 @@ TEST_F(InnerPointerResolutionTest, SeveralLargePages) {
 }
 
 TEST_F(InnerPointerResolutionTest, PagesOfBothKind) {
-  if (v8_flags.enable_third_party_heap) return;
   CreateObjectsInPage({
       {16 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::UNMARKED},
       {13 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::MARKED},
@@ -576,7 +557,6 @@ TEST_F(InnerPointerResolutionTest, PagesOfBothKind) {
 }
 
 TEST_F(InnerPointerResolutionTest, FreePages) {
-  if (v8_flags.enable_third_party_heap) return;
   int some_normal_page = CreateObjectsInPage({
       {16 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::UNMARKED},
       {13 * kTaggedSize, ObjectRequest::REGULAR, ObjectRequest::MARKED},
@@ -652,9 +632,9 @@ TEST_F(InnerPointerResolutionHeapTest, UnusedRegularYoungPages) {
     auto page3 = MemoryChunk::FromHeapObject(obj3);
     EXPECT_TRUE(page3 == page1 || page3 == page2);
     if (page3 == page1) {
-      EXPECT_EQ(obj3.address(), obj1.address() + obj1->Size(cage_base));
+      EXPECT_EQ(obj3.address(), obj1.address() + obj1->Size());
     } else {
-      EXPECT_EQ(obj3.address(), obj2.address() + obj2->Size(cage_base));
+      EXPECT_EQ(obj3.address(), obj2.address() + obj2->Size());
     }
 
     // Keep inner pointers to all objects.
@@ -665,12 +645,12 @@ TEST_F(InnerPointerResolutionHeapTest, UnusedRegularYoungPages) {
     // Keep pointers to the end of the pages, after the objects.
     outside_ptr1 = page1->Metadata()->area_end() - 3 * kTaggedSize;
     outside_ptr2 = page2->Metadata()->area_end() - 2 * kTaggedSize;
-    EXPECT_LE(obj1.address() + obj1->Size(cage_base), outside_ptr1);
-    EXPECT_LE(obj2.address() + obj2->Size(cage_base), outside_ptr2);
+    EXPECT_LE(obj1.address() + obj1->Size(), outside_ptr1);
+    EXPECT_LE(obj2.address() + obj2->Size(), outside_ptr2);
     if (page3 == page1) {
-      EXPECT_LE(obj3.address() + obj3->Size(cage_base), outside_ptr1);
+      EXPECT_LE(obj3.address() + obj3->Size(), outside_ptr1);
     } else {
-      EXPECT_LE(obj3.address() + obj3->Size(cage_base), outside_ptr2);
+      EXPECT_LE(obj3.address() + obj3->Size(), outside_ptr2);
     }
 
     // Ensure the young generation space is iterable.

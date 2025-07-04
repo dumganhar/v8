@@ -39,7 +39,7 @@ void WasmInliner::Trace(Node* call, int inlinee, const char* decision) {
 }
 
 int WasmInliner::GetCallCount(Node* call) {
-  if (!env_->enabled_features.has_inlining() && !env_->module->is_wasm_gc) {
+  if (!v8_flags.wasm_inlining) {
     return 0;
   }
   return mcgraph()->GetCallCount(call->id());
@@ -102,9 +102,8 @@ Reduction WasmInliner::ReduceCall(Node* call) {
 
   // If liftoff ran and collected call counts, only inline calls that have been
   // invoked often, except for truly tiny functions.
-  if (v8_flags.liftoff &&
-      (env_->enabled_features.has_inlining() || env_->module->is_wasm_gc) &&
-      wire_byte_size >= 12 && call_count < min_count_for_inlining) {
+  if (v8_flags.liftoff && v8_flags.wasm_inlining && wire_byte_size >= 12 &&
+      call_count < min_count_for_inlining) {
     Trace(call, inlinee_index, "not called often enough");
     return NoChange();
   }
@@ -169,10 +168,10 @@ bool WasmInliner::graph_size_allows_inlining(const wasm::WasmModule* module,
 void WasmInliner::Trace(const CandidateInfo& candidate, const char* decision) {
   TRACE(
       "  [function %d: considering candidate {@%d, index=%d, count=%d, "
-      "size=%d, score=%" PRId64 "}: %s]\n",
+      "size=%d, score=%" PRId64 "} graphsize=%zu: %s]\n",
       data_.func_index, candidate.node->id(), candidate.inlinee_index,
       candidate.call_count, candidate.wire_byte_size, candidate.score(),
-      decision);
+      current_graph_size_, decision);
 }
 
 void WasmInliner::Finalize() {
@@ -190,7 +189,7 @@ void WasmInliner::Finalize() {
     }
     // We could build the candidate's graph first and consider its node count,
     // but it turns out that wire byte size and node count are quite strongly
-    // correlated, at about 1.16 nodes per wire byte (measured for J2Wasm).
+    // correlated, at about 0.74 nodes per wire byte (measured for J2Wasm).
     if (!SmallEnoughToInline(module(), current_graph_size_,
                              candidate.wire_byte_size, initial_graph_size_)) {
       Trace(candidate, "not enough inlining budget");
@@ -216,7 +215,7 @@ void WasmInliner::Finalize() {
     base::Vector<const uint8_t> function_bytes =
         data_.wire_bytes_storage->GetCode(inlinee->code);
 
-    bool is_shared = module()->types[inlinee->sig_index].is_shared;
+    bool is_shared = module()->type(inlinee->sig_index).is_shared;
 
     const wasm::FunctionBody inlinee_body{inlinee->sig, inlinee->code.offset(),
                                           function_bytes.begin(),
@@ -270,7 +269,7 @@ void WasmInliner::Finalize() {
     }
 
     size_t additional_nodes = graph()->NodeCount() - subgraph_min_node_id;
-    Trace(candidate, "inlining");
+    Trace(candidate, "decided to inline");
     current_graph_size_ += additional_nodes;
     DCHECK_GE(function_inlining_count_[candidate.inlinee_index], 0);
     function_inlining_count_[candidate.inlinee_index]++;

@@ -123,7 +123,8 @@ def _default_args():
         }) + select({
             "@v8//bazel/config:is_clang": [
                 "-Wno-invalid-offsetof",
-                "-std=c++17",
+                "-Wno-deprecated-this-capture",
+                "-std=c++20",
             ],
             "@v8//bazel/config:is_gcc": [
                 "-Wno-extra",
@@ -138,12 +139,13 @@ def _default_args():
                 "-Wno-redundant-move",
                 "-Wno-return-type",
                 "-Wno-stringop-overflow",
+                "-Wno-deprecated-this-capture",
                 # Use GNU dialect, because GCC doesn't allow using
                 # ##__VA_ARGS__ when in standards-conforming mode.
-                "-std=gnu++17",
+                "-std=gnu++2a",
             ],
             "@v8//bazel/config:is_windows": [
-                "/std:c++17",
+                "/std:c++20",
             ],
             "//conditions:default": [],
         }) + select({
@@ -430,7 +432,7 @@ def _v8_target_cpu_transition_impl(settings,
         "armeabi-v7a": "arm32",
         "s390x": "s390x",
         "riscv64": "riscv64",
-        "ppc": "ppc64le",
+        "ppc64": "ppc64le",
     }
     v8_target_cpu = mapping[settings["//command_line_option:cpu"]]
     return {"@v8//bazel/config:v8_target_cpu": v8_target_cpu}
@@ -533,6 +535,7 @@ def build_config_content(cpu, icu):
         ("arch", arch),
         ("asan", "false"),
         ("atomic_object_field_writes", "false"),
+        ("cet_shadow_stack", "false"),
         ("cfi", "false"),
         ("clang_coverage", "false"),
         ("clang", "true"),
@@ -547,7 +550,6 @@ def build_config_content(cpu, icu):
         ("debugging_features", "false"),
         ("dict_property_const_tracking", "false"),
         ("direct_handle", "false"),
-        ("direct_local", "false"),
         ("disassembler", "false"),
         ("full_debug", "false"),
         ("gdbjit", "false"),
@@ -555,10 +557,12 @@ def build_config_content(cpu, icu):
         ("has_maglev", "true"),
         ("has_turbofan", "true"),
         ("has_webassembly", "false"),
+        ("has_wasm_interpreter", "false"),
         ("i18n", icu),
         ("is_android", "false"),
         ("is_ios", "false"),
         ("js_shared_memory", "false"),
+        ("leaptiering", "true"),
         ("lite_mode", "false"),
         ("local_off_stack_check", "false"),
         ("memory_corruption_api", "false"),
@@ -576,7 +580,6 @@ def build_config_content(cpu, icu):
         ("single_generation", "false"),
         ("slow_dchecks", "false"),
         ("target_cpu", cpu),
-        ("third_party_heap", "false"),
         ("tsan", "false"),
         ("ubsan", "false"),
         ("use_sanitizer", "false"),
@@ -586,6 +589,7 @@ def build_config_content(cpu, icu):
         ("verify_csa", "false"),
         ("verify_heap", "false"),
         ("verify_predictable", "false"),
+        ("wasm_random_fuzzers", "false"),
         ("write_barriers", "false"),
     ])
 

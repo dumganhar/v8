@@ -46,6 +46,7 @@
 #include "src/codegen/assembler.h"
 #include "src/codegen/cpu-features.h"
 #include "src/codegen/label.h"
+#include "src/codegen/x64/builtin-jump-table-info-x64.h"
 #include "src/codegen/x64/constants-x64.h"
 #include "src/codegen/x64/fma-instr.h"
 #include "src/codegen/x64/register-x64.h"
@@ -492,6 +493,11 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   // own buffer. Otherwise it takes ownership of the provided buffer.
   explicit Assembler(const AssemblerOptions&,
                      std::unique_ptr<AssemblerBuffer> = {});
+  // For compatibility with assemblers that require a zone.
+  Assembler(const MaybeAssemblerZone&, const AssemblerOptions& options,
+            std::unique_ptr<AssemblerBuffer> buffer = {})
+      : Assembler(options, std::move(buffer)) {}
+
   ~Assembler() override = default;
 
   // GetCode emits any pending (non-emitted) code and fills the descriptor desc.
@@ -525,6 +531,7 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   static inline Address target_address_at(Address pc, Address constant_pool);
   static inline void set_target_address_at(
       Address pc, Address constant_pool, Address target,
+      WritableJitAllocation* writable_jit_allocation = nullptr,
       ICacheFlushMode icache_flush_mode = FLUSH_ICACHE_IF_NEEDED);
   static inline int32_t relative_target_offset(Address target, Address pc);
 
@@ -532,11 +539,6 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   // instructions are temporarily encoded as builtin ID until the generated
   // code is moved into the code space.
   static inline Builtin target_builtin_at(Address pc);
-
-  // This sets the branch destination (which is in the instruction on x64).
-  // This is for calls and branches within generated code.
-  inline static void deserialization_set_special_target_at(
-      Address instruction_payload, Tagged<Code> code, Address target);
 
   // Get the size of the special target encoded at 'instruction_payload'.
   inline static int deserialization_special_target_size(
@@ -549,6 +551,13 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
 
   inline Handle<Code> code_target_object_handle_at(Address pc);
   inline Handle<HeapObject> compressed_embedded_object_handle_at(Address pc);
+
+  // Read/modify the uint32 constant used at pc.
+  static inline uint32_t uint32_constant_at(Address pc, Address constant_pool);
+  static inline void set_uint32_constant_at(
+      Address pc, Address constant_pool, uint32_t new_constant,
+      WritableJitAllocation* jit_allocation = nullptr,
+      ICacheFlushMode icache_flush_mode = FLUSH_ICACHE_IF_NEEDED);
 
   // Number of bytes taken up by the branch target in the code.
   static constexpr int kSpecialTargetSize = 4;  // 32-bit displacement.
@@ -1080,8 +1089,9 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void call(Label* L);
 
   // Explicitly emit a near call / near jump. The displacement is relative to
-  // the next instructions (which starts at {pc_offset() + kNearJmpInstrSize}).
-  static constexpr int kNearJmpInstrSize = 5;
+  // the next instructions (which starts at
+  // {pc_offset() + kIntraSegmentJmpInstrSize}).
+  static constexpr int kIntraSegmentJmpInstrSize = 5;
   void near_call(intptr_t disp, RelocInfo::Mode rmode);
   void near_call(Builtin buitin, RelocInfo::Mode rmode);
   void near_jmp(intptr_t disp, RelocInfo::Mode rmode);
@@ -1108,13 +1118,10 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void jmp(Handle<Code> target, RelocInfo::Mode rmode);
 
   // Jump near absolute indirect (r64)
-#ifdef V8_ENABLE_CET_IBT
+  // With notrack, add an optional prefix to disable CET IBT enforcement for
+  // this jump.
   void jmp(Register adr, bool notrack = false);
   void jmp(Operand src, bool notrack = false);
-#else
-  void jmp(Register adr);
-  void jmp(Operand src);
-#endif
 
   // Unconditional jump relative to the current address. Low-level routine,
   // use with caution!
@@ -2271,6 +2278,17 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void vpdpbusd(XMMRegister dst, XMMRegister src1, XMMRegister src2) {
     vinstr(0x50, dst, src1, src2, k66, k0F38, kW0, AVX_VNNI);
   }
+  void vpdpbusd(YMMRegister dst, YMMRegister src1, YMMRegister src2) {
+    vinstr(0x50, dst, src1, src2, k66, k0F38, kW0, AVX_VNNI);
+  }
+
+  // AVX-VNNI-INT8 instruction
+  void vpdpbssd(XMMRegister dst, XMMRegister src1, XMMRegister src2) {
+    vinstr(0x50, dst, src1, src2, kF2, k0F38, kW0, AVX_VNNI_INT8);
+  }
+  void vpdpbssd(YMMRegister dst, YMMRegister src1, YMMRegister src2) {
+    vinstr(0x50, dst, src1, src2, kF2, k0F38, kW0, AVX_VNNI_INT8);
+  }
 
   // BMI instruction
   void andnq(Register dst, Register src1, Register src2) {
@@ -2435,7 +2453,7 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void dp(uintptr_t data) { dq(data); }
   void dq(Label* label);
 
-  void WriteBuiltinJumpTableEntry(Label* label, const int table_pos);
+  void WriteBuiltinJumpTableEntry(Label* label, int table_pos);
 
   // Patch entries for partial constant pool.
   void PatchConstPool();
@@ -2456,6 +2474,7 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   }
 
   static bool IsNop(Address addr);
+  static bool IsJmpRel(Address addr);
 
   // Avoid overflows for displacements etc.
   static constexpr int kMaximalBufferSize = 512 * MB;
@@ -3027,6 +3046,7 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void AllocateAndInstallRequestedHeapNumbers(LocalIsolate* isolate);
 
   int WriteCodeComments();
+  int WriteBuiltinJumpTableInfos();
 
   void GetCode(LocalIsolate* isolate, CodeDesc* desc,
                int safepoint_table_offset, int handler_table_offset);
@@ -3045,6 +3065,8 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   ConstPool constpool_;
 
   friend class ConstPool;
+
+  BuiltinJumpTableInfoWriter builtin_jump_table_info_writer_;
 
 #if defined(V8_OS_WIN_X64)
   std::unique_ptr<win64_unwindinfo::XdataEncoder> xdata_encoder_;

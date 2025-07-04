@@ -117,8 +117,8 @@ HeapBase::HeapBase(
                         *prefinalizer_handler_, *oom_handler_,
                         garbage_collector),
       sweeper_(*this),
-      strong_persistent_region_(*oom_handler_),
-      weak_persistent_region_(*oom_handler_),
+      strong_persistent_region_(*this, *oom_handler_),
+      weak_persistent_region_(*this, *oom_handler_),
       strong_cross_thread_persistent_region_(*oom_handler_),
       weak_cross_thread_persistent_region_(*oom_handler_),
 #if defined(CPPGC_YOUNG_GENERATION)
@@ -299,9 +299,16 @@ void HeapBase::Terminate() {
 HeapStatistics HeapBase::CollectStatistics(
     HeapStatistics::DetailLevel detail_level) {
   if (detail_level == HeapStatistics::DetailLevel::kBrief) {
-    return {stats_collector_->allocated_memory_size(),
-            stats_collector_->resident_memory_size(),
+    const size_t pooled_memory = page_backend_->page_pool().PooledMemory();
+    const size_t committed_memory =
+        stats_collector_->allocated_memory_size() + pooled_memory;
+    const size_t resident_memory =
+        stats_collector_->resident_memory_size() + pooled_memory;
+
+    return {committed_memory,
+            resident_memory,
             stats_collector_->allocated_object_size(),
+            pooled_memory,
             HeapStatistics::DetailLevel::kBrief,
             {},
             {}};
@@ -339,6 +346,10 @@ bool HeapBase::IsGCAllowed() const {
   // GC is prohibited in a GC forbidden scope, or when currently sweeping an
   // object.
   return !sweeper().IsSweepingOnMutatorThread() && !in_no_gc_scope();
+}
+
+bool HeapBase::IsCurrentThread(int thread_id) const {
+  return thread_id == v8::base::OS::GetCurrentThreadId();
 }
 
 ClassNameAsHeapObjectNameScope::ClassNameAsHeapObjectNameScope(HeapBase& heap)

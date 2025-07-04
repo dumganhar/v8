@@ -19,6 +19,8 @@ void IncrementalMarking::TransferColor(Tagged<HeapObject> from,
                                        Tagged<HeapObject> to) {
   DCHECK(marking_state()->IsUnmarked(to));
   DCHECK(!black_allocation());
+  DCHECK(!MemoryChunk::FromHeapObject(to)->IsFlagSet(
+      MemoryChunk::BLACK_ALLOCATED));
 
   if (marking_state()->IsMarked(from)) {
     bool success = marking_state()->TryMark(to);
@@ -26,7 +28,7 @@ void IncrementalMarking::TransferColor(Tagged<HeapObject> from,
     USE(success);
     if (!IsDescriptorArray(to) ||
         (DescriptorArrayMarkingState::Marked::decode(
-             DescriptorArray::cast(to)->raw_gc_state(kRelaxedLoad)) != 0)) {
+             Cast<DescriptorArray>(to)->raw_gc_state(kRelaxedLoad)) != 0)) {
       MutablePageMetadata::FromHeapObject(to)->IncrementLiveBytesAtomically(
           ALIGN_TO_ALLOCATION_ALIGNMENT(to->Size()));
     }

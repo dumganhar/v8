@@ -6,13 +6,15 @@
 #define V8_COMMON_CODE_MEMORY_ACCESS_H_
 
 #include <map>
+#include <optional>
 
 #include "include/v8-internal.h"
 #include "include/v8-platform.h"
 #include "src/base/build_config.h"
 #include "src/base/macros.h"
+#include "src/base/memory.h"
 #include "src/base/platform/mutex.h"
-#include "src/heap/mutable-page.h"
+#include "src/common/globals.h"
 
 namespace v8 {
 namespace internal {
@@ -50,8 +52,9 @@ class CodeSpaceWriteScope;
 #define THREAD_ISOLATION_ALIGN_SZ 0x1000
 #define THREAD_ISOLATION_ALIGN alignas(THREAD_ISOLATION_ALIGN_SZ)
 #define THREAD_ISOLATION_ALIGN_OFFSET_MASK (THREAD_ISOLATION_ALIGN_SZ - 1)
-#define THREAD_ISOLATION_FILL_PAGE_SZ(size)                                    \
-  ((THREAD_ISOLATION_ALIGN_SZ - ((size)&THREAD_ISOLATION_ALIGN_OFFSET_MASK)) % \
+#define THREAD_ISOLATION_FILL_PAGE_SZ(size)          \
+  ((THREAD_ISOLATION_ALIGN_SZ -                      \
+    ((size) & THREAD_ISOLATION_ALIGN_OFFSET_MASK)) % \
    THREAD_ISOLATION_ALIGN_SZ)
 
 #else  // V8_HAS_PKU_JIT_WRITE_PROTECT
@@ -159,12 +162,13 @@ class V8_EXPORT ThreadIsolation {
   // Register a new JIT allocation for tracking and return a writable reference
   // to it. All writes should go through the returned WritableJitAllocation
   // object since it will perform additional validation required for CFI.
-  static WritableJitAllocation RegisterJitAllocation(Address addr, size_t size,
-                                                     JitAllocationType type);
+  static WritableJitAllocation RegisterJitAllocation(
+      Address addr, size_t size, JitAllocationType type,
+      bool enforce_write_api = false);
   // TODO(sroettger): remove this overwrite and use RegisterJitAllocation
   // instead.
-  static WritableJitAllocation RegisterInstructionStreamAllocation(Address addr,
-                                                                   size_t size);
+  static WritableJitAllocation RegisterInstructionStreamAllocation(
+      Address addr, size_t size, bool enforce_write_api = false);
   // Register multiple consecutive allocations together.
   static void RegisterJitAllocations(Address start,
                                      const std::vector<size_t>& sizes,
@@ -173,8 +177,11 @@ class V8_EXPORT ThreadIsolation {
   // Get writable reference to a previously registered allocation. All writes to
   // executable memory need to go through one of these Writable* objects since
   // this is where we perform CFI validation.
-  static WritableJitAllocation LookupJitAllocation(Address addr, size_t size,
-                                                   JitAllocationType type);
+  // If enforce_write_api is set, all writes to JIT memory need to go through
+  // this object.
+  static WritableJitAllocation LookupJitAllocation(
+      Address addr, size_t size, JitAllocationType type,
+      bool enforce_write_api = false);
   // A special case of LookupJitAllocation since in Wasm, we sometimes have to
   // unlock two allocations (jump tables) together.
   static WritableJumpTablePair LookupJumpTableAllocations(
@@ -189,13 +196,19 @@ class V8_EXPORT ThreadIsolation {
   // Check for a potential dead lock in case we want to lookup the jit
   // allocation from inside a signal handler.
   static bool CanLookupStartOfJitAllocationAt(Address inner_pointer);
-  static base::Optional<Address> StartOfJitAllocationAt(Address inner_pointer);
+  static std::optional<Address> StartOfJitAllocationAt(Address inner_pointer);
+
+  // Write-protect a given range of memory. Address and size need to be page
+  // aligned.
+  V8_NODISCARD static bool WriteProtectMemory(
+      Address addr, size_t size, PageAllocator::Permission page_permissions);
 
   static void RegisterJitAllocationForTesting(Address obj, size_t size);
   static void UnregisterJitAllocationForTesting(Address addr, size_t size);
 
 #if V8_HAS_PKU_JIT_WRITE_PROTECT
   static int pkey() { return trusted_data_.pkey; }
+  static bool PkeyIsAvailable() { return trusted_data_.pkey != -1; }
 #endif
 
 #if DEBUG
@@ -349,11 +362,11 @@ class V8_EXPORT ThreadIsolation {
   // doesn't need to be the exact previously registered JitPage.
   static JitPageReference LookupJitPage(Address addr, size_t size);
   static JitPageReference LookupJitPageLocked(Address addr, size_t size);
-  static base::Optional<JitPageReference> TryLookupJitPage(Address addr,
-                                                           size_t size);
+  static std::optional<JitPageReference> TryLookupJitPage(Address addr,
+                                                          size_t size);
   // The caller needs to hold a lock of the jit_pages_mutex_
-  static base::Optional<JitPageReference> TryLookupJitPageLocked(Address addr,
-                                                                 size_t size);
+  static std::optional<JitPageReference> TryLookupJitPageLocked(Address addr,
+                                                                size_t size);
   static JitPageReference SplitJitPageLocked(Address addr, size_t size);
   static JitPageReference SplitJitPage(Address addr, size_t size);
   static std::pair<JitPageReference, JitPageReference> SplitJitPages(
@@ -375,8 +388,8 @@ class WritableJitAllocation {
   WritableJitAllocation& operator=(const WritableJitAllocation&) = delete;
   V8_INLINE ~WritableJitAllocation();
 
-  static V8_INLINE WritableJitAllocation
-  ForInstructionStream(Tagged<InstructionStream> istream);
+  static WritableJitAllocation ForInstructionStream(
+      Tagged<InstructionStream> istream);
 
   // WritableJitAllocations are used during reloc iteration. But in some
   // cases, we relocate code off-heap, e.g. when growing AssemblerBuffers.
@@ -398,6 +411,9 @@ class WritableJitAllocation {
   V8_INLINE void WriteHeaderSlot(Tagged<T> value, RelaxedStoreTag);
   template <typename T, size_t offset>
   V8_INLINE void WriteProtectedPointerHeaderSlot(Tagged<T> value,
+                                                 ReleaseStoreTag);
+  template <typename T, size_t offset>
+  V8_INLINE void WriteProtectedPointerHeaderSlot(Tagged<T> value,
                                                  RelaxedStoreTag);
   template <typename T>
   V8_INLINE void WriteHeaderSlot(Address address, T value, RelaxedStoreTag);
@@ -408,6 +424,11 @@ class WritableJitAllocation {
                           size_t num_bytes);
   V8_INLINE void CopyData(size_t dst_offset, const uint8_t* src,
                           size_t num_bytes);
+
+  template <typename T>
+  V8_INLINE void WriteUnalignedValue(Address address, T value);
+  template <typename T>
+  V8_INLINE void WriteValue(Address address, T value);
 
   V8_INLINE void ClearBytes(size_t offset, size_t len);
 
@@ -421,12 +442,19 @@ class WritableJitAllocation {
   };
   V8_INLINE WritableJitAllocation(Address addr, size_t size,
                                   ThreadIsolation::JitAllocationType type,
-                                  JitAllocationSource source);
+                                  JitAllocationSource source,
+                                  bool enforce_write_api = false);
   // Used for non-executable memory.
   V8_INLINE WritableJitAllocation(Address addr, size_t size,
                                   ThreadIsolation::JitAllocationType type);
 
   ThreadIsolation::JitPageReference& page_ref() { return page_ref_.value(); }
+
+  // In DEBUG mode, we only make RWX memory writable during the write operations
+  // themselves to ensure that all writes go through this object.
+  // This function returns a write scope that can be used for these writes.
+  V8_INLINE std::optional<RwxMemoryWriteScope> WriteScopeForApiEnforcement()
+      const;
 
   const Address address_;
   // TODO(sroettger): we can move the memory write scopes into the Write*
@@ -435,9 +463,10 @@ class WritableJitAllocation {
   // The scope and page reference are optional in case we're creating a
   // WritableJitAllocation for off-heap memory. See ForNonExecutableMemory
   // above.
-  base::Optional<RwxMemoryWriteScope> write_scope_;
-  base::Optional<ThreadIsolation::JitPageReference> page_ref_;
+  std::optional<RwxMemoryWriteScope> write_scope_;
+  std::optional<ThreadIsolation::JitPageReference> page_ref_;
   const ThreadIsolation::JitAllocation allocation_;
+  bool enforce_write_api_ = false;
 
   friend class ThreadIsolation;
   friend class WritableJitPage;
@@ -464,7 +493,7 @@ class WritableFreeSpace {
   template <typename T, size_t offset>
   V8_INLINE void WriteHeaderSlot(Tagged<T> value, RelaxedStoreTag) const;
   template <size_t offset>
-  V8_INLINE void ClearTagged(size_t count) const;
+  void ClearTagged(size_t count) const;
 
   base::Address Address() const { return address_; }
   int Size() const { return size_; }
@@ -479,6 +508,11 @@ class WritableFreeSpace {
 
   friend class WritableJitPage;
 };
+
+extern template void WritableFreeSpace::ClearTagged<kTaggedSize>(
+    size_t count) const;
+extern template void WritableFreeSpace::ClearTagged<2 * kTaggedSize>(
+    size_t count) const;
 
 class WritableJitPage {
  public:
@@ -503,6 +537,8 @@ class WritableJitPage {
 class WritableJumpTablePair {
  public:
   // TODO(sroettger): add functions to write to the jump tables.
+  RwxMemoryWriteScope& write_scope() { return write_scope_; }
+
  private:
   V8_INLINE WritableJumpTablePair(Address jump_table_address,
                                   size_t jump_table_size,
@@ -533,8 +569,9 @@ bool operator!=(const ThreadIsolation::StlAllocator<T>&,
 // This class is a no-op version of the RwxMemoryWriteScope class above.
 // It's used as a target type for other scope type definitions when a no-op
 // semantics is required.
-class V8_NODISCARD NopRwxMemoryWriteScope final {
+class V8_NODISCARD V8_ALLOW_UNUSED NopRwxMemoryWriteScope final {
  public:
+  V8_INLINE NopRwxMemoryWriteScope() = default;
   V8_INLINE explicit NopRwxMemoryWriteScope(const char* comment) {
     // Define a constructor to avoid unused variable warnings.
   }
@@ -561,6 +598,12 @@ class V8_NODISCARD RwxMemoryWriteScopeForTesting final
 using CFIMetadataWriteScope = NopRwxMemoryWriteScope;
 #else
 using CFIMetadataWriteScope = RwxMemoryWriteScope;
+#endif
+
+#ifdef V8_ENABLE_MEMORY_SEALING
+using DiscardSealedMemoryScope = RwxMemoryWriteScope;
+#else
+using DiscardSealedMemoryScope = NopRwxMemoryWriteScope;
 #endif
 
 }  // namespace internal

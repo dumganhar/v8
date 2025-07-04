@@ -44,6 +44,8 @@ namespace internal {
     "Insufficient type feedback for object literal")                           \
   V(InsufficientTypeFeedbackForInstanceOf,                                     \
     "Insufficient type feedback for instanceof")                               \
+  V(InsufficientTypeFeedbackForTypeOf,                                         \
+    "Insufficient type feedback for typeof")                                   \
   V(LostPrecision, "lost precision")                                           \
   V(LostPrecisionOrNaN, "lost precision or NaN")                               \
   V(MinusZero, "minus zero")                                                   \
@@ -61,8 +63,10 @@ namespace internal {
   V(NotAnArrayIndex, "not an array index")                                     \
   V(NotASmi, "not a Smi")                                                      \
   V(NotAString, "not a String")                                                \
+  V(NotAStringWrapper, "not a string wrapper")                                 \
   V(NotAStringOrStringWrapper, "not a String or a string wrapper")             \
   V(NotASymbol, "not a Symbol")                                                \
+  V(NotDetectableReceiver, "not a detectable receiver")                        \
   V(NotInt32, "not int32")                                                     \
   V(NotUint32, "not unsigned int32")                                           \
   V(OutOfBounds, "out of bounds")                                              \

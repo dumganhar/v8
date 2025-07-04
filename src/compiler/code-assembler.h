@@ -8,6 +8,7 @@
 #include <initializer_list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <type_traits>
 
@@ -15,7 +16,6 @@
 // Do not include anything from src/compiler here!
 #include "include/cppgc/source-location.h"
 #include "src/base/macros.h"
-#include "src/base/optional.h"
 #include "src/builtins/builtins.h"
 #include "src/codegen/atomic-memory-order.h"
 #include "src/codegen/callable.h"
@@ -28,6 +28,10 @@
 #include "src/objects/objects.h"
 #include "src/runtime/runtime.h"
 #include "src/zone/zone-containers.h"
+
+#if V8_ENABLE_WEBASSEMBLY
+#include "src/wasm/wasm-builtin-list.h"
+#endif
 
 namespace v8 {
 namespace internal {
@@ -592,6 +596,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   TNode<String> StringConstant(const char* str);
   TNode<Boolean> BooleanConstant(bool value);
   TNode<ExternalReference> ExternalConstant(ExternalReference address);
+  TNode<ExternalReference> IsolateField(IsolateFieldId id);
   TNode<Float32T> Float32Constant(double value);
   TNode<Float64T> Float64Constant(double value);
   TNode<BoolT> Int32TrueConstant() {
@@ -632,12 +637,28 @@ class V8_EXPORT_PRIVATE CodeAssembler {
     return UncheckedCast<UintPtrT>(x);
   }
 
+  // Support for code with a "dynamic" parameter count.
+  //
+  // Code assembled by our code assembler always has a "static" parameter count
+  // as defined by the call descriptor for the code. This parameter count is
+  // known at compile time. However, some builtins also have a "dynamic"
+  // parameter count because they can be installed on different function
+  // objects with different parameter counts. In that case, the actual
+  // parameter count is only known at runtime. Examples of such builtins
+  // include the CompileLazy builtin and the InterpreterEntryTrampoline, or the
+  // generic JSToWasm and JSToJS wrappers. These builtins then may have to
+  // obtain the "dynamic" parameter count, for example to correctly remove all
+  // function arguments (including padding arguments) from the stack.
+  bool HasDynamicJSParameterCount();
+  TNode<Uint16T> DynamicJSParameterCount();
+  void SetDynamicJSParameterCount(TNode<Uint16T> parameter_count);
+
   static constexpr int kTargetParameterIndex = kJSCallClosureParameterIndex;
   static_assert(kTargetParameterIndex == -1);
 
   template <class T>
-  TNode<T> Parameter(
-      int value, cppgc::SourceLocation loc = cppgc::SourceLocation::Current()) {
+  TNode<T> Parameter(int value,
+                     const SourceLocation& loc = SourceLocation::Current()) {
     static_assert(
         std::is_convertible<TNode<T>, TNode<Object>>::value,
         "Parameter is only for tagged types. Use UncheckedParameter instead.");
@@ -672,6 +693,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   void Return(TNode<WordT> value1, TNode<WordT> value2);
   void Return(TNode<Word32T> value1, TNode<Word32T> value2);
   void Return(TNode<WordT> value1, TNode<Object> value2);
+  void Return(TNode<Word32T> value1, TNode<Object> value2);
   void PopAndReturn(Node* pop, Node* value);
   void PopAndReturn(Node* pop, Node* value1, Node* value2, Node* value3,
                     Node* value4);
@@ -685,12 +707,13 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   // Hack for supporting SourceLocation alongside template packs.
   struct MessageWithSourceLocation {
     const char* message;
-    SourceLocation loc;
+    const SourceLocation& loc;
 
     // Allow implicit construction, necessary for the hack.
     // NOLINTNEXTLINE
-    MessageWithSourceLocation(const char* message,
-                              SourceLocation loc = SourceLocation::Current())
+    MessageWithSourceLocation(
+        const char* message,
+        const SourceLocation& loc = SourceLocation::Current())
         : message(message), loc(loc) {}
   };
   template <class... Args>
@@ -787,7 +810,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
 #if V8_ENABLE_WEBASSEMBLY
   // Access to the stack pointer.
   TNode<RawPtrT> LoadStackPointer();
-  void SetStackPointer(TNode<RawPtrT> ptr, wasm::FPRelativeScope fp_scope);
+  void SetStackPointer(TNode<RawPtrT> ptr);
 #endif  // V8_ENABLE_WEBASSEMBLY
 
   TNode<RawPtrT> LoadPointerFromRootRegister(TNode<IntPtrT> offset);
@@ -1260,20 +1283,48 @@ class V8_EXPORT_PRIVATE CodeAssembler {
                                {implicit_cast<TNode<Object>>(args)...});
   }
 
+  Builtin builtin();
+
+  // If the current code is running on a secondary stack, move the stack pointer
+  // to the central stack (but not the frame pointer) and adjust the stack
+  // limit. Returns the old stack pointer, or nullptr if no switch was
+  // performed.
+  TNode<RawPtrT> SwitchToTheCentralStackIfNeeded();
+  TNode<RawPtrT> SwitchToTheCentralStack();
+  // Switch the SP back to the secondary stack after switching to the central
+  // stack.
+  void SwitchFromTheCentralStack(TNode<RawPtrT> old_sp);
+
   //
   // If context passed to CallBuiltin is nullptr, it won't be passed to the
   // builtin.
   //
-
   template <typename T = Object, class... TArgs>
   TNode<T> CallBuiltin(Builtin id, TNode<Object> context, TArgs... args) {
+    DCHECK_WITH_MSG(!Builtins::HasJSLinkage(id), "Use CallJSBuiltin instead");
+    TNode<RawPtrT> old_sp;
+#if V8_ENABLE_WEBASSEMBLY
+    bool maybe_needs_switch = wasm::BuiltinLookup::IsWasmBuiltinId(builtin()) &&
+                              !wasm::BuiltinLookup::IsWasmBuiltinId(id);
+    if (maybe_needs_switch) {
+      old_sp = SwitchToTheCentralStackIfNeeded();
+    }
+#endif
     Callable callable = Builtins::CallableFor(isolate(), id);
     TNode<Code> target = HeapConstantNoHole(callable.code());
-    return CallStub<T>(callable.descriptor(), target, context, args...);
+    TNode<T> call =
+        CallStub<T>(callable.descriptor(), target, context, args...);
+#if V8_ENABLE_WEBASSEMBLY
+    if (maybe_needs_switch) {
+      SwitchFromTheCentralStack(old_sp);
+    }
+#endif
+    return call;
   }
 
   template <class... TArgs>
   void CallBuiltinVoid(Builtin id, TNode<Object> context, TArgs... args) {
+    DCHECK_WITH_MSG(!Builtins::HasJSLinkage(id), "Use CallJSBuiltin instead");
     Callable callable = Builtins::CallableFor(isolate(), id);
     TNode<Code> target = HeapConstantNoHole(callable.code());
     CallStubR(StubCallMode::kCallCodeObject, callable.descriptor(), target,
@@ -1282,6 +1333,8 @@ class V8_EXPORT_PRIVATE CodeAssembler {
 
   template <class... TArgs>
   void TailCallBuiltin(Builtin id, TNode<Object> context, TArgs... args) {
+    DCHECK_WITH_MSG(!Builtins::HasJSLinkage(id),
+                    "Use TailCallJSBuiltin instead");
     Callable callable = Builtins::CallableFor(isolate(), id);
     TNode<Code> target = HeapConstantNoHole(callable.code());
     TailCallStub(callable.descriptor(), target, context, args...);
@@ -1325,6 +1378,78 @@ class V8_EXPORT_PRIVATE CodeAssembler {
                                          {args...});
   }
 
+  // A specialized version of CallBuiltin for builtins with JS linkage.
+  // This for example takes care of computing and supplying the argument count.
+  template <class... TArgs>
+  TNode<Object> CallJSBuiltin(Builtin builtin, TNode<Context> context,
+                              TNode<Object> function,
+                              std::optional<TNode<Object>> new_target,
+                              TNode<Object> receiver, TArgs... args) {
+    DCHECK(Builtins::HasJSLinkage(builtin));
+    // The receiver is also passed on the stack so needs to be included.
+    DCHECK_EQ(Builtins::GetStackParameterCount(builtin), 1 + sizeof...(args));
+    Callable callable = Builtins::CallableFor(isolate(), builtin);
+    int argc = JSParameterCount(static_cast<int>(sizeof...(args)));
+    TNode<Int32T> arity = Int32Constant(argc);
+    TNode<JSDispatchHandleT> dispatch_handle = UncheckedCast<JSDispatchHandleT>(
+        Uint32Constant(kInvalidDispatchHandle));
+    TNode<Code> target = HeapConstantNoHole(callable.code());
+    return CAST(CallJSStubImpl(callable.descriptor(), target, context, function,
+                               new_target, arity, dispatch_handle,
+                               {receiver, args...}));
+  }
+
+  // A specialized version of TailCallBuiltin for builtins with JS linkage.
+  // The JS arguments (including receiver) must already be on the stack.
+  void TailCallJSBuiltin(Builtin id, TNode<Object> context,
+                         TNode<Object> function, TNode<Object> new_target,
+                         TNode<Int32T> arg_count,
+                         TNode<JSDispatchHandleT> dispatch_handle) {
+    DCHECK(Builtins::HasJSLinkage(id));
+    Callable callable = Builtins::CallableFor(isolate(), id);
+    TNode<Code> target = HeapConstantNoHole(callable.code());
+#ifdef V8_ENABLE_LEAPTIERING
+    TailCallStub(callable.descriptor(), target, context, function, new_target,
+                 arg_count, dispatch_handle);
+#else
+    TailCallStub(callable.descriptor(), target, context, function, new_target,
+                 arg_count);
+#endif
+  }
+
+  // Call the given JavaScript callable through one of the JS Call builtins.
+  template <class... TArgs>
+  TNode<Object> CallJS(Builtin builtin, TNode<Context> context,
+                       TNode<Object> function, TNode<Object> receiver,
+                       TArgs... args) {
+    DCHECK(Builtins::IsAnyCall(builtin));
+    Callable callable = Builtins::CallableFor(isolate(), builtin);
+    int argc = JSParameterCount(static_cast<int>(sizeof...(args)));
+    TNode<Int32T> arity = Int32Constant(argc);
+    TNode<Code> target = HeapConstantNoHole(callable.code());
+    return CAST(CallJSStubImpl(callable.descriptor(), target, context, function,
+                               std::nullopt, arity, std::nullopt,
+                               {receiver, args...}));
+  }
+
+  // Construct the given JavaScript callable through a JS Construct builtin.
+  template <class... TArgs>
+  TNode<Object> ConstructJS(Builtin builtin, TNode<Context> context,
+                            TNode<Object> function, TNode<Object> new_target,
+                            TArgs... args) {
+    // Consider creating a Builtins::IsAnyConstruct if we ever expect other
+    // Construct builtins here.
+    DCHECK_EQ(builtin, Builtin::kConstruct);
+    Callable callable = Builtins::CallableFor(isolate(), builtin);
+    int argc = JSParameterCount(static_cast<int>(sizeof...(args)));
+    TNode<Int32T> arity = Int32Constant(argc);
+    TNode<Object> receiver = LoadRoot(RootIndex::kUndefinedValue);
+    TNode<Code> target = HeapConstantNoHole(callable.code());
+    return CAST(CallJSStubImpl(callable.descriptor(), target, context, function,
+                               new_target, arity, std::nullopt,
+                               {receiver, args...}));
+  }
+
   // Tailcalls to the given code object with JSCall linkage. The JS arguments
   // (including receiver) are supposed to be already on the stack.
   // This is a building block for implementing trampoline stubs that are
@@ -1334,45 +1459,8 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   // only be used after arguments adaptation has been performed already.
   void TailCallJSCode(TNode<Code> code, TNode<Context> context,
                       TNode<JSFunction> function, TNode<Object> new_target,
-                      TNode<Int32T> arg_count);
-
-  template <class... TArgs>
-  TNode<Object> CallJS(Builtin builtin, TNode<Context> context,
-                       TNode<Object> function,
-                       base::Optional<TNode<Object>> new_target,
-                       TNode<Object> receiver, TArgs... args) {
-    Callable callable = Builtins::CallableFor(isolate(), builtin);
-    // CallTrampolineDescriptor doesn't have |new_target| parameter.
-    DCHECK_IMPLIES(callable.descriptor() == CallTrampolineDescriptor{},
-                   !new_target.has_value());
-    int argc = JSParameterCount(static_cast<int>(sizeof...(args)));
-    TNode<Int32T> arity = Int32Constant(argc);
-    TNode<Code> target = HeapConstantNoHole(callable.code());
-    return CAST(CallJSStubImpl(callable.descriptor(), target, context, function,
-                               new_target, arity, {receiver, args...}));
-  }
-
-  template <class... TArgs>
-  TNode<Object> ConstructJSWithTarget(Builtin builtin, TNode<Context> context,
-                                      TNode<Object> function,
-                                      TNode<Object> new_target, TArgs... args) {
-    Callable callable = Builtins::CallableFor(isolate(), builtin);
-    // Only descriptors with |new_target| parameter are allowed here.
-    DCHECK_EQ(callable.descriptor(), JSTrampolineDescriptor{});
-    int argc = JSParameterCount(static_cast<int>(sizeof...(args)));
-    TNode<Int32T> arity = Int32Constant(argc);
-    TNode<Object> receiver = LoadRoot(RootIndex::kUndefinedValue);
-    TNode<Code> target = HeapConstantNoHole(callable.code());
-    return CAST(CallJSStubImpl(callable.descriptor(), target, context, function,
-                               new_target, arity, {receiver, args...}));
-  }
-
-  template <class... TArgs>
-  TNode<Object> ConstructJS(Builtin builtin, TNode<Context> context,
-                            TNode<Object> target, TArgs... args) {
-    return CallOrConstructJSWithTarget(builtin, context, target, target,
-                                       args...);
-  }
+                      TNode<Int32T> arg_count,
+                      TNode<JSDispatchHandleT> dispatch_handle);
 
   Node* CallCFunctionN(Signature<MachineType>* signature, int input_count,
                        Node* const* inputs);
@@ -1382,7 +1470,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
 
   // Call to a C function.
   template <class... CArgs>
-  Node* CallCFunction(Node* function, base::Optional<MachineType> return_type,
+  Node* CallCFunction(Node* function, std::optional<MachineType> return_type,
                       CArgs... cargs) {
     static_assert(
         std::conjunction_v<std::is_convertible<CArgs, CFunctionArg>...>,
@@ -1442,7 +1530,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
  private:
   void HandleException(Node* result);
 
-  Node* CallCFunction(Node* function, base::Optional<MachineType> return_type,
+  Node* CallCFunction(Node* function, std::optional<MachineType> return_type,
                       std::initializer_list<CFunctionArg> args);
 
   Node* CallCFunctionWithoutFunctionDescriptor(
@@ -1483,8 +1571,10 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   Node* CallJSStubImpl(const CallInterfaceDescriptor& descriptor,
                        TNode<Object> target, TNode<Object> context,
                        TNode<Object> function,
-                       base::Optional<TNode<Object>> new_target,
-                       TNode<Int32T> arity, std::initializer_list<Node*> args);
+                       std::optional<TNode<Object>> new_target,
+                       TNode<Int32T> arity,
+                       std::optional<TNode<JSDispatchHandleT>> dispatch_handle,
+                       std::initializer_list<Node*> args);
 
   Node* CallStubN(StubCallMode call_mode,
                   const CallInterfaceDescriptor& descriptor, int input_count,

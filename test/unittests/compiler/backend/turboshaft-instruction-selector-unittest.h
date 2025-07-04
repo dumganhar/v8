@@ -10,18 +10,30 @@
 #include <type_traits>
 
 #include "src/base/utils/random-number-generator.h"
+#include "src/common/globals.h"
 #include "src/compiler/backend/instruction-selector.h"
+#include "src/compiler/globals.h"
 #include "src/compiler/turboshaft/assembler.h"
 #include "src/compiler/turboshaft/index.h"
 #include "src/compiler/turboshaft/instruction-selection-normalization-reducer.h"
 #include "src/compiler/turboshaft/load-store-simplification-reducer.h"
 #include "src/compiler/turboshaft/operations.h"
+#include "src/compiler/turboshaft/phase.h"
 #include "src/compiler/turboshaft/representations.h"
 #include "test/unittests/test-utils.h"
 
 namespace v8::internal::compiler::turboshaft {
 
+#if V8_ENABLE_WEBASSEMBLY
+#define SIMD_BINOP_LIST(V)          \
+  FOREACH_SIMD_128_BINARY_OPCODE(V) \
+  FOREACH_SIMD_128_SHIFT_OPCODE(V)
+#else
+#define SIMD_BINOP_LIST(V)
+#endif  // V8_ENABLE_WEBASSEMBLY
+
 #define BINOP_LIST(V)           \
+  SIMD_BINOP_LIST(V)            \
   V(Word32BitwiseAnd)           \
   V(Word64BitwiseAnd)           \
   V(Word32BitwiseOr)            \
@@ -115,12 +127,13 @@ class TurboshaftInstructionSelectorTest : public TestWithNativeContextAndZone {
   TurboshaftInstructionSelectorTest();
   ~TurboshaftInstructionSelectorTest() override;
 
+  ZoneStats zone_stats_{this->zone()->allocator()};
+
   void SetUp() override {
     pipeline_data_ = std::make_unique<PipelineData>(
-        TurboshaftPipelineKind::kJS, info_, schedule_, graph_zone_,
-        this->zone(), broker_, isolate_, source_positions_, node_origins_,
-        sequence_, frame_, assembler_options_, &max_unoptimized_frame_height_,
-        &max_pushed_argument_count_, instruction_zone_);
+        &zone_stats_, TurboshaftPipelineKind::kJS, isolate_, nullptr,
+        AssemblerOptions::Default(isolate_));
+    pipeline_data_->InitializeGraphComponent(nullptr);
   }
   void TearDown() override { pipeline_data_.reset(); }
 
@@ -193,8 +206,8 @@ class TurboshaftInstructionSelectorTest : public TestWithNativeContextAndZone {
                  InstructionSelector::SourcePositionMode source_position_mode =
                      InstructionSelector::kAllSourcePositions);
 
-    const FrameStateFunctionInfo* GetFrameStateFunctionInfo(int parameter_count,
-                                                            int local_count);
+    const FrameStateFunctionInfo* GetFrameStateFunctionInfo(
+        uint16_t parameter_count, int local_count);
 
     // Create a simple call descriptor for testing.
     static CallDescriptor* MakeSimpleCallDescriptor(Zone* zone,
@@ -234,7 +247,7 @@ class TurboshaftInstructionSelectorTest : public TestWithNativeContextAndZone {
           kDefaultCodeEntrypointTag,     // tag
           target_type,                   // target MachineType
           target_loc,                    // target location
-          locations.Build(),             // location_sig
+          locations.Get(),               // location_sig
           0,                             // stack_parameter_count
           Operator::kNoProperties,       // properties
           kCalleeSaveRegisters,          // callee-saved registers
@@ -246,7 +259,8 @@ class TurboshaftInstructionSelectorTest : public TestWithNativeContextAndZone {
     static const TSCallDescriptor* MakeSimpleTSCallDescriptor(
         Zone* zone, MachineSignature* msig) {
       return TSCallDescriptor::Create(MakeSimpleCallDescriptor(zone, msig),
-                                      CanThrow::kYes, zone);
+                                      CanThrow::kYes, LazyDeoptOnThrow::kNo,
+                                      zone);
     }
 
     CallDescriptor* call_descriptor() { return call_descriptor_; }
@@ -316,17 +330,20 @@ class TurboshaftInstructionSelectorTest : public TestWithNativeContextAndZone {
     V<Word32> Uint64GreaterThan(V<Word64> a, V<Word64> b) {
       return Uint64LessThan(b, a);
     }
-    using Assembler::Parameter;
     OpIndex Parameter(int index) {
-      return Parameter(index, RegisterRepresentation::FromMachineType(
-                                  call_descriptor()->GetParameterType(index)));
+      return Assembler::Parameter(
+          index, RegisterRepresentation::FromMachineType(
+                     call_descriptor()->GetParameterType(index)));
+    }
+    OpIndex Parameter(int index, RegisterRepresentation rep) {
+      return Assembler::Parameter(index, rep);
     }
     template <typename T>
     V<T> Parameter(int index) {
       RegisterRepresentation rep = RegisterRepresentation::FromMachineType(
           call_descriptor()->GetParameterType(index));
       DCHECK_EQ(rep, v_traits<T>::rep);
-      return Parameter(index, rep);
+      return Assembler::Parameter(index, rep);
     }
     using Assembler::Phi;
     template <typename... Args,
@@ -398,6 +415,40 @@ class TurboshaftInstructionSelectorTest : public TestWithNativeContextAndZone {
     FOREACH_SIMD_128_UNARY_OPCODE(DECL_SIMD128_UNOP)
 #undef DECL_SIMD128_UNOP
 
+#define DECL_SIMD128_EXTRACT_LANE(Name, Suffix, Type)                 \
+  V<Type> Name##Suffix##ExtractLane(V<Simd128> input, uint8_t lane) { \
+    return V<Type>::Cast(Simd128ExtractLane(                          \
+        input, Simd128ExtractLaneOp::Kind::k##Name##Suffix, lane));   \
+  }
+    DECL_SIMD128_EXTRACT_LANE(I8x16, S, Word32)
+    DECL_SIMD128_EXTRACT_LANE(I8x16, U, Word32)
+    DECL_SIMD128_EXTRACT_LANE(I16x8, S, Word32)
+    DECL_SIMD128_EXTRACT_LANE(I16x8, U, Word32)
+    DECL_SIMD128_EXTRACT_LANE(I32x4, , Word32)
+    DECL_SIMD128_EXTRACT_LANE(I64x2, , Word64)
+    DECL_SIMD128_EXTRACT_LANE(F32x4, , Float32)
+    DECL_SIMD128_EXTRACT_LANE(F64x2, , Float64)
+#undef DECL_SIMD128_EXTRACT_LANE
+
+#define DECL_SIMD128_REDUCE(Name)                                           \
+  V<Simd128> Name##AddReduce(V<Simd128> input) {                            \
+    return Simd128Reduce(input, Simd128ReduceOp::Kind::k##Name##AddReduce); \
+  }
+    DECL_SIMD128_REDUCE(I8x16)
+    DECL_SIMD128_REDUCE(I16x8)
+    DECL_SIMD128_REDUCE(I32x4)
+    DECL_SIMD128_REDUCE(I64x2)
+    DECL_SIMD128_REDUCE(F32x4)
+    DECL_SIMD128_REDUCE(F64x2)
+#undef DECL_SIMD128_REDUCE
+
+#define DECL_SIMD128_SHIFT(Name)                                      \
+  V<Simd128> Name(V<Simd128> input, V<Word32> shift) {                \
+    return Simd128Shift(input, shift, Simd128ShiftOp::Kind::k##Name); \
+  }
+    FOREACH_SIMD_128_SHIFT_OPCODE(DECL_SIMD128_SHIFT)
+#undef DECL_SIMD128_SHIFT
+
 #endif  // V8_ENABLE_WEBASSEMBLY
 
    private:
@@ -407,7 +458,7 @@ class TurboshaftInstructionSelectorTest : public TestWithNativeContextAndZone {
       MachineSignature::Builder builder(zone, 1, sizeof...(ParamT));
       builder.AddReturn(return_type);
       (builder.AddParam(parameter_type), ...);
-      return MakeSimpleCallDescriptor(zone, builder.Build());
+      return MakeSimpleCallDescriptor(zone, builder.Get());
     }
 
     void Init() {
@@ -548,21 +599,7 @@ class TurboshaftInstructionSelectorTest : public TestWithNativeContextAndZone {
 
   Graph& graph() { return pipeline_data_->graph(); }
 
-  // We use some dummy data to initialize the PipelineData::Scope.
-  // TODO(nicohartmann@): Clean this up once PipelineData is reorganized.
-  OptimizedCompilationInfo* info_ = nullptr;
-  Schedule* schedule_ = nullptr;
-  Zone* graph_zone_ = this->zone();
-  JSHeapBroker* broker_ = nullptr;
   Isolate* isolate_ = this->isolate();
-  SourcePositionTable* source_positions_ = nullptr;
-  NodeOriginTable* node_origins_ = nullptr;
-  InstructionSequence* sequence_ = nullptr;
-  Frame* frame_ = nullptr;
-  AssemblerOptions assembler_options_;
-  size_t max_unoptimized_frame_height_ = 0;
-  size_t max_pushed_argument_count_ = 0;
-  Zone* instruction_zone_ = this->zone();
 
   std::unique_ptr<turboshaft::PipelineData> pipeline_data_;
 };

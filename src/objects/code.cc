@@ -9,6 +9,8 @@
 #include "src/codegen/assembler-inl.h"
 #include "src/codegen/flush-instruction-cache.h"
 #include "src/codegen/reloc-info-inl.h"
+#include "src/codegen/source-position-table.h"
+#include "src/codegen/source-position.h"
 #include "src/deoptimizer/deoptimizer.h"
 #include "src/objects/code-inl.h"
 
@@ -37,7 +39,7 @@ void Code::ClearEmbeddedObjects(Heap* heap) {
   {
     WritableJitAllocation jit_allocation = ThreadIsolation::LookupJitAllocation(
         istream->address(), istream->Size(),
-        ThreadIsolation::JitAllocationType::kInstructionStream);
+        ThreadIsolation::JitAllocationType::kInstructionStream, true);
     for (WritableRelocIterator it(jit_allocation, istream, constant_pool(),
                                   mode_mask);
          !it.done(); it.next()) {
@@ -50,6 +52,41 @@ void Code::ClearEmbeddedObjects(Heap* heap) {
 
 void Code::FlushICache() const {
   FlushInstructionCache(instruction_start(), instruction_size());
+}
+
+int Code::SourcePosition(int offset) const {
+  CHECK_NE(kind(), CodeKind::BASELINE);
+
+  // Subtract one because the current PC is one instruction after the call site.
+  offset--;
+
+  int position = 0;
+  if (!has_source_position_table()) return position;
+  for (SourcePositionTableIterator it(
+           source_position_table(),
+           SourcePositionTableIterator::kJavaScriptOnly,
+           SourcePositionTableIterator::kDontSkipFunctionEntry);
+       !it.done() && it.code_offset() <= offset; it.Advance()) {
+    position = it.source_position().ScriptOffset();
+  }
+  return position;
+}
+
+int Code::SourceStatementPosition(int offset) const {
+  CHECK_NE(kind(), CodeKind::BASELINE);
+
+  // Subtract one because the current PC is one instruction after the call site.
+  offset--;
+
+  int position = 0;
+  if (!has_source_position_table()) return position;
+  for (SourcePositionTableIterator it(source_position_table());
+       !it.done() && it.code_offset() <= offset; it.Advance()) {
+    if (it.is_statement()) {
+      position = it.source_position().ScriptOffset();
+    }
+  }
+  return position;
 }
 
 SafepointEntry Code::GetSafepointEntry(Isolate* isolate, Address pc) {
@@ -70,7 +107,9 @@ bool Code::IsIsolateIndependent(Isolate* isolate) {
       RelocInfo::AllRealModesMask() &
       ~RelocInfo::ModeMask(RelocInfo::CONST_POOL) &
       ~RelocInfo::ModeMask(RelocInfo::OFF_HEAP_TARGET) &
-      ~RelocInfo::ModeMask(RelocInfo::VENEER_POOL);
+      ~RelocInfo::ModeMask(RelocInfo::VENEER_POOL) &
+      ~RelocInfo::ModeMask(RelocInfo::WASM_CANONICAL_SIG_ID) &
+      ~RelocInfo::ModeMask(RelocInfo::WASM_INDIRECT_CALL_TARGET);
   static_assert(kModeMask ==
                 (RelocInfo::ModeMask(RelocInfo::CODE_TARGET) |
                  RelocInfo::ModeMask(RelocInfo::RELATIVE_CODE_TARGET) |
@@ -78,17 +117,15 @@ bool Code::IsIsolateIndependent(Isolate* isolate) {
                  RelocInfo::ModeMask(RelocInfo::FULL_EMBEDDED_OBJECT) |
                  RelocInfo::ModeMask(RelocInfo::EXTERNAL_REFERENCE) |
                  RelocInfo::ModeMask(RelocInfo::INTERNAL_REFERENCE) |
-                 RelocInfo::ModeMask(RelocInfo::RELATIVE_SWITCH_TABLE_ENTRY) |
                  RelocInfo::ModeMask(RelocInfo::INTERNAL_REFERENCE_ENCODED) |
                  RelocInfo::ModeMask(RelocInfo::NEAR_BUILTIN_ENTRY) |
                  RelocInfo::ModeMask(RelocInfo::WASM_CALL) |
                  RelocInfo::ModeMask(RelocInfo::WASM_STUB_CALL)));
 
-#if defined(V8_TARGET_ARCH_PPC) || defined(V8_TARGET_ARCH_PPC64) || \
-    defined(V8_TARGET_ARCH_MIPS64)
+#if defined(V8_TARGET_ARCH_PPC64) || defined(V8_TARGET_ARCH_MIPS64)
   return RelocIterator(*this, kModeMask).done();
 #elif defined(V8_TARGET_ARCH_X64) || defined(V8_TARGET_ARCH_ARM64) ||  \
-    defined(V8_TARGET_ARCH_ARM) || defined(V8_TARGET_ARCH_S390) ||     \
+    defined(V8_TARGET_ARCH_ARM) || defined(V8_TARGET_ARCH_S390X) ||    \
     defined(V8_TARGET_ARCH_IA32) || defined(V8_TARGET_ARCH_RISCV64) || \
     defined(V8_TARGET_ARCH_LOONG64) || defined(V8_TARGET_ARCH_RISCV32)
   for (RelocIterator it(*this, kModeMask); !it.done(); it.next()) {
@@ -105,9 +142,6 @@ bool Code::IsIsolateIndependent(Isolate* isolate) {
       if (Builtins::IsIsolateIndependentBuiltin(target)) {
         continue;
       }
-    } else if (RelocInfo::IsRelativeSwitchTableEntry(it.rinfo()->rmode())) {
-      CHECK(is_builtin());
-      continue;
     }
     return false;
   }
@@ -122,13 +156,13 @@ bool Code::Inlines(Tagged<SharedFunctionInfo> sfi) {
   DCHECK(is_optimized_code());
   DisallowGarbageCollection no_gc;
   Tagged<DeoptimizationData> const data =
-      DeoptimizationData::cast(deoptimization_data());
+      Cast<DeoptimizationData>(deoptimization_data());
   if (data->length() == 0) return false;
-  if (data->SharedFunctionInfo() == sfi) return true;
+  if (data->GetSharedFunctionInfo() == sfi) return true;
   Tagged<DeoptimizationLiteralArray> const literals = data->LiteralArray();
   int const inlined_count = data->InlinedFunctionCount().value();
   for (int i = 0; i < inlined_count; ++i) {
-    if (SharedFunctionInfo::cast(literals->get(i)) == sfi) return true;
+    if (Cast<SharedFunctionInfo>(literals->get(i)) == sfi) return true;
   }
   return false;
 }
@@ -234,7 +268,7 @@ void Disassemble(const char* name, std::ostream& os, Isolate* isolate,
 
   if (code->uses_deoptimization_data()) {
     Tagged<DeoptimizationData> data =
-        DeoptimizationData::cast(code->deoptimization_data());
+        Cast<DeoptimizationData>(code->deoptimization_data());
     data->PrintDeoptimizationData(os);
   }
   os << "\n";

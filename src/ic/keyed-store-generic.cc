@@ -4,6 +4,8 @@
 
 #include "src/ic/keyed-store-generic.h"
 
+#include <optional>
+
 #include "src/codegen/code-factory.h"
 #include "src/codegen/code-stub-assembler-inl.h"
 #include "src/codegen/interface-descriptors.h"
@@ -15,6 +17,8 @@
 
 namespace v8 {
 namespace internal {
+
+#include "src/codegen/define-code-stub-assembler-macros.inc"
 
 enum class StoreMode {
   // kSet implements [[Set]] in the spec and traverses the prototype
@@ -420,8 +424,9 @@ void KeyedStoreGenericAssembler::StoreElementWithCapacity(
     GotoIf(IsSetWord32(details, PropertyDetails::kAttributesReadOnlyMask),
            slow);
   }
-  static_assert(FixedArray::kHeaderSize == FixedDoubleArray::kHeaderSize);
-  const int kHeaderSize = FixedArray::kHeaderSize - kHeapObjectTag;
+  static_assert(OFFSET_OF_DATA_START(FixedArray) ==
+                OFFSET_OF_DATA_START(FixedDoubleArray));
+  const int kHeaderSize = OFFSET_OF_DATA_START(FixedArray) - kHeapObjectTag;
 
   Label check_double_elements(this), check_cow_elements(this);
   TNode<Map> elements_map = LoadMap(elements);
@@ -847,7 +852,7 @@ TNode<Map> KeyedStoreGenericAssembler::FindCandidateStoreICTransitionMapHandler(
                                       TransitionArray::kEntryKeyIndex) *
                                      kTaggedSize;
       var_transition_map = CAST(GetHeapObjectAssumeWeak(
-          LoadArrayElement(transitions, WeakFixedArray::kHeaderSize,
+          LoadArrayElement(transitions, OFFSET_OF_DATA_START(WeakFixedArray),
                            var_name_index.value(), kKeyToTargetOffset)));
       Goto(&found_handler_candidate);
     }
@@ -1181,7 +1186,7 @@ void KeyedStoreGenericAssembler::KeyedStoreGeneric(
   {
     Comment("key is unique name");
     StoreICParameters p(context, receiver, var_unique.value(), value,
-                        base::nullopt, slot, maybe_vector,
+                        std::nullopt, slot, maybe_vector,
                         StoreICMode::kDefault);
     ExitPoint direct_exit(this);
     EmitGenericPropertyStore(CAST(receiver), receiver_map, instance_type, &p,
@@ -1276,7 +1281,7 @@ void KeyedStoreGenericAssembler::StoreIC_NoFeedback() {
     // checks, strings and string wrappers, proxies) are handled in the runtime.
     GotoIf(IsSpecialReceiverInstanceType(instance_type), &miss);
     {
-      StoreICParameters p(context, receiver, name, value, base::nullopt, {},
+      StoreICParameters p(context, receiver, name, value, std::nullopt, {},
                           UndefinedConstant(),
                           IsDefineNamedOwn() ? StoreICMode::kDefineNamedOwn
                                              : StoreICMode::kDefault);
@@ -1302,7 +1307,7 @@ void KeyedStoreGenericAssembler::StoreProperty(TNode<Context> context,
                                                TNode<Name> unique_name,
                                                TNode<Object> value,
                                                LanguageMode language_mode) {
-  StoreICParameters p(context, receiver, unique_name, value, base::nullopt, {},
+  StoreICParameters p(context, receiver, unique_name, value, std::nullopt, {},
                       UndefinedConstant(), StoreICMode::kDefault);
 
   Label done(this), slow(this, Label::kDeferred);
@@ -1335,6 +1340,8 @@ void KeyedStoreGenericAssembler::StoreProperty(TNode<Context> context,
 
   BIND(&done);
 }
+
+#include "src/codegen/undef-code-stub-assembler-macros.inc"
 
 }  // namespace internal
 }  // namespace v8

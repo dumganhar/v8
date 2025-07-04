@@ -11,6 +11,7 @@
 #include "src/ast/ast-value-factory.h"
 #include "src/base/platform/elapsed-timer.h"
 #include "src/base/small-vector.h"
+#include "src/base/threaded-list.h"
 #include "src/codegen/background-merge-task.h"
 #include "src/codegen/bailout-reason.h"
 #include "src/common/globals.h"
@@ -27,6 +28,11 @@
 #include "src/zone/zone.h"
 
 namespace v8 {
+
+namespace tracing {
+class TracedValue;
+}  // namespace tracing
+
 namespace internal {
 
 // Forward declarations.
@@ -40,7 +46,7 @@ class TimedHistogram;
 class TurbofanCompilationJob;
 class UnoptimizedCompilationInfo;
 class UnoptimizedCompilationJob;
-class UnoptimizedFrame;
+class UnoptimizedJSFrame;
 class WorkerThreadRuntimeCallStats;
 struct ScriptDetails;
 struct ScriptStreamingData;
@@ -92,7 +98,8 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
                                         Handle<SharedFunctionInfo> shared,
                                         ClearExceptionFlag flag,
                                         IsCompiledScope* is_compiled_scope);
-  static bool CompileBaseline(Isolate* isolate, Handle<JSFunction> function,
+  static bool CompileBaseline(Isolate* isolate,
+                              DirectHandle<JSFunction> function,
                               ClearExceptionFlag flag,
                               IsCompiledScope* is_compiled_scope);
 
@@ -123,8 +130,7 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
 
   // Dispose a job without finalization.
   static void DisposeTurbofanCompilationJob(Isolate* isolate,
-                                            TurbofanCompilationJob* job,
-                                            bool restore_function_code);
+                                            TurbofanCompilationJob* job);
 
   // Finalize and install Turbofan code from a previously run job.
   static void FinalizeTurbofanCompilationJob(TurbofanCompilationJob* job,
@@ -137,7 +143,8 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
   // Give the compiler a chance to perform low-latency initialization tasks of
   // the given {function} on its instantiation. Note that only the runtime will
   // offer this chance, optimized closure instantiation will not call this.
-  static void PostInstantiation(Handle<JSFunction> function,
+  static void PostInstantiation(Isolate* isolate,
+                                DirectHandle<JSFunction> function,
                                 IsCompiledScope* is_compiled_scope);
 
   // ===========================================================================
@@ -153,8 +160,7 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
   V8_WARN_UNUSED_RESULT static MaybeHandle<JSFunction> GetFunctionFromEval(
       Handle<String> source, Handle<SharedFunctionInfo> outer_info,
       Handle<Context> context, LanguageMode language_mode,
-      ParseRestriction restriction, int parameters_end_pos,
-      int eval_scope_position, int eval_position,
+      ParseRestriction restriction, int parameters_end_pos, int eval_position,
       ParsingWhileDebugging parsing_while_debugging =
           ParsingWhileDebugging::kNo);
 
@@ -169,7 +175,7 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
   // Create a (bound) function for a String source within a context for eval.
   V8_WARN_UNUSED_RESULT static MaybeHandle<JSFunction> GetFunctionFromString(
       Handle<NativeContext> context, Handle<i::Object> source,
-      ParseRestriction restriction, int parameters_end_pos, bool is_code_like);
+      int parameters_end_pos, bool is_code_like);
 
   // Decompose GetFunctionFromString into two functions, to allow callers to
   // deal seperately with a case of object not handled by the embedder.
@@ -185,7 +191,7 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
                                  int parameters_end_pos);
 
   // Create a shared function info object for a String source.
-  static MaybeHandle<SharedFunctionInfo> GetSharedFunctionInfoForScript(
+  static MaybeDirectHandle<SharedFunctionInfo> GetSharedFunctionInfoForScript(
       Isolate* isolate, Handle<String> source,
       const ScriptDetails& script_details,
       ScriptCompiler::CompileOptions compile_options,
@@ -194,7 +200,7 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
       ScriptCompiler::CompilationDetails* compilation_details);
 
   // Create a shared function info object for a String source.
-  static MaybeHandle<SharedFunctionInfo>
+  static MaybeDirectHandle<SharedFunctionInfo>
   GetSharedFunctionInfoForScriptWithExtension(
       Isolate* isolate, Handle<String> source,
       const ScriptDetails& script_details, v8::Extension* extension,
@@ -205,7 +211,7 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
   // Create a shared function info object for a String source and serialized
   // cached data. The cached data may be rejected, in which case this function
   // will set cached_data->rejected() to true.
-  static MaybeHandle<SharedFunctionInfo>
+  static MaybeDirectHandle<SharedFunctionInfo>
   GetSharedFunctionInfoForScriptWithCachedData(
       Isolate* isolate, Handle<String> source,
       const ScriptDetails& script_details, AlignedCachedData* cached_data,
@@ -218,7 +224,7 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
   // has deserialized cached data on a background thread. The cached data from
   // the task may be rejected, in which case this function will set
   // deserialize_task->rejected() to true.
-  static MaybeHandle<SharedFunctionInfo>
+  static MaybeDirectHandle<SharedFunctionInfo>
   GetSharedFunctionInfoForScriptWithDeserializeTask(
       Isolate* isolate, Handle<String> source,
       const ScriptDetails& script_details,
@@ -228,7 +234,7 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
       NativesFlag is_natives_code,
       ScriptCompiler::CompilationDetails* compilation_details);
 
-  static MaybeHandle<SharedFunctionInfo>
+  static MaybeDirectHandle<SharedFunctionInfo>
   GetSharedFunctionInfoForScriptWithCompileHints(
       Isolate* isolate, Handle<String> source,
       const ScriptDetails& script_details,
@@ -244,7 +250,8 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
   // from a streamed source. On return, the data held by |streaming_data| will
   // have been released, however the object itself isn't freed and is still
   // owned by the caller.
-  static MaybeHandle<SharedFunctionInfo> GetSharedFunctionInfoForStreamedScript(
+  static MaybeDirectHandle<SharedFunctionInfo>
+  GetSharedFunctionInfoForStreamedScript(
       Isolate* isolate, Handle<String> source,
       const ScriptDetails& script_details, ScriptStreamingData* streaming_data,
       ScriptCompiler::CompilationDetails* compilation_details);
@@ -252,13 +259,12 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
   // Create a shared function info object for the given function literal
   // node (the code may be lazily compiled).
   template <typename IsolateT>
-  static Handle<SharedFunctionInfo> GetSharedFunctionInfo(FunctionLiteral* node,
-                                                          Handle<Script> script,
-                                                          IsolateT* isolate);
+  static DirectHandle<SharedFunctionInfo> GetSharedFunctionInfo(
+      FunctionLiteral* node, Handle<Script> script, IsolateT* isolate);
 
   static void LogFunctionCompilation(Isolate* isolate,
                                      LogEventListener::CodeTag code_type,
-                                     Handle<Script> script,
+                                     DirectHandle<Script> script,
                                      Handle<SharedFunctionInfo> shared,
                                      Handle<FeedbackVector> vector,
                                      Handle<AbstractCode> abstract_code,
@@ -267,6 +273,12 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
   static void InstallInterpreterTrampolineCopy(
       Isolate* isolate, Handle<SharedFunctionInfo> shared_info,
       LogEventListener::CodeTag log_tag);
+
+ private:
+  static std::unique_ptr<v8::tracing::TracedValue> AddScriptCompiledTrace(
+      Isolate* isolate, DirectHandle<SharedFunctionInfo> shared);
+  static void EmitScriptSourceTextTrace(
+      Isolate* isolate, DirectHandle<SharedFunctionInfo> shared);
 };
 
 // A base class for compilation jobs intended to run concurrent to the main
@@ -428,10 +440,10 @@ class OptimizedCompilationJob : public CompilationJob {
 
   // Register weak object to optimized code dependencies.
   GlobalHandleVector<Map> CollectRetainedMaps(Isolate* isolate,
-                                              Handle<Code> code);
+                                              DirectHandle<Code> code);
   void RegisterWeakObjectsInOptimizedCode(Isolate* isolate,
-                                          Handle<NativeContext> context,
-                                          Handle<Code> code,
+                                          DirectHandle<NativeContext> context,
+                                          DirectHandle<Code> code,
                                           GlobalHandleVector<Map> maps);
 
   base::TimeDelta time_taken_to_prepare_;
@@ -519,7 +531,7 @@ using FinalizeUnoptimizedCompilationDataList =
 class DeferredFinalizationJobData {
  public:
   DeferredFinalizationJobData(Isolate* isolate,
-                              Handle<SharedFunctionInfo> function_handle,
+                              DirectHandle<SharedFunctionInfo> function_handle,
                               std::unique_ptr<UnoptimizedCompilationJob> job) {
     UNREACHABLE();
   }
@@ -586,7 +598,7 @@ class V8_EXPORT_PRIVATE BackgroundCompileTask {
            ReusableUnoptimizedCompileState* reusable_state);
 
   MaybeHandle<SharedFunctionInfo> FinalizeScript(
-      Isolate* isolate, Handle<String> source,
+      Isolate* isolate, DirectHandle<String> source,
       const ScriptDetails& script_details,
       MaybeHandle<Script> maybe_cached_script);
 
@@ -616,8 +628,8 @@ class V8_EXPORT_PRIVATE BackgroundCompileTask {
 
   // Data needed for merging onto the main thread after background finalization.
   std::unique_ptr<PersistentHandles> persistent_handles_;
-  MaybeHandle<SharedFunctionInfo> outer_function_sfi_;
-  Handle<Script> script_;
+  MaybeIndirectHandle<SharedFunctionInfo> outer_function_sfi_;
+  IndirectHandle<Script> script_;
   IsCompiledScope is_compiled_scope_;
   FinalizeUnoptimizedCompilationDataList finalize_unoptimized_compilation_data_;
   DeferredFinalizationJobDataList jobs_to_retry_finalization_on_main_thread_;
@@ -625,7 +637,7 @@ class V8_EXPORT_PRIVATE BackgroundCompileTask {
   int total_preparse_skipped_ = 0;
 
   // Single function data for top-level function compilation.
-  MaybeHandle<SharedFunctionInfo> input_shared_info_;
+  MaybeIndirectHandle<SharedFunctionInfo> input_shared_info_;
   int start_position_;
   int end_position_;
   int function_literal_id_;
@@ -636,7 +648,7 @@ class V8_EXPORT_PRIVATE BackgroundCompileTask {
 
 // Contains all data which needs to be transmitted between threads for
 // background parsing and compiling and finalizing it on the main thread.
-struct ScriptStreamingData {
+struct V8_EXPORT_PRIVATE ScriptStreamingData {
   ScriptStreamingData(
       std::unique_ptr<ScriptCompiler::ExternalSourceStream> source_stream,
       ScriptCompiler::StreamedSource::Encoding encoding);
@@ -681,7 +693,7 @@ class V8_EXPORT_PRIVATE BackgroundDeserializeTask {
   void MergeWithExistingScript();
 
   MaybeHandle<SharedFunctionInfo> Finish(Isolate* isolate,
-                                         Handle<String> source,
+                                         DirectHandle<String> source,
                                          const ScriptDetails& script_details);
 
   bool rejected() const { return cached_data_.rejected(); }

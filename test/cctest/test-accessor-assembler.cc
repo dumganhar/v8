@@ -14,6 +14,8 @@
 namespace v8 {
 namespace internal {
 
+#include "src/codegen/define-code-stub-assembler-macros.inc"
+
 using compiler::CodeAssemblerTester;
 using compiler::FunctionTester;
 using compiler::Node;
@@ -80,10 +82,10 @@ void TestStubCacheOffsetCalculation(StubCache::Table table) {
           expected_result = StubCache::SecondaryOffsetForTesting(*name, *map);
         }
       }
-      Handle<Object> result = ft.Call(name, map).ToHandleChecked();
+      DirectHandle<Object> result = ft.Call(name, map).ToHandleChecked();
 
       Tagged<Smi> expected = Smi::FromInt(expected_result & Smi::kMaxValue);
-      CHECK_EQ(expected, Smi::cast(*result));
+      CHECK_EQ(expected, Cast<Smi>(*result));
     }
   }
 }
@@ -190,7 +192,7 @@ TEST(TryProbeStubCache) {
 
   // Generate some number of receiver maps and receivers.
   for (int i = 0; i < StubCache::kSecondaryTableSize / 2; i++) {
-    Handle<Map> map = Map::Create(isolate, 0);
+    DirectHandle<Map> map = Map::Create(isolate, 0);
     receivers.push_back(factory->NewJSObjectFromMap(map));
   }
 
@@ -207,9 +209,9 @@ TEST(TryProbeStubCache) {
   const int N = StubCache::kPrimaryTableSize + StubCache::kSecondaryTableSize;
   for (int i = 0; i < N; i++) {
     int index = rand_gen.NextInt();
-    Handle<Name> name = names[index % names.size()];
-    Handle<JSObject> receiver = receivers[index % receivers.size()];
-    Handle<Code> handler = handlers[index % handlers.size()];
+    DirectHandle<Name> name = names[index % names.size()];
+    DirectHandle<JSObject> receiver = receivers[index % receivers.size()];
+    DirectHandle<Code> handler = handlers[index % handlers.size()];
     stub_cache.Set(*name, receiver->map(), *handler);
   }
 
@@ -249,6 +251,8 @@ TEST(TryProbeStubCache) {
   // Ensure we performed both kind of queries.
   CHECK(queried_existing && queried_non_existing);
 }
+
+#include "src/codegen/undef-code-stub-assembler-macros.inc"
 
 }  // namespace internal
 }  // namespace v8

@@ -5,6 +5,8 @@
 #ifndef V8_HEAP_SAFEPOINT_H_
 #define V8_HEAP_SAFEPOINT_H_
 
+#include <optional>
+
 #include "src/base/platform/condition-variable.h"
 #include "src/base/platform/mutex.h"
 #include "src/common/globals.h"
@@ -172,6 +174,7 @@ class GlobalSafepoint final {
 
   template <typename Callback>
   void IterateClientIsolates(Callback callback) {
+    AssertActive();
     for (Isolate* current = clients_head_; current;
          current = current->global_safepoint_next_client_isolate_) {
       DCHECK(!current->is_shared_space_isolate());
@@ -217,15 +220,21 @@ class V8_NODISCARD GlobalSafepointScope {
 };
 
 enum class SafepointKind { kIsolate, kGlobal };
+struct GlobalSafepointForSharedSpaceIsolateTag {};
+
+static constexpr GlobalSafepointForSharedSpaceIsolateTag
+    kGlobalSafepointForSharedSpaceIsolate;
 
 class V8_NODISCARD SafepointScope {
  public:
   V8_EXPORT_PRIVATE explicit SafepointScope(Isolate* initiator,
                                             SafepointKind kind);
+  V8_EXPORT_PRIVATE explicit SafepointScope(
+      Isolate* initiator, GlobalSafepointForSharedSpaceIsolateTag);
 
  private:
-  base::Optional<IsolateSafepointScope> isolate_safepoint_;
-  base::Optional<GlobalSafepointScope> global_safepoint_;
+  std::optional<IsolateSafepointScope> isolate_safepoint_;
+  std::optional<GlobalSafepointScope> global_safepoint_;
 };
 
 }  // namespace internal

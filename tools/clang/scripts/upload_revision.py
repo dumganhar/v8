@@ -59,7 +59,6 @@ Tricium: skip
 Disable-Rts: True
 Cq-Include-Trybots: chromium/try:chromeos-amd64-generic-cfi-thin-lto-rel
 Cq-Include-Trybots: chromium/try:dawn-win10-x86-deps-rel
-Cq-Include-Trybots: chromium/try:lacros-arm64-generic-rel
 Cq-Include-Trybots: chromium/try:linux-chromeos-dbg
 Cq-Include-Trybots: chromium/try:linux_chromium_cfi_rel_ng
 Cq-Include-Trybots: chromium/try:linux_chromium_chromeos_msan_rel_ng
@@ -73,6 +72,8 @@ Cq-Include-Trybots: chromium/try:win-arm64-rel
 Cq-Include-Trybots: chromium/try:linux-swangle-try-x64,win-swangle-try-x86
 Cq-Include-Trybots: chromium/try:android-cronet-mainline-clang-arm64-dbg
 Cq-Include-Trybots: chromium/try:android-cronet-mainline-clang-arm64-rel
+Cq-Include-Trybots: chromium/try:android-cronet-mainline-clang-riscv64-dbg
+Cq-Include-Trybots: chromium/try:android-cronet-mainline-clang-riscv64-rel
 Cq-Include-Trybots: chromium/try:android-cronet-mainline-clang-x86-dbg
 Cq-Include-Trybots: chromium/try:android-cronet-mainline-clang-x86-rel
 Cq-Include-Trybots: chromium/try:android-cronet-riscv64-dbg
@@ -391,7 +392,10 @@ def main():
       no_run=args.no_git)
 
   print('Please, wait until the try bots succeeded '
-        'and then push the binaries to goma.')
+        'and then push the binaries to RBE.')
+  print()
+  print('To update the Clang/Rust DEPS entries, run:\n  '
+        'tools/clang/scripts/sync_deps.py')
   print()
   print('To regenerate BUILD.gn rules for Rust stdlib (needed if dep versions '
         'in the stdlib change for example), run:\n  tools/rust/gnrt_stdlib.py.')

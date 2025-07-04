@@ -314,7 +314,7 @@ class PoolTest : public                                     //
              SetPlatformPageAllocatorForTesting(tracking_page_allocator_));
     old_sweeping_flag_ = i::v8_flags.concurrent_sweeping;
     i::v8_flags.concurrent_sweeping = false;
-#ifdef V8_COMPRESS_POINTERS_IN_SHARED_CAGE
+#ifndef V8_COMPRESS_POINTERS_IN_MULTIPLE_CAGES
     // Reinitialize the process-wide pointer cage so it can pick up the
     // TrackingPageAllocator.
     // The pointer cage must be destroyed before the sandbox.
@@ -331,7 +331,7 @@ class PoolTest : public                                     //
   }
 
   static void DoMixinTearDown() {
-#ifdef V8_COMPRESS_POINTERS_IN_SHARED_CAGE
+#ifndef V8_COMPRESS_POINTERS_IN_MULTIPLE_CAGES
     // Free the process-wide cage reservation, otherwise the pages won't be
     // freed until process teardown.
     FreeProcessWidePtrComprCageForTesting();
@@ -378,7 +378,6 @@ PoolTestMixin<TMixin>::~PoolTestMixin() {
 
 // See v8:5945.
 TEST_F(PoolTest, UnmapOnTeardown) {
-  if (v8_flags.enable_third_party_heap) return;
   PageMetadata* page =
       allocator()->AllocatePage(MemoryAllocator::AllocationMode::kRegular,
                                 static_cast<PagedSpace*>(heap()->old_space()),

@@ -4,6 +4,8 @@
 
 #include "src/interpreter/bytecode-array-builder.h"
 
+#include <optional>
+
 #include "src/ast/scopes.h"
 #include "src/ast/variables.h"
 #include "src/common/assert-scope.h"
@@ -52,6 +54,7 @@ BytecodeArrayBuilder::BytecodeArrayBuilder(
       constant_array_builder_(zone),
       handler_table_builder_(zone),
       parameter_count_(parameter_count),
+      max_arguments_(0),
       local_register_count_(locals_count),
       register_allocator_(fixed_register_count()),
       bytecode_array_writer_(zone, &constant_array_builder_,
@@ -99,8 +102,9 @@ Handle<BytecodeArray> BytecodeArrayBuilder::ToBytecodeArray(IsolateT* isolate) {
 
   Handle<TrustedByteArray> handler_table =
       handler_table_builder()->ToHandlerTable(isolate);
-  return bytecode_array_writer_.ToBytecodeArray(
-      isolate, register_count, parameter_count(), handler_table);
+  return bytecode_array_writer_.ToBytecodeArray(isolate, register_count,
+                                                parameter_count(),
+                                                max_arguments(), handler_table);
 }
 
 template EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE)
@@ -199,7 +203,7 @@ void BytecodeArrayBuilder::OutputLdarRaw(Register reg) {
 
 void BytecodeArrayBuilder::OutputStarRaw(Register reg) {
   uint32_t operand = static_cast<uint32_t>(reg.ToOperand());
-  base::Optional<Bytecode> short_code = reg.TryToShortStar();
+  std::optional<Bytecode> short_code = reg.TryToShortStar();
   BytecodeNode node = short_code
                           ? BytecodeNode(*short_code)
                           : BytecodeNode::Star(BytecodeSourceInfo(), operand);
@@ -386,7 +390,7 @@ class BytecodeNodeBuilder {
     BytecodeNode node(Create##name##Node(operands...));               \
     WriteJump(&node, label);                                          \
   }
-BYTECODE_LIST(DEFINE_BYTECODE_OUTPUT)
+BYTECODE_LIST(DEFINE_BYTECODE_OUTPUT, DEFINE_BYTECODE_OUTPUT)
 #undef DEFINE_BYTECODE_OUTPUT
 
 void BytecodeArrayBuilder::OutputJumpLoop(BytecodeLoopHeader* loop_header,
@@ -528,8 +532,8 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::LogicalNot(ToBooleanMode mode) {
   return *this;
 }
 
-BytecodeArrayBuilder& BytecodeArrayBuilder::TypeOf() {
-  OutputTypeOf();
+BytecodeArrayBuilder& BytecodeArrayBuilder::TypeOf(int feedback_slot) {
+  OutputTypeOf(feedback_slot);
   return *this;
 }
 
@@ -655,6 +659,13 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::LoadLiteral(
   return *this;
 }
 
+BytecodeArrayBuilder& BytecodeArrayBuilder::LoadLiteral(
+    const AstConsString* cons_string) {
+  size_t entry = GetConstantPoolEntry(cons_string);
+  OutputLdaConstant(entry);
+  return *this;
+}
+
 BytecodeArrayBuilder& BytecodeArrayBuilder::LoadLiteral(const Scope* scope) {
   size_t entry = GetConstantPoolEntry(scope);
   OutputLdaConstant(entry);
@@ -763,20 +774,31 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::StoreGlobal(
 }
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::LoadContextSlot(
-    Register context, int slot_index, int depth,
+    Register context, Variable* variable, int depth,
     ContextSlotMutability mutability) {
-  if (context.is_current_context() && depth == 0) {
-    if (mutability == kImmutableSlot) {
+  int slot_index = variable->index();
+  if (mutability == kImmutableSlot) {
+    if (context.is_current_context() && depth == 0) {
       OutputLdaImmutableCurrentContextSlot(slot_index);
     } else {
-      DCHECK_EQ(kMutableSlot, mutability);
-      OutputLdaCurrentContextSlot(slot_index);
+      OutputLdaImmutableContextSlot(context, slot_index, depth);
     }
-  } else if (mutability == kImmutableSlot) {
-    OutputLdaImmutableContextSlot(context, slot_index, depth);
   } else {
-    DCHECK_EQ(mutability, kMutableSlot);
-    OutputLdaContextSlot(context, slot_index, depth);
+    DCHECK_EQ(kMutableSlot, mutability);
+    if (v8_flags.script_context_mutable_heap_number &&
+        variable->scope()->is_script_scope()) {
+      if (context.is_current_context() && depth == 0) {
+        OutputLdaCurrentScriptContextSlot(slot_index);
+      } else {
+        OutputLdaScriptContextSlot(context, slot_index, depth);
+      }
+    } else {
+      if (context.is_current_context() && depth == 0) {
+        OutputLdaCurrentContextSlot(slot_index);
+      } else {
+        OutputLdaContextSlot(context, slot_index, depth);
+      }
+    }
   }
   return *this;
 }
@@ -785,8 +807,10 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::StoreContextSlot(Register context,
                                                              Variable* variable,
                                                              int depth) {
   int slot_index = variable->index();
-  if (v8_flags.const_tracking_let && variable->scope()->is_script_scope() &&
-      variable->mode() == VariableMode::kLet) {
+  if ((v8_flags.script_context_mutable_heap_number ||
+       (v8_flags.const_tracking_let &&
+        variable->mode() == VariableMode::kLet)) &&
+      variable->scope()->is_script_scope()) {
     if (context.is_current_context() && depth == 0) {
       OutputStaCurrentScriptContextSlot(slot_index);
     } else {
@@ -817,15 +841,26 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::LoadLookupSlot(
 }
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::LoadLookupContextSlot(
-    const AstRawString* name, TypeofMode typeof_mode, int slot_index,
-    int depth) {
+    const AstRawString* name, TypeofMode typeof_mode, ContextKind context_kind,
+    int slot_index, int depth) {
   size_t name_index = GetConstantPoolEntry(name);
   switch (typeof_mode) {
     case TypeofMode::kInside:
-      OutputLdaLookupContextSlotInsideTypeof(name_index, slot_index, depth);
+      if (v8_flags.script_context_mutable_heap_number &&
+          context_kind == ContextKind::kScriptContext) {
+        OutputLdaLookupScriptContextSlotInsideTypeof(name_index, slot_index,
+                                                     depth);
+      } else {
+        OutputLdaLookupContextSlotInsideTypeof(name_index, slot_index, depth);
+      }
       break;
     case TypeofMode::kNotInside:
-      OutputLdaLookupContextSlot(name_index, slot_index, depth);
+      if (v8_flags.script_context_mutable_heap_number &&
+          context_kind == ContextKind::kScriptContext) {
+        OutputLdaLookupScriptContextSlot(name_index, slot_index, depth);
+      } else {
+        OutputLdaLookupContextSlot(name_index, slot_index, depth);
+      }
       break;
   }
   return *this;
@@ -1594,6 +1629,11 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::Delete(Register object,
 size_t BytecodeArrayBuilder::GetConstantPoolEntry(
     const AstRawString* raw_string) {
   return constant_array_builder()->Insert(raw_string);
+}
+
+size_t BytecodeArrayBuilder::GetConstantPoolEntry(
+    const AstConsString* cons_string) {
+  return constant_array_builder()->Insert(cons_string);
 }
 
 size_t BytecodeArrayBuilder::GetConstantPoolEntry(AstBigInt bigint) {

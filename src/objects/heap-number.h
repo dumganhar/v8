@@ -17,6 +17,7 @@ namespace internal {
 namespace maglev {
 class MaglevGraphBuilder;
 class StoreDoubleField;
+class StoreScriptContextSlotWithWriteBarrier;
 }  // namespace maglev
 
 namespace compiler {
@@ -45,7 +46,6 @@ V8_OBJECT class HeapNumber : public PrimitiveHeapObject {
   static const int kMantissaBitsInTopWord = 20;
   static const int kNonMantissaBitsInTopWord = 12;
 
-  DECL_CAST(HeapNumber)
   DECL_PRINTER(HeapNumber)
   DECL_VERIFIER(HeapNumber)
   V8_EXPORT_PRIVATE void HeapNumberShortPrint(std::ostream& os);
@@ -59,6 +59,7 @@ V8_OBJECT class HeapNumber : public PrimitiveHeapObject {
   friend class maglev::MaglevAssembler;
   friend class maglev::MaglevGraphBuilder;
   friend class maglev::StoreDoubleField;
+  friend class maglev::StoreScriptContextSlotWithWriteBarrier;
   friend class compiler::AccessBuilder;
   friend class compiler::GraphAssembler;
   friend class TorqueGeneratedHeapNumberAsserts;

@@ -77,9 +77,7 @@ MemOperand BaselineAssembler::FeedbackCellOperand() {
 void BaselineAssembler::Bind(Label* label) { __ bind(label); }
 
 void BaselineAssembler::JumpTarget() {
-#ifdef V8_ENABLE_CET_IBT
   __ endbr64();
-#endif
 }
 
 void BaselineAssembler::Jump(Label* target, Label::Distance distance) {
@@ -379,13 +377,15 @@ void BaselineAssembler::LoadTaggedField(Register output, TaggedRegister source,
 void BaselineAssembler::LoadFixedArrayElement(Register output,
                                               TaggedRegister array,
                                               int32_t index) {
-  LoadTaggedField(output, array, FixedArray::kHeaderSize + index * kTaggedSize);
+  LoadTaggedField(output, array,
+                  OFFSET_OF_DATA_START(FixedArray) + index * kTaggedSize);
 }
 
 void BaselineAssembler::LoadFixedArrayElement(TaggedRegister output,
                                               TaggedRegister array,
                                               int32_t index) {
-  LoadTaggedField(output, array, FixedArray::kHeaderSize + index * kTaggedSize);
+  LoadTaggedField(output, array,
+                  OFFSET_OF_DATA_START(FixedArray) + index * kTaggedSize);
 }
 
 void BaselineAssembler::TryLoadOptimizedOsrCode(Register scratch_and_result,
@@ -568,7 +568,7 @@ void BaselineAssembler::EmitReturn(MacroAssembler* masm) {
   Register scratch = scope.AcquireScratch();
 
   Register actual_params_size = scratch;
-  // Compute the size of the actual parameters + receiver (in bytes).
+  // Compute the size of the actual parameters + receiver.
   __ masm()->movq(actual_params_size,
                   MemOperand(rbp, StandardFrameConstants::kArgCOffset));
 
@@ -581,9 +581,7 @@ void BaselineAssembler::EmitReturn(MacroAssembler* masm) {
   __ masm()->LeaveFrame(StackFrame::BASELINE);
 
   // Drop receiver + arguments.
-  __ masm()->DropArguments(params_size, scratch,
-                           MacroAssembler::kCountIsInteger,
-                           MacroAssembler::kCountIncludesReceiver);
+  __ masm()->DropArguments(params_size, scratch);
   __ masm()->Ret();
 }
 

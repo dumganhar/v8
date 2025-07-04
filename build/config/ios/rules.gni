@@ -109,7 +109,7 @@ _ios_xcode_xcuitest_bundle_id = "com.apple.product-type.bundle.ui-testing"
 #
 #   transparent
 #       (optional) boolean, whether the bundle is "transparent"; defaults to
-#       "false" if ommitted; a bundle is considered "transparent" if it does
+#       "false" if omitted; a bundle is considered "transparent" if it does
 #       not package the "bundle_data" deps but forward them to all targets
 #       the depend on it (unless the "bundle_data" target sets "product_type"
 #       to the same value as the "create_signed_bundle" target).
@@ -270,7 +270,7 @@ template("create_signed_bundle") {
       deps = []
     }
 
-    post_processing_script = "//build/config/ios/codesign.py"
+    post_processing_script = "//build/config/apple/codesign.py"
     post_processing_sources = [ _bundle_binary_path ]
     if (_enable_entitlements) {
       if (defined(invoker.entitlements_target)) {
@@ -341,7 +341,7 @@ template("create_signed_bundle") {
       # rebase_path here unless using RBE and system Xcode (as in that
       # case the system framework are found via a symlink in root_build_dir).
       foreach(_framework, invoker.extra_system_frameworks) {
-        if (use_system_xcode && (use_remoteexec || use_siso)) {
+        if (use_system_xcode && use_remoteexec) {
           _framework_path = rebase_path(_framework, root_build_dir)
         } else {
           _framework_path = _framework
@@ -511,6 +511,13 @@ template("ios_info_plist") {
 #       application. If defined, it must corresponds to a `swift_source_set`
 #       target configured with `generate_intents = true`.
 #
+#   transparent
+#       (optional) boolean, whether the bundle is "transparent"; defaults to
+#       "false" if omitted; a bundle is considered "transparent" if it does
+#       not package the "bundle_data" deps but forward them to all targets
+#       the depend on it (unless the "bundle_data" target sets "product_type"
+#       to the same value as the "create_signed_bundle" target).
+#
 # For more information, see "gn help executable".
 template("ios_app_bundle") {
   _output_name = target_name
@@ -620,6 +627,7 @@ template("ios_app_bundle") {
                              "info_plist_target",
                              "output_name",
                              "product_type",
+                             "transparent",
                              "visibility",
                              "xcode_extra_attributes",
                            ])
@@ -773,7 +781,7 @@ template("ios_app_bundle") {
     _gen_info_plist_outputs = get_target_outputs(":$_generate_info_plist")
     _info_plist_path = _gen_info_plist_outputs[0]
 
-    script = "//build/config/ios/codesign.py"
+    script = "//build/config/apple/codesign.py"
     deps = [ ":$_generate_info_plist" ]
     if (defined(invoker.entitlements_target)) {
       deps += [ invoker.entitlements_target ]
@@ -840,6 +848,7 @@ template("ios_app_bundle") {
                                "public_configs",
                                "public_deps",
                                "testonly",
+                               "transparent",
                                "visibility",
                                "xcode_extra_attributes",
                              ])
@@ -959,51 +968,6 @@ set_defaults("ios_appex_bundle") {
   configs = [ "//build/config/ios:ios_extension_executable_flags" ]
 }
 
-# Template to compile .xib and .storyboard files.
-#
-# Arguments
-#
-#     sources:
-#         list of string, sources to compile
-#
-#     ibtool_flags:
-#         (optional) list of string, additional flags to pass to the ibtool
-template("compile_ib_files") {
-  action_foreach(target_name) {
-    forward_variables_from(invoker,
-                           [
-                             "testonly",
-                             "visibility",
-                           ])
-    assert(defined(invoker.sources),
-           "sources must be specified for $target_name")
-    assert(defined(invoker.output_extension),
-           "output_extension must be specified for $target_name")
-
-    ibtool_flags = []
-    if (defined(invoker.ibtool_flags)) {
-      ibtool_flags = invoker.ibtool_flags
-    }
-
-    _output_extension = invoker.output_extension
-
-    script = "//build/config/ios/compile_ib_files.py"
-    sources = invoker.sources
-    outputs = [
-      "$target_gen_dir/$target_name/{{source_name_part}}.$_output_extension",
-    ]
-    args = [
-      "--input",
-      "{{source}}",
-      "--output",
-      rebase_path(
-          "$target_gen_dir/$target_name/{{source_name_part}}.$_output_extension",
-          root_build_dir),
-    ]
-    args += ibtool_flags
-  }
-}
-
 # Compile a xib or storyboard file and add it to a bundle_data so that it is
 # available at runtime in the bundle.
 #
@@ -1012,28 +976,42 @@ template("compile_ib_files") {
 #   source:
 #       string, path of the xib or storyboard to compile.
 #
+#   extension:
+#       string, extension of the generated file or bundle.
+#
+#   bundle_files:
+#       list of string, name of the files in the generated  bundle;
+#       if empty, the output is expected to be a single file.
+#
 # Forwards all variables to the bundle_data target.
 template("bundle_data_ib_file") {
   assert(defined(invoker.source), "source needs to be defined for $target_name")
-
-  _source_extension = get_path_info(invoker.source, "extension")
-  assert(_source_extension == "xib" || _source_extension == "storyboard",
-         "source must be a .xib or .storyboard for $target_name")
+  assert(defined(invoker.extension),
+         "extension needs to be defined for $target_name")
+  assert(defined(invoker.bundle_files),
+         "bundle_files needs to be defined for $target_name")
 
   _target_name = target_name
-  if (_source_extension == "xib") {
-    _compile_ib_file = target_name + "_compile_xib"
-    _output_extension = "nib"
-  } else {
-    _compile_ib_file = target_name + "_compile_storyboard"
-    _output_extension = "storyboardc"
-  }
+  _compile_target =
+      target_name + "_compile_" + get_path_info(invoker.source, "extension")
 
-  compile_ib_files(_compile_ib_file) {
-    sources = [ invoker.source ]
-    output_extension = _output_extension
-    visibility = [ ":$_target_name" ]
-    ibtool_flags = [
+  _output_path = "$target_gen_dir/$_target_name/"
+  _output_name = get_path_info(invoker.source, "name") + ".${invoker.extension}"
+
+  action(_compile_target) {
+    forward_variables_from(invoker,
+                           "*",
+                           [
+                             "source",
+                             "bundle_files",
+                           ])
+
+    script = "//build/config/ios/compile_ib_files.py"
+    args = [
+      "--input",
+      rebase_path(invoker.source, root_build_dir),
+      "--output",
+      rebase_path("$_output_path/$_output_name", root_build_dir),
       "--minimum-deployment-target",
       ios_deployment_target,
       "--auto-activate-custom-fonts",
@@ -1042,6 +1020,16 @@ template("bundle_data_ib_file") {
       "--target-device",
       "ipad",
     ]
+
+    sources = [ invoker.source ]
+    if (invoker.bundle_files == []) {
+      outputs = [ "$_output_path/$_output_name" ]
+    } else {
+      outputs = []
+      foreach(_bundle_file, invoker.bundle_files) {
+        outputs += [ "$_output_path/$_output_name/$_bundle_file" ]
+      }
+    }
   }
 
   bundle_data(_target_name) {
@@ -1050,11 +1038,70 @@ template("bundle_data_ib_file") {
     if (!defined(public_deps)) {
       public_deps = []
     }
-    public_deps += [ ":$_compile_ib_file" ]
+    public_deps += [ ":$_compile_target" ]
 
-    sources = get_target_outputs(":$_compile_ib_file")
+    sources = get_target_outputs(":$_compile_target")
+    if (invoker.bundle_files == []) {
+      outputs = [ "{{bundle_resources_dir}}/{{source_file_part}}" ]
+    } else {
+      outputs =
+          [ "{{bundle_resources_dir}}/$_output_name/{{source_file_part}}" ]
+    }
+  }
+}
 
-    outputs = [ "{{bundle_resources_dir}}/{{source_file_part}}" ]
+# Compile a xib file and add it to a bundle_data so that it is available at
+# runtime in the bundle.
+#
+# Arguments
+#
+#   source:
+#       string, path of the xib or storyboard to compile.
+#
+# Forwards all variables to the bundle_data target.
+template("bundle_data_xib_file") {
+  assert(defined(invoker.source), "source needs to be defined for $target_name")
+
+  _extension = get_path_info(invoker.source, "extension")
+  assert(_extension == "xib",
+         "source must have the .xib extension for $target_name")
+
+  bundle_data_ib_file(target_name) {
+    forward_variables_from(invoker, "*", TESTONLY_AND_VISIBILITY)
+    forward_variables_from(invoker, TESTONLY_AND_VISIBILITY)
+
+    extension = "nib"
+    bundle_files = []
+  }
+}
+
+# Compile a storyboard file and add it to a bundle_data so that it is available
+# at runtime in the bundle.
+#
+# Arguments
+#
+#   source:
+#       string, path of the xib or storyboard to compile.
+#
+#   bundle_files
+#       list of strings, name of the individual files in the generated bundle
+#
+# Forwards all variables to the bundle_data target.
+template("bundle_data_storyboard_file") {
+  assert(defined(invoker.source), "source needs to be defined for $target_name")
+
+  assert(defined(invoker.bundle_files) && invoker.bundle_files != [],
+         "bundle_files needs to be defined for $target_name")
+
+  _extension = get_path_info(invoker.source, "extension")
+  assert(_extension == "storyboard",
+         "source must have the .storyboard extension for $target_name")
+
+  bundle_data_ib_file(target_name) {
+    forward_variables_from(invoker, "*", TESTONLY_AND_VISIBILITY)
+    forward_variables_from(invoker, TESTONLY_AND_VISIBILITY)
+
+    extension = "storyboardc"
   }
 }
 
@@ -1209,7 +1256,7 @@ template("bundle_data_xcassets") {
 #
 #   transparent
 #       (optional) boolean, whether the bundle is "transparent"; defaults to
-#       "false" if ommitted; a bundle is considered "transparent" if it does
+#       "false" if omitted; a bundle is considered "transparent" if it does
 #       not package the "bundle_data" deps but forward them to all targets
 #       the depend on it (unless the "bundle_data" target sets "product_type"
 #       to "com.apple.product-type.framework").
@@ -1382,7 +1429,7 @@ template("ios_framework_bundle") {
                                "public_deps",
                                "testonly",
                              ])
-      script = "//build/config/ios/write_framework_hmap.py"
+      script = "//build/config/apple/write_framework_hmap.py"
       outputs = [ _header_map_filename ]
 
       # The header map generation only wants the list of headers, not all of
@@ -1407,7 +1454,7 @@ template("ios_framework_bundle") {
     _create_module_map_target = _target_name + "_module_map"
     action(_create_module_map_target) {
       visibility = [ ":$_framework_headers_target" ]
-      script = "//build/config/ios/write_framework_modulemap.py"
+      script = "//build/config/apple/write_framework_modulemap.py"
       outputs = [ "$_framework_contents_dir/Modules/module.modulemap" ]
       args = [
         _output_name,
@@ -1698,6 +1745,7 @@ template("ios_xctest_bundle") {
                              "data_deps",
                              "enable_code_signing",
                              "product_type",
+                             "transparent",
                              "xcode_test_application_name",
                            ])
 
@@ -1912,7 +1960,7 @@ template("ios_xcuitest_test_runner_bundle") {
              "-o=" + rebase_path(_output_name, root_build_dir),
            ] + rebase_path(sources, root_build_dir)
 
-    if (use_system_xcode && (use_remoteexec || use_siso)) {
+    if (ios_use_xcode_symlinks) {
       deps = [ "//build/config/ios:copy_xctrunner_app" ]
     }
   }
@@ -1945,7 +1993,7 @@ template("ios_xcuitest_test_runner_bundle") {
 
     outputs = [ "{{bundle_contents_dir}}/PkgInfo" ]
 
-    if (use_system_xcode && (use_remoteexec || use_siso)) {
+    if (ios_use_xcode_symlinks) {
       public_deps = [ "//build/config/ios:copy_xctrunner_app" ]
     }
   }

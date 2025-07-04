@@ -17,9 +17,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>  // NOLINT
+#include <sstream>
 #include <string>
 #include <string_view>
-#include <thread>  //NOLINT
 #include <vector>
 
 #include "gmock/gmock.h"
@@ -28,10 +28,11 @@
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "./centipede/binary_info.h"
-#include "./centipede/logging.h"
 #include "./centipede/pc_info.h"
 #include "./centipede/symbol_table.h"
-#include "./centipede/test_util.h"
+#include "./centipede/thread_pool.h"
+#include "./common/logging.h"
+#include "./common/test_util.h"
 
 namespace centipede {
 
@@ -99,6 +100,13 @@ TEST(CFTable, MakeCfgFromCfTable) {
   CHECK_EQ(cfg.GetCyclomaticComplexity(1), 2);
 }
 
+TEST(CFTable, SerializesAndDeserializesCfTable) {
+  std::stringstream stream;
+  WriteCfTable(g_cf_table, stream);
+  const CFTable cf_table = ReadCfTable(stream);
+  EXPECT_EQ(cf_table, g_cf_table);
+}
+
 TEST(FunctionComplexity, ComputeFuncComplexity) {
   static const CFTable g_cf_table1 = {
       1, 2, 3, 0, 0,  // 1 goes to 2 and 3.
@@ -148,7 +156,7 @@ TEST(ControlFlowGraph, LazyReachability) {
   cfg.InitializeControlFlowGraph(g_cf_table, g_pc_table);
   EXPECT_NE(cfg.size(), 0);
 
-  auto rt = [&]() {
+  auto rt = [&cfg]() {
     for (int i = 0; i < 10; ++i) {
       cfg.LazyGetReachabilityForPc(1);
       cfg.LazyGetReachabilityForPc(2);
@@ -166,10 +174,12 @@ TEST(ControlFlowGraph, LazyReachability) {
     EXPECT_THAT(reach4, testing::ElementsAre(4));
   };
 
-  std::thread t1(rt), t2(rt), t3(rt);
-  t1.join();
-  t2.join();
-  t3.join();
+  {
+    ThreadPool threads{3};
+    threads.Schedule(rt);
+    threads.Schedule(rt);
+    threads.Schedule(rt);
+  }  // The threads join here.
 }
 
 // Returns path to test_fuzz_target.
@@ -304,7 +314,7 @@ static void SymbolizeBinary(std::string_view test_dir,
       has_llvm_fuzzer_test_one_input = true;
       EXPECT_THAT(
           symbols.location(i),
-          testing::HasSubstr("centipede/testing/test_fuzz_target.cc:70"));
+          testing::HasSubstr("centipede/testing/test_fuzz_target.cc:71"));
     }
   }
   EXPECT_TRUE(has_llvm_fuzzer_test_one_input);

@@ -200,9 +200,11 @@ TEST(StringTest, Printer) {
 }
 
 TEST(ByteArrayTest, Printer) {
-  EXPECT_THAT(TestPrintValue(std::vector<uint8_t>{'\0', 'a', 0223, 'b', '\"'}),
-              ElementsAre(R"("\000a\223b"")",
-                          R"(fuzztest::ToByteArray("\000a\223b\""))"));
+  EXPECT_THAT(
+      TestPrintValue(std::vector<uint8_t>{'\0', 'a', 0223, 'b', '\"'}),
+      ElementsAre(R"("\000a\223b"")",
+                  R"(fuzztest::ToByteArray(std::string("\000a\223b\"", 5)))"));
+  EXPECT_EQ(std::string("\000a\223b\"", 5).size(), 5);
 }
 
 TEST(CompoundTest, Printer) {
@@ -379,6 +381,26 @@ TEST(MapTest, Printer) {
   // Test fallback on user value when map involves a lambda.
   EXPECT_THAT(TestPrintValue(std::tuple<int>(21), HexString()),
               Each("\"0x15\""));
+}
+
+}  // namespace
+}  // namespace fuzztest::internal
+
+auto DoubleValueOutsideNamespace(int n) { return 2 * n; }
+
+namespace fuzztest::internal {
+namespace {
+
+TEST(MapTest, PrintsMapperOutsideNamespace) {
+  auto domain = Map(DoubleValueOutsideNamespace, InRange(2, 5));
+  std::tuple<int> corpus_value(3);
+
+  EXPECT_THAT(
+      TestPrintValue(corpus_value, domain),
+      ElementsAre("6",
+                  // Takes into account that the function name may
+                  // contain ABI annotations after de-mangling.
+                  MatchesRegex(R"re(DoubleValueOutsideNamespace.*\(3\))re")));
 }
 
 auto ValueInRange(int a, int b) {

@@ -64,17 +64,7 @@ class V8_BASE_EXPORT CPU final {
   static const int kNvidiaDenverV10 = 0x002;
 
   // PPC-specific part codes
-  enum {
-    kPPCPower5,
-    kPPCPower6,
-    kPPCPower7,
-    kPPCPower8,
-    kPPCPower9,
-    kPPCPower10,
-    kPPCG4,
-    kPPCG5,
-    kPPCPA6T
-  };
+  enum { kPPCPower8, kPPCPower9, kPPCPower10 };
 
   // General features
   bool has_fpu() const { return has_fpu_; }
@@ -96,6 +86,7 @@ class V8_BASE_EXPORT CPU final {
   bool has_avx() const { return has_avx_; }
   bool has_avx2() const { return has_avx2_; }
   bool has_avx_vnni() const { return has_avx_vnni_; }
+  bool has_avx_vnni_int8() const { return has_avx_vnni_int8_; }
   bool has_fma3() const { return has_fma3_; }
   bool has_f16c() const { return has_f16c_; }
   bool has_bmi1() const { return has_bmi1_; }
@@ -138,6 +129,9 @@ class V8_BASE_EXPORT CPU final {
 
   // riscv-specific part codes
   bool has_rvv() const { return has_rvv_; }
+  bool has_zba() const { return has_zba_; }
+  bool has_zbb() const { return has_zbb_; }
+  bool has_zbs() const { return has_zbs_; }
   enum class RV_MMU_MODE {
     kRiscvSV39,
     kRiscvSV48,
@@ -180,6 +174,7 @@ class V8_BASE_EXPORT CPU final {
   bool has_avx_;
   bool has_avx2_;
   bool has_avx_vnni_;
+  bool has_avx_vnni_int8_;
   bool has_fma3_;
   bool has_f16c_;
   bool has_bmi1_;
@@ -204,6 +199,9 @@ class V8_BASE_EXPORT CPU final {
   bool has_msa_;
   RV_MMU_MODE riscv_mmu_;
   bool has_rvv_;
+  bool has_zba_;
+  bool has_zbb_;
+  bool has_zbs_;
 };
 
 }  // namespace base

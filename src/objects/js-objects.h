@@ -5,7 +5,8 @@
 #ifndef V8_OBJECTS_JS_OBJECTS_H_
 #define V8_OBJECTS_JS_OBJECTS_H_
 
-#include "src/base/optional.h"
+#include <optional>
+
 #include "src/common/globals.h"
 #include "src/handles/handles.h"
 #include "src/objects/embedder-data-slot.h"
@@ -17,8 +18,7 @@
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
 
-namespace v8 {
-namespace internal {
+namespace v8::internal {
 
 // Enum for functions that offer a second mode that does not cause allocations.
 // Used in conjunction with LookupIterator and unboxed double fields.
@@ -32,8 +32,11 @@ class PropertyDescriptor;
 class PropertyKey;
 class NativeContext;
 class IsCompiledScope;
+class StackTraceInfo;
 class SwissNameDictionary;
 class ElementsAccessor;
+class Undefined;
+class Null;
 
 #include "torque-generated/src/objects/js-objects-tq.inc"
 
@@ -87,7 +90,7 @@ class JSReceiver : public TorqueGeneratedJSReceiver<JSReceiver, HeapObject> {
   inline void initialize_properties(Isolate* isolate);
 
   // Deletes an existing named property in a normalized object.
-  static void DeleteNormalizedProperty(Handle<JSReceiver> object,
+  static void DeleteNormalizedProperty(DirectHandle<JSReceiver> object,
                                        InternalIndex entry);
 
   // ES6 section 7.1.1 ToPrimitive
@@ -105,13 +108,13 @@ class JSReceiver : public TorqueGeneratedJSReceiver<JSReceiver, HeapObject> {
   // Throws TypeError in case there's a revoked JSProxy on the way.
   // https://tc39.es/ecma262/#sec-getfunctionrealm
   static MaybeHandle<NativeContext> GetFunctionRealm(
-      Handle<JSReceiver> receiver);
+      DirectHandle<JSReceiver> receiver);
 
   V8_EXPORT_PRIVATE static MaybeHandle<NativeContext> GetContextForMicrotask(
-      Handle<JSReceiver> receiver);
+      DirectHandle<JSReceiver> receiver);
 
   // Get the first non-hidden prototype.
-  static inline MaybeHandle<HeapObject> GetPrototype(
+  static inline MaybeHandle<JSPrototype> GetPrototype(
       Isolate* isolate, Handle<JSReceiver> receiver);
 
   V8_WARN_UNUSED_RESULT static Maybe<bool> HasInPrototypeChain(
@@ -121,10 +124,13 @@ class JSReceiver : public TorqueGeneratedJSReceiver<JSReceiver, HeapObject> {
   // target, using either Set or CreateDataProperty depending on the
   // use_set argument. This only copies values not present in the
   // maybe_excluded_properties list.
+  // If direct handles are enabled, it is the responsibility of the caller to
+  // ensure that the memory pointed to by `excluded_properties` is scanned
+  // during CSS, e.g., it comes from a `DirectHandleVector<Object>`.
   V8_WARN_UNUSED_RESULT static Maybe<bool> SetOrCopyDataProperties(
       Isolate* isolate, Handle<JSReceiver> target, Handle<Object> source,
       PropertiesEnumerationMode mode,
-      const base::ScopedVector<Handle<Object>>* excluded_properties = nullptr,
+      base::Vector<DirectHandle<Object>> excluded_properties = {},
       bool use_set = true);
 
   // Implementation of [[HasProperty]], ECMA-262 5th edition, section 8.12.6.
@@ -149,15 +155,16 @@ class JSReceiver : public TorqueGeneratedJSReceiver<JSReceiver, HeapObject> {
 
   // Implementation of ES6 [[Delete]]
   V8_EXPORT_PRIVATE V8_WARN_UNUSED_RESULT static Maybe<bool>
-  DeletePropertyOrElement(Handle<JSReceiver> object, Handle<Name> name,
+  DeletePropertyOrElement(Isolate* isolate, Handle<JSReceiver> object,
+                          Handle<Name> name,
                           LanguageMode language_mode = LanguageMode::kSloppy);
   V8_EXPORT_PRIVATE V8_WARN_UNUSED_RESULT static Maybe<bool> DeleteProperty(
-      Handle<JSReceiver> object, Handle<Name> name,
+      Isolate* isolate, Handle<JSReceiver> object, Handle<Name> name,
       LanguageMode language_mode = LanguageMode::kSloppy);
   V8_WARN_UNUSED_RESULT static Maybe<bool> DeleteProperty(
       LookupIterator* it, LanguageMode language_mode);
   V8_WARN_UNUSED_RESULT static Maybe<bool> DeleteElement(
-      Handle<JSReceiver> object, uint32_t index,
+      Isolate* isolate, Handle<JSReceiver> object, uint32_t index,
       LanguageMode language_mode = LanguageMode::kSloppy);
 
   V8_WARN_UNUSED_RESULT static Tagged<Object> DefineProperty(
@@ -182,7 +189,7 @@ class JSReceiver : public TorqueGeneratedJSReceiver<JSReceiver, HeapObject> {
       Isolate* isolate, Handle<JSReceiver> object, Handle<Name> key,
       Handle<Object> value, Maybe<ShouldThrow> should_throw);
   V8_WARN_UNUSED_RESULT static Maybe<bool> CreateDataProperty(
-      Isolate* isolate, Handle<Object> object, PropertyKey key,
+      Isolate* isolate, Handle<JSAny> object, PropertyKey key,
       Handle<Object> value, Maybe<ShouldThrow> should_throw);
   V8_WARN_UNUSED_RESULT static Maybe<bool> CreateDataProperty(
       Isolate* isolate, Handle<JSReceiver> object, PropertyKey key,
@@ -259,7 +266,7 @@ class JSReceiver : public TorqueGeneratedJSReceiver<JSReceiver, HeapObject> {
   static Handle<String> GetConstructorName(Isolate* isolate,
                                            Handle<JSReceiver> receiver);
 
-  V8_EXPORT_PRIVATE inline base::Optional<Tagged<NativeContext>>
+  V8_EXPORT_PRIVATE inline std::optional<Tagged<NativeContext>>
   GetCreationContext();
   V8_EXPORT_PRIVATE inline MaybeHandle<NativeContext> GetCreationContext(
       Isolate* isolate);
@@ -342,17 +349,18 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
 
   V8_EXPORT_PRIVATE static V8_WARN_UNUSED_RESULT MaybeHandle<JSObject> New(
       Handle<JSFunction> constructor, Handle<JSReceiver> new_target,
-      Handle<AllocationSite> site,
+      DirectHandle<AllocationSite> site,
       NewJSObjectType = NewJSObjectType::kNoAPIWrapper);
 
   static MaybeHandle<JSObject> NewWithMap(
-      Isolate* isolate, Handle<Map> initial_map, Handle<AllocationSite> site,
+      Isolate* isolate, DirectHandle<Map> initial_map,
+      DirectHandle<AllocationSite> site,
       NewJSObjectType = NewJSObjectType::kNoAPIWrapper);
 
   // 9.1.12 ObjectCreate ( proto [ , internalSlotsList ] )
   // Notice: This is NOT 19.1.2.2 Object.create ( O, Properties )
   static V8_WARN_UNUSED_RESULT MaybeHandle<JSObject> ObjectCreate(
-      Isolate* isolate, Handle<Object> prototype);
+      Isolate* isolate, Handle<JSPrototype> prototype);
 
   DECL_ACCESSORS(elements, Tagged<FixedArrayBase>)
   DECL_RELAXED_GETTER(elements, Tagged<FixedArrayBase>)
@@ -368,8 +376,9 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
                     WriteBarrierMode mode = UPDATE_WRITE_BARRIER) = delete;
 
   inline void initialize_elements();
-  static inline void SetMapAndElements(Handle<JSObject> object, Handle<Map> map,
-                                       Handle<FixedArrayBase> elements);
+  static inline void SetMapAndElements(DirectHandle<JSObject> object,
+                                       DirectHandle<Map> map,
+                                       DirectHandle<FixedArrayBase> elements);
   DECL_GETTER(GetElementsKind, ElementsKind)
   DECL_GETTER(GetElementsAccessor, ElementsAccessor*)
 
@@ -429,11 +438,12 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
   DECL_GETTER(element_dictionary, Tagged<NumberDictionary>)
 
   // Requires: HasFastElements().
-  static void EnsureWritableFastElements(Handle<JSObject> object);
+  static void EnsureWritableFastElements(DirectHandle<JSObject> object);
 
-  V8_WARN_UNUSED_RESULT static Maybe<bool> SetPropertyWithInterceptor(
-      LookupIterator* it, Maybe<ShouldThrow> should_throw,
-      Handle<Object> value);
+  V8_WARN_UNUSED_RESULT static Maybe<InterceptorResult>
+  SetPropertyWithInterceptor(LookupIterator* it,
+                             Maybe<ShouldThrow> should_throw,
+                             Handle<Object> value);
 
   // The API currently still wants DefineOwnPropertyIgnoreAttributes to convert
   // AccessorInfo objects to data fields. We allow FORCE_FIELD as an exception
@@ -480,16 +490,16 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
   V8_EXPORT_PRIVATE static void AddProperty(Isolate* isolate,
                                             Handle<JSObject> object,
                                             Handle<Name> name,
-                                            Handle<Object> value,
+                                            DirectHandle<Object> value,
                                             PropertyAttributes attributes);
 
   // {name} must be a UTF-8 encoded, null-terminated string.
   static void AddProperty(Isolate* isolate, Handle<JSObject> object,
-                          const char* name, Handle<Object> value,
+                          const char* name, DirectHandle<Object> value,
                           PropertyAttributes attributes);
 
   V8_EXPORT_PRIVATE static Maybe<bool> AddDataElement(
-      Handle<JSObject> receiver, uint32_t index, Handle<Object> value,
+      Handle<JSObject> receiver, uint32_t index, DirectHandle<Object> value,
       PropertyAttributes attributes);
 
   // Extend the receiver with a single fast property appeared first in the
@@ -498,11 +508,13 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
 
   // Migrates the given object to a map whose field representations are the
   // lowest upper bound of all known representations for that field.
-  static void MigrateInstance(Isolate* isolate, Handle<JSObject> instance);
+  static void MigrateInstance(Isolate* isolate,
+                              DirectHandle<JSObject> instance);
 
   // Migrates the given object only if the target map is already available,
   // or returns false if such a map is not yet available.
-  static bool TryMigrateInstance(Isolate* isolate, Handle<JSObject> instance);
+  static bool TryMigrateInstance(Isolate* isolate,
+                                 DirectHandle<JSObject> instance);
 
   // Sets the property value in a normalized object given (key, value, details).
   // Handles the special representation of JS global objects.
@@ -513,23 +525,24 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
                                    Handle<Object> value,
                                    PropertyDetails details);
 
-  static void OptimizeAsPrototype(Handle<JSObject> object,
+  static void OptimizeAsPrototype(DirectHandle<JSObject> object,
                                   bool enable_setup_mode = true);
-  static void ReoptimizeIfPrototype(Handle<JSObject> object);
+  static void ReoptimizeIfPrototype(DirectHandle<JSObject> object);
   static void MakePrototypesFast(Handle<Object> receiver,
                                  WhereToStart where_to_start, Isolate* isolate);
-  static void LazyRegisterPrototypeUser(Handle<Map> user, Isolate* isolate);
-  static void UpdatePrototypeUserRegistration(Handle<Map> old_map,
-                                              Handle<Map> new_map,
+  static void LazyRegisterPrototypeUser(DirectHandle<Map> user,
+                                        Isolate* isolate);
+  static void UpdatePrototypeUserRegistration(DirectHandle<Map> old_map,
+                                              DirectHandle<Map> new_map,
                                               Isolate* isolate);
-  static bool UnregisterPrototypeUser(Handle<Map> user, Isolate* isolate);
+  static bool UnregisterPrototypeUser(DirectHandle<Map> user, Isolate* isolate);
   static Tagged<Map> InvalidatePrototypeChains(Tagged<Map> map);
   static void InvalidatePrototypeValidityCell(Tagged<JSGlobalObject> global);
 
   // Updates prototype chain tracking information when an object changes its
   // map from |old_map| to |new_map|.
-  static void NotifyMapChange(Handle<Map> old_map, Handle<Map> new_map,
-                              Isolate* isolate);
+  static void NotifyMapChange(DirectHandle<Map> old_map,
+                              DirectHandle<Map> new_map, Isolate* isolate);
 
   // Utility used by many Array builtins and runtime functions
   static inline bool PrototypeHasNoElements(Isolate* isolate,
@@ -552,12 +565,12 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
   // Defines an AccessorPair property on the given object.
   V8_EXPORT_PRIVATE static MaybeHandle<Object>
   DefineOwnAccessorIgnoreAttributes(Handle<JSObject> object, Handle<Name> name,
-                                    Handle<Object> getter,
-                                    Handle<Object> setter,
+                                    DirectHandle<Object> getter,
+                                    DirectHandle<Object> setter,
                                     PropertyAttributes attributes);
   static MaybeHandle<Object> DefineOwnAccessorIgnoreAttributes(
-      LookupIterator* it, Handle<Object> getter, Handle<Object> setter,
-      PropertyAttributes attributes);
+      LookupIterator* it, DirectHandle<Object> getter,
+      DirectHandle<Object> setter, PropertyAttributes attributes);
 
   // Defines an AccessorInfo property on the given object.
   V8_WARN_UNUSED_RESULT static MaybeHandle<Object> SetAccessor(
@@ -567,13 +580,13 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
   // Check if a data property can be created on the object. It will fail with
   // an error when it cannot.
   V8_WARN_UNUSED_RESULT static Maybe<bool> CheckIfCanDefineAsConfigurable(
-      Isolate* isolate, LookupIterator* it, Handle<Object> value,
+      Isolate* isolate, LookupIterator* it, DirectHandle<Object> value,
       Maybe<ShouldThrow> should_throw);
 
   // The result must be checked first for exceptions. If there's no exception,
   // the output parameter |done| indicates whether the interceptor has a result
   // or not.
-  V8_WARN_UNUSED_RESULT static MaybeHandle<Object> GetPropertyWithInterceptor(
+  V8_WARN_UNUSED_RESULT static MaybeHandle<JSAny> GetPropertyWithInterceptor(
       LookupIterator* it, bool* done);
 
   static void ValidateElements(Tagged<JSObject> object);
@@ -611,7 +624,7 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
   // These methods do not perform access checks!
   template <AllocationSiteUpdateMode update_or_check =
                 AllocationSiteUpdateMode::kUpdate>
-  static bool UpdateAllocationSite(Handle<JSObject> object,
+  static bool UpdateAllocationSite(DirectHandle<JSObject> object,
                                    ElementsKind to_kind);
 
   // Lookup interceptors are used for handling properties controlled by host
@@ -655,7 +668,7 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
 
   // Returns a new map with all transitions dropped from the object's current
   // map and the ElementsKind set.
-  static Handle<Map> GetElementsTransitionMap(Handle<JSObject> object,
+  static Handle<Map> GetElementsTransitionMap(DirectHandle<JSObject> object,
                                               ElementsKind to_kind);
   V8_EXPORT_PRIVATE static void TransitionElementsKind(Handle<JSObject> object,
                                                        ElementsKind to_kind);
@@ -664,25 +677,27 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
   // |expected_additional_properties| is only used for fast-to-slow transitions
   // and ignored otherwise.
   V8_EXPORT_PRIVATE static void MigrateToMap(
-      Isolate* isolate, Handle<JSObject> object, Handle<Map> new_map,
-      int expected_additional_properties = 0);
+      Isolate* isolate, DirectHandle<JSObject> object,
+      DirectHandle<Map> new_map, int expected_additional_properties = 0);
 
   // Forces a prototype without any of the checks that the regular SetPrototype
   // would do.
-  static void ForceSetPrototype(Isolate* isolate, Handle<JSObject> object,
-                                Handle<HeapObject> proto);
+  static void ForceSetPrototype(Isolate* isolate, DirectHandle<JSObject> object,
+                                Handle<JSPrototype> proto);
 
   // Convert the object to use the canonical dictionary
   // representation. If the object is expected to have additional properties
   // added this number can be indicated to have the backing store allocated to
   // an initial capacity for holding these properties.
   V8_EXPORT_PRIVATE static void NormalizeProperties(
-      Isolate* isolate, Handle<JSObject> object, PropertyNormalizationMode mode,
-      int expected_additional_properties, bool use_cache, const char* reason);
+      Isolate* isolate, DirectHandle<JSObject> object,
+      PropertyNormalizationMode mode, int expected_additional_properties,
+      bool use_cache, const char* reason);
 
   V8_EXPORT_PRIVATE static void NormalizeProperties(
-      Isolate* isolate, Handle<JSObject> object, PropertyNormalizationMode mode,
-      int expected_additional_properties, const char* reason) {
+      Isolate* isolate, DirectHandle<JSObject> object,
+      PropertyNormalizationMode mode, int expected_additional_properties,
+      const char* reason) {
     const bool kUseCache = true;
     NormalizeProperties(isolate, object, mode, expected_additional_properties,
                         kUseCache, reason);
@@ -696,43 +711,43 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
   void RequireSlowElements(Tagged<NumberDictionary> dictionary);
 
   // Transform slow named properties to fast variants.
-  V8_EXPORT_PRIVATE static void MigrateSlowToFast(Handle<JSObject> object,
+  V8_EXPORT_PRIVATE static void MigrateSlowToFast(DirectHandle<JSObject> object,
                                                   int unused_property_fields,
                                                   const char* reason);
 
   // Access property in dictionary mode object at the given dictionary index.
   static Handle<Object> DictionaryPropertyAt(Isolate* isolate,
-                                             Handle<JSObject> object,
+                                             DirectHandle<JSObject> object,
                                              InternalIndex dict_index);
   // Same as above, but it will return {} if we would be reading out of the
   // bounds of the object or if the dictionary is pending allocation. Use this
   // version for concurrent access.
-  static base::Optional<Tagged<Object>> DictionaryPropertyAt(
-      Handle<JSObject> object, InternalIndex dict_index, Heap* heap);
+  static std::optional<Tagged<Object>> DictionaryPropertyAt(
+      DirectHandle<JSObject> object, InternalIndex dict_index, Heap* heap);
 
   // Access fast-case object properties at index.
-  static Handle<Object> FastPropertyAt(Isolate* isolate,
-                                       Handle<JSObject> object,
-                                       Representation representation,
-                                       FieldIndex index);
-  static Handle<Object> FastPropertyAt(Isolate* isolate,
-                                       Handle<JSObject> object,
-                                       Representation representation,
-                                       FieldIndex index, SeqCstAccessTag tag);
-  inline Tagged<Object> RawFastPropertyAt(FieldIndex index) const;
-  inline Tagged<Object> RawFastPropertyAt(PtrComprCageBase cage_base,
-                                          FieldIndex index) const;
-  inline Tagged<Object> RawFastPropertyAt(FieldIndex index,
-                                          SeqCstAccessTag tag) const;
-  inline Tagged<Object> RawFastPropertyAt(PtrComprCageBase cage_base,
-                                          FieldIndex index,
-                                          SeqCstAccessTag tag) const;
+  static Handle<JSAny> FastPropertyAt(Isolate* isolate,
+                                      DirectHandle<JSObject> object,
+                                      Representation representation,
+                                      FieldIndex index);
+  static Handle<JSAny> FastPropertyAt(Isolate* isolate,
+                                      DirectHandle<JSObject> object,
+                                      Representation representation,
+                                      FieldIndex index, SeqCstAccessTag tag);
+  inline Tagged<JSAny> RawFastPropertyAt(FieldIndex index) const;
+  inline Tagged<JSAny> RawFastPropertyAt(PtrComprCageBase cage_base,
+                                         FieldIndex index) const;
+  inline Tagged<JSAny> RawFastPropertyAt(FieldIndex index,
+                                         SeqCstAccessTag tag) const;
+  inline Tagged<JSAny> RawFastPropertyAt(PtrComprCageBase cage_base,
+                                         FieldIndex index,
+                                         SeqCstAccessTag tag) const;
 
   // See comment in the body of the method to understand the conditions
   // in which this method is meant to be used, and what guarantees it
   // provides against invalid reads from another thread during object
   // mutation.
-  inline base::Optional<Tagged<Object>> RawInobjectPropertyAt(
+  inline std::optional<Tagged<Object>> RawInobjectPropertyAt(
       PtrComprCageBase cage_base, Tagged<Map> original_map,
       FieldIndex index) const;
 
@@ -777,7 +792,8 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
 
   // Makes the object prototype immutable
   // Never called from JavaScript
-  static void SetImmutableProto(Handle<JSObject> object);
+  static void SetImmutableProto(Isolate* isolate,
+                                DirectHandle<JSObject> object);
 
   // Initializes the body starting at |start_offset|. It is responsibility of
   // the caller to initialize object header. Fill the pre-allocated fields with
@@ -816,11 +832,10 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
   void PrintTransitions(std::ostream& os);
 #endif
 
-  static void PrintElementsTransition(FILE* file, Handle<JSObject> object,
-                                      ElementsKind from_kind,
-                                      Handle<FixedArrayBase> from_elements,
-                                      ElementsKind to_kind,
-                                      Handle<FixedArrayBase> to_elements);
+  static void PrintElementsTransition(
+      FILE* file, DirectHandle<JSObject> object, ElementsKind from_kind,
+      DirectHandle<FixedArrayBase> from_elements, ElementsKind to_kind,
+      DirectHandle<FixedArrayBase> to_elements);
 
   void PrintInstanceMigration(FILE* file, Tagged<Map> original_map,
                               Tagged<Map> new_map);
@@ -932,15 +947,15 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
   friend class Object;
 
   // Used from Object::GetProperty().
-  V8_WARN_UNUSED_RESULT static MaybeHandle<Object>
+  V8_WARN_UNUSED_RESULT static MaybeHandle<JSAny>
   GetPropertyWithFailedAccessCheck(LookupIterator* it);
 
   V8_WARN_UNUSED_RESULT static Maybe<bool> SetPropertyWithFailedAccessCheck(
       LookupIterator* it, Handle<Object> value,
       Maybe<ShouldThrow> should_throw);
 
-  V8_WARN_UNUSED_RESULT static Maybe<bool> DeletePropertyWithInterceptor(
-      LookupIterator* it, ShouldThrow should_throw);
+  V8_WARN_UNUSED_RESULT static Maybe<InterceptorResult>
+  DeletePropertyWithInterceptor(LookupIterator* it, ShouldThrow should_throw);
 
   bool ReferencesObjectFromElements(Tagged<FixedArray> elements,
                                     ElementsKind kind, Tagged<Object> object);
@@ -1025,16 +1040,16 @@ class JSApiWrapper {
  public:
   V8_INLINE explicit JSApiWrapper(Tagged<JSObject> object);
 
-  template <ExternalPointerTag tag>
+  template <CppHeapPointerTag tag>
   V8_INLINE void SetCppHeapWrappable(IsolateForPointerCompression isolate,
                                      void*);
   V8_INLINE void SetCppHeapWrappable(IsolateForPointerCompression isolate,
-                                     void*, ExternalPointerTag tag);
-  template <ExternalPointerTag tag>
+                                     void*, CppHeapPointerTag tag);
+  template <CppHeapPointerTag lower_bound, CppHeapPointerTag upper_bound>
   V8_INLINE void* GetCppHeapWrappable(
       IsolateForPointerCompression isolate) const;
   V8_INLINE void* GetCppHeapWrappable(IsolateForPointerCompression isolate,
-                                      ExternalPointerTag tag) const;
+                                      CppHeapPointerTagRange tag_range) const;
 
  private:
   static_assert(JSAPIObjectWithEmbedderSlots::kCppHeapWrappableOffset ==
@@ -1127,8 +1142,6 @@ class JSIteratorResult : public JSObject {
   static const int kValueIndex = 0;
   static const int kDoneIndex = 1;
 
-  DECL_CAST(JSIteratorResult)
-
   OBJECT_CONSTRUCTORS(JSIteratorResult, JSObject);
 };
 
@@ -1161,7 +1174,7 @@ class JSGlobalObject
  public:
   DECL_RELEASE_ACQUIRE_ACCESSORS(global_dictionary, Tagged<GlobalDictionary>)
 
-  static void InvalidatePropertyCell(Handle<JSGlobalObject> object,
+  static void InvalidatePropertyCell(DirectHandle<JSGlobalObject> object,
                                      Handle<Name> name);
 
   inline bool IsDetached();
@@ -1206,9 +1219,8 @@ class JSDate : public TorqueGeneratedJSDate<JSDate, JSObject> {
   static Address GetField(Isolate* isolate, Address raw_date,
                           Address smi_index);
 
-  static Handle<Object> SetValue(Handle<JSDate> date, double v);
-
-  void SetValue(Tagged<Object> value, bool is_value_nan);
+  void SetValue(double v);
+  void SetNanValue();
 
   // Dispatched behavior.
   DECL_PRINTER(JSDate)
@@ -1217,7 +1229,6 @@ class JSDate : public TorqueGeneratedJSDate<JSDate, JSObject> {
   // The order is important. It must be kept in sync with date macros
   // in macros.py.
   enum FieldIndex {
-    kDateValue,
     kYear,
     kMonth,
     kDay,
@@ -1242,6 +1253,8 @@ class JSDate : public TorqueGeneratedJSDate<JSDate, JSObject> {
     kTimeInDayUTC,
     kTimezoneOffset
   };
+
+  class BodyDescriptor;
 
  private:
   Tagged<Object> DoGetField(Isolate* isolate, FieldIndex index);
@@ -1272,7 +1285,7 @@ class JSMessageObject
   // source positions will be not be set and calling it again when there is more
   // stack space will not have any effect.
   static inline void EnsureSourcePositionsAvailable(
-      Isolate* isolate, Handle<JSMessageObject> message);
+      Isolate* isolate, DirectHandle<JSMessageObject> message);
 
   // Gets the start and end positions for the message.
   // EnsureSourcePositionsAvailable must have been called before calling these.
@@ -1312,8 +1325,8 @@ class JSMessageObject
   friend class Factory;
 
   inline bool DidEnsureSourcePositionsAvailable() const;
-  static void V8_PRESERVE_MOST V8_EXPORT_PRIVATE
-  InitializeSourcePositions(Isolate* isolate, Handle<JSMessageObject> message);
+  static void V8_PRESERVE_MOST V8_EXPORT_PRIVATE InitializeSourcePositions(
+      Isolate* isolate, DirectHandle<JSMessageObject> message);
 
   // [shared]: optional SharedFunctionInfo that can be used to reconstruct the
   // source position if not available when the message was generated.
@@ -1407,13 +1420,10 @@ class JSPromiseWithResolversResult : public JSObject {
   static const int kResolveIndex = 1;
   static const int kRejectIndex = 2;
 
-  DECL_CAST(JSPromiseWithResolversResult)
-
   OBJECT_CONSTRUCTORS(JSPromiseWithResolversResult, JSObject);
 };
 
-}  // namespace internal
-}  // namespace v8
+}  // namespace v8::internal
 
 #include "src/objects/object-macros-undef.h"
 

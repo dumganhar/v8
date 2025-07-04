@@ -35,15 +35,15 @@ class PipelineData;
 namespace wasm {
 class AssumptionsJournal;
 struct FunctionBody;
-class WasmFeatures;
+class WasmDetectedFeatures;
 struct WasmModule;
 class WireBytesStorage;
 class TurboshaftGraphBuildingInterface;
 struct CompilationEnv;
 
-V8_EXPORT_PRIVATE bool BuildTSGraph(
+V8_EXPORT_PRIVATE void BuildTSGraph(
     compiler::turboshaft::PipelineData* data, AccountingAllocator* allocator,
-    CompilationEnv* env, WasmFeatures* detected,
+    CompilationEnv* env, WasmDetectedFeatures* detected,
     compiler::turboshaft::Graph& graph, const FunctionBody& func_body,
     const WireBytesStorage* wire_bytes, AssumptionsJournal* assumptions,
     ZoneVector<WasmInliningPosition>* inlining_positions, int func_index);
@@ -51,8 +51,7 @@ V8_EXPORT_PRIVATE bool BuildTSGraph(
 void BuildWasmWrapper(compiler::turboshaft::PipelineData* data,
                       AccountingAllocator* allocator,
                       compiler::turboshaft::Graph& graph,
-                      const wasm::FunctionSig* sig, WrapperCompilationInfo,
-                      const WasmModule* module);
+                      const wasm::CanonicalSig* sig, WrapperCompilationInfo);
 
 // Base class for the decoder graph builder interface and for the wrapper
 // builder.
@@ -63,9 +62,13 @@ class V8_EXPORT_PRIVATE WasmGraphBuilderBase {
       compiler::turboshaft::DataViewLoweringReducer,
       compiler::turboshaft::VariableReducer>;
   template <typename T>
-  using ScopedVar = compiler::turboshaft::ScopedVariable<T, Assembler>;
+  using Var = compiler::turboshaft::Var<T, Assembler>;
+  template <typename T>
+  using ScopedVar = compiler::turboshaft::ScopedVar<T, Assembler>;
   template <typename T, typename A>
-  friend class compiler::turboshaft::ScopedVariable;
+  friend class compiler::turboshaft::Var;
+  template <typename T, typename A>
+  friend class compiler::turboshaft::ScopedVar;
 
  public:
   using OpIndex = compiler::turboshaft::OpIndex;
@@ -80,19 +83,18 @@ class V8_EXPORT_PRIVATE WasmGraphBuilderBase {
 
   using RegisterRepresentation = compiler::turboshaft::RegisterRepresentation;
   using TSCallDescriptor = compiler::turboshaft::TSCallDescriptor;
+  using WasmCodePtr = compiler::turboshaft::WasmCodePtr;
   using Word32 = compiler::turboshaft::Word32;
   using Word64 = compiler::turboshaft::Word64;
   using WordPtr = compiler::turboshaft::WordPtr;
+  using CallTarget = compiler::turboshaft::CallTarget;
+  using Word = compiler::turboshaft::Word;
   using Any = compiler::turboshaft::Any;
 
   template <typename T>
   using V = compiler::turboshaft::V<T>;
   template <typename T>
   using ConstOrV = compiler::turboshaft::ConstOrV<T>;
-
-  using ValidationTag = Decoder::FullValidationTag;
-  using FullDecoder =
-      WasmFullDecoder<ValidationTag, TurboshaftGraphBuildingInterface>;
 
   OpIndex CallRuntime(Zone* zone, Runtime::FunctionId f,
                       std::initializer_list<const OpIndex> args,
@@ -101,10 +103,17 @@ class V8_EXPORT_PRIVATE WasmGraphBuilderBase {
   OpIndex GetBuiltinPointerTarget(Builtin builtin);
   V<WordPtr> GetTargetForBuiltinCall(Builtin builtin, StubCallMode stub_mode);
   V<BigInt> BuildChangeInt64ToBigInt(V<Word64> input, StubCallMode stub_mode);
-  std::pair<V<WordPtr>, V<HeapObject>> BuildImportedFunctionTargetAndRef(
+
+  std::pair<V<WasmCodePtr>, V<HeapObject>>
+  BuildImportedFunctionTargetAndImplicitArg(
       ConstOrV<Word32> func_index,
       V<WasmTrustedInstanceData> trusted_instance_data);
-  RegisterRepresentation RepresentationFor(ValueType type);
+
+  std::pair<V<WasmCodePtr>, V<ExposedTrustedObject>>
+  BuildFunctionTargetAndImplicitArg(V<WasmInternalFunction> internal_function,
+                                    uint64_t expected_sig_hash);
+
+  RegisterRepresentation RepresentationFor(ValueTypeBase type);
   V<WasmTrustedInstanceData> LoadTrustedDataFromInstanceObject(
       V<HeapObject> instance_object);
 

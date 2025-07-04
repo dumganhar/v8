@@ -74,8 +74,8 @@ void DisassembleFunctionImpl(const WasmModule* module, int func_index,
   const wasm::WasmFunction& func = module->functions[func_index];
   AccountingAllocator allocator;
   Zone zone(&allocator, "Wasm disassembler");
-  bool shared = module->types[func.sig_index].is_shared;
-  WasmFeatures detected;
+  bool shared = module->type(func.sig_index).is_shared;
+  WasmDetectedFeatures detected;
   FunctionBodyDisassembler d(&zone, module, func_index, shared, &detected,
                              func.sig, function_body.begin(),
                              function_body.end(), func.code.offset(),
@@ -382,7 +382,7 @@ class ImmediatesPrinter {
     owner_->out_->PatchLabel(label_info, out_.start() + label_start_position);
   }
 
-  void PrintSignature(uint32_t sig_index) {
+  void PrintSignature(ModuleTypeIndex sig_index) {
     if (owner_->module_->has_signature(sig_index)) {
       const FunctionSig* sig = owner_->module_->signature(sig_index);
       PrintSignatureOneLine(out_, sig, 0 /* ignored */, names(), false);
@@ -411,6 +411,11 @@ class ImmediatesPrinter {
         out_, ValueType::RefMaybeNull(imm.type,
                                       is_nullable ? kNullable : kNonNullable));
     if (imm.type.is_index()) use_type(imm.type.ref_index());
+  }
+
+  void BrOnCastFlags(BrOnCastImmediate& flags) {
+    // Ignored here. For printing text format, we do all the work via the
+    // two calls to {ValueType()} that we get for a br_on_cast.
   }
 
   void BranchDepth(BranchDepthImmediate& imm) { PrintDepthAsLabel(imm.depth); }
@@ -479,7 +484,8 @@ class ImmediatesPrinter {
   void Field(FieldImmediate& imm) {
     TypeIndex(imm.struct_imm);
     out_ << " ";
-    names()->PrintFieldName(out_, imm.struct_imm.index, imm.field_imm.index);
+    names()->PrintFieldName(out_, imm.struct_imm.index.index,
+                            imm.field_imm.index);
   }
 
   void Length(IndexImmediate& imm) {
@@ -496,7 +502,7 @@ class ImmediatesPrinter {
     names()->PrintFunctionName(out_, imm.index, NamesProvider::kDevTools);
   }
 
-  void TypeIndex(IndexImmediate& imm) {
+  void TypeIndex(TypeIndexImmediate& imm) {
     out_ << " ";
     names()->PrintTypeName(out_, imm.index);
     use_type(imm.index);
@@ -512,7 +518,7 @@ class ImmediatesPrinter {
     names()->PrintGlobalName(out_, imm.index);
   }
 
-  void TableIndex(IndexImmediate& imm) {
+  void TableIndex(TableIndexImmediate& imm) {
     out_ << " ";
     names()->PrintTableName(out_, imm.index);
   }
@@ -667,7 +673,7 @@ class ImmediatesPrinter {
     names()->PrintTableName(out_, imm.table_src.index);
   }
 
-  void ArrayCopy(IndexImmediate& dst, IndexImmediate& src) {
+  void ArrayCopy(TypeIndexImmediate& dst, TypeIndexImmediate& src) {
     out_ << " ";
     names()->PrintTypeName(out_, dst.index);
     out_ << " ";
@@ -677,7 +683,9 @@ class ImmediatesPrinter {
   }
 
  private:
-  void use_type(uint32_t type_index) { owner_->used_types_.insert(type_index); }
+  void use_type(ModuleTypeIndex type_index) {
+    owner_->used_types_.insert(type_index.index);
+  }
 
   NamesProvider* names() { return owner_->names_; }
 
@@ -711,7 +719,9 @@ void OffsetsProvider::CollectOffsets(const WasmModule* module,
   data_offsets_.reserve(module->data_segments.size());
   recgroups_.reserve(4);  // We can't know, so this is just a guess.
 
-  ModuleDecoderImpl decoder{WasmFeatures::All(), wire_bytes, kWasmOrigin, this};
+  WasmDetectedFeatures unused_detected_features;
+  ModuleDecoderImpl decoder{WasmEnabledFeatures::All(), wire_bytes, kWasmOrigin,
+                            &unused_detected_features, this};
   constexpr bool kNoVerifyFunctions = false;
   decoder.DecodeModule(kNoVerifyFunctions);
 }
@@ -838,8 +848,8 @@ void ModuleDisassembler::PrintModule(Indentation indentation, size_t max_mb) {
         break;
       }
     }
-    if (kSkipFunctionTypesInTypeSection && module_->has_signature(i) &&
-        !in_explicit_recgroup) {
+    if (kSkipFunctionTypesInTypeSection &&
+        module_->has_signature(ModuleTypeIndex{i}) && !in_explicit_recgroup) {
       continue;
     }
     PrintTypeDefinition(i, indentation, kIndicesAsComments);
@@ -1011,8 +1021,10 @@ void ModuleDisassembler::PrintModule(Indentation indentation, size_t max_mb) {
     if (elem.shared) out_ << "shared ";
     names_->PrintValueType(out_, elem.type);
 
-    ModuleDecoderImpl decoder(WasmFeatures::All(), wire_bytes_.module_bytes(),
-                              ModuleOrigin::kWasmOrigin);
+    WasmDetectedFeatures unused_detected_features;
+    ModuleDecoderImpl decoder(
+        WasmEnabledFeatures::All(), wire_bytes_.module_bytes(),
+        ModuleOrigin::kWasmOrigin, &unused_detected_features);
     decoder.consume_bytes(elem.elements_wire_bytes_offset);
     for (size_t i = 0; i < elem.element_count; i++) {
       ConstantExpression entry = decoder.consume_element_segment_entry(
@@ -1042,8 +1054,8 @@ void ModuleDisassembler::PrintModule(Indentation indentation, size_t max_mb) {
     if (func->exported) PrintExportName(kExternalFunction, i);
     PrintSignatureOneLine(out_, func->sig, i, names_, true, kIndicesAsComments);
     out_.NextLine(func->code.offset());
-    bool shared = module_->types[func->sig_index].is_shared;
-    WasmFeatures detected;
+    bool shared = module_->type(func->sig_index).is_shared;
+    WasmDetectedFeatures detected;
     base::Vector<const uint8_t> code = wire_bytes_.GetFunctionBytes(func);
     FunctionBodyDisassembler d(&zone_, module_, i, shared, &detected, func->sig,
                                code.begin(), code.end(), func->code.offset(),
@@ -1072,7 +1084,7 @@ void ModuleDisassembler::PrintModule(Indentation indentation, size_t max_mb) {
     }
     if (data.shared) out_ << " shared";
     if (data.active) {
-      ValueType type = module_->memories[data.memory_index].is_memory64
+      ValueType type = module_->memories[data.memory_index].is_memory64()
                            ? kWasmI64
                            : kWasmI32;
       PrintInitExpression(data.dest_addr, type);
@@ -1162,7 +1174,7 @@ void ModuleDisassembler::PrintInitExpression(const ConstantExpression& init,
       const uint8_t* end = start_ + ref.end_offset();
 
       auto sig = FixedSizeSignature<ValueType>::Returns(expected_type);
-      WasmFeatures detected;
+      WasmDetectedFeatures detected;
       FunctionBodyDisassembler d(&zone_, module_, 0, false, &detected, &sig,
                                  start, end, ref.offset(), wire_bytes_, names_);
       d.DecodeGlobalInitializer(out_);

@@ -32,7 +32,6 @@ namespace internal {
 // referenced via indirect pointers, which guarantee memory-safe access.
 class TrustedObject : public HeapObject {
  public:
-  DECL_CAST(TrustedObject)
   DECL_VERIFIER(TrustedObject)
 
   // Protected pointers.
@@ -51,8 +50,8 @@ class TrustedObject : public HeapObject {
   inline void WriteProtectedPointerField(int offset,
                                          Tagged<TrustedObject> value,
                                          ReleaseStoreTag);
-  inline bool IsProtectedPointerFieldCleared(int offset) const;
-  inline bool IsProtectedPointerFieldCleared(int offset, AcquireLoadTag) const;
+  inline bool IsProtectedPointerFieldEmpty(int offset) const;
+  inline bool IsProtectedPointerFieldEmpty(int offset, AcquireLoadTag) const;
   inline void ClearProtectedPointerField(int offset);
   inline void ClearProtectedPointerField(int offset, ReleaseStoreTag);
 
@@ -66,6 +65,11 @@ class TrustedObject : public HeapObject {
 
   OBJECT_CONSTRUCTORS(TrustedObject, HeapObject);
 };
+
+V8_OBJECT class TrustedObjectLayout : public HeapObjectLayout {
+ public:
+  DECL_VERIFIER(TrustedObject)
+} V8_OBJECT_END;
 
 // A trusted object that can safely be referenced from untrusted objects.
 //
@@ -110,7 +114,6 @@ class ExposedTrustedObject : public TrustedObject {
   // which this object can be referenced from inside the sandbox.
   inline IndirectPointerHandle self_indirect_pointer_handle() const;
 
-  DECL_CAST(ExposedTrustedObject)
   DECL_VERIFIER(ExposedTrustedObject)
 
 #ifdef V8_ENABLE_SANDBOX

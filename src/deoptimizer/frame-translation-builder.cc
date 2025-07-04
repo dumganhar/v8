@@ -4,6 +4,8 @@
 
 #include "src/deoptimizer/frame-translation-builder.h"
 
+#include <optional>
+
 #include "src/base/vlq.h"
 #include "src/deoptimizer/translated-state.h"
 #include "src/objects/fixed-array-inl.h"
@@ -283,7 +285,7 @@ void FrameTranslationBuilder::BeginBuiltinContinuationFrame(
 #if V8_ENABLE_WEBASSEMBLY
 void FrameTranslationBuilder::BeginJSToWasmBuiltinContinuationFrame(
     BytecodeOffset bytecode_offset, int literal_id, unsigned height,
-    base::Optional<wasm::ValueKind> return_kind) {
+    std::optional<wasm::ValueKind> return_kind) {
   auto opcode = TranslationOpcode::JS_TO_WASM_BUILTIN_CONTINUATION_FRAME;
   Add(opcode, SignedOperand(bytecode_offset.ToInt()), SignedOperand(literal_id),
       SignedOperand(height),
@@ -299,15 +301,17 @@ void FrameTranslationBuilder::BeginWasmInlinedIntoJSFrame(
 }
 
 void FrameTranslationBuilder::BeginLiftoffFrame(BytecodeOffset bailout_id,
-                                                unsigned height) {
+                                                unsigned height,
+                                                uint32_t wasm_function_index) {
   auto opcode = TranslationOpcode::LIFTOFF_FRAME;
-  Add(opcode, SignedOperand(bailout_id.ToInt()), SignedOperand(height));
+  Add(opcode, SignedOperand(bailout_id.ToInt()), SignedOperand(height),
+      SignedOperand(wasm_function_index));
 }
 #endif  // V8_ENABLE_WEBASSEMBLY
 
 void FrameTranslationBuilder::BeginJavaScriptBuiltinContinuationFrame(
     BytecodeOffset bytecode_offset, int literal_id, unsigned height) {
-  auto opcode = TranslationOpcode::JAVA_SCRIPT_BUILTIN_CONTINUATION_FRAME;
+  auto opcode = TranslationOpcode::JAVASCRIPT_BUILTIN_CONTINUATION_FRAME;
   Add(opcode, SignedOperand(bytecode_offset.ToInt()), SignedOperand(literal_id),
       SignedOperand(height));
 }
@@ -315,7 +319,7 @@ void FrameTranslationBuilder::BeginJavaScriptBuiltinContinuationFrame(
 void FrameTranslationBuilder::BeginJavaScriptBuiltinContinuationWithCatchFrame(
     BytecodeOffset bytecode_offset, int literal_id, unsigned height) {
   auto opcode =
-      TranslationOpcode::JAVA_SCRIPT_BUILTIN_CONTINUATION_WITH_CATCH_FRAME;
+      TranslationOpcode::JAVASCRIPT_BUILTIN_CONTINUATION_WITH_CATCH_FRAME;
   Add(opcode, SignedOperand(bytecode_offset.ToInt()), SignedOperand(literal_id),
       SignedOperand(height));
 }
@@ -338,17 +342,19 @@ void FrameTranslationBuilder::BeginInlinedExtraArguments(int literal_id,
 }
 
 void FrameTranslationBuilder::BeginInterpretedFrame(
-    BytecodeOffset bytecode_offset, int literal_id, unsigned height,
-    int return_value_offset, int return_value_count) {
+    BytecodeOffset bytecode_offset, int literal_id, int bytecode_array_id,
+    unsigned height, int return_value_offset, int return_value_count) {
   if (return_value_count == 0) {
     auto opcode = TranslationOpcode::INTERPRETED_FRAME_WITHOUT_RETURN;
     Add(opcode, SignedOperand(bytecode_offset.ToInt()),
-        SignedOperand(literal_id), SignedOperand(height));
+        SignedOperand(literal_id), SignedOperand(bytecode_array_id),
+        SignedOperand(height));
   } else {
     auto opcode = TranslationOpcode::INTERPRETED_FRAME_WITH_RETURN;
     Add(opcode, SignedOperand(bytecode_offset.ToInt()),
-        SignedOperand(literal_id), SignedOperand(height),
-        SignedOperand(return_value_offset), SignedOperand(return_value_count));
+        SignedOperand(literal_id), SignedOperand(bytecode_array_id),
+        SignedOperand(height), SignedOperand(return_value_offset),
+        SignedOperand(return_value_count));
   }
 }
 
@@ -436,6 +442,12 @@ void FrameTranslationBuilder::StoreHoleyDoubleRegister(DoubleRegister reg) {
   Add(opcode, SmallUnsignedOperand(static_cast<uint8_t>(reg.code())));
 }
 
+void FrameTranslationBuilder::StoreSimd128Register(Simd128Register reg) {
+  static_assert(DoubleRegister::kNumRegisters - 1 <= base::kDataMask);
+  auto opcode = TranslationOpcode::SIMD128_REGISTER;
+  Add(opcode, SmallUnsignedOperand(static_cast<uint8_t>(reg.code())));
+}
+
 void FrameTranslationBuilder::StoreStackSlot(int index) {
   auto opcode = TranslationOpcode::TAGGED_STACK_SLOT;
   Add(opcode, SignedOperand(index));
@@ -478,6 +490,11 @@ void FrameTranslationBuilder::StoreFloatStackSlot(int index) {
 
 void FrameTranslationBuilder::StoreDoubleStackSlot(int index) {
   auto opcode = TranslationOpcode::DOUBLE_STACK_SLOT;
+  Add(opcode, SignedOperand(index));
+}
+
+void FrameTranslationBuilder::StoreSimd128StackSlot(int index) {
+  auto opcode = TranslationOpcode::SIMD128_STACK_SLOT;
   Add(opcode, SignedOperand(index));
 }
 

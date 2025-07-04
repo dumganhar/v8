@@ -52,6 +52,9 @@ using ReturnAddressLocationResolver =
 using DcheckErrorCallback = void (*)(const char* file, int line,
                                      const char* message);
 
+using V8FatalErrorCallback = void (*)(const char* file, int line,
+                                      const char* message);
+
 /**
  * Container class for static utility functions.
  */
@@ -76,6 +79,12 @@ class V8_EXPORT V8 {
 
   /** Set the callback to invoke in case of Dcheck failures. */
   static void SetDcheckErrorHandler(DcheckErrorCallback that);
+
+  /** Set the callback to invoke in the case of CHECK failures or fatal
+   * errors. This is distinct from Isolate::SetFatalErrorHandler, which
+   * is invoked in response to API usage failures.
+   * */
+  static void SetFatalErrorHandler(V8FatalErrorCallback that);
 
   /**
    * Sets V8 flags from a string.
@@ -103,11 +112,18 @@ class V8_EXPORT V8 {
     const bool kV8TargetOsIsAndroid = false;
 #endif
 
+#ifdef V8_ENABLE_CHECKS
+    const bool kV8EnableChecks = true;
+#else
+    const bool kV8EnableChecks = false;
+#endif
+
     const int kBuildConfiguration =
         (internal::PointerCompressionIsEnabled() ? kPointerCompression : 0) |
         (internal::SmiValuesAre31Bits() ? k31BitSmis : 0) |
         (internal::SandboxIsEnabled() ? kSandbox : 0) |
-        (kV8TargetOsIsAndroid ? kTargetOsIsAndroid : 0);
+        (kV8TargetOsIsAndroid ? kTargetOsIsAndroid : 0) |
+        (kV8EnableChecks ? kEnableChecks : 0);
     return Initialize(kBuildConfiguration);
   }
 
@@ -193,12 +209,18 @@ class V8_EXPORT V8 {
   /**
    * Returns true if the sandbox is configured securely.
    *
-   * If V8 cannot create a regular sandbox during initialization, for example
-   * because not enough virtual address space can be reserved, it will instead
-   * create a fallback sandbox that still allows it to function normally but
-   * does not have the same security properties as a regular sandbox. This API
-   * can be used to determine if such a fallback sandbox is being used, in
-   * which case it will return false.
+   * There are currently two reasons why this may return false:
+   *
+   * 1. If V8 cannot create a regular sandbox during initialization, for
+   *    example because not enough virtual address space can be reserved, it
+   *    will instead create a fallback sandbox that still allows it to
+   *    function normally but does not have the same security properties as a
+   *    regular sandbox.
+   *
+   * 2. The Sandbox will also attempt to reserve the first four gigabytes of
+   *    the address space during initialization. This is used to mitigates
+   *    certain issues where a Smi is treated as a pointer and dereferenced,
+   *    causing an access somewhere in the 32-bit address range.
    */
   static bool IsSandboxConfiguredSecurely();
 
@@ -279,6 +301,7 @@ class V8_EXPORT V8 {
     k31BitSmis = 1 << 1,
     kSandbox = 1 << 2,
     kTargetOsIsAndroid = 1 << 3,
+    kEnableChecks = 1 << 4,
   };
 
   /**

@@ -27,8 +27,8 @@
 #include "absl/strings/substitute.h"
 #include "absl/time/time.h"
 #include "./centipede/early_exit.h"
-#include "./centipede/test_util.h"
 #include "./centipede/util.h"
+#include "./common/test_util.h"
 
 namespace centipede {
 namespace {
@@ -124,7 +124,9 @@ TEST(CommandTest, ForkServer) {
     const std::string log = std::filesystem::path{test_tmpdir} / input;
     Command cmd(helper, {input}, {}, log, log);
     EXPECT_TRUE(cmd.StartForkServer(test_tmpdir, "ForkServer"));
-    EXPECT_EQ(WTERMSIG(cmd.Execute()), SIGABRT);
+    // WTERMSIG() needs an lvalue on some platforms.
+    const int ret = cmd.Execute();
+    EXPECT_EQ(WTERMSIG(ret), SIGABRT);
     std::string log_contents;
     ReadFromLocalFile(log, log_contents);
     EXPECT_EQ(log_contents, absl::Substitute("Got input: $0", input));

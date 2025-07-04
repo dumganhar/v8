@@ -24,8 +24,6 @@ _IGNORE_WARNINGS = (
     # apk_under_test have no shared_libraries.
     # https://crbug.com/1364192 << To fix this in a better way.
     r'Missing class org.chromium.build.NativeLibraries',
-    # Caused by internal protobuf package: https://crbug.com/1183971
-    r'referenced from: com\.google\.protobuf\.GeneratedMessageLite\$GeneratedExtension',  # pylint: disable=line-too-long
     # Caused by protobuf runtime using -identifiernamestring in a way that
     # doesn't work with R8. Looks like:
     # Rule matches the static final field `...`, which may have been inlined...
@@ -61,13 +59,23 @@ _IGNORE_WARNINGS = (
     r'Missing class android.adservices.common.AdServicesOutcomeReceiver',
     # We enforce that this class is removed via -checkdiscard.
     r'FastServiceLoader\.class:.*Could not inline ServiceLoader\.load',
-
+    # Happens on internal builds. It's a real failure, but happens in dead code.
+    r'(?:GeneratedExtensionRegistryLoader|ExtensionRegistryLite)\.class:.*Could not inline ServiceLoader\.load',   # pylint: disable=line-too-long
+    # This class is referenced by kotlinx-coroutines-core-jvm but it does not
+    # depend on it. Not actually needed though.
+    r'Missing class org.codehaus.mojo.animal_sniffer.IgnoreJRERequirement',
     # Ignore MethodParameter attribute count isn't matching in espresso.
     # This is a banner warning and each individual file affected will have
     # its own warning.
     r'Warning: Invalid parameter counts in MethodParameter attributes',
-    r'Warning in obj/third_party/androidx/androidx_test_espresso_espresso_core_java',  # pylint: disable=line-too-long
-    r'Warning in obj/third_party/androidx/androidx_test_espresso_espresso_web_java',  # pylint: disable=line-too-long
+    # Full error: "Warning: InnerClasses attribute has entries missing a
+    # corresponding EnclosingMethod attribute. Such InnerClasses attribute
+    # entries are ignored."
+    r'Warning: InnerClasses attribute has entries missing a corresponding EnclosingMethod attribute',  # pylint: disable=line-too-long
+    # Full error example: "Warning in <path to target prebuilt>:
+    # androidx/test/espresso/web/internal/deps/guava/collect/Maps$1.class:"
+    # Also happens in espresso core.
+    r'Warning in .*:androidx/test/espresso/.*/guava/collect/.*',
 
     # We are following up in b/290389974
     r'AppSearchDocumentClassMap\.class:.*Could not inline ServiceLoader\.load',
@@ -75,7 +83,7 @@ _IGNORE_WARNINGS = (
 
 _BLOCKLISTED_EXPECTATION_PATHS = [
     # A separate expectation file is created for these files.
-    'clank/third_party/google3/pg_confs/',
+    'clank/third_party/google3/cipd/pg_confs/',
 ]
 
 _DUMP_DIR_NAME = 'r8inputs_dir'
@@ -110,10 +118,14 @@ def _ParseOptions():
   parser.add_argument(
       '--extra-mapping-output-paths',
       help='GN-list of additional paths to copy output mapping file to.')
+  parser.add_argument('--sdk-jars',
+                      action='append',
+                      help='GN-list of .jar files to include as libraries.')
   parser.add_argument(
-      '--classpath',
+      '--sdk-extension-jars',
       action='append',
-      help='GN-list of .jar files to include as libraries.')
+      help='GN-list of .jar files to include as libraries, and that are not a '
+      'part of R8\'s API database.')
   parser.add_argument('--main-dex-rules-path',
                       action='append',
                       help='Path to main dex rules for multidex.')
@@ -221,12 +233,16 @@ def _ParseOptions():
     parser.error('Cannot use both --force-enable-assertions and '
                  '--assertion-handler')
 
-  options.classpath = action_helpers.parse_gn_list(options.classpath)
+  options.sdk_jars = action_helpers.parse_gn_list(options.sdk_jars)
+  options.sdk_extension_jars = action_helpers.parse_gn_list(
+      options.sdk_extension_jars)
   options.proguard_configs = action_helpers.parse_gn_list(
       options.proguard_configs)
   options.input_paths = action_helpers.parse_gn_list(options.input_paths)
   options.extra_mapping_output_paths = action_helpers.parse_gn_list(
       options.extra_mapping_output_paths)
+  if os.environ.get('R8_VERBOSE') == '1':
+    options.verbose = True
 
   if options.feature_names:
     if 'base' not in options.feature_names:
@@ -319,15 +335,29 @@ def _OptimizeWithR8(options, config_paths, libraries, dynamic_config_data):
                                                      tmp_output)
     base_context = split_contexts_by_name['base']
 
-    # R8 OOMs with the default xmx=1G.
-    cmd = build_utils.JavaCmd(xmx='2G') + [
+    # R8 OOMs with xmx=2G.
+    cmd = build_utils.JavaCmd(xmx='3G') + [
         # Allows -whyareyounotinlining, which we don't have by default, but
         # which is useful for one-off queries.
         '-Dcom.android.tools.r8.experimental.enablewhyareyounotinlining=1',
         # Restricts horizontal class merging to apply only to classes that
         # share a .java file (nested classes). https://crbug.com/1363709
         '-Dcom.android.tools.r8.enableSameFilePolicy=1',
+        # Allow ServiceLoaderUtil.maybeCreate() to work with types that are
+        # -kept (e.g. due to containing JNI).
+        '-Dcom.android.tools.r8.allowServiceLoaderRewritingPinnedTypes=1',
+        # Allow R8 to inline kept methods by default.
+        # See: b/364267880#2
+        '-Dcom.android.tools.r8.allowCodeReplacement=false',
+        # Required to use "-keep,allowcodereplacement"
+        '-Dcom.android.tools.r8.allowTestProguardOptions=true',
     ]
+    if options.sdk_extension_jars:
+      # Enable API modelling for OS extensions. https://b/326252366
+      cmd += [
+          '-Dcom.android.tools.r8.androidApiExtensionLibraries=' +
+          ','.join(options.sdk_extension_jars)
+      ]
     if options.dump_inputs:
       cmd += [f'-Dcom.android.tools.r8.dumpinputtodirectory={_DUMP_DIR_NAME}']
     if options.dump_unknown_refs:
@@ -352,6 +382,9 @@ def _OptimizeWithR8(options, config_paths, libraries, dynamic_config_data):
 
     if options.disable_checks:
       cmd += ['--map-diagnostics:CheckDiscardDiagnostic', 'error', 'none']
+    # Triggered by rules from deps we cannot control.
+    cmd += [('--map-diagnostics:EmptyMemberRulesToDefaultInitRuleConversion'
+             'Diagnostic'), 'warning', 'none']
     cmd += ['--map-diagnostics', 'info', 'warning']
     # An "error" level diagnostic causes r8 to return an error exit code. Doing
     # this allows our filter to decide what should/shouldn't break our build.
@@ -401,7 +434,7 @@ def _OptimizeWithR8(options, config_paths, libraries, dynamic_config_data):
 
     cmd += sorted(base_context.input_jars)
 
-    if options.verbose or os.environ.get('R8_VERBOSE') == '1':
+    if options.verbose:
       stderr_filter = None
     else:
       filters = list(dex.DEFAULT_IGNORE_WARNINGS)
@@ -432,10 +465,10 @@ def _OptimizeWithR8(options, config_paths, libraries, dynamic_config_data):
   return split_contexts_by_name
 
 
-def _OutputKeepRules(r8_path, input_paths, classpath, targets_re_string,
+def _OutputKeepRules(r8_path, input_paths, libraries, targets_re_string,
                      keep_rules_output):
 
-  cmd = build_utils.JavaCmd() + [
+  cmd = build_utils.JavaCmd(xmx='2G') + [
       '-cp', r8_path, 'com.android.tools.r8.tracereferences.TraceReferences',
       '--map-diagnostics:MissingDefinitionsDiagnostic', 'error', 'warning',
       '--keep-rules', '--output', keep_rules_output
@@ -446,26 +479,26 @@ def _OutputKeepRules(r8_path, input_paths, classpath, targets_re_string,
       cmd += ['--target', path]
     else:
       cmd += ['--source', path]
-  for path in classpath:
+  for path in libraries:
     cmd += ['--lib', path]
 
   build_utils.CheckOutput(cmd, print_stderr=False, fail_on_output=False)
 
 
-def _CheckForMissingSymbols(r8_path, dex_files, classpath, warnings_as_errors,
-                            dump_inputs, error_title):
-  cmd = build_utils.JavaCmd()
+def _CheckForMissingSymbols(options, dex_files, error_title):
+  cmd = build_utils.JavaCmd(xmx='2G')
 
-  if dump_inputs:
+  if options.dump_inputs:
     cmd += [f'-Dcom.android.tools.r8.dumpinputtodirectory={_DUMP_DIR_NAME}']
 
   cmd += [
-      '-cp', r8_path, 'com.android.tools.r8.tracereferences.TraceReferences',
+      '-cp', options.r8_path,
+      'com.android.tools.r8.tracereferences.TraceReferences',
       '--map-diagnostics:MissingDefinitionsDiagnostic', 'error', 'warning',
       '--check'
   ]
 
-  for path in classpath:
+  for path in options.sdk_jars + options.sdk_extension_jars:
     cmd += ['--lib', path]
   for path in dex_files:
     cmd += ['--source', path]
@@ -507,6 +540,10 @@ def _CheckForMissingSymbols(r8_path, dex_files, classpath, warnings_as_errors,
         # Explicitly guarded by try (NoClassDefFoundError) in Firebase's
         # KotlinDetector: com.google.firebase.platforminfo.KotlinDetector.
         'kotlin.KotlinVersion',
+
+        # Not sure why these two are missing, but they do not seem important.
+        'ResultIgnorabilityUnspecified',
+        'kotlin.DeprecationLevel',
     ]
 
     had_unfiltered_items = '  ' in stderr
@@ -532,10 +569,12 @@ out/Release/apks/YourApk.apk > dex.txt
     return stderr
 
   try:
+    if options.verbose:
+      stderr_filter = None
     build_utils.CheckOutput(cmd,
                             print_stdout=True,
                             stderr_filter=stderr_filter,
-                            fail_on_output=warnings_as_errors)
+                            fail_on_output=options.warnings_as_errors)
   except build_utils.CalledProcessError as e:
     # Do not output command line because it is massive and makes the actual
     # error message hard to find.
@@ -662,9 +701,7 @@ def _DoTraceReferencesChecks(options, split_contexts_by_name):
   error_title = 'DEX contains references to non-existent symbols after R8.'
   dex_files = sorted(c.final_output_path
                      for c in split_contexts_by_name.values())
-  if _CheckForMissingSymbols(options.r8_path, dex_files, options.classpath,
-                             options.warnings_as_errors, options.dump_inputs,
-                             error_title):
+  if _CheckForMissingSymbols(options, dex_files, error_title):
     # Failed but didn't raise due to warnings_as_errors=False
     return
 
@@ -678,9 +715,7 @@ def _DoTraceReferencesChecks(options, split_contexts_by_name):
     # run 3 of them (all, base, base+chrome).
     # We could run them concurrently, to shave off 5-6 seconds, but would need
     # to make sure that the order is maintained.
-    if _CheckForMissingSymbols(options.r8_path, dex_files, options.classpath,
-                               options.warnings_as_errors, options.dump_inputs,
-                               error_title):
+    if _CheckForMissingSymbols(options, dex_files, error_title):
       # Failed but didn't raise due to warnings_as_errors=False
       return
 
@@ -691,11 +726,10 @@ def _Run(options):
   dynamic_config_data = _CreateDynamicConfig(options)
 
   logging.debug('Looking for embedded configs')
-  # If a jar is part of input no need to include it as library jar.
-  libraries = [p for p in options.classpath if p not in options.input_paths]
+  libraries = options.sdk_jars + options.sdk_extension_jars
 
   embedded_configs = {}
-  for jar_path in options.input_paths + libraries:
+  for jar_path in options.input_paths:
     _ExtractEmbeddedConfigs(jar_path, embedded_configs)
 
   # ProGuard configs that are derived from flags.
@@ -714,7 +748,7 @@ def _Run(options):
       return
 
   if options.keep_rules_output_path:
-    _OutputKeepRules(options.r8_path, options.input_paths, options.classpath,
+    _OutputKeepRules(options.r8_path, options.input_paths, libraries,
                      options.keep_rules_targets_regex,
                      options.keep_rules_output_path)
     return

@@ -99,6 +99,8 @@ JSSynchronizationPrimitive::SetWaiterQueueHead(Isolate* requester,
       // threads may access an uninitialized table entry and crash.
       base::AsAtomic32::Release_Store(waiter_queue_head_handle_location(),
                                       handle);
+      EXTERNAL_POINTER_WRITE_BARRIER(*this, kWaiterQueueHeadOffset,
+                                     kWaiterQueueNodeTag);
       return new_state;
     }
     if (DEBUG_BOOL) {
@@ -125,8 +127,6 @@ JSSynchronizationPrimitive::SetWaiterQueueHead(Isolate* requester,
 
 TQ_OBJECT_CONSTRUCTORS_IMPL(JSAtomicsMutex)
 
-CAST_ACCESSOR(JSAtomicsMutex)
-
 JSAtomicsMutex::LockGuardBase::LockGuardBase(Isolate* isolate,
                                              Handle<JSAtomicsMutex> mutex,
                                              bool locked)
@@ -138,7 +138,7 @@ JSAtomicsMutex::LockGuardBase::~LockGuardBase() {
 
 JSAtomicsMutex::LockGuard::LockGuard(Isolate* isolate,
                                      Handle<JSAtomicsMutex> mutex,
-                                     base::Optional<base::TimeDelta> timeout)
+                                     std::optional<base::TimeDelta> timeout)
     : LockGuardBase(isolate, mutex,
                     JSAtomicsMutex::Lock(isolate, mutex, timeout)) {}
 
@@ -147,8 +147,9 @@ JSAtomicsMutex::TryLockGuard::TryLockGuard(Isolate* isolate,
     : LockGuardBase(isolate, mutex, mutex->TryLock()) {}
 
 // static
-bool JSAtomicsMutex::LockImpl(Isolate* requester, Handle<JSAtomicsMutex> mutex,
-                              base::Optional<base::TimeDelta> timeout,
+bool JSAtomicsMutex::LockImpl(Isolate* requester,
+                              DirectHandle<JSAtomicsMutex> mutex,
+                              std::optional<base::TimeDelta> timeout,
                               LockSlowPathWrapper slow_path_wrapper) {
   DisallowGarbageCollection no_gc;
   // First try to lock an uncontended mutex, which should be the common case. If
@@ -175,7 +176,7 @@ bool JSAtomicsMutex::LockImpl(Isolate* requester, Handle<JSAtomicsMutex> mutex,
 
 // static
 bool JSAtomicsMutex::Lock(Isolate* requester, Handle<JSAtomicsMutex> mutex,
-                          base::Optional<base::TimeDelta> timeout) {
+                          std::optional<base::TimeDelta> timeout) {
   return LockImpl(requester, mutex, timeout, [=](std::atomic<StateT>* state) {
     return LockSlowPath(requester, mutex, state, timeout);
   });
@@ -242,8 +243,6 @@ std::atomic<int32_t>* JSAtomicsMutex::AtomicOwnerThreadIdPtr() {
 }
 
 TQ_OBJECT_CONSTRUCTORS_IMPL(JSAtomicsCondition)
-
-CAST_ACCESSOR(JSAtomicsCondition)
 
 }  // namespace internal
 }  // namespace v8

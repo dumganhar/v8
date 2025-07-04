@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string>
 #include <utility>
 
 #include "cppgc/common.h"
@@ -17,6 +18,7 @@
 #include "v8-data.h"               // NOLINT(build/include_directory)
 #include "v8-debug.h"              // NOLINT(build/include_directory)
 #include "v8-embedder-heap.h"      // NOLINT(build/include_directory)
+#include "v8-exception.h"          // NOLINT(build/include_directory)
 #include "v8-function-callback.h"  // NOLINT(build/include_directory)
 #include "v8-internal.h"           // NOLINT(build/include_directory)
 #include "v8-local-handle.h"       // NOLINT(build/include_directory)
@@ -277,12 +279,6 @@ class V8_EXPORT Isolate {
     bool allow_atomics_wait = true;
 
     /**
-     * Termination is postponed when there is no active SafeForTerminationScope.
-     */
-    V8_DEPRECATED("All code should be safe for termination")
-    bool only_terminate_in_safe_scope = false;
-
-    /**
      * The following parameters describe the offsets for addressing type info
      * for wrapped API objects and are used by the fast C API
      * (for details see v8-fast-api-calls.h).
@@ -388,21 +384,6 @@ class V8_EXPORT Isolate {
     internal::Address previous_stack_height_;
 
     friend class internal::ThreadLocalTop;
-  };
-
-  /**
-   * This scope allows terminations inside direct V8 API calls and forbid them
-   * inside any recursive API calls without explicit SafeForTerminationScope.
-   */
-  class V8_EXPORT V8_NODISCARD SafeForTerminationScope {
-   public:
-    V8_DEPRECATED("All code should be safe for termination")
-    explicit SafeForTerminationScope(v8::Isolate* v8_isolate) {}
-    ~SafeForTerminationScope() {}
-
-    // Prevent copying of Scope objects.
-    SafeForTerminationScope(const SafeForTerminationScope&) = delete;
-    SafeForTerminationScope& operator=(const SafeForTerminationScope&) = delete;
   };
 
   /**
@@ -543,7 +524,7 @@ class V8_EXPORT Isolate {
     kDurationFormat = 117,
     kInvalidatedNumberStringNotRegexpLikeProtector = 118,
     kOBSOLETE_RegExpUnicodeSetIncompatibilitiesWithUnicodeMode = 119,
-    kImportAssertionDeprecatedSyntax = 120,
+    kOBSOLETE_ImportAssertionDeprecatedSyntax = 120,
     kLocaleInfoObsoletedGetters = 121,
     kLocaleInfoFunctions = 122,
     kCompileHintsMagicAll = 123,
@@ -564,6 +545,12 @@ class V8_EXPORT Isolate {
     kWasmExnRef = 138,
     kWasmTypedFuncRef = 139,
     kInvalidatedStringWrapperToPrimitiveProtector = 140,
+    kDocumentAllLegacyCall = 141,
+    kDocumentAllLegacyConstruct = 142,
+    kConsoleContext = 143,
+    kWasmImportedStringsUtf8 = 144,
+    kResizableArrayBuffer = 145,
+    kGrowableSharedArrayBuffer = 146,
 
     // If you add new values here, you'll also need to update Chromium's:
     // web_feature.mojom, use_counter_callback.cc, and enums.xml. V8 changes to
@@ -579,6 +566,21 @@ class V8_EXPORT Isolate {
     kMessageWarning = (1 << 4),
     kMessageAll = kMessageLog | kMessageDebug | kMessageInfo | kMessageError |
                   kMessageWarning,
+  };
+
+  // The different priorities that an isolate can have.
+  enum class Priority {
+    // The isolate does not relate to content that is currently important
+    // to the user. Lowest priority.
+    kBestEffort,
+
+    // The isolate contributes to content that is visible to the user, like a
+    // visible iframe that's not interacted directly with. High priority.
+    kUserVisible,
+
+    // The isolate contributes to content that is of the utmost importance to
+    // the user, like visible content in the focused window. Highest priority.
+    kUserBlocking,
   };
 
   using UseCounterCallback = void (*)(Isolate* isolate,
@@ -673,6 +675,18 @@ class V8_EXPORT Isolate {
       HostImportModuleDynamicallyCallback callback);
 
   /**
+   * This specifies the callback called by the upcoming dynamic
+   * import() and import.source() language feature to load modules.
+   *
+   * This API is experimental and is expected to be changed or removed in the
+   * future. The callback is currently only called when for source-phase
+   * imports. Evaluation-phase imports use the existing
+   * HostImportModuleDynamicallyCallback callback.
+   */
+  void SetHostImportModuleWithPhaseDynamicallyCallback(
+      HostImportModuleWithPhaseDynamicallyCallback callback);
+
+  /**
    * This specifies the callback called by the upcoming import.meta
    * language feature to retrieve host-defined meta data for a module.
    */
@@ -691,6 +705,11 @@ class V8_EXPORT Isolate {
    * is accessed.
    */
   void SetPrepareStackTraceCallback(PrepareStackTraceCallback callback);
+
+  /**
+   * Get the stackTraceLimit property of Error.
+   */
+  int GetStackTraceLimit();
 
 #if defined(V8_OS_WIN)
   /**
@@ -934,6 +953,12 @@ class V8_EXPORT Isolate {
   Local<Context> GetIncumbentContext();
 
   /**
+   * Returns the host defined options set for currently running script or
+   * module, if available.
+   */
+  MaybeLocal<Data> GetCurrentHostDefinedOptions();
+
+  /**
    * Schedules a v8::Exception::Error with the given message.
    * See ThrowException for more details. Templatized to provide compile-time
    * errors in case of too long strings (see v8::String::NewFromUtf8Literal).
@@ -951,6 +976,14 @@ class V8_EXPORT Isolate {
    * has been handled does it become legal to invoke JavaScript operations.
    */
   Local<Value> ThrowException(Local<Value> exception);
+
+  /**
+   * Returns true if an exception was thrown but not processed yet by an
+   * exception handler on JavaScript side or by v8::TryCatch handler.
+   *
+   * This is an experimental feature and may still change significantly.
+   */
+  bool HasPendingException();
 
   using GCCallback = void (*)(Isolate* isolate, GCType type,
                               GCCallbackFlags flags);
@@ -1275,6 +1308,15 @@ class V8_EXPORT Isolate {
   void SetPromiseRejectCallback(PromiseRejectCallback callback);
 
   /**
+   * This is a part of experimental Api and might be changed without further
+   * notice.
+   * Do not use it.
+   *
+   * Set callback to notify about a new exception being thrown.
+   */
+  void SetExceptionPropagationCallback(ExceptionPropagationCallback callback);
+
+  /**
    * Runs the default MicrotaskQueue until it gets empty and perform other
    * microtask checkpoint steps, such as calling ClearKeptObjects. Asserts that
    * the MicrotasksPolicy is not kScoped. Any exceptions thrown by microtask
@@ -1364,24 +1406,6 @@ class V8_EXPORT Isolate {
   void SetAddCrashKeyCallback(AddCrashKeyCallback);
 
   /**
-   * Optional notification that the embedder is idle.
-   * V8 uses the notification to perform garbage collection.
-   * This call can be used repeatedly if the embedder remains idle.
-   * Returns true if the embedder should stop calling IdleNotificationDeadline
-   * until real work has been done.  This indicates that V8 has done
-   * as much cleanup as it will be able to do.
-   *
-   * The deadline_in_seconds argument specifies the deadline V8 has to finish
-   * garbage collection work. deadline_in_seconds is compared with
-   * MonotonicallyIncreasingTime() and should be based on the same timebase as
-   * that function. There is no guarantee that the actual work will be done
-   * within the time limit.
-   */
-  V8_DEPRECATED(
-      "Use MemoryPressureNotification() to influence the GC schedule.")
-  bool IdleNotificationDeadline(double deadline_in_seconds);
-
-  /**
    * Optional notification that the system is running low on memory.
    * V8 uses these notifications to attempt to free memory.
    */
@@ -1402,13 +1426,21 @@ class V8_EXPORT Isolate {
    * Optional notification that the isolate switched to the foreground.
    * V8 uses these notifications to guide heuristics.
    */
+  V8_DEPRECATE_SOON("Use SetPriority(Priority::kUserBlocking) instead")
   void IsolateInForegroundNotification();
 
   /**
    * Optional notification that the isolate switched to the background.
    * V8 uses these notifications to guide heuristics.
    */
+  V8_DEPRECATE_SOON("Use SetPriority(Priority::kBestEffort) instead")
   void IsolateInBackgroundNotification();
+
+  /**
+   * Optional notification that the isolate changed `priority`.
+   * V8 uses the priority value to guide heuristics.
+   */
+  void SetPriority(Priority priority);
 
   /**
    * Optional notification to tell V8 the current performance requirements
@@ -1417,12 +1449,28 @@ class V8_EXPORT Isolate {
    * This is an unfinished experimental feature. Semantics and implementation
    * may change frequently.
    */
+  V8_DEPRECATED("Use SetIsLoading instead")
   void SetRAILMode(RAILMode rail_mode);
 
   /**
    * Update load start time of the RAIL mode
    */
+  V8_DEPRECATED("Use SetIsLoading instead")
   void UpdateLoadStartTime();
+
+  /**
+   * Optional notification to tell V8 whether the embedder is currently loading
+   * resources. If the embedder uses this notification, it should call
+   * SetIsLoading(true) when loading starts and SetIsLoading(false) when it
+   * ends.
+   * It's valid to call SetIsLoading(true) again while loading, which will
+   * update the timestamp when V8 considers the load started. Calling
+   * SetIsLoading(false) while not loading does nothing.
+   * V8 uses these notifications to guide heuristics.
+   * This is an unfinished experimental feature. Semantics and implementation
+   * may change frequently.
+   */
+  void SetIsLoading(bool is_loading);
 
   /**
    * Optional notification to tell V8 the current isolate is used for debugging
@@ -1593,6 +1641,9 @@ class V8_EXPORT Isolate {
    * Register callback to control whether compile hints magic comments are
    * enabled.
    */
+  V8_DEPRECATED(
+      "Will be removed, use ScriptCompiler::CompileOptions for enabling the "
+      "compile hints magic comments")
   void SetJavaScriptCompileHintsMagicEnabledCallback(
       JavaScriptCompileHintsMagicEnabledCallback callback);
 
@@ -1661,12 +1712,6 @@ class V8_EXPORT Isolate {
   void VisitExternalResources(ExternalResourceVisitor* visitor);
 
   /**
-   * Iterates through all the persistent handles in the current isolate's heap
-   * that have class_ids.
-   */
-  void VisitHandlesWithClassIds(PersistentHandleVisitor* visitor);
-
-  /**
    * Check if this isolate is in use.
    * True if at least one thread Enter'ed this isolate.
    */
@@ -1718,6 +1763,12 @@ class V8_EXPORT Isolate {
    */
   void LocaleConfigurationChangeNotification();
 
+  /**
+   * Returns the default locale in a string if Intl support is enabled.
+   * Otherwise returns an empty string.
+   */
+  std::string GetDefaultLocale();
+
   Isolate() = delete;
   ~Isolate() = delete;
   Isolate(const Isolate&) = delete;
@@ -1733,8 +1784,9 @@ class V8_EXPORT Isolate {
   template <class K, class V, class Traits>
   friend class PersistentValueMapBase;
 
-  internal::Address* GetDataFromSnapshotOnce(size_t index);
-  void ReportExternalAllocationLimitReached();
+  internal::ValueHelper::InternalRepresentationType GetDataFromSnapshotOnce(
+      size_t index);
+  void HandleExternalMemoryInterrupt();
 };
 
 void Isolate::SetData(uint32_t slot, void* data) {
@@ -1754,10 +1806,10 @@ uint32_t Isolate::GetNumberOfDataSlots() {
 
 template <class T>
 MaybeLocal<T> Isolate::GetDataFromSnapshotOnce(size_t index) {
-  if (auto slot = GetDataFromSnapshotOnce(index); slot) {
-    internal::PerformCastCheck(
-        internal::ValueHelper::SlotAsValue<T, false>(slot));
-    return Local<T>::FromSlot(slot);
+  if (auto repr = GetDataFromSnapshotOnce(index);
+      repr != internal::ValueHelper::kEmpty) {
+    internal::PerformCastCheck(internal::ValueHelper::ReprAsValue<T>(repr));
+    return Local<T>::FromRepr(repr);
   }
   return {};
 }

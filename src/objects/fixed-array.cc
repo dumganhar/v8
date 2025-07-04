@@ -20,12 +20,11 @@ bool FixedArrayBase::IsCowArray() const {
 
 Handle<FixedArray> FixedArray::SetAndGrow(Isolate* isolate,
                                           Handle<FixedArray> array, int index,
-                                          Handle<Object> value) {
+                                          DirectHandle<Object> value) {
   int len = array->length();
   if (index >= len) {
     int new_capacity = FixedArray::NewCapacityForIndex(index, len);
-    array = Handle<FixedArray>::cast(
-        FixedArray::Resize(isolate, array, new_capacity));
+    array = Cast<FixedArray>(FixedArray::Resize(isolate, array, new_capacity));
     // TODO(jgruber): This is somewhat subtle - other FixedArray methods
     // use `undefined` as a filler. Make this more explicit.
     array->FillWithHoles(len, new_capacity);
@@ -66,7 +65,7 @@ Handle<ArrayList> ArrayList::Add(Isolate* isolate, Handle<ArrayList> array,
 
 // static
 Handle<ArrayList> ArrayList::Add(Isolate* isolate, Handle<ArrayList> array,
-                                 Handle<Object> obj,
+                                 DirectHandle<Object> obj,
                                  AllocationType allocation) {
   int length = array->length();
   int new_length = length + 1;
@@ -81,7 +80,8 @@ Handle<ArrayList> ArrayList::Add(Isolate* isolate, Handle<ArrayList> array,
 
 // static
 Handle<ArrayList> ArrayList::Add(Isolate* isolate, Handle<ArrayList> array,
-                                 Handle<Object> obj0, Handle<Object> obj1,
+                                 DirectHandle<Object> obj0,
+                                 DirectHandle<Object> obj1,
                                  AllocationType allocation) {
   int length = array->length();
   int new_length = length + 2;
@@ -97,7 +97,7 @@ Handle<ArrayList> ArrayList::Add(Isolate* isolate, Handle<ArrayList> array,
 
 // static
 Handle<FixedArray> ArrayList::ToFixedArray(Isolate* isolate,
-                                           Handle<ArrayList> array,
+                                           DirectHandle<ArrayList> array,
                                            AllocationType allocation) {
   int length = array->length();
   if (length == 0) return isolate->factory()->empty_fixed_array();
@@ -139,7 +139,7 @@ Handle<ArrayList> ArrayList::EnsureSpace(Isolate* isolate,
 // static
 Handle<WeakArrayList> WeakArrayList::AddToEnd(Isolate* isolate,
                                               Handle<WeakArrayList> array,
-                                              MaybeObjectHandle value) {
+                                              MaybeObjectDirectHandle value) {
   int length = array->length();
   array = EnsureSpace(isolate, array, length + 1);
   {
@@ -155,7 +155,7 @@ Handle<WeakArrayList> WeakArrayList::AddToEnd(Isolate* isolate,
 
 Handle<WeakArrayList> WeakArrayList::AddToEnd(Isolate* isolate,
                                               Handle<WeakArrayList> array,
-                                              MaybeObjectHandle value1,
+                                              MaybeObjectDirectHandle value1,
                                               Tagged<Smi> value2) {
   int length = array->length();
   array = EnsureSpace(isolate, array, length + 2);
@@ -174,7 +174,7 @@ Handle<WeakArrayList> WeakArrayList::AddToEnd(Isolate* isolate,
 // static
 Handle<WeakArrayList> WeakArrayList::Append(Isolate* isolate,
                                             Handle<WeakArrayList> array,
-                                            MaybeObjectHandle value,
+                                            MaybeObjectDirectHandle value,
                                             AllocationType allocation) {
   int length = 0;
   int new_length = 0;
@@ -277,7 +277,7 @@ int WeakArrayList::CountLiveElements() const {
   return non_cleared_objects;
 }
 
-bool WeakArrayList::RemoveOne(MaybeObjectHandle value) {
+bool WeakArrayList::RemoveOne(MaybeObjectDirectHandle value) {
   int last_index = length() - 1;
   // Optimize for the most recently added element to be removed again.
   for (int i = last_index; i >= 0; --i) {

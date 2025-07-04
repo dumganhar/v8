@@ -5,7 +5,8 @@
 #ifndef V8_BUILTINS_BUILTINS_REGEXP_GEN_H_
 #define V8_BUILTINS_BUILTINS_REGEXP_GEN_H_
 
-#include "src/base/optional.h"
+#include <optional>
+
 #include "src/codegen/code-stub-assembler.h"
 #include "src/common/message-template.h"
 #include "src/objects/string.h"
@@ -49,6 +50,11 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
                          String::Encoding encoding,
                          TVariable<RawPtrT>* var_string_start,
                          TVariable<RawPtrT>* var_string_end);
+
+  TNode<RawPtrT> TryLoadStaticRegExpResultVector(TNode<Smi> capture_count,
+                                                 Label* if_failure);
+  void ReturnStaticRegExpResultVectorIfNeeded(
+      TNode<RawPtrT> maybe_result_vector);
 
   // Low level logic around the actual call into pattern matching code.
   TNode<HeapObject> RegExpExecInternal(
@@ -94,7 +100,7 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
   void BranchIfFastRegExp(
       TNode<Context> context, TNode<HeapObject> object, TNode<Map> map,
       PrototypeCheckAssembler::Flags prototype_check_flags,
-      base::Optional<DescriptorIndexNameValue> additional_property_to_check,
+      std::optional<DescriptorIndexNameValue> additional_property_to_check,
       Label* if_isunmodified, Label* if_ismodified);
 
   void BranchIfFastRegExpForSearch(TNode<Context> context,

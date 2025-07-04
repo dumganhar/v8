@@ -71,7 +71,6 @@ namespace internal {
   V(ConstructStub)                                   \
   V(ConstructVarargs)                                \
   V(ConstructWithArrayLike)                          \
-  V(ConstructWithArrayLike_WithFeedback)             \
   V(Construct_WithFeedback)                          \
   V(ConstructWithSpread)                             \
   V(ConstructWithSpread_Baseline)                    \
@@ -154,6 +153,7 @@ namespace internal {
   V(WasmJSToWasmWrapper)                             \
   V(WasmToJSWrapper)                                 \
   V(WasmSuspend)                                     \
+  V(WasmHandleStackOverflow)                         \
   V(WriteBarrier)                                    \
   V(IndirectPointerWriteBarrier)                     \
   IF_TSAN(V, TSANLoad)                               \
@@ -848,6 +848,20 @@ class WasmDummyWithJSLinkageDescriptor
   DECLARE_DESCRIPTOR(WasmDummyWithJSLinkageDescriptor)
 };
 
+class WasmHandleStackOverflowDescriptor
+    : public StaticCallInterfaceDescriptor<WasmHandleStackOverflowDescriptor> {
+ public:
+  INTERNAL_DESCRIPTOR()
+  DEFINE_PARAMETERS_NO_CONTEXT(kFrameBase, kGap)
+  DEFINE_RESULT_AND_PARAMETER_TYPES(MachineType::AnyTagged(),  // result
+                                    MachineType::Pointer(),    // kFrameBase
+                                    MachineType::Uint32())     // kGap
+  DECLARE_DESCRIPTOR(WasmHandleStackOverflowDescriptor)
+
+  static constexpr inline Register FrameBaseRegister();
+  static constexpr inline Register GapRegister();
+};
+
 class AllocateDescriptor
     : public StaticCallInterfaceDescriptor<AllocateDescriptor> {
  public:
@@ -870,9 +884,23 @@ class NewHeapNumberDescriptor
   DECLARE_DESCRIPTOR(NewHeapNumberDescriptor)
 };
 
-// This descriptor defines the JavaScript calling convention that can be used
-// by stubs: target, new.target, argc and context are passed in registers while
+// This descriptor defines the JavaScript calling convention and is used by all
+// code that can be installed on a JSFunction. Target, new.target, argc,
+// context and potentially the dispatch entry are passed in registers while
 // receiver and the rest of the JS arguments are passed on the stack.
+#ifdef V8_ENABLE_LEAPTIERING
+class JSTrampolineDescriptor
+    : public StaticJSCallInterfaceDescriptor<JSTrampolineDescriptor> {
+ public:
+  SANDBOX_EXPOSED_DESCRIPTOR(kJSEntrypointTag)
+  DEFINE_JS_PARAMETERS(kDispatchHandle)
+  DEFINE_JS_PARAMETER_TYPES(MachineType::Int32())
+
+  DECLARE_JS_COMPATIBLE_DESCRIPTOR(JSTrampolineDescriptor)
+
+  static constexpr auto registers();
+};
+#else
 class JSTrampolineDescriptor
     : public StaticJSCallInterfaceDescriptor<JSTrampolineDescriptor> {
  public:
@@ -881,7 +909,10 @@ class JSTrampolineDescriptor
   DEFINE_JS_PARAMETER_TYPES()
 
   DECLARE_JS_COMPATIBLE_DESCRIPTOR(JSTrampolineDescriptor)
+
+  static constexpr auto registers();
 };
+#endif
 
 // Descriptor used for code using the RegExp calling convention, in particular
 // the RegExp interpreter trampolines.
@@ -1757,6 +1788,20 @@ class CallWithArrayLike_WithFeedbackDescriptor
   DECLARE_DESCRIPTOR(CallWithArrayLike_WithFeedbackDescriptor)
 };
 
+// TODO(ishell): consider merging this with ArrayConstructorDescriptor
+class ConstructStubDescriptor
+    : public StaticCallInterfaceDescriptor<ConstructStubDescriptor> {
+ public:
+  INTERNAL_DESCRIPTOR()
+  DEFINE_JS_PARAMETERS()
+  DEFINE_JS_PARAMETER_TYPES()
+
+  // TODO(ishell): Use DECLARE_JS_COMPATIBLE_DESCRIPTOR if registers match
+  DECLARE_DESCRIPTOR(ConstructStubDescriptor)
+
+  static constexpr inline auto registers();
+};
+
 class ConstructVarargsDescriptor
     : public StaticCallInterfaceDescriptor<ConstructVarargsDescriptor> {
  public:
@@ -1797,11 +1842,9 @@ class ConstructWithSpread_BaselineDescriptor
           ConstructWithSpread_BaselineDescriptor> {
  public:
   INTERNAL_DESCRIPTOR()
-  // Note: kSlot comes before kSpread since as an untagged value it must be
-  // passed in a register.
-  DEFINE_JS_PARAMETERS_NO_CONTEXT(kSlot, kSpread)
-  DEFINE_JS_PARAMETER_TYPES(MachineType::UintPtr(),    // kSlot
-                            MachineType::AnyTagged())  // kSpread
+  DEFINE_JS_PARAMETERS_NO_CONTEXT(kSpread, kSlot)
+  DEFINE_JS_PARAMETER_TYPES(MachineType::AnyTagged(),  // kSpread
+                            MachineType::AnyTagged())  // kSlot
   DECLARE_DESCRIPTOR(ConstructWithSpread_BaselineDescriptor)
 };
 
@@ -1810,12 +1853,10 @@ class ConstructWithSpread_WithFeedbackDescriptor
           ConstructWithSpread_WithFeedbackDescriptor> {
  public:
   INTERNAL_DESCRIPTOR()
-  // Note: kSlot comes before kSpread since as an untagged value it must be
-  // passed in a register.
-  DEFINE_JS_PARAMETERS(kSlot, kSpread, kFeedbackVector)
-  DEFINE_JS_PARAMETER_TYPES(MachineType::UintPtr(),    // kSlot
-                            MachineType::AnyTagged(),  // kSpread
-                            MachineType::AnyTagged())  // kFeedbackVector
+  DEFINE_JS_PARAMETERS(kSpread, kSlot, kVector)
+  DEFINE_JS_PARAMETER_TYPES(MachineType::AnyTagged(),  // kSpread
+                            MachineType::AnyTagged(),  // kSlot
+                            MachineType::AnyTagged())  // kVector
   DECLARE_DESCRIPTOR(ConstructWithSpread_WithFeedbackDescriptor)
 };
 
@@ -1830,20 +1871,6 @@ class ConstructWithArrayLikeDescriptor
   DECLARE_DESCRIPTOR(ConstructWithArrayLikeDescriptor)
 
   static constexpr inline auto registers();
-};
-
-class ConstructWithArrayLike_WithFeedbackDescriptor
-    : public StaticCallInterfaceDescriptor<
-          ConstructWithArrayLike_WithFeedbackDescriptor> {
- public:
-  INTERNAL_DESCRIPTOR()
-  DEFINE_PARAMETERS(kTarget, kNewTarget, kArgumentsList, kSlot, kFeedbackVector)
-  DEFINE_PARAMETER_TYPES(MachineType::AnyTagged(),  // kTarget
-                         MachineType::AnyTagged(),  // kNewTarget
-                         MachineType::AnyTagged(),  // kArgumentsList
-                         MachineType::UintPtr(),    // kSlot
-                         MachineType::AnyTagged())  // kFeedbackVector
-  DECLARE_DESCRIPTOR(ConstructWithArrayLike_WithFeedbackDescriptor)
 };
 
 class ConstructForwardAllArgsDescriptor
@@ -1866,7 +1893,7 @@ class ConstructForwardAllArgs_BaselineDescriptor
   DEFINE_PARAMETERS(kTarget, kNewTarget, kSlot)
   DEFINE_PARAMETER_TYPES(MachineType::AnyTagged(),  // kTarget
                          MachineType::AnyTagged(),  // kNewTarget
-                         MachineType::UintPtr())    // kSlot
+                         MachineType::AnyTagged())  // kSlot
   DECLARE_DESCRIPTOR(ConstructForwardAllArgs_BaselineDescriptor)
 };
 
@@ -1878,23 +1905,9 @@ class ConstructForwardAllArgs_WithFeedbackDescriptor
   DEFINE_PARAMETERS(kTarget, kNewTarget, kSlot, kVector)
   DEFINE_PARAMETER_TYPES(MachineType::AnyTagged(),  // kTarget
                          MachineType::AnyTagged(),  // kNewTarget
-                         MachineType::UintPtr(),    // kSlot
+                         MachineType::AnyTagged(),  // kSlot
                          MachineType::AnyTagged())  // kVector
   DECLARE_DESCRIPTOR(ConstructForwardAllArgs_WithFeedbackDescriptor)
-};
-
-// TODO(ishell): consider merging this with ArrayConstructorDescriptor
-class ConstructStubDescriptor
-    : public StaticCallInterfaceDescriptor<ConstructStubDescriptor> {
- public:
-  INTERNAL_DESCRIPTOR()
-  DEFINE_JS_PARAMETERS()
-  DEFINE_JS_PARAMETER_TYPES()
-
-  // TODO(ishell): Use DECLARE_JS_COMPATIBLE_DESCRIPTOR if registers match
-  DECLARE_DESCRIPTOR(ConstructStubDescriptor)
-
-  static constexpr inline auto registers();
 };
 
 class AbortDescriptor : public StaticCallInterfaceDescriptor<AbortDescriptor> {
@@ -2117,18 +2130,18 @@ class CallApiCallbackOptimizedDescriptor
  public:
   INTERNAL_DESCRIPTOR()
   DEFINE_PARAMETERS_VARARGS(kApiFunctionAddress, kActualArgumentsCount,
-                            kCallData, kHolder)
+                            kFunctionTemplateInfo, kHolder)
   //                           receiver is implicit stack argument 1
   //                           argv are implicit stack arguments [2, 2 + kArgc[
   DEFINE_PARAMETER_TYPES(MachineType::Pointer(),    // kApiFunctionAddress
                          MachineType::Int32(),      // kActualArgumentsCount
-                         MachineType::AnyTagged(),  // kCallData
+                         MachineType::AnyTagged(),  // kFunctionTemplateInfo
                          MachineType::AnyTagged())  // kHolder
   DECLARE_DESCRIPTOR(CallApiCallbackOptimizedDescriptor)
 
   static constexpr inline Register ApiFunctionAddressRegister();
   static constexpr inline Register ActualArgumentsCountRegister();
-  static constexpr inline Register CallDataRegister();
+  static constexpr inline Register FunctionTemplateInfoRegister();
   static constexpr inline Register HolderRegister();
 
   static constexpr inline auto registers();
@@ -2440,7 +2453,7 @@ class WasmFloat64ToTaggedDescriptor final
 class WasmJSToWasmWrapperDescriptor final
     : public StaticCallInterfaceDescriptor<WasmJSToWasmWrapperDescriptor> {
  public:
-  SANDBOX_EXPOSED_DESCRIPTOR(kJSEntrypointTag)
+  INTERNAL_DESCRIPTOR()
   DEFINE_PARAMETERS_NO_CONTEXT(kWrapperBuffer, kInstance, kResultJSArray)
   DEFINE_RESULT_AND_PARAMETER_TYPES(MachineType::AnyTagged(),  // result
                                     MachineType::IntPtr(),     // ParamBuffer
@@ -2462,14 +2475,13 @@ class WasmJSToWasmWrapperDescriptor final
 class WasmToJSWrapperDescriptor final
     : public StaticCallInterfaceDescriptor<WasmToJSWrapperDescriptor> {
  public:
-  SANDBOX_EXPOSED_DESCRIPTOR(kWasmEntrypointTag)
-  DEFINE_RESULT_AND_PARAMETERS_NO_CONTEXT(4, kWasmApiFunctionRef)
-  DEFINE_RESULT_AND_PARAMETER_TYPES(
-      MachineType::IntPtr(),     // GP return 1
-      MachineType::IntPtr(),     // GP return 2
-      MachineType::Float64(),    // FP return 1
-      MachineType::Float64(),    // FP return 2
-      MachineType::AnyTagged())  // WasmApiFunctionRef
+  INTERNAL_DESCRIPTOR()
+  DEFINE_RESULT_AND_PARAMETERS_NO_CONTEXT(4, kWasmImportData)
+  DEFINE_RESULT_AND_PARAMETER_TYPES(MachineType::IntPtr(),     // GP return 1
+                                    MachineType::IntPtr(),     // GP return 2
+                                    MachineType::Float64(),    // FP return 1
+                                    MachineType::Float64(),    // FP return 2
+                                    MachineType::AnyTagged())  // WasmImportData
   DECLARE_DESCRIPTOR(WasmToJSWrapperDescriptor)
 
   static constexpr int kMaxRegisterParams = 1;

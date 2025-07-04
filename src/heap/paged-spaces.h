@@ -8,12 +8,12 @@
 #include <atomic>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <variant>
 
 #include "src/base/bounds.h"
 #include "src/base/macros.h"
-#include "src/base/optional.h"
 #include "src/base/platform/mutex.h"
 #include "src/common/globals.h"
 #include "src/flags/flags.h"
@@ -22,7 +22,7 @@
 #include "src/heap/heap-verifier.h"
 #include "src/heap/heap.h"
 #include "src/heap/memory-chunk-layout.h"
-#include "src/heap/mutable-page.h"
+#include "src/heap/mutable-page-metadata.h"
 #include "src/heap/spaces.h"
 
 namespace v8 {
@@ -150,7 +150,11 @@ class V8_EXPORT_PRIVATE PagedSpaceBase
   // to the available and wasted totals. The free list is cleared as well.
   void ClearAllocatorState() {
     accounting_stats_.ClearSize();
-    free_list_->Reset();
+    if (v8_flags.black_allocated_pages) {
+      free_list_->ResetForNonBlackAllocatedPages();
+    } else {
+      free_list_->Reset();
+    }
   }
 
   // Available bytes without growing.  These are the bytes on the free list.
@@ -167,11 +171,11 @@ class V8_EXPORT_PRIVATE PagedSpaceBase
 
   // Wasted bytes in this space.  These are just the bytes that were thrown away
   // due to being too small to use for allocation.
-  virtual size_t Waste() const { return free_list_->wasted_bytes(); }
+  size_t Waste() const;
 
   // Allocate the requested number of bytes in the space from a background
   // thread.
-  V8_WARN_UNUSED_RESULT base::Optional<std::pair<Address, size_t>>
+  V8_WARN_UNUSED_RESULT std::optional<std::pair<Address, size_t>>
   RawAllocateBackground(LocalHeap* local_heap, size_t min_size_in_bytes,
                         size_t max_size_in_bytes, AllocationOrigin origin);
 
@@ -345,7 +349,7 @@ class V8_EXPORT_PRIVATE PagedSpaceBase
       }
     }
 
-    base::Optional<base::MutexGuard> guard_;
+    std::optional<base::MutexGuard> guard_;
   };
 
   bool SupportsConcurrentAllocation() const {
@@ -376,16 +380,28 @@ class V8_EXPORT_PRIVATE PagedSpace : public PagedSpaceBase {
 
 class V8_EXPORT_PRIVATE CompactionSpace final : public PagedSpace {
  public:
+  // Specifies to which heap the compaction space should be merged.
+  enum class DestinationHeap {
+    // Should be merged to the same heap.
+    kSameHeap,
+    // Should be merged to the main isolate shared space.
+    kSharedSpaceHeap
+  };
+
   CompactionSpace(Heap* heap, AllocationSpace id, Executability executable,
-                  CompactionSpaceKind compaction_space_kind)
+                  CompactionSpaceKind compaction_space_kind,
+                  DestinationHeap destination_heap)
       : PagedSpace(heap, id, executable, FreeList::CreateFreeList(),
-                   compaction_space_kind) {
+                   compaction_space_kind),
+        destination_heap_(destination_heap) {
     DCHECK(is_compaction_space());
   }
 
   const std::vector<PageMetadata*>& GetNewPages() { return new_pages_; }
 
   void RefillFreeList() final;
+
+  DestinationHeap destination_heap() const { return destination_heap_; }
 
  protected:
   void NotifyNewPage(PageMetadata* page) final;
@@ -395,6 +411,7 @@ class V8_EXPORT_PRIVATE CompactionSpace final : public PagedSpace {
   // Pages that were allocated in this local space and need to be merged
   // to the main space.
   std::vector<PageMetadata*> new_pages_;
+  const DestinationHeap destination_heap_;
 };
 
 // A collection of |CompactionSpace|s used by a single compaction task.
@@ -410,7 +427,8 @@ class CompactionSpaceCollection : public Malloced {
       case CODE_SPACE:
         return &code_space_;
       case SHARED_SPACE:
-        return &shared_space_;
+        DCHECK(shared_space_);
+        return &*shared_space_;
       case TRUSTED_SPACE:
         return &trusted_space_;
       default:
@@ -422,7 +440,7 @@ class CompactionSpaceCollection : public Malloced {
  private:
   CompactionSpace old_space_;
   CompactionSpace code_space_;
-  CompactionSpace shared_space_;
+  std::optional<CompactionSpace> shared_space_;
   CompactionSpace trusted_space_;
 };
 

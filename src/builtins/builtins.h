@@ -11,6 +11,10 @@
 #include "src/objects/type-hints.h"
 #include "src/sandbox/code-entrypoint-tag.h"
 
+#ifdef V8_ENABLE_WEBASSEMBLY
+#include "src/wasm/wasm-code-pointer-table.h"
+#endif
+
 namespace v8 {
 namespace internal {
 
@@ -22,8 +26,13 @@ class Callable;
 class BytecodeOffset;
 class RootVisitor;
 enum class InterpreterPushArgsMode : unsigned;
+class Zone;
 namespace compiler {
 class CodeAssemblerState;
+namespace turboshaft {
+class Graph;
+class PipelineData;
+}  // namespace turboshaft
 }  // namespace compiler
 
 template <typename T>
@@ -39,7 +48,7 @@ enum class Builtin : int32_t {
   kNoBuiltinId = -1,
 #define DEF_ENUM(Name, ...) k##Name,
   BUILTIN_LIST(DEF_ENUM, DEF_ENUM, DEF_ENUM, DEF_ENUM, DEF_ENUM, DEF_ENUM,
-               DEF_ENUM)
+               DEF_ENUM, DEF_ENUM, DEF_ENUM)
 #undef DEF_ENUM
 #define EXTRACT_NAME(Name, ...) k##Name,
   // Define kFirstBytecodeHandler,
@@ -70,17 +79,17 @@ class Builtins {
   // Disassembler support.
   const char* Lookup(Address pc);
 
-#if !defined(V8_SHORT_BUILTIN_CALLS) || \
-    defined(V8_COMPRESS_POINTERS_IN_SHARED_CAGE)
+#if !defined(V8_SHORT_BUILTIN_CALLS) || defined(V8_COMPRESS_POINTERS)
   static constexpr bool kCodeObjectsAreInROSpace = true;
 #else
   static constexpr bool kCodeObjectsAreInROSpace = false;
 #endif  // !defined(V8_SHORT_BUILTIN_CALLS) || \
-        // defined(V8_COMPRESS_POINTERS_IN_SHARED_CAGE)
+        // defined(V8_COMPRESS_POINTERS)
 
 #define ADD_ONE(Name, ...) +1
-  static constexpr int kBuiltinCount = 0 BUILTIN_LIST(
-      ADD_ONE, ADD_ONE, ADD_ONE, ADD_ONE, ADD_ONE, ADD_ONE, ADD_ONE);
+  static constexpr int kBuiltinCount =
+      0 BUILTIN_LIST(ADD_ONE, ADD_ONE, ADD_ONE, ADD_ONE, ADD_ONE, ADD_ONE,
+                     ADD_ONE, ADD_ONE, ADD_ONE);
   static constexpr int kBuiltinTier0Count = 0 BUILTIN_LIST_TIER0(
       ADD_ONE, ADD_ONE, ADD_ONE, ADD_ONE, ADD_ONE, ADD_ONE, ADD_ONE);
 #undef ADD_ONE
@@ -100,6 +109,20 @@ class Builtins {
   static constexpr bool kBytecodeHandlersAreSortedLast =
       kLastBytecodeHandlerPlusOne == kBuiltinCount;
   static_assert(kBytecodeHandlersAreSortedLast);
+
+#ifdef V8_ENABLE_WEBASSEMBLY
+  // The list of builtins that can be called indirectly from Wasm and need an
+  // entry in the WasmCodePointerTable.
+  static constexpr Builtin kWasmIndirectlyCallableBuiltins[] = {
+      Builtin::kWasmToJsWrapperInvalidSig, Builtin::kWasmToJsWrapperAsm};
+  static constexpr size_t kNumWasmIndirectlyCallableBuiltins =
+      arraysize(kWasmIndirectlyCallableBuiltins);
+  using WasmBuiltinHandleArray =
+      wasm::WasmCodePointerTable::Handle[kNumWasmIndirectlyCallableBuiltins];
+  // TODO(sroettger): this can be consteval, but the gcc bot doesn't support it.
+  template <Builtin builtin>
+  static constexpr size_t WasmBuiltinHandleArrayIndex();
+#endif
 
   static constexpr bool IsBuiltinId(Builtin builtin) {
     return builtin != Builtin::kNoBuiltinId;
@@ -123,7 +146,7 @@ class Builtins {
   }
 
   // The different builtin kinds are documented in builtins-definitions.h.
-  enum Kind { CPP, TFJ, TFC, TFS, TFH, BCH, ASM };
+  enum Kind { CPP, TSJ, TFJ, TSC, TFC, TFS, TFH, BCH, ASM };
 
   static BytecodeOffset GetContinuationBytecodeOffset(Builtin builtin);
   static Builtin GetBuiltinFromBytecodeOffset(BytecodeOffset);
@@ -136,10 +159,15 @@ class Builtins {
       SaveFPRegsMode fp_mode);
   static inline constexpr Builtin EphemeronKeyBarrier(SaveFPRegsMode fp_mode);
 
+  static inline constexpr Builtin AdaptorWithBuiltinExitFrame(
+      int formal_parameter_count);
+
   static inline constexpr Builtin CallFunction(
       ConvertReceiverMode = ConvertReceiverMode::kAny);
   static inline constexpr Builtin Call(
       ConvertReceiverMode = ConvertReceiverMode::kAny);
+  // Whether the given builtin is one of the JS function call builtins.
+  static inline constexpr bool IsAnyCall(Builtin builtin);
 
   static inline constexpr Builtin NonPrimitiveToPrimitive(
       ToPrimitiveHint hint = ToPrimitiveHint::kDefault);
@@ -175,9 +203,25 @@ class Builtins {
   static CallInterfaceDescriptor CallInterfaceDescriptorFor(Builtin builtin);
   V8_EXPORT_PRIVATE static Callable CallableFor(Isolate* isolate,
                                                 Builtin builtin);
-  static bool HasJSLinkage(Builtin builtin);
+  V8_EXPORT_PRIVATE static bool HasJSLinkage(Builtin builtin);
 
-  static int GetStackParameterCount(Builtin builtin);
+  // Returns the number builtin's parameters passed on the stack.
+  V8_EXPORT_PRIVATE static int GetStackParameterCount(Builtin builtin);
+
+  // Formal parameter count is the minimum number of JS arguments that's
+  // expected to be present on the stack when a builtin is called. When
+  // a JavaScript function is called with less arguments than expected by
+  // a builtin the stack is "adapted" - i.e. the required number of undefined
+  // values is pushed to the stack to match the target builtin expectations.
+  // In case the builtin does not require arguments adaptation it returns
+  // kDontAdaptArgumentsSentinel.
+  static constexpr inline int GetFormalParameterCount(Builtin builtin);
+
+  // Checks that the formal parameter count specified in CPP macro matches
+  // the value set in SharedFunctionInfo.
+  static bool CheckFormalParameterCount(
+      Builtin builtin, int function_length,
+      int formal_parameter_count_with_receiver);
 
   V8_EXPORT_PRIVATE static const char* name(Builtin builtin);
   V8_EXPORT_PRIVATE static const char* NameForStackTrace(Isolate* isolate,
@@ -195,13 +239,20 @@ class Builtins {
   // builtin_entry_table, initialized earlier via {InitializeIsolateDataTables}.
   static inline Address EntryOf(Builtin builtin, Isolate* isolate);
 
-  static Kind KindOf(Builtin builtin);
+#ifdef V8_ENABLE_WEBASSEMBLY
+  // Returns a handle to the WasmCodePointerTable entry for a given builtin.
+  template <Builtin builtin>
+  static inline wasm::WasmCodePointerTable::Handle WasmBuiltinHandleOf(
+      Isolate* isolate);
+#endif
+
+  V8_EXPORT_PRIVATE static Kind KindOf(Builtin builtin);
   static const char* KindNameOf(Builtin builtin);
 
   // The tag for the builtins entrypoint.
   V8_EXPORT_PRIVATE static CodeEntrypointTag EntrypointTagFor(Builtin builtin);
 
-  static bool IsCpp(Builtin builtin);
+  V8_EXPORT_PRIVATE static bool IsCpp(Builtin builtin);
 
   // True, iff the given code object is a builtin. Note that this does not
   // necessarily mean that its kind is InstructionStream::BUILTIN.
@@ -243,13 +294,15 @@ class Builtins {
       Handle<FunctionTemplateInfo> function, Handle<Object> receiver, int argc,
       Handle<Object> args[], Handle<HeapObject> new_target);
 
-  static void Generate_Adaptor(MacroAssembler* masm, Address builtin_address);
+  static void Generate_Adaptor(MacroAssembler* masm, int formal_parameter_count,
+                               Address builtin_address);
 
   static void Generate_CEntry(MacroAssembler* masm, int result_size,
                               ArgvMode argv_mode, bool builtin_exit_frame,
                               bool switch_to_central_stack);
 
-  static bool AllowDynamicFunction(Isolate* isolate, Handle<JSFunction> target,
+  static bool AllowDynamicFunction(Isolate* isolate,
+                                   DirectHandle<JSFunction> target,
                                    Handle<JSObject> target_global_proxy);
 
   // Creates a copy of InterpreterEntryTrampolineForProfiling in the code space.
@@ -280,6 +333,22 @@ class Builtins {
     CHECK_EQ(jspi_prompt_handler_offset_, 0);
     jspi_prompt_handler_offset_ = offset;
   }
+
+#if V8_ENABLE_DRUMBRAKE
+  int cwasm_interpreter_entry_handler_offset() const {
+    DCHECK_NE(cwasm_interpreter_entry_handler_offset_, 0);
+    return cwasm_interpreter_entry_handler_offset_;
+  }
+
+  void SetCWasmInterpreterEntryHandlerOffset(int offset) {
+    // Check the stored offset is either uninitialized or unchanged (we
+    // generate multiple variants of this builtin but they should all have the
+    // same handler offset).
+    CHECK(cwasm_interpreter_entry_handler_offset_ == 0 ||
+          cwasm_interpreter_entry_handler_offset_ == offset);
+    cwasm_interpreter_entry_handler_offset_ = offset;
+  }
+#endif  // V8_ENABLE_DRUMBRAKE
 
   // Returns given builtin's slot in the main builtin table.
   FullObjectSlot builtin_slot(Builtin builtin);
@@ -336,9 +405,13 @@ class Builtins {
   static void Generate_##Name(MacroAssembler* masm);
 #define DECLARE_TF(Name, ...) \
   static void Generate_##Name(compiler::CodeAssemblerState* state);
+#define DECLARE_TS(Name, ...)                                           \
+  static void Generate_##Name(compiler::turboshaft::PipelineData* data, \
+                              Isolate* isolate,                         \
+                              compiler::turboshaft::Graph& graph, Zone* zone);
 
-  BUILTIN_LIST(IGNORE_BUILTIN, DECLARE_TF, DECLARE_TF, DECLARE_TF, DECLARE_TF,
-               IGNORE_BUILTIN, DECLARE_ASM)
+  BUILTIN_LIST(IGNORE_BUILTIN, DECLARE_TS, DECLARE_TF, DECLARE_TS, DECLARE_TF,
+               DECLARE_TF, DECLARE_TF, IGNORE_BUILTIN, DECLARE_ASM)
 
 #undef DECLARE_ASM
 #undef DECLARE_TF
@@ -350,6 +423,14 @@ class Builtins {
   // label) in JSEntry and its variants. It's used to generate the handler table
   // during codegen (mksnapshot-only).
   int js_entry_handler_offset_ = 0;
+
+#if V8_ENABLE_DRUMBRAKE
+  // Stores the offset of exception handler entry point (the handler_entry
+  // label) in CWasmInterpreterEntry. It's used to generate the handler table
+  // during codegen (mksnapshot-only).
+  int cwasm_interpreter_entry_handler_offset_ = 0;
+#endif  // V8_ENABLE_DRUMBRAKE
+
   // Do the same for the JSPI prompt, which catches uncaught exceptions and
   // rejects the corresponding promise.
   int jspi_prompt_handler_offset_ = 0;

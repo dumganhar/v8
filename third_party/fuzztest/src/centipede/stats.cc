@@ -44,9 +44,9 @@
 #include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "./centipede/environment.h"
-#include "./centipede/logging.h"
-#include "./centipede/remote_file.h"
 #include "./centipede/workdir.h"
+#include "./common/logging.h"
+#include "./common/remote_file.h"
 
 namespace centipede {
 
@@ -171,8 +171,9 @@ void StatsLogger::DoneFieldSamplesBatch() {
 //                           StatsCsvFileAppender
 
 StatsCsvFileAppender::~StatsCsvFileAppender() {
-  for (const auto &[group_name, file] : files_) {
-    RemoteFileClose(file.file);
+  if (files_ == nullptr) return;
+  for (const auto &[group_name, file] : *files_) {
+    CHECK_OK(RemoteFileClose(file.file));
   }
 }
 
@@ -194,7 +195,8 @@ void StatsCsvFileAppender::PreAnnounceFields(
 }
 
 void StatsCsvFileAppender::SetCurrGroup(const Environment &master_env) {
-  BufferedRemoteFile &file = files_[master_env.experiment_name];
+  CHECK(files_ != nullptr);
+  BufferedRemoteFile &file = (*files_)[master_env.experiment_name];
   if (file.file == nullptr) {
     const std::string filename =
         WorkDir{master_env}.FuzzingStatsPath(master_env.experiment_name);
@@ -206,22 +208,24 @@ void StatsCsvFileAppender::SetCurrGroup(const Environment &master_env) {
     bool append = false;
     if (RemotePathExists(filename)) {
       std::string contents;
-      RemoteFileGetContents(filename, contents);
+      CHECK_OK(RemoteFileGetContents(filename, contents));
       // NOTE: `csv_header_` ends with '\n', so the match is exact.
       if (absl::StartsWith(contents, csv_header_)) {
         append = true;
       } else {
         append = false;
-        RemoteFileSetContents(GetBackupFilename(filename), contents);
+        CHECK_OK(RemoteFileSetContents(GetBackupFilename(filename), contents));
       }
     }
-    file.file = RemoteFileOpen(filename, append ? "a" : "w");
+    file.file = *RemoteFileOpen(filename, append ? "a" : "w");
     CHECK(file.file != nullptr) << VV(filename);
     if (!append) {
-      RemoteFileAppend(file.file, csv_header_);
-      RemoteFileFlush(file.file);
+      CHECK_OK(RemoteFileAppend(file.file, csv_header_));
+      CHECK_OK(RemoteFileFlush(file.file));
     }
   }
+  // This is OK even though hash maps provide no pointer stability because the
+  // field is always updated immediately after the map is modified.
   curr_file_ = &file;
 }
 
@@ -259,9 +263,10 @@ void StatsCsvFileAppender::ReportFlags(const GroupToFlags &group_to_flags) {
 }
 
 void StatsCsvFileAppender::DoneFieldSamplesBatch() {
-  for (auto &&[group_name, file] : files_) {
-    RemoteFileAppend(file.file, absl::StrCat(file.buffer, "\n"));
-    RemoteFileFlush(file.file);
+  CHECK(files_ != nullptr);
+  for (auto &[group_name, file] : *files_) {
+    CHECK_OK(RemoteFileAppend(file.file, absl::StrCat(file.buffer, "\n")));
+    CHECK_OK(RemoteFileFlush(file.file));
     file.buffer.clear();
   }
 }

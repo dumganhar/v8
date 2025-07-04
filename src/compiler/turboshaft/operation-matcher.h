@@ -6,6 +6,7 @@
 #define V8_COMPILER_TURBOSHAFT_OPERATION_MATCHER_H_
 
 #include <limits>
+#include <optional>
 #include <type_traits>
 
 #include "src/compiler/turboshaft/graph.h"
@@ -16,7 +17,7 @@ namespace v8::internal::compiler::turboshaft {
 
 class OperationMatcher {
  public:
-  explicit OperationMatcher(Graph& graph) : graph_(graph) {}
+  explicit OperationMatcher(const Graph& graph) : graph_(graph) {}
 
   template <class Op>
   bool Is(OpIndex op_idx) const {
@@ -45,9 +46,9 @@ class OperationMatcher {
       case ConstantOp::Kind::kWord64:
         return op->integral() == 0;
       case ConstantOp::Kind::kFloat32:
-        return op->float32() == 0;
+        return op->float32().get_scalar() == 0;
       case ConstantOp::Kind::kFloat64:
-        return op->float64() == 0;
+        return op->float64().get_scalar() == 0;
       case ConstantOp::Kind::kSmi:
         return op->smi().value() == 0;
       default:
@@ -71,7 +72,15 @@ class OperationMatcher {
     const ConstantOp* op = TryCast<ConstantOp>(matched);
     if (!op) return false;
     if (op->kind != ConstantOp::Kind::kFloat32) return false;
-    *constant = op->float32();
+    *constant = op->storage.float32.get_scalar();
+    return true;
+  }
+
+  bool MatchFloat32Constant(OpIndex matched, i::Float32* constant) const {
+    const ConstantOp* op = TryCast<ConstantOp>(matched);
+    if (!op) return false;
+    if (op->kind != ConstantOp::Kind::kFloat32) return false;
+    *constant = op->storage.float32;
     return true;
   }
 
@@ -79,7 +88,15 @@ class OperationMatcher {
     const ConstantOp* op = TryCast<ConstantOp>(matched);
     if (!op) return false;
     if (op->kind != ConstantOp::Kind::kFloat64) return false;
-    *constant = op->float64();
+    *constant = op->storage.float64.get_scalar();
+    return true;
+  }
+
+  bool MatchFloat64Constant(OpIndex matched, i::Float64* constant) const {
+    const ConstantOp* op = TryCast<ConstantOp>(matched);
+    if (!op) return false;
+    if (op->kind != ConstantOp::Kind::kFloat64) return false;
+    *constant = op->storage.float64;
     return true;
   }
 
@@ -87,10 +104,10 @@ class OperationMatcher {
     const ConstantOp* op = TryCast<ConstantOp>(matched);
     if (!op) return false;
     if (op->kind == ConstantOp::Kind::kFloat64) {
-      *value = op->float64();
+      *value = op->storage.float64.get_scalar();
       return true;
     } else if (op->kind == ConstantOp::Kind::kFloat32) {
-      *value = op->float32();
+      *value = op->storage.float32.get_scalar();
       return true;
     }
     return false;
@@ -108,14 +125,17 @@ class OperationMatcher {
     return MatchFloat(matched, &k) && std::isnan(k);
   }
 
-  bool MatchTaggedConstant(OpIndex matched, Handle<HeapObject>* tagged) const {
+  bool MatchHeapConstant(OpIndex matched,
+                         Handle<HeapObject>* tagged = nullptr) const {
     const ConstantOp* op = TryCast<ConstantOp>(matched);
     if (!op) return false;
     if (!(op->kind == any_of(ConstantOp::Kind::kHeapObject,
                              ConstantOp::Kind::kCompressedHeapObject))) {
       return false;
     }
-    *tagged = op->handle();
+    if (tagged) {
+      *tagged = op->handle();
+    }
     return true;
   }
 
@@ -158,11 +178,6 @@ class OperationMatcher {
     return MatchIntegralWordConstant(matched, rep, nullptr, signed_constant);
   }
 
-  bool MatchIntegralWord64Constant(OpIndex matched, uint64_t* constant) const {
-    return MatchIntegralWordConstant(matched, WordRepresentation::Word64(),
-                                     constant);
-  }
-
   bool MatchIntegralWord32Constant(OpIndex matched, uint32_t* constant) const {
     if (uint64_t value; MatchIntegralWordConstant(
             matched, WordRepresentation::Word32(), &value)) {
@@ -170,6 +185,11 @@ class OperationMatcher {
       return true;
     }
     return false;
+  }
+
+  bool MatchIntegralWord64Constant(OpIndex matched, uint64_t* constant) const {
+    return MatchIntegralWordConstant(matched, WordRepresentation::Word64(),
+                                     constant);
   }
 
   bool MatchIntegralWord32Constant(OpIndex matched, uint32_t constant) const {
@@ -192,6 +212,23 @@ class OperationMatcher {
       return true;
     }
     return false;
+  }
+
+  template <typename T = intptr_t>
+  bool MatchIntegralWordPtrConstant(OpIndex matched, T* constant) const {
+    if constexpr (Is64()) {
+      static_assert(sizeof(T) == sizeof(int64_t));
+      int64_t v;
+      if (!MatchIntegralWord64Constant(matched, &v)) return false;
+      *constant = static_cast<T>(v);
+      return true;
+    } else {
+      static_assert(sizeof(T) == sizeof(int32_t));
+      int32_t v;
+      if (!MatchIntegralWord32Constant(matched, &v)) return false;
+      *constant = static_cast<T>(v);
+      return true;
+    }
   }
 
   bool MatchSignedIntegralConstant(OpIndex matched, int64_t* constant) const {
@@ -437,7 +474,7 @@ class OperationMatcher {
   }
 
   bool MatchPhi(OpIndex matched,
-                base::Optional<int> input_count = base::nullopt) const {
+                std::optional<int> input_count = std::nullopt) const {
     if (const PhiOp* phi = TryCast<PhiOp>(matched)) {
       return !input_count.has_value() || phi->input_count == *input_count;
     }
@@ -468,7 +505,7 @@ class OperationMatcher {
   }
 
  private:
-  Graph& graph_;
+  const Graph& graph_;
 };
 
 }  // namespace v8::internal::compiler::turboshaft

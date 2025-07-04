@@ -6,6 +6,7 @@
 
 #include "src/heap/heap-inl.h"
 #include "src/heap/read-only-heap.h"
+#include "src/heap/visit-object.h"
 #include "src/objects/objects-inl.h"
 #include "src/objects/slots.h"
 #include "src/snapshot/read-only-serializer-deserializer.h"
@@ -30,7 +31,7 @@ class ObjectPreProcessor final {
     const InstanceType itype = o->map(isolate_)->instance_type();
 #define V(TYPE)                               \
   if (InstanceTypeChecker::Is##TYPE(itype)) { \
-    return PreProcess##TYPE(TYPE::cast(o));   \
+    return PreProcess##TYPE(Cast<TYPE>(o));   \
   }
     PRE_PROCESS_TYPE_LIST(V)
 #undef V
@@ -98,6 +99,9 @@ struct ReadOnlySegmentForSerialization {
         tagged_slots(segment_size / kTaggedSize) {
     // .. because tagged_slots records a bit for each slot:
     DCHECK(IsAligned(segment_size, kTaggedSize));
+    // Ensure incoming pointers to this page are representable.
+    CHECK_LT(isolate->read_only_heap()->read_only_space()->IndexOf(page),
+             1UL << ro::EncodedTagged::kPageIndexBits);
 
     MemCopy(contents.get(), reinterpret_cast<void*>(segment_start),
             segment_size);
@@ -118,7 +122,7 @@ struct ReadOnlySegmentForSerialization {
       size_t o_offset = o.ptr() - segment_start;
       Address o_dst = reinterpret_cast<Address>(contents.get()) + o_offset;
       pre_processor->PreProcessIfNeeded(
-          HeapObject::cast(Tagged<Object>(o_dst)));
+          Cast<HeapObject>(Tagged<Object>(o_dst)));
     }
   }
 
@@ -140,17 +144,12 @@ ro::EncodedTagged Encode(Isolate* isolate, Tagged<HeapObject> o) {
   Address o_address = o.address();
   MemoryChunkMetadata* chunk = MemoryChunkMetadata::FromAddress(o_address);
 
-  ro::EncodedTagged encoded;
   ReadOnlySpace* ro_space = isolate->read_only_heap()->read_only_space();
   int index = static_cast<int>(ro_space->IndexOf(chunk));
-  DCHECK_LT(index, 1UL << ro::EncodedTagged::kPageIndexBits);
-  encoded.page_index = index;
   uint32_t offset = static_cast<int>(chunk->Offset(o_address));
   DCHECK(IsAligned(offset, kTaggedSize));
-  DCHECK_LT(offset / kTaggedSize, 1UL << ro::EncodedTagged::kOffsetBits);
-  encoded.offset = offset / kTaggedSize;
 
-  return encoded;
+  return ro::EncodedTagged(index, offset / kTaggedSize);
 }
 
 // If relocations are needed, this class
@@ -271,7 +270,7 @@ void ReadOnlySegmentForSerialization::EncodeTaggedSlots(Isolate* isolate) {
                                 SkipFreeSpaceOrFiller::kNo);
   for (Tagged<HeapObject> o = it.Next(); !o.is_null(); o = it.Next()) {
     if (o.address() >= segment_end) break;
-    o->Iterate(cage_base, &v);
+    VisitObject(isolate, o, &v);
   }
 }
 
@@ -320,7 +319,11 @@ class ReadOnlyHeapImageSerializer {
 
   void EmitAllocatePage(const ReadOnlyPageMetadata* page,
                         const std::vector<MemoryRegion>& unmapped_regions) {
-    sink_->Put(Bytecode::kAllocatePage, "page begin");
+    if (V8_STATIC_ROOTS_BOOL) {
+      sink_->Put(Bytecode::kAllocatePageAt, "fixed page begin");
+    } else {
+      sink_->Put(Bytecode::kAllocatePage, "page begin");
+    }
     sink_->PutUint30(IndexOf(page), "page index");
     sink_->PutUint30(
         static_cast<uint32_t>(page->HighWaterMark() - page->area_start()),
@@ -383,7 +386,7 @@ class ReadOnlyHeapImageSerializer {
       ReadOnlyRoots roots(isolate_);
       for (size_t i = 0; i < ReadOnlyRoots::kEntriesCount; i++) {
         RootIndex rudi = static_cast<RootIndex>(i);
-        Tagged<HeapObject> rudolf = HeapObject::cast(roots.object_at(rudi));
+        Tagged<HeapObject> rudolf = Cast<HeapObject>(roots.object_at(rudi));
         ro::EncodedTagged encoded = Encode(isolate_, rudolf);
         sink_->PutUint32(encoded.ToUint32(), "read only roots entry");
       }

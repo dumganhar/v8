@@ -5,6 +5,8 @@
 #ifndef V8_COMPILER_LINKAGE_H_
 #define V8_COMPILER_LINKAGE_H_
 
+#include <optional>
+
 #include "src/base/compiler-specific.h"
 #include "src/base/flags.h"
 #include "src/codegen/interface-descriptors.h"
@@ -15,6 +17,7 @@
 #include "src/codegen/signature.h"
 #include "src/common/globals.h"
 #include "src/compiler/frame.h"
+#include "src/compiler/globals.h"
 #include "src/compiler/operator.h"
 #include "src/execution/encoded-c-signature.h"
 #include "src/runtime/runtime.h"
@@ -330,8 +333,8 @@ class V8_EXPORT_PRIVATE CallDescriptor final
   const StackArgumentOrder stack_order_;
   const char* const debug_name_;
 
-  mutable base::Optional<size_t> gp_param_count_;
-  mutable base::Optional<size_t> fp_param_count_;
+  mutable std::optional<size_t> gp_param_count_;
+  mutable std::optional<size_t> fp_param_count_;
 };
 
 DEFINE_OPERATORS_FOR_FLAGS(CallDescriptor::Flags)
@@ -339,6 +342,13 @@ DEFINE_OPERATORS_FOR_FLAGS(CallDescriptor::Flags)
 std::ostream& operator<<(std::ostream& os, const CallDescriptor& d);
 V8_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os,
                                            const CallDescriptor::Kind& k);
+
+#if V8_ENABLE_WEBASSEMBLY
+// Lowers a wasm CallDescriptor for 32 bit platforms by replacing i64 parameters
+// and returns with two i32s each.
+V8_EXPORT_PRIVATE CallDescriptor* GetI32WasmCallDescriptor(
+    Zone* zone, const CallDescriptor* call_descriptor);
+#endif
 
 // Defines the linkage for a compilation, including the calling conventions
 // for incoming parameters and return value(s) as well as the outgoing calling
@@ -375,7 +385,8 @@ class V8_EXPORT_PRIVATE Linkage : public NON_EXPORTED_BASE(ZoneObject) {
 
   static CallDescriptor* GetRuntimeCallDescriptor(
       Zone* zone, Runtime::FunctionId function, int js_parameter_count,
-      Operator::Properties properties, CallDescriptor::Flags flags);
+      Operator::Properties properties, CallDescriptor::Flags flags,
+      LazyDeoptOnThrow lazy_deopt_on_throw = LazyDeoptOnThrow::kNo);
 
   static CallDescriptor* GetCEntryStubCallDescriptor(
       Zone* zone, int return_count, int js_parameter_count,
@@ -431,22 +442,34 @@ class V8_EXPORT_PRIVATE Linkage : public NON_EXPORTED_BASE(ZoneObject) {
 
   // A special {Parameter} index for Stub Calls that represents context.
   static int GetStubCallContextParamIndex(int parameter_count) {
-    return parameter_count + 0;  // Parameter (arity + 0) is special.
+    return parameter_count + 0;
   }
 
   // A special {Parameter} index for JSCalls that represents the new target.
   static constexpr int GetJSCallNewTargetParamIndex(int parameter_count) {
-    return parameter_count + 0;  // Parameter (arity + 0) is special.
+    return parameter_count + 0;
   }
 
   // A special {Parameter} index for JSCalls that represents the argument count.
   static constexpr int GetJSCallArgCountParamIndex(int parameter_count) {
-    return parameter_count + 1;  // Parameter (arity + 1) is special.
+    return GetJSCallNewTargetParamIndex(parameter_count) + 1;
   }
+
+#ifdef V8_ENABLE_LEAPTIERING
+  // A special {Parameter} index for JSCalls that represents the dispatch
+  // handle.
+  static constexpr int GetJSCallDispatchHandleParamIndex(int parameter_count) {
+    return GetJSCallArgCountParamIndex(parameter_count) + 1;
+  }
+#endif
 
   // A special {Parameter} index for JSCalls that represents the context.
   static constexpr int GetJSCallContextParamIndex(int parameter_count) {
-    return parameter_count + 2;  // Parameter (arity + 2) is special.
+#ifdef V8_ENABLE_LEAPTIERING
+    return GetJSCallDispatchHandleParamIndex(parameter_count) + 1;
+#else
+    return GetJSCallArgCountParamIndex(parameter_count) + 1;
+#endif
   }
 
   // A special {Parameter} index for JSCalls that represents the closure.

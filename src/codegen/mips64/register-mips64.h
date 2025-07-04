@@ -304,11 +304,13 @@ constexpr Register kJavaScriptCallCodeStartRegister = a2;
 constexpr Register kJavaScriptCallTargetRegister = kJSFunctionRegister;
 constexpr Register kJavaScriptCallNewTargetRegister = a3;
 constexpr Register kJavaScriptCallExtraArg1Register = a2;
+// Leaptiering is not currently available on MIPS64.
+constexpr Register kJavaScriptCallDispatchHandleRegister = no_reg;
 
 constexpr Register kRuntimeCallFunctionRegister = a1;
 constexpr Register kRuntimeCallArgCountRegister = a0;
 constexpr Register kRuntimeCallArgvRegister = a2;
-constexpr Register kWasmInstanceRegister = a0;
+constexpr Register kWasmImplicitArgRegister = a0;
 constexpr Register kWasmCompileLazyFuncIndexRegister = t0;
 
 constexpr DoubleRegister kFPReturnRegister0 = f0;

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <optional>
+
 #if !V8_ENABLE_WEBASSEMBLY
 #error This header should only be included if WebAssembly is enabled.
 #endif  // !V8_ENABLE_WEBASSEMBLY
@@ -43,13 +45,13 @@ static constexpr int kAssertNotNullIndex = -5;
 // All "load-like" special cases use the same fake size and type. The specific
 // values we use don't matter; for accurate alias analysis, the type should
 // be "unrelated" to any struct type.
-static constexpr uint32_t kLoadLikeType = wasm::HeapType::kExtern;
+static constexpr wasm::ModuleTypeIndex kLoadLikeType{wasm::HeapType::kExtern};
 static constexpr int kLoadLikeSize = 4;  // Chosen by fair dice roll.
 
 struct WasmMemoryAddress {
   OpIndex base;
   int32_t offset;
-  uint32_t type_index;
+  wasm::ModuleTypeIndex type_index;
   uint8_t size;
   bool mutability;
 
@@ -132,7 +134,8 @@ class WasmMemoryContentTable
     }
   }
 
-  bool TypesUnrelated(uint32_t type1, uint32_t type2) {
+  bool TypesUnrelated(wasm::ModuleTypeIndex type1,
+                      wasm::ModuleTypeIndex type2) {
     return wasm::TypesUnrelated(wasm::ValueType::Ref(type1),
                                 wasm::ValueType::Ref(type2), module_, module_);
   }
@@ -224,7 +227,7 @@ class WasmMemoryContentTable
                     kLoadLikeSize, mutability);
   }
 
-  OpIndex FindImpl(OpIndex object, int offset, uint32_t type_index,
+  OpIndex FindImpl(OpIndex object, int offset, wasm::ModuleTypeIndex type_index,
                    uint8_t size, bool mutability,
                    OptionalOpIndex index = OptionalOpIndex::Nullopt()) {
     WasmMemoryAddress mem{object, offset, type_index, size, mutability};
@@ -270,8 +273,8 @@ class WasmMemoryContentTable
 #endif  // DEBUG
 
  private:
-  void Insert(OpIndex base, int32_t offset, uint32_t type_index, uint8_t size,
-              bool mutability, OpIndex value) {
+  void Insert(OpIndex base, int32_t offset, wasm::ModuleTypeIndex type_index,
+              uint8_t size, bool mutability, OpIndex value) {
     DCHECK_EQ(base, ResolveBase(base));
 
     WasmMemoryAddress mem{base, offset, type_index, size, mutability};
@@ -491,7 +494,7 @@ class WasmLoadEliminationAnalyzer {
     AliasSnapshot alias_snapshot;
     MemorySnapshot memory_snapshot;
   };
-  FixedBlockSidetable<base::Optional<Snapshot>> block_to_snapshot_mapping_;
+  FixedBlockSidetable<std::optional<Snapshot>> block_to_snapshot_mapping_;
 
   // {predecessor_alias_napshots_}, {predecessor_maps_snapshots_} and
   // {predecessor_memory_snapshots_} are used as temporary vectors when starting
@@ -629,7 +632,8 @@ void WasmLoadEliminationAnalyzer::ProcessBlock(const Block& block,
       case Opcode::kAtomicRMW:
       case Opcode::kAtomicWord32Pair:
       case Opcode::kMemoryBarrier:
-      case Opcode::kStackCheck:
+      case Opcode::kJSStackCheck:
+      case Opcode::kWasmStackCheck:
       case Opcode::kSimd128LaneMemory:
       case Opcode::kGlobalSet:
       case Opcode::kParameter:

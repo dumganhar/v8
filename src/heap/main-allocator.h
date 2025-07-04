@@ -5,7 +5,8 @@
 #ifndef V8_HEAP_MAIN_ALLOCATOR_H_
 #define V8_HEAP_MAIN_ALLOCATOR_H_
 
-#include "src/base/optional.h"
+#include <optional>
+
 #include "src/common/globals.h"
 #include "src/heap/allocation-observer.h"
 #include "src/heap/allocation-result.h"
@@ -227,8 +228,9 @@ class MainAllocator {
 
   V8_EXPORT_PRIVATE void MakeLinearAllocationAreaIterable();
 
-  void MarkLinearAllocationAreaBlack();
-  void UnmarkLinearAllocationArea();
+  V8_EXPORT_PRIVATE void MarkLinearAllocationAreaBlack();
+  V8_EXPORT_PRIVATE void UnmarkLinearAllocationArea();
+  V8_EXPORT_PRIVATE void FreeLinearAllocationAreaAndResetFreeList();
 
   V8_EXPORT_PRIVATE Address AlignTopForTesting(AllocationAlignment alignment,
                                                int offset);
@@ -247,7 +249,7 @@ class MainAllocator {
 #endif  // DEBUG
 
   // Checks whether the LAB is currently in use.
-  V8_INLINE bool IsLabValid() {
+  V8_INLINE bool IsLabValid() const {
     return allocation_info_->top() != kNullAddress;
   }
 
@@ -352,11 +354,11 @@ class MainAllocator {
   Heap* const isolate_heap_;
   SpaceWithLinearArea* const space_;
 
-  base::Optional<AllocationCounter> allocation_counter_;
+  std::optional<AllocationCounter> allocation_counter_;
   LinearAllocationArea* const allocation_info_;
   // This memory is used if no LinearAllocationArea& is passed in as argument.
   LinearAllocationArea owned_allocation_info_;
-  base::Optional<LinearAreaOriginalData> linear_area_original_data_;
+  std::optional<LinearAreaOriginalData> linear_area_original_data_;
   std::unique_ptr<AllocatorPolicy> allocator_policy_;
 
   const bool supports_extending_lab_;

@@ -16,6 +16,7 @@
 #include "src/execution/isolate.h"
 #include "src/logging/code-events.h"
 #include "src/objects/objects.h"
+#include "src/regexp/regexp-flags.h"
 
 namespace v8 {
 
@@ -188,8 +189,8 @@ class V8FileLogger : public LogEventListener {
   void CallbackEvent(Handle<Name> name, Address entry_point) override;
   void GetterCallbackEvent(Handle<Name> name, Address entry_point) override;
   void SetterCallbackEvent(Handle<Name> name, Address entry_point) override;
-  void RegExpCodeCreateEvent(Handle<AbstractCode> code,
-                             Handle<String> source) override;
+  void RegExpCodeCreateEvent(Handle<AbstractCode> code, Handle<String> source,
+                             RegExpFlags flags) override;
   void CodeMoveEvent(Tagged<InstructionStream> from,
                      Tagged<InstructionStream> to) override;
   void BytecodeMoveEvent(Tagged<BytecodeArray> from,
@@ -208,7 +209,7 @@ class V8FileLogger : public LogEventListener {
                            Tagged<AbstractCode> code);
   void WeakCodeClearEvent() override {}
 
-  void ProcessDeoptEvent(Handle<Code> code, SourcePosition position,
+  void ProcessDeoptEvent(DirectHandle<Code> code, SourcePosition position,
                          const char* kind, const char* reason);
 
   // Emits a code line info record event.
@@ -223,7 +224,7 @@ class V8FileLogger : public LogEventListener {
   void CodeNameEvent(Address addr, int pos, const char* code_name);
 
   void ICEvent(const char* type, bool keyed, Handle<Map> map,
-               Handle<Object> key, char old_state, char new_state,
+               DirectHandle<Object> key, char old_state, char new_state,
                const char* modifier, const char* slow_stub_reason);
 
   void MapEvent(const char* type, Handle<Map> from, Handle<Map> to,
@@ -308,7 +309,7 @@ class V8FileLogger : public LogEventListener {
   void ProfilerBeginEvent();
 
   // Emits callback event messages.
-  void CallbackEventInternal(const char* prefix, Handle<Name> name,
+  void CallbackEventInternal(const char* prefix, DirectHandle<Name> name,
                              Address entry_point);
 
   // Internal configurable move event.
@@ -329,8 +330,8 @@ class V8FileLogger : public LogEventListener {
   bool EnsureLogScriptSource(Tagged<Script> script);
 
   void LogSourceCodeInformation(Handle<AbstractCode> code,
-                                Handle<SharedFunctionInfo> shared);
-  void LogCodeDisassemble(Handle<AbstractCode> code);
+                                DirectHandle<SharedFunctionInfo> shared);
+  void LogCodeDisassemble(DirectHandle<AbstractCode> code);
 
   void WriteApiSecurityCheck();
   void WriteApiNamedPropertyAccess(const char* tag, Tagged<JSObject> holder,
@@ -439,8 +440,8 @@ class V8_EXPORT_PRIVATE CodeEventLogger : public LogEventListener {
                        int code_offset, int script_id) override;
 #endif  // V8_ENABLE_WEBASSEMBLY
 
-  void RegExpCodeCreateEvent(Handle<AbstractCode> code,
-                             Handle<String> source) override;
+  void RegExpCodeCreateEvent(Handle<AbstractCode> code, Handle<String> source,
+                             RegExpFlags flags) override;
   void CallbackEvent(Handle<Name> name, Address entry_point) override {}
   void GetterCallbackEvent(Handle<Name> name, Address entry_point) override {}
   void SetterCallbackEvent(Handle<Name> name, Address entry_point) override {}
@@ -507,8 +508,8 @@ class ExternalLogEventListener : public LogEventListener {
                        int code_offset, int script_id) override;
 #endif  // V8_ENABLE_WEBASSEMBLY
 
-  void RegExpCodeCreateEvent(Handle<AbstractCode> code,
-                             Handle<String> source) override;
+  void RegExpCodeCreateEvent(Handle<AbstractCode> code, Handle<String> source,
+                             RegExpFlags flags) override;
   void CallbackEvent(Handle<Name> name, Address entry_point) override {}
   void GetterCallbackEvent(Handle<Name> name, Address entry_point) override {}
   void SetterCallbackEvent(Handle<Name> name, Address entry_point) override {}

@@ -4,6 +4,8 @@
 
 #include "src/wasm/function-compiler.h"
 
+#include <optional>
+
 #include "src/codegen/compiler.h"
 #include "src/codegen/optimized-compilation-info.h"
 #include "src/compiler/turboshaft/wasm-turboshaft-compiler.h"
@@ -23,20 +25,17 @@ namespace v8::internal::wasm {
 
 WasmCompilationResult WasmCompilationUnit::ExecuteCompilation(
     CompilationEnv* env, const WireBytesStorage* wire_bytes_storage,
-    Counters* counters, WasmFeatures* detected) {
-  WasmCompilationResult result;
-  if (func_index_ < static_cast<int>(env->module->num_imported_functions)) {
-    result = ExecuteImportWrapperCompilation(env);
-  } else {
-    result =
-        ExecuteFunctionCompilation(env, wire_bytes_storage, counters, detected);
-  }
+    Counters* counters, WasmDetectedFeatures* detected) {
+  DCHECK_GE(func_index_, static_cast<int>(env->module->num_imported_functions));
+  WasmCompilationResult result =
+      ExecuteFunctionCompilation(env, wire_bytes_storage, counters, detected);
 
   if (result.succeeded() && counters) {
-    // TODO(mliedtke): Add counter for deopt data size.
     counters->wasm_generated_code_size()->Increment(
         result.code_desc.instr_size);
     counters->wasm_reloc_size()->Increment(result.code_desc.reloc_size);
+    counters->wasm_deopt_data_size()->Increment(
+        static_cast<int>(result.deopt_data.size()));
   }
 
   result.func_index = func_index_;
@@ -44,30 +43,17 @@ WasmCompilationResult WasmCompilationUnit::ExecuteCompilation(
   return result;
 }
 
-WasmCompilationResult WasmCompilationUnit::ExecuteImportWrapperCompilation(
-    CompilationEnv* env) {
-  const FunctionSig* sig = env->module->functions[func_index_].sig;
-  // Assume the wrapper is going to be a JS function with matching arity at
-  // instantiation time.
-  auto kind = kDefaultImportCallKind;
-  bool source_positions = is_asmjs_module(env->module);
-  WasmCompilationResult result = compiler::CompileWasmImportCallWrapper(
-      env, kind, sig, source_positions,
-      static_cast<int>(sig->parameter_count()), wasm::kNoSuspend);
-  return result;
-}
-
 WasmCompilationResult WasmCompilationUnit::ExecuteFunctionCompilation(
     CompilationEnv* env, const WireBytesStorage* wire_bytes_storage,
-    Counters* counters, WasmFeatures* detected) {
+    Counters* counters, WasmDetectedFeatures* detected) {
   const WasmFunction* func = &env->module->functions[func_index_];
   base::Vector<const uint8_t> code = wire_bytes_storage->GetCode(func->code);
-  bool is_shared = env->module->types[func->sig_index].is_shared;
+  bool is_shared = env->module->type(func->sig_index).is_shared;
   wasm::FunctionBody func_body{func->sig, func->code.offset(), code.begin(),
                                code.end(), is_shared};
 
-  base::Optional<TimedHistogramScope> wasm_compile_function_time_scope;
-  base::Optional<TimedHistogramScope> wasm_compile_huge_function_time_scope;
+  std::optional<TimedHistogramScope> wasm_compile_function_time_scope;
+  std::optional<TimedHistogramScope> wasm_compile_huge_function_time_scope;
   if (counters && base::TimeTicks::IsHighResolution()) {
     if (func_body.end - func_body.start >= 100 * KB) {
       auto huge_size_histogram = SELECT_WASM_COUNTER(
@@ -113,17 +99,27 @@ WasmCompilationResult WasmCompilationUnit::ExecuteFunctionCompilation(
 
   switch (tier_) {
     case ExecutionTier::kNone:
+#if V8_ENABLE_DRUMBRAKE
+    case ExecutionTier::kInterpreter:
+#endif  // V8_ENABLE_DRUMBRAKE
       UNREACHABLE();
 
     case ExecutionTier::kLiftoff: {
       // The --wasm-tier-mask-for-testing flag can force functions to be
       // compiled with TurboFan, and the --wasm-debug-mask-for-testing can force
       // them to be compiled for debugging, see documentation.
-      if (V8_LIKELY(v8_flags.wasm_tier_mask_for_testing == 0) ||
-          declared_index >= 32 ||
-          ((v8_flags.wasm_tier_mask_for_testing & (1 << declared_index)) ==
-           0) ||
-          v8_flags.liftoff_only) {
+      bool try_liftoff = true;
+      if (V8_UNLIKELY(v8_flags.wasm_tier_mask_for_testing != 0)) {
+        bool must_use_liftoff =
+            v8_flags.liftoff_only ||
+            for_debugging_ != ForDebugging::kNotForDebugging;
+        bool tiering_requested =
+            declared_index < 32 &&
+            (v8_flags.wasm_tier_mask_for_testing & (1 << declared_index));
+        if (!must_use_liftoff && tiering_requested) try_liftoff = false;
+      }
+
+      if (V8_LIKELY(try_liftoff)) {
         auto options = LiftoffOptions{}
                            .set_func_index(func_index_)
                            .set_for_debugging(for_debugging_)
@@ -134,7 +130,11 @@ WasmCompilationResult WasmCompilationUnit::ExecuteFunctionCompilation(
         std::unique_ptr<DebugSideTable> unused_debug_sidetable;
         if (V8_UNLIKELY(declared_index < 32 &&
                         (v8_flags.wasm_debug_mask_for_testing &
-                         (1 << declared_index)) != 0)) {
+                         (1 << declared_index)) != 0) &&
+            // Do not overwrite the debugging setting when performing a
+            // deoptimization.
+            (!v8_flags.wasm_deopt ||
+             env->deopt_location_kind == LocationKindForDeopt::kNone)) {
           options.set_debug_sidetable(&unused_debug_sidetable);
           if (!for_debugging_) options.set_for_debugging(kForDebugging);
         }
@@ -163,12 +163,15 @@ WasmCompilationResult WasmCompilationUnit::ExecuteFunctionCompilation(
       if (use_turboshaft) {
         result = compiler::turboshaft::ExecuteTurboshaftWasmCompilation(
             env, data, detected);
-        if (result.succeeded()) return result;
-        // Else fall back to turbofan.
+      } else {
+        result = compiler::ExecuteTurbofanWasmCompilation(env, data, counters,
+                                                          detected);
       }
-
-      result = compiler::ExecuteTurbofanWasmCompilation(env, data, counters,
-                                                        detected);
+      // In exceptional cases it can happen that compilation requests for
+      // debugging end up being executed by Turbofan, e.g. if Liftoff bails out
+      // because of unsupported features or the --wasm-tier-mask-for-testing is
+      // set. In that case we set the for_debugging field for the TurboFan
+      // result to match the requested for_debugging_.
       result.for_debugging = for_debugging_;
       break;
     }
@@ -181,12 +184,11 @@ WasmCompilationResult WasmCompilationUnit::ExecuteFunctionCompilation(
 // static
 void WasmCompilationUnit::CompileWasmFunction(Counters* counters,
                                               NativeModule* native_module,
-                                              WasmFeatures* detected,
+                                              WasmDetectedFeatures* detected,
                                               const WasmFunction* function,
                                               ExecutionTier tier) {
   ModuleWireBytes wire_bytes(native_module->wire_bytes());
-  bool is_shared =
-      native_module->module()->types[function->sig_index].is_shared;
+  bool is_shared = native_module->module()->type(function->sig_index).is_shared;
   FunctionBody function_body{function->sig, function->code.offset(),
                              wire_bytes.start() + function->code.offset(),
                              wire_bytes.start() + function->code.end_offset(),
@@ -210,25 +212,48 @@ void WasmCompilationUnit::CompileWasmFunction(Counters* counters,
 }
 
 JSToWasmWrapperCompilationUnit::JSToWasmWrapperCompilationUnit(
-    Isolate* isolate, const FunctionSig* sig, uint32_t canonical_sig_index,
-    const WasmModule* module, bool is_import, WasmFeatures enabled_features)
+    Isolate* isolate, const CanonicalSig* sig, CanonicalTypeIndex sig_index)
     : isolate_(isolate),
-      is_import_(is_import),
       sig_(sig),
-      canonical_sig_index_(canonical_sig_index),
-      job_(compiler::NewJSToWasmCompilationJob(isolate, sig, module, is_import,
-                                               enabled_features)) {}
+      sig_index_(sig_index),
+      job_(v8_flags.wasm_jitless
+               ? nullptr
+               : compiler::NewJSToWasmCompilationJob(isolate, sig)) {
+  if (!v8_flags.wasm_jitless) {
+    OptimizedCompilationInfo* info =
+        v8_flags.turboshaft_wasm_wrappers
+            ? static_cast<compiler::turboshaft::TurboshaftCompilationJob*>(
+                  job_.get())
+                  ->compilation_info()
+            : static_cast<TurbofanCompilationJob*>(job_.get())
+                  ->compilation_info();
+    if (info->trace_turbo_graph()) {
+      // Make sure that code tracer is initialized on the main thread if tracing
+      // is enabled.
+      isolate->GetCodeTracer();
+    }
+  }
+}
 
 JSToWasmWrapperCompilationUnit::~JSToWasmWrapperCompilationUnit() = default;
 
 void JSToWasmWrapperCompilationUnit::Execute() {
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.wasm.detailed"),
                "wasm.CompileJSToWasmWrapper");
-  CompilationJob::Status status = job_->ExecuteJob(nullptr);
-  CHECK_EQ(status, CompilationJob::SUCCEEDED);
+  if (!v8_flags.wasm_jitless) {
+    CompilationJob::Status status = job_->ExecuteJob(nullptr);
+    CHECK_EQ(status, CompilationJob::SUCCEEDED);
+  }
 }
 
 Handle<Code> JSToWasmWrapperCompilationUnit::Finalize() {
+#if V8_ENABLE_DRUMBRAKE
+  if (v8_flags.wasm_jitless) {
+    return isolate_->builtins()->code_handle(
+        Builtin::kGenericJSToWasmInterpreterWrapper);
+  }
+#endif  // V8_ENABLE_DRUMBRAKE
+
   CompilationJob::Status status = job_->FinalizeJob(isolate_);
   CHECK_EQ(status, CompilationJob::SUCCEEDED);
   OptimizedCompilationInfo* info =
@@ -243,19 +268,25 @@ Handle<Code> JSToWasmWrapperCompilationUnit::Finalize() {
     Handle<String> name = isolate_->factory()->NewStringFromAsciiChecked(
         info->GetDebugName().get());
     PROFILE(isolate_, CodeCreateEvent(LogEventListener::CodeTag::kStub,
-                                      Handle<AbstractCode>::cast(code), name));
+                                      Cast<AbstractCode>(code), name));
   }
+  // We should always have checked the cache before compiling a wrapper.
+  Tagged<WeakFixedArray> cache = isolate_->heap()->js_to_wasm_wrappers();
+  DCHECK(cache->get(sig_index_.index).IsCleared());
+  // Install the compiled wrapper in the cache now.
+  cache->set(sig_index_.index, MakeWeak(code->wrapper()));
+  Counters* counters = isolate_->counters();
+  counters->wasm_generated_code_size()->Increment(code->body_size());
+  counters->wasm_reloc_size()->Increment(code->relocation_size());
+  counters->wasm_compiled_export_wrapper()->Increment(1);
   return code;
 }
 
 // static
 Handle<Code> JSToWasmWrapperCompilationUnit::CompileJSToWasmWrapper(
-    Isolate* isolate, const FunctionSig* sig, uint32_t canonical_sig_index,
-    const WasmModule* module, bool is_import) {
+    Isolate* isolate, const CanonicalSig* sig, CanonicalTypeIndex sig_index) {
   // Run the compilation unit synchronously.
-  WasmFeatures enabled_features = WasmFeatures::FromIsolate(isolate);
-  JSToWasmWrapperCompilationUnit unit(isolate, sig, canonical_sig_index, module,
-                                      is_import, enabled_features);
+  JSToWasmWrapperCompilationUnit unit(isolate, sig, sig_index);
   unit.Execute();
   return unit.Finalize();
 }

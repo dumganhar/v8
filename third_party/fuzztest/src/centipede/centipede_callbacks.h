@@ -26,13 +26,13 @@
 #include "./centipede/binary_info.h"
 #include "./centipede/byte_array_mutator.h"
 #include "./centipede/command.h"
-#include "./centipede/defs.h"
 #include "./centipede/environment.h"
 #include "./centipede/fuzztest_mutator.h"
 #include "./centipede/mutation_input.h"
 #include "./centipede/runner_result.h"
 #include "./centipede/shared_memory_blob_sequence.h"
 #include "./centipede/util.h"
+#include "./common/defs.h"
 
 namespace centipede {
 
@@ -176,8 +176,8 @@ class CentipedeCallbacks {
       std::filesystem::path(temp_dir_).append("log");
   std::string failure_description_path_ =
       std::filesystem::path(temp_dir_).append("failure_description");
-  const std::string shmem_name1_ = ProcessAndThreadUniqueID("/centipede-shm1-");
-  const std::string shmem_name2_ = ProcessAndThreadUniqueID("/centipede-shm2-");
+  const std::string shmem_name1_ = ProcessAndThreadUniqueID("/ctpd-shm1-");
+  const std::string shmem_name2_ = ProcessAndThreadUniqueID("/ctpd-shm2-");
 
   SharedMemoryBlobSequence inputs_blobseq_;
   SharedMemoryBlobSequence outputs_blobseq_;

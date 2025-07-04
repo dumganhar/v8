@@ -41,9 +41,9 @@ Tagged<FreeSpace> FreeSpace::next() const {
     return FreeSpace();
   }
   Address next_ptr = ptr() + diff_to_next * kObjectAlignment;
-  return FreeSpace::unchecked_cast(Tagged<Object>(next_ptr));
+  return UncheckedCast<FreeSpace>(Tagged<Object>(next_ptr));
 #else
-  return FreeSpace::unchecked_cast(
+  return UncheckedCast<FreeSpace>(
       TaggedField<Object, kNextOffset>::load(*this));
 #endif  // V8_EXTERNAL_CODE_SPACE
 }
@@ -67,25 +67,7 @@ void FreeSpace::SetNext(const WritableFreeSpace& writable_free_space,
 #endif  // V8_EXTERNAL_CODE_SPACE
 }
 
-Tagged<FreeSpace> FreeSpace::cast(Tagged<HeapObject> o) {
-  SLOW_DCHECK((!GetHeapFromWritableObject(o)->deserialization_complete()) ||
-              IsFreeSpace(o));
-  return base::bit_cast<FreeSpace>(o);
-}
-
-Tagged<FreeSpace> FreeSpace::unchecked_cast(const Tagged<Object> o) {
-  return base::bit_cast<FreeSpace>(o);
-}
-
-bool FreeSpace::IsValid() const {
-  Heap* heap = GetHeapFromWritableObject(*this);
-  Tagged<Object> free_space_map =
-      Isolate::FromHeap(heap)->root(RootIndex::kFreeSpaceMap);
-  CHECK(!heap->deserialization_complete() ||
-        map_slot().contains_map_value(free_space_map.ptr()));
-  CHECK_LE(kNextOffset + kTaggedSize, size(kRelaxedLoad));
-  return true;
-}
+bool FreeSpace::IsValid() const { return Heap::IsFreeSpaceValid(*this); }
 
 }  // namespace internal
 }  // namespace v8

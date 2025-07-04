@@ -27,6 +27,8 @@
 
 #if defined(V8_OS_AIX)
 #include <fenv.h>  // NOLINT(build/c++11)
+
+#include "src/wasm/float16.h"
 #endif
 
 #ifdef _MSC_VER
@@ -39,7 +41,7 @@
 #endif
 
 #ifdef __SSE3__
-#include <immintrin.h>
+#include <pmmintrin.h>
 #endif
 
 #if defined(V8_TARGET_ARCH_ARM64) && \
@@ -240,6 +242,16 @@ inline T RoundingAverageUnsigned(T a, T b) {
   enum {                                                       \
     LIST_MACRO##_StartOffset = StartOffset - 1,                \
     LIST_MACRO(DEFINE_ONE_FIELD_OFFSET)                        \
+  };
+
+#define DEFINE_ONE_FIELD_OFFSET_PURE_NAME(CamelName, Size, ...) \
+  k##CamelName##Offset,                                         \
+      k##CamelName##OffsetEnd = k##CamelName##Offset + (Size)-1,
+
+#define DEFINE_FIELD_OFFSET_CONSTANTS_WITH_PURE_NAME(StartOffset, LIST_MACRO) \
+  enum {                                                                      \
+    LIST_MACRO##_StartOffset = StartOffset - 1,                               \
+    LIST_MACRO(DEFINE_ONE_FIELD_OFFSET_PURE_NAME)                             \
   };
 
 // Size of the field defined by DEFINE_FIELD_OFFSET_CONSTANTS
@@ -804,6 +816,13 @@ T FpOpWorkaround(T input, T value) {
   }
   return value;
 }
+
+template <>
+inline Float16 FpOpWorkaround(Float16 input, Float16 value) {
+  float result = FpOpWorkaround(input.ToFloat32(), value.ToFloat32());
+  return Float16::FromFloat32(result);
+}
+
 #endif
 
 V8_EXPORT_PRIVATE bool PassesFilter(base::Vector<const char> name,

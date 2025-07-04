@@ -161,11 +161,9 @@ RegExpMacroAssemblerMIPS::~RegExpMacroAssemblerMIPS() {
   fallback_label_.Unuse();
 }
 
-
-int RegExpMacroAssemblerMIPS::stack_limit_slack()  {
-  return RegExpStack::kStackLimitSlack;
+int RegExpMacroAssemblerMIPS::stack_limit_slack_slot_count() {
+  return RegExpStack::kStackLimitSlackSlotCount;
 }
-
 
 void RegExpMacroAssemblerMIPS::AdvanceCurrentPosition(int by) {
   if (by != 0) {
@@ -540,8 +538,21 @@ void RegExpMacroAssemblerMIPS::CheckBitInTable(
     __ Daddu(a0, a0, current_character());
   }
 
-  __ Lbu(a0, FieldMemOperand(a0, ByteArray::kHeaderSize));
+  __ Lbu(a0, FieldMemOperand(a0, OFFSET_OF_DATA_START(ByteArray)));
   BranchOrBacktrack(on_bit_set, ne, a0, Operand(zero_reg));
+}
+
+void RegExpMacroAssemblerMIPS::SkipUntilBitInTable(
+    int cp_offset, Handle<ByteArray> table, Handle<ByteArray> nibble_table,
+    int advance_by) {
+  // TODO(pthier): Optimize. Table can be loaded outside of the loop.
+  Label cont, again;
+  Bind(&again);
+  LoadCurrentCharacter(cp_offset, &cont, true);
+  CheckBitInTable(table, &cont);
+  AdvanceCurrentPosition(advance_by);
+  GoTo(&again);
+  Bind(&cont);
 }
 
 bool RegExpMacroAssemblerMIPS::CheckSpecialClassRanges(
@@ -688,7 +699,8 @@ void RegExpMacroAssemblerMIPS::PopRegExpBasePointer(Register stack_pointer_out,
   StoreRegExpStackPointerToMemory(stack_pointer_out, scratch);
 }
 
-Handle<HeapObject> RegExpMacroAssemblerMIPS::GetCode(Handle<String> source) {
+Handle<HeapObject> RegExpMacroAssemblerMIPS::GetCode(Handle<String> source,
+                                                     RegExpFlags flags) {
   Label return_v0;
   if (masm_->has_exception()) {
     // If the code gets corrupted due to long regular expressions and lack of
@@ -1032,8 +1044,8 @@ Handle<HeapObject> RegExpMacroAssemblerMIPS::GetCode(Handle<String> source) {
           .set_empty_source_position_table()
           .Build();
   LOG(masm_->isolate(),
-      RegExpCodeCreateEvent(Handle<AbstractCode>::cast(code), source));
-  return Handle<HeapObject>::cast(code);
+      RegExpCodeCreateEvent(Cast<AbstractCode>(code), source, flags));
+  return Cast<HeapObject>(code);
 }
 
 void RegExpMacroAssemblerMIPS::GoTo(Label* to) {
@@ -1243,7 +1255,7 @@ int64_t RegExpMacroAssemblerMIPS::CheckStackGuardState(Address* return_address,
                                                        Address re_frame,
                                                        uintptr_t extra_space) {
   Tagged<InstructionStream> re_code =
-      InstructionStream::cast(Tagged<Object>(raw_code));
+      Cast<InstructionStream>(Tagged<Object>(raw_code));
   return NativeRegExpMacroAssembler::CheckStackGuardState(
       frame_entry<Isolate*>(re_frame, kIsolateOffset),
       static_cast<int>(frame_entry<int64_t>(re_frame, kStartIndexOffset)),

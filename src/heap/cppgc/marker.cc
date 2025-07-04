@@ -119,9 +119,6 @@ MarkerBase::IncrementalMarkingTask::Post(cppgc::TaskRunner* runner,
                      HeapBase::StackSupport::kSupportsConservativeStackScan,
                  runner->NonNestableTasksEnabled());
 
-  const bool should_use_delayed_task =
-      !marker->config_.incremental_task_delay.IsZero() &&
-      marker->IsAheadOfSchedule();
   const bool non_nestable_tasks_enabled = runner->NonNestableTasksEnabled();
 
   auto task = std::make_unique<IncrementalMarkingTask>(
@@ -129,19 +126,9 @@ MarkerBase::IncrementalMarkingTask::Post(cppgc::TaskRunner* runner,
                                          : StackState::kMayContainHeapPointers);
   auto handle = task->handle_;
   if (non_nestable_tasks_enabled) {
-    if (should_use_delayed_task) {
-      runner->PostNonNestableDelayedTask(
-          std::move(task), marker->config_.incremental_task_delay.InSecondsF());
-    } else {
-      runner->PostNonNestableTask(std::move(task));
-    }
+    runner->PostNonNestableTask(std::move(task));
   } else {
-    if (should_use_delayed_task) {
-      runner->PostDelayedTask(
-          std::move(task), marker->config_.incremental_task_delay.InSecondsF());
-    } else {
-      runner->PostTask(std::move(task));
-    }
+    runner->PostTask(std::move(task));
   }
   return handle;
 }
@@ -247,7 +234,7 @@ void MarkerBase::StartMarking() {
     // Performing incremental or concurrent marking.
     schedule_->NotifyIncrementalMarkingStart();
     // Scanning the stack is expensive so we only do it at the atomic pause.
-    VisitRoots(StackState::kNoHeapPointers);
+    VisitLocalRoots(StackState::kNoHeapPointers);
     ScheduleIncrementalMarkingTask();
     if (config_.marking_type ==
         MarkingConfig::MarkingType::kIncrementalAndConcurrent) {
@@ -291,8 +278,8 @@ void MarkerBase::EnterAtomicPause(StackState stack_state) {
   mutator_marking_state_.set_in_atomic_pause();
 
   {
-    // VisitRoots also resets the LABs.
-    VisitRoots(config_.stack_state);
+    // VisitLocalRoots() also resets the LABs.
+    VisitLocalRoots(config_.stack_state);
     HandleNotFullyConstructedObjects();
   }
   if (old_marking_type ==
@@ -309,6 +296,11 @@ void MarkerBase::EnterAtomicPause(StackState stack_state) {
 
 void MarkerBase::ReEnableConcurrentMarking() {
   CHECK(is_marking_);
+
+  if (config_.marking_type == MarkingConfig::MarkingType::kAtomic) {
+    return;
+  }
+
   CHECK_EQ(config_.marking_type, MarkingConfig::MarkingType::kIncremental);
   config_.marking_type = MarkingConfig::MarkingType::kIncrementalAndConcurrent;
   mutator_marking_state_.Publish();
@@ -334,15 +326,15 @@ void MarkerBase::LeaveAtomicPause() {
     cppgc::subtle::DisallowGarbageCollectionScope disallow_gc_scope(heap_);
     ProcessWeakness();
   }
-  // TODO(chromium:1056170): It would be better if the call to Unlock was
-  // covered by some cppgc scope.
-  g_process_mutex.Pointer()->Unlock();
   heap().SetStackStateOfPrevGC(config_.stack_state);
 }
+
+void MarkerBase::EnterProcessGlobalAtomicPause() { VisitCrossThreadRoots(); }
 
 void MarkerBase::FinishMarking(StackState stack_state) {
   DCHECK(is_marking_);
   EnterAtomicPause(stack_state);
+  EnterProcessGlobalAtomicPause();
   {
     StatsCollector::EnabledScope stats_scope(heap().stats_collector(),
                                              StatsCollector::kAtomicMark);
@@ -392,6 +384,17 @@ void MarkerBase::ProcessWeakness() {
   StatsCollector::EnabledScope stats_scope(heap().stats_collector(),
                                            StatsCollector::kAtomicWeak);
 
+  RootMarkingVisitor root_marking_visitor(mutator_marking_state_);
+
+  // Processing cross-thread roots requires taking the global process lock.
+  // Process these weak roots first to minimize the time the lock is held.
+  g_process_mutex.Get().AssertHeld();
+  CHECK(visited_cross_thread_persistents_in_atomic_pause_);
+  heap().GetWeakCrossThreadPersistentRegion().Iterate(root_marking_visitor);
+  g_process_mutex.Pointer()->Unlock();
+
+  // Launch the parallel job before anything else to provide the maximum time
+  // slice for processing.
   LivenessBroker broker = LivenessBrokerFactory::Create();
   std::unique_ptr<cppgc::JobHandle> job_handle{nullptr};
   if (heap().marking_support() ==
@@ -403,12 +406,8 @@ void MarkerBase::ProcessWeakness() {
             broker));
   }
 
-  RootMarkingVisitor root_marking_visitor(mutator_marking_state_);
+  // Process same-thread roots.
   heap().GetWeakPersistentRegion().Iterate(root_marking_visitor);
-  // Processing cross-thread handles requires taking the process lock.
-  g_process_mutex.Get().AssertHeld();
-  CHECK(visited_cross_thread_persistents_in_atomic_pause_);
-  heap().GetWeakCrossThreadPersistentRegion().Iterate(root_marking_visitor);
 
   // Call weak callbacks on objects that may now be pointing to dead objects.
 #if defined(CPPGC_YOUNG_GENERATION)
@@ -473,7 +472,7 @@ void MarkerBase::ProcessWeakness() {
   DCHECK(marking_worklists_.marking_worklist()->IsEmpty());
 }
 
-void MarkerBase::VisitRoots(StackState stack_state) {
+void MarkerBase::VisitLocalRoots(StackState stack_state) {
   StatsCollector::EnabledScope stats_scope(heap().stats_collector(),
                                            StatsCollector::kMarkVisitRoots);
 
@@ -506,14 +505,12 @@ void MarkerBase::VisitRoots(StackState stack_state) {
 #endif  // defined(CPPGC_YOUNG_GENERATION)
 }
 
-bool MarkerBase::VisitCrossThreadPersistentsIfNeeded() {
-  if (config_.marking_type != MarkingConfig::MarkingType::kAtomic ||
-      visited_cross_thread_persistents_in_atomic_pause_)
-    return false;
-
+void MarkerBase::VisitCrossThreadRoots() {
   StatsCollector::DisabledScope inner_stats_scope(
       heap().stats_collector(),
       StatsCollector::kMarkVisitCrossThreadPersistents);
+  CHECK_EQ(config_.marking_type, MarkingConfig::MarkingType::kAtomic);
+  CHECK(!visited_cross_thread_persistents_in_atomic_pause_);
   // Lock guards against changes to {Weak}CrossThreadPersistent handles, that
   // may conflict with marking. E.g., a WeakCrossThreadPersistent may be
   // converted into a CrossThreadPersistent which requires that the handle
@@ -522,7 +519,6 @@ bool MarkerBase::VisitCrossThreadPersistentsIfNeeded() {
   RootMarkingVisitor root_marking_visitor(mutator_marking_state_);
   heap().GetStrongCrossThreadPersistentRegion().Iterate(root_marking_visitor);
   visited_cross_thread_persistents_in_atomic_pause_ = true;
-  return (heap().GetStrongCrossThreadPersistentRegion().NodesInUse() > 0);
 }
 
 void MarkerBase::ScheduleIncrementalMarkingTask() {
@@ -589,11 +585,6 @@ bool MarkerBase::AdvanceMarkingWithLimits(v8::base::TimeDelta max_duration,
         max_duration.InMillisecondsF());
     const auto deadline = v8::base::TimeTicks::Now() + max_duration;
     is_done = ProcessWorklistsWithDeadline(marked_bytes_limit, deadline);
-    if (is_done && VisitCrossThreadPersistentsIfNeeded()) {
-      // Both limits are absolute and hence can be passed along without further
-      // adjustment.
-      is_done = ProcessWorklistsWithDeadline(marked_bytes_limit, deadline);
-    }
     schedule_->UpdateMutatorThreadMarkedBytes(
         mutator_marking_state_.marked_bytes());
   }
@@ -626,7 +617,7 @@ bool MarkerBase::ProcessWorklistsWithDeadline(
     // than other objects. Therefore we reduce the interval between deadline
     // checks to guarantee the deadline is not exceeded.
     {
-      StatsCollector::EnabledScope inner_scope(
+      StatsCollector::DisabledScope inner_scope(
           heap().stats_collector(), StatsCollector::kMarkProcessBailOutObjects);
       if (!DrainWorklistWithBytesAndTimeDeadline<kDefaultDeadlineCheckInterval /
                                                  5>(
@@ -634,7 +625,9 @@ bool MarkerBase::ProcessWorklistsWithDeadline(
               mutator_marking_state_.concurrent_marking_bailout_worklist(),
               [this](
                   const MarkingWorklists::ConcurrentMarkingBailoutItem& item) {
-                mutator_marking_state_.AccountMarkedBytes(item.bailedout_size);
+                mutator_marking_state_.AccountMarkedBytes(
+                    BasePage::FromPayload(const_cast<void*>(item.parameter)),
+                    item.bailedout_size);
                 item.callback(&visitor(), item.parameter);
               })) {
         return false;
@@ -642,7 +635,7 @@ bool MarkerBase::ProcessWorklistsWithDeadline(
     }
 
     {
-      StatsCollector::EnabledScope inner_scope(
+      StatsCollector::DisabledScope inner_scope(
           heap().stats_collector(),
           StatsCollector::kMarkProcessNotFullyconstructedWorklist);
       if (!DrainWorklistWithBytesAndTimeDeadline(
@@ -659,7 +652,7 @@ bool MarkerBase::ProcessWorklistsWithDeadline(
     }
 
     {
-      StatsCollector::EnabledScope inner_scope(
+      StatsCollector::DisabledScope inner_scope(
           heap().stats_collector(),
           StatsCollector::kMarkProcessMarkingWorklist);
       if (!DrainWorklistWithBytesAndTimeDeadline(
@@ -678,7 +671,7 @@ bool MarkerBase::ProcessWorklistsWithDeadline(
     }
 
     {
-      StatsCollector::EnabledScope inner_scope(
+      StatsCollector::DisabledScope inner_scope(
           heap().stats_collector(),
           StatsCollector::kMarkProcessWriteBarrierWorklist);
       if (!DrainWorklistWithBytesAndTimeDeadline(
@@ -707,7 +700,7 @@ bool MarkerBase::ProcessWorklistsWithDeadline(
     saved_did_discover_new_ephemeron_pairs =
         mutator_marking_state_.DidDiscoverNewEphemeronPairs();
     {
-      StatsCollector::EnabledScope inner_stats_scope(
+      StatsCollector::DisabledScope inner_stats_scope(
           heap().stats_collector(), StatsCollector::kMarkProcessEphemerons);
       if (!DrainWorklistWithBytesAndTimeDeadline(
               mutator_marking_state_, marked_bytes_deadline, time_deadline,
@@ -725,14 +718,17 @@ bool MarkerBase::ProcessWorklistsWithDeadline(
 }
 
 void MarkerBase::MarkNotFullyConstructedObjects() {
-  StatsCollector::DisabledScope stats_scope(
-      heap().stats_collector(),
-      StatsCollector::kMarkVisitNotFullyConstructedObjects);
   // Parallel marking may still be running which is why atomic extraction is
   // required.
   std::unordered_set<HeapObjectHeader*> objects =
       mutator_marking_state_.not_fully_constructed_worklist()
           .Extract<AccessMode::kAtomic>();
+  if (objects.empty()) {
+    return;
+  }
+  StatsCollector::DisabledScope stats_scope(
+      heap().stats_collector(),
+      StatsCollector::kMarkVisitNotFullyConstructedObjects);
   for (HeapObjectHeader* object : objects) {
     DCHECK(object);
     // TraceConservativelyIfNeeded delegates to either in-construction or

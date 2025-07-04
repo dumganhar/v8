@@ -47,11 +47,14 @@ namespace v8::internal::wasm {
   V(WasmTableSetFuncRef)                                                       \
   V(WasmFunctionTableGet)                                                      \
   V(WasmStackGuard)                                                            \
+  V(WasmGrowableStackGuard)                                                    \
   V(WasmStackOverflow)                                                         \
   V(WasmAllocateFixedArray)                                                    \
   V(WasmThrow)                                                                 \
   V(WasmRethrow)                                                               \
+  V(WasmThrowRef)                                                              \
   V(WasmRethrowExplicitContext)                                                \
+  V(WasmHandleStackOverflow)                                                   \
   V(WasmTraceEnter)                                                            \
   V(WasmTraceExit)                                                             \
   V(WasmTraceMemory)                                                           \
@@ -64,7 +67,6 @@ namespace v8::internal::wasm {
   V(I64ToBigInt)                                                               \
   V(RecordWriteSaveFP)                                                         \
   V(RecordWriteIgnoreFP)                                                       \
-  V(ToNumber)                                                                  \
   V(ThrowDataViewTypeError)                                                    \
   V(ThrowDataViewDetachedError)                                                \
   V(ThrowDataViewOutOfBounds)                                                  \
@@ -93,7 +95,6 @@ namespace v8::internal::wasm {
   IF_TSAN(V, TSANRelaxedLoad64SaveFP)                                          \
   V(WasmAllocateArray_Uninitialized)                                           \
   V(WasmArrayCopy)                                                             \
-  V(WasmArrayCopyWithChecks)                                                   \
   V(WasmArrayNewSegment)                                                       \
   V(WasmArrayInitSegment)                                                      \
   V(WasmAllocateStructWithRtt)                                                 \
@@ -143,7 +144,11 @@ namespace v8::internal::wasm {
   V(WasmAllocateZeroedFixedArray)                                              \
   V(WasmFastApiCallTypeCheckAndUpdateIC)                                       \
   V(DeoptimizationEntry_Eager)                                                 \
-  V(WasmPropagateException)
+  V(WasmLiftoffDeoptFinish)                                                    \
+  V(WasmPropagateException)                                                    \
+  V(WasmToJsWrapperInvalidSig)                                                 \
+  V(WasmTrapHandlerThrowTrap)                                                  \
+  IF_SHADOW_STACK(V, AdaptShadowStackForDeopt)
 
 namespace detail {
 constexpr std::array<uint8_t, static_cast<int>(Builtin::kFirstBytecodeHandler)>

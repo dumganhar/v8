@@ -130,13 +130,14 @@ void JSArrayBuffer::set_extension(ArrayBufferExtension* extension) {
     ExternalPointerHandle handle = table.AllocateAndInitializeEntry(
         isolate.GetExternalPointerTableSpaceFor(tag, address()), value, tag);
     base::AsAtomic32::Release_Store(extension_handle_location(), handle);
+    EXTERNAL_POINTER_WRITE_BARRIER(*this, kExtensionOffset, tag);
   } else {
     table.Set(current_handle, value, tag);
   }
 #else
   base::AsAtomicPointer::Release_Store(extension_location(), extension);
 #endif  // V8_COMPRESS_POINTERS
-  WriteBarrier::Marking(*this, extension);
+  WriteBarrier::ForArrayBufferExtension(*this, extension);
 }
 
 #if V8_COMPRESS_POINTERS
@@ -205,7 +206,7 @@ void JSArrayBufferView::set_byte_length(size_t value) {
 }
 
 bool JSArrayBufferView::WasDetached() const {
-  return JSArrayBuffer::cast(buffer())->was_detached();
+  return Cast<JSArrayBuffer>(buffer())->was_detached();
 }
 
 BIT_FIELD_ACCESSORS(JSArrayBufferView, bit_field, is_length_tracking,
@@ -372,22 +373,22 @@ MaybeHandle<JSTypedArray> JSTypedArray::Validate(Isolate* isolate,
                                                  const char* method_name) {
   if (V8_UNLIKELY(!IsJSTypedArray(*receiver))) {
     const MessageTemplate message = MessageTemplate::kNotTypedArray;
-    THROW_NEW_ERROR(isolate, NewTypeError(message), JSTypedArray);
+    THROW_NEW_ERROR(isolate, NewTypeError(message));
   }
 
-  Handle<JSTypedArray> array = Handle<JSTypedArray>::cast(receiver);
+  Handle<JSTypedArray> array = Cast<JSTypedArray>(receiver);
   if (V8_UNLIKELY(array->WasDetached())) {
     const MessageTemplate message = MessageTemplate::kDetachedOperation;
     Handle<String> operation =
         isolate->factory()->NewStringFromAsciiChecked(method_name);
-    THROW_NEW_ERROR(isolate, NewTypeError(message, operation), JSTypedArray);
+    THROW_NEW_ERROR(isolate, NewTypeError(message, operation));
   }
 
   if (V8_UNLIKELY(array->IsVariableLength() && array->IsOutOfBounds())) {
     const MessageTemplate message = MessageTemplate::kDetachedOperation;
     Handle<String> operation =
         isolate->factory()->NewStringFromAsciiChecked(method_name);
-    THROW_NEW_ERROR(isolate, NewTypeError(message, operation), JSTypedArray);
+    THROW_NEW_ERROR(isolate, NewTypeError(message, operation));
   }
 
   // spec describes to return `buffer`, but it may disrupt current

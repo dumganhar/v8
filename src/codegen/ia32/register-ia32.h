@@ -138,6 +138,8 @@ constexpr Register kJavaScriptCallArgCountRegister = eax;
 constexpr Register kJavaScriptCallCodeStartRegister = ecx;
 constexpr Register kJavaScriptCallTargetRegister = kJSFunctionRegister;
 constexpr Register kJavaScriptCallNewTargetRegister = edx;
+// Leaptiering is not currently available on Ia32.
+constexpr Register kJavaScriptCallDispatchHandleRegister = no_reg;
 
 // The ExtraArg1Register not part of the real JS calling convention and is
 // mostly there to simplify consistent interface descriptor definitions across
@@ -147,7 +149,7 @@ constexpr Register kJavaScriptCallExtraArg1Register = ecx;
 constexpr Register kRuntimeCallFunctionRegister = edx;
 constexpr Register kRuntimeCallArgCountRegister = eax;
 constexpr Register kRuntimeCallArgvRegister = ecx;
-constexpr Register kWasmInstanceRegister = esi;
+constexpr Register kWasmImplicitArgRegister = esi;
 constexpr Register kWasmCompileLazyFuncIndexRegister = edi;
 
 constexpr Register kRootRegister = ebx;

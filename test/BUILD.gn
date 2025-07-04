@@ -12,9 +12,9 @@ group("gn_all") {
     "fuzzer:v8_fuzzer",
     "intl:v8_intl",
     "message:v8_message",
-    #"mjsunit:v8_mjsunit",
+    "mjsunit:v8_mjsunit",
     "mozilla:v8_mozilla",
-    #"test262:v8_test262",
+    "test262:v8_test262",
     "webkit:v8_webkit",
   ]
 
@@ -27,7 +27,7 @@ group("gn_all") {
   if (v8_enable_webassembly) {
     data_deps += [
       "wasm-js:v8_wasm_js",
-      #"wasm-spec-tests:v8_wasm_spec_tests",
+      "wasm-spec-tests:v8_wasm_spec_tests",
     ]
     deps += [ "wasm-api-tests:wasm_api_tests" ]
   }
@@ -96,7 +96,7 @@ group("v8_bot_default") {
     "inspector:inspector-test",
     "intl:v8_intl",
     "message:v8_message",
-    #"mjsunit:v8_mjsunit",
+    "mjsunit:v8_mjsunit",
     "mkgrokdump:mkgrokdump",
     "unittests:v8_unittests",
     "webkit:v8_webkit",
@@ -106,7 +106,7 @@ group("v8_bot_default") {
     data_deps += [
       "wasm-api-tests:wasm_api_tests",
       "wasm-js:v8_wasm_js",
-      #"wasm-spec-tests:v8_wasm_spec_tests",
+      "wasm-spec-tests:v8_wasm_spec_tests",
     ]
   }
 }
@@ -121,7 +121,7 @@ group("v8_default") {
     "inspector:inspector-test",
     "intl:v8_intl",
     "message:v8_message",
-    #"mjsunit:v8_mjsunit",
+    "mjsunit:v8_mjsunit",
     "mkgrokdump:mkgrokdump",
     "unittests:v8_unittests",
   ]
@@ -130,7 +130,7 @@ group("v8_default") {
     data_deps += [
       "wasm-api-tests:wasm_api_tests",
       "wasm-js:v8_wasm_js",
-      #"wasm-spec-tests:v8_wasm_spec_tests",
+      "wasm-spec-tests:v8_wasm_spec_tests",
     ]
   }
 }
@@ -143,7 +143,7 @@ group("v8_optimize_for_size") {
     "debugger:v8_debugger",
     "inspector:inspector-test",
     "intl:v8_intl",
-    #"mjsunit:v8_mjsunit",
+    "mjsunit:v8_mjsunit",
     "webkit:v8_webkit",
   ]
 }
@@ -155,7 +155,7 @@ group("v8_d8_default") {
     "debugger:v8_debugger",
     "intl:v8_intl",
     "message:v8_message",
-    #"mjsunit:v8_mjsunit",
+    "mjsunit:v8_mjsunit",
     "webkit:v8_webkit",
   ]
 }
@@ -165,7 +165,7 @@ group("v8_run_num_fuzzer") {
 
   data_deps = [
     "benchmarks:v8_benchmarks",
-    #"mjsunit:v8_mjsunit",
+    "mjsunit:v8_mjsunit",
     "webkit:v8_webkit",
   ]
 }

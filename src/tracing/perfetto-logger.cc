@@ -185,7 +185,7 @@ void WriteJsCode(const CodeTraceContext& ctx,
     case CodeKind::MAGLEV:
       tier = V8JsCode::TIER_MAGLEV;
       break;
-    case CodeKind::TURBOFAN:
+    case CodeKind::TURBOFAN_JS:
       tier = V8JsCode::TIER_TURBOFAN;
       break;
 
@@ -259,7 +259,7 @@ void PerfettoLogger::CodeCreateEvent(CodeTag tag,
   V8InternalCode::Type type = V8InternalCode::TYPE_UNKNOWN;
   switch (code->kind()) {
     case CodeKind::REGEXP:
-      RegExpCodeCreateEvent(abstract_code, Handle<String>());
+      RegExpCodeCreateEvent(abstract_code, Handle<String>(), {});
       break;
     case CodeKind::BYTECODE_HANDLER:
       type = V8InternalCode::TYPE_BYTECODE_HANDLER;
@@ -289,7 +289,7 @@ void PerfettoLogger::CodeCreateEvent(CodeTag tag,
     case CodeKind::INTERPRETED_FUNCTION:
     case CodeKind::BASELINE:
     case CodeKind::MAGLEV:
-    case CodeKind::TURBOFAN:
+    case CodeKind::TURBOFAN_JS:
       UNREACHABLE();
   }
 
@@ -319,7 +319,7 @@ void PerfettoLogger::CodeCreateEvent(CodeTag tag,
                                      Handle<Name> name) {
   DisallowGarbageCollection no_gc;
   if (!IsString(*name)) return;
-  CodeCreateEvent(tag, abstract_code, String::cast(*name)->ToCString().get());
+  CodeCreateEvent(tag, abstract_code, Cast<String>(*name)->ToCString().get());
 }
 
 void PerfettoLogger::CodeCreateEvent(CodeTag tag,
@@ -345,7 +345,7 @@ void PerfettoLogger::CodeCreateEvent(CodeTag tag,
         code_proto->set_v8_isolate_iid(ctx.InternIsolate(isolate_));
         code_proto->set_v8_js_function_iid(ctx.InternJsFunction(
             isolate_, info,
-            ctx.InternJsScript(isolate_, Script::cast(info->script())), line,
+            ctx.InternJsScript(isolate_, Cast<Script>(info->script())), line,
             column));
         WriteJsCode(ctx, *abstract_code, *code_proto);
       });
@@ -384,7 +384,8 @@ void PerfettoLogger::GetterCallbackEvent(Handle<Name> name,
 void PerfettoLogger::SetterCallbackEvent(Handle<Name> name,
                                          Address entry_point) {}
 void PerfettoLogger::RegExpCodeCreateEvent(Handle<AbstractCode> abstract_code,
-                                           Handle<String> pattern) {
+                                           Handle<String> pattern,
+                                           RegExpFlags flags) {
   DisallowGarbageCollection no_gc;
   DCHECK(IsCode(*abstract_code));
   Tagged<Code> code = abstract_code->GetCode();

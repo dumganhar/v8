@@ -19,89 +19,46 @@
 namespace v8 {
 namespace internal {
 
-OBJECT_CONSTRUCTORS_IMPL(HashTableBase, FixedArray)
-
-template <typename Derived, typename Shape>
-HashTable<Derived, Shape>::HashTable(Address ptr) : HashTableBase(ptr) {
-  SLOW_DCHECK(IsHashTable(*this));
-}
-
-template <typename Derived, typename Shape>
-ObjectHashTableBase<Derived, Shape>::ObjectHashTableBase(Address ptr)
-    : HashTable<Derived, Shape>(ptr) {}
-
-ObjectHashTable::ObjectHashTable(Address ptr)
-    : ObjectHashTableBase<ObjectHashTable, ObjectHashTableShape>(ptr) {
-  SLOW_DCHECK(IsObjectHashTable(*this));
-}
-
-RegisteredSymbolTable::RegisteredSymbolTable(Address ptr)
-    : HashTable<RegisteredSymbolTable, RegisteredSymbolTableShape>(ptr) {
-  SLOW_DCHECK(IsRegisteredSymbolTable(*this));
-}
-
-EphemeronHashTable::EphemeronHashTable(Address ptr)
-    : ObjectHashTableBase<EphemeronHashTable, ObjectHashTableShape>(ptr) {
-  SLOW_DCHECK(IsEphemeronHashTable(*this));
-}
-
-ObjectHashSet::ObjectHashSet(Address ptr)
-    : HashTable<ObjectHashSet, ObjectHashSetShape>(ptr) {
-  SLOW_DCHECK(IsObjectHashSet(*this));
-}
-
-NameToIndexHashTable::NameToIndexHashTable(Address ptr)
-    : HashTable<NameToIndexHashTable, NameToIndexShape>(ptr) {
-  SLOW_DCHECK(IsNameToIndexHashTable(*this));
-}
-
-template <typename Derived, int N>
-ObjectMultiHashTableBase<Derived, N>::ObjectMultiHashTableBase(Address ptr)
-    : HashTable<Derived, ObjectMultiHashTableShape<N>>(ptr) {}
-
-ObjectTwoHashTable::ObjectTwoHashTable(Address ptr)
-    : ObjectMultiHashTableBase<ObjectTwoHashTable, 2>(ptr) {
-  SLOW_DCHECK(IsObjectTwoHashTable(*this));
-}
-
-CAST_ACCESSOR(ObjectHashTable)
-CAST_ACCESSOR(RegisteredSymbolTable)
-CAST_ACCESSOR(EphemeronHashTable)
-CAST_ACCESSOR(ObjectHashSet)
-CAST_ACCESSOR(NameToIndexHashTable)
-CAST_ACCESSOR(ObjectTwoHashTable)
-
 void EphemeronHashTable::set_key(int index, Tagged<Object> value) {
   DCHECK_NE(GetReadOnlyRoots().fixed_cow_array_map(), map());
-  DCHECK(IsEphemeronHashTable(*this));
+  DCHECK(IsEphemeronHashTable(this));
   DCHECK_GE(index, 0);
   DCHECK_LT(index, this->length());
-  int offset = kHeaderSize + index * kTaggedSize;
-  RELAXED_WRITE_FIELD(*this, offset, value);
-  EPHEMERON_KEY_WRITE_BARRIER(*this, offset, value);
+  objects()[index].Relaxed_Store_no_write_barrier(value);
+#ifndef V8_DISABLE_WRITE_BARRIERS
+  DCHECK(HeapLayout::IsOwnedByAnyHeap(this));
+  WriteBarrier::ForEphemeronHashTable(
+      Tagged(this), ObjectSlot(&objects()[index]), value, UPDATE_WRITE_BARRIER);
+#endif
 }
 
 void EphemeronHashTable::set_key(int index, Tagged<Object> value,
                                  WriteBarrierMode mode) {
   DCHECK_NE(GetReadOnlyRoots().fixed_cow_array_map(), map());
-  DCHECK(IsEphemeronHashTable(*this));
+  DCHECK(IsEphemeronHashTable(this));
   DCHECK_GE(index, 0);
   DCHECK_LT(index, this->length());
-  int offset = kHeaderSize + index * kTaggedSize;
-  RELAXED_WRITE_FIELD(*this, offset, value);
-  CONDITIONAL_EPHEMERON_KEY_WRITE_BARRIER(*this, offset, value, mode);
+  objects()[index].Relaxed_Store_no_write_barrier(value);
+#ifndef V8_DISABLE_WRITE_BARRIERS
+#if V8_ENABLE_UNCONDITIONAL_WRITE_BARRIERS
+  mode = UPDATE_WRITE_BARRIER;
+#endif
+  DCHECK(HeapLayout::IsOwnedByAnyHeap(this));
+  WriteBarrier::ForEphemeronHashTable(
+      Tagged(this), ObjectSlot(&objects()[index]), value, mode);
+#endif
 }
 
 int HashTableBase::NumberOfElements() const {
-  return Smi::cast(get(kNumberOfElementsIndex)).value();
+  return Cast<Smi>(get(kNumberOfElementsIndex)).value();
 }
 
 int HashTableBase::NumberOfDeletedElements() const {
-  return Smi::cast(get(kNumberOfDeletedElementsIndex)).value();
+  return Cast<Smi>(get(kNumberOfDeletedElementsIndex)).value();
 }
 
 int HashTableBase::Capacity() const {
-  return Smi::cast(get(kCapacityIndex)).value();
+  return Cast<Smi>(get(kCapacityIndex)).value();
 }
 
 InternalIndex::Range HashTableBase::IterateEntries() const {
@@ -225,14 +182,14 @@ bool HashTable<Derived, Shape>::ToKey(PtrComprCageBase cage_base,
                                       InternalIndex entry,
                                       Tagged<Object>* out_k) {
   Tagged<Object> k = KeyAt(cage_base, entry);
-  if (!IsKey(GetReadOnlyRoots(cage_base), k)) return false;
+  if (!IsKey(GetReadOnlyRoots(), k)) return false;
   *out_k = TodoShape::Unwrap(k);
   return true;
 }
 
 template <typename Derived, typename Shape>
 Tagged<Object> HashTable<Derived, Shape>::KeyAt(InternalIndex entry) {
-  PtrComprCageBase cage_base = GetPtrComprCageBase(*this);
+  PtrComprCageBase cage_base = GetPtrComprCageBase();
   return KeyAt(cage_base, entry);
 }
 
@@ -245,7 +202,7 @@ Tagged<Object> HashTable<Derived, Shape>::KeyAt(PtrComprCageBase cage_base,
 template <typename Derived, typename Shape>
 Tagged<Object> HashTable<Derived, Shape>::KeyAt(InternalIndex entry,
                                                 RelaxedLoadTag tag) {
-  PtrComprCageBase cage_base = GetPtrComprCageBase(*this);
+  PtrComprCageBase cage_base = GetPtrComprCageBase();
   return KeyAt(cage_base, entry, tag);
 }
 
@@ -265,14 +222,14 @@ void HashTable<Derived, Shape>::SetKeyAt(InternalIndex entry,
 
 template <typename Derived, typename Shape>
 void HashTable<Derived, Shape>::set_key(int index, Tagged<Object> value) {
-  DCHECK(!IsEphemeronHashTable(*this));
+  DCHECK(!IsEphemeronHashTable(this));
   FixedArray::set(index, value);
 }
 
 template <typename Derived, typename Shape>
 void HashTable<Derived, Shape>::set_key(int index, Tagged<Object> value,
                                         WriteBarrierMode mode) {
-  DCHECK(!IsEphemeronHashTable(*this));
+  DCHECK(!IsEphemeronHashTable(this));
   FixedArray::set(index, value, mode);
 }
 
@@ -297,40 +254,42 @@ bool ObjectHashSet::Has(Isolate* isolate, Handle<Object> key) {
       .is_found();
 }
 
-bool ObjectHashTableShape::IsMatch(Handle<Object> key, Tagged<Object> other) {
+bool ObjectHashTableShape::IsMatch(DirectHandle<Object> key,
+                                   Tagged<Object> other) {
   return Object::SameValue(*key, other);
 }
 
-bool RegisteredSymbolTableShape::IsMatch(Handle<String> key,
+bool RegisteredSymbolTableShape::IsMatch(DirectHandle<String> key,
                                          Tagged<Object> value) {
   DCHECK(IsString(value));
-  return key->Equals(String::cast(value));
+  return key->Equals(Cast<String>(value));
 }
 
 uint32_t RegisteredSymbolTableShape::Hash(ReadOnlyRoots roots,
-                                          Handle<String> key) {
+                                          DirectHandle<String> key) {
   return key->EnsureHash();
 }
 
 uint32_t RegisteredSymbolTableShape::HashForObject(ReadOnlyRoots roots,
                                                    Tagged<Object> object) {
-  return String::cast(object)->EnsureHash();
+  return Cast<String>(object)->EnsureHash();
 }
 
-bool NameToIndexShape::IsMatch(Handle<Name> key, Tagged<Object> other) {
+bool NameToIndexShape::IsMatch(DirectHandle<Name> key, Tagged<Object> other) {
   return *key == other;
 }
 
 uint32_t NameToIndexShape::HashForObject(ReadOnlyRoots roots,
                                          Tagged<Object> other) {
-  return Name::cast(other)->hash();
+  return Cast<Name>(other)->hash();
 }
 
-uint32_t NameToIndexShape::Hash(ReadOnlyRoots roots, Handle<Name> key) {
+uint32_t NameToIndexShape::Hash(ReadOnlyRoots roots, DirectHandle<Name> key) {
   return key->hash();
 }
 
-uint32_t ObjectHashTableShape::Hash(ReadOnlyRoots roots, Handle<Object> key) {
+uint32_t ObjectHashTableShape::Hash(ReadOnlyRoots roots,
+                                    DirectHandle<Object> key) {
   return Smi::ToInt(Object::GetHash(*key));
 }
 
@@ -341,8 +300,8 @@ uint32_t ObjectHashTableShape::HashForObject(ReadOnlyRoots roots,
 
 template <typename IsolateT>
 Handle<NameToIndexHashTable> NameToIndexHashTable::Add(
-    IsolateT* isolate, Handle<NameToIndexHashTable> table, Handle<Name> key,
-    int32_t index) {
+    IsolateT* isolate, Handle<NameToIndexHashTable> table,
+    IndirectHandle<Name> key, int32_t index) {
   DCHECK_GE(index, 0);
   // Validate that the key is absent.
   SLOW_DCHECK(table->FindEntry(isolate, key).is_not_found());

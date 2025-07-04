@@ -73,7 +73,7 @@ class BytecodeGenerator final : public AstVisitor<BytecodeGenerator> {
   void VisitModuleDeclarations(Declaration::List* declarations);
   void VisitGlobalDeclarations(Declaration::List* declarations);
   void VisitDeclarations(Declaration::List* declarations);
-  void VisitStatements(const ZonePtrList<Statement>* statments);
+  void VisitStatements(const ZonePtrList<Statement>* statments, int start = 0);
 
  private:
   class AccumulatorPreservingScope;
@@ -198,8 +198,15 @@ class BytecodeGenerator final : public AstVisitor<BytecodeGenerator> {
   };
 
   void GenerateBytecodeBody();
-  void GenerateBytecodeBodyWithoutImplicitFinalReturn();
-  void GenerateBytecodeBodyWithoutImplicitFinalReturnOrDispose();
+
+  void GenerateBaseConstructorBody();
+  void GenerateDerivedConstructorBody();
+  void GenerateAsyncFunctionBody();
+  void GenerateAsyncGeneratorFunctionBody();
+
+  void GenerateBodyPrologue();
+  void GenerateBodyStatements(int start = 0);
+  void GenerateBodyStatementsWithoutImplicitFinalReturn(int start = 0);
 
   template <typename IsolateT>
   void AllocateDeferredConstants(IsolateT* isolate, Handle<Script> script);
@@ -285,7 +292,7 @@ class BytecodeGenerator final : public AstVisitor<BytecodeGenerator> {
 
   void SetVariableInRegister(Variable* var, Register reg);
 
-  Variable* GetVariableInAccumulator();
+  Variable* GetPotentialVariableInAccumulator();
 
   void BuildVariableLoad(Variable* variable, HoleCheckMode hole_check_mode,
                          TypeofMode typeof_mode = TypeofMode::kNotInside);
@@ -447,7 +454,7 @@ class BytecodeGenerator final : public AstVisitor<BytecodeGenerator> {
                        HandlerTable::CatchPrediction catch_prediction,
                        TryFinallyStatement* stmt_for_coverage = nullptr);
   template <typename WrappedFunc>
-  void BuildDisposeScope(WrappedFunc wrapped_func);
+  void BuildDisposeScope(WrappedFunc wrapped_func, bool has_await_using);
 
   template <typename ExpressionFunc>
   void BuildOptionalChain(ExpressionFunc expression_func);

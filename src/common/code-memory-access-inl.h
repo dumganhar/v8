@@ -7,7 +7,6 @@
 
 #include "src/common/code-memory-access.h"
 #include "src/flags/flags.h"
-#include "src/objects/instruction-stream-inl.h"
 #include "src/objects/instruction-stream.h"
 #include "src/objects/slots-inl.h"
 #include "src/objects/tagged.h"
@@ -36,11 +35,19 @@ RwxMemoryWriteScope::~RwxMemoryWriteScope() {
   }
 }
 
-WritableJitAllocation::~WritableJitAllocation() = default;
+WritableJitAllocation::~WritableJitAllocation() {
+#ifdef DEBUG
+  if (enforce_write_api_) {
+    // We disabled RWX write access for debugging. But we'll need it in the
+    // destructor again to release the jit page reference.
+    write_scope_.emplace("~WritableJitAllocation");
+  }
+#endif
+}
 
 WritableJitAllocation::WritableJitAllocation(
     Address addr, size_t size, ThreadIsolation::JitAllocationType type,
-    JitAllocationSource source)
+    JitAllocationSource source, bool enforce_write_api)
     : address_(addr),
       // The order of these is important. We need to create the write scope
       // before we lookup the Jit page, since the latter will take a mutex in
@@ -49,7 +56,16 @@ WritableJitAllocation::WritableJitAllocation(
       page_ref_(ThreadIsolation::LookupJitPage(addr, size)),
       allocation_(source == JitAllocationSource::kRegister
                       ? page_ref_->RegisterAllocation(addr, size, type)
-                      : page_ref_->LookupAllocation(addr, size, type)) {}
+                      : page_ref_->LookupAllocation(addr, size, type)),
+      enforce_write_api_(enforce_write_api) {
+#ifdef DEBUG
+  if (enforce_write_api_) {
+    // Reset the write scope for debugging. We'll create fine-grained scopes in
+    // all Write functions of this class instead.
+    write_scope_.reset();
+  }
+#endif
+}
 
 WritableJitAllocation::WritableJitAllocation(
     Address addr, size_t size, ThreadIsolation::JitAllocationType type)
@@ -61,13 +77,14 @@ WritableJitAllocation WritableJitAllocation::ForNonExecutableMemory(
   return WritableJitAllocation(addr, size, type);
 }
 
-// static
-WritableJitAllocation WritableJitAllocation::ForInstructionStream(
-    Tagged<InstructionStream> istream) {
-  return WritableJitAllocation(
-      istream->address(), istream->Size(),
-      ThreadIsolation::JitAllocationType::kInstructionStream,
-      JitAllocationSource::kLookup);
+std::optional<RwxMemoryWriteScope>
+WritableJitAllocation::WriteScopeForApiEnforcement() const {
+#ifdef DEBUG
+  if (enforce_write_api_) {
+    return std::optional<RwxMemoryWriteScope>("WriteScopeForApiEnforcement");
+  }
+#endif
+  return {};
 }
 
 WritableJumpTablePair::WritableJumpTablePair(Address jump_table_address,
@@ -89,6 +106,8 @@ WritableJumpTablePair::WritableJumpTablePair(Address jump_table_address,
 
 template <typename T, size_t offset>
 void WritableJitAllocation::WriteHeaderSlot(T value) {
+  std::optional<RwxMemoryWriteScope> write_scope =
+      WriteScopeForApiEnforcement();
   // This assert is no strict requirement, it just guards against
   // non-implemented functionality.
   static_assert(!is_taggable_v<T>);
@@ -103,6 +122,8 @@ void WritableJitAllocation::WriteHeaderSlot(T value) {
 
 template <typename T, size_t offset>
 void WritableJitAllocation::WriteHeaderSlot(Tagged<T> value, ReleaseStoreTag) {
+  std::optional<RwxMemoryWriteScope> write_scope =
+      WriteScopeForApiEnforcement();
   // These asserts are no strict requirements, they just guard against
   // non-implemented functionality.
   static_assert(offset != HeapObject::kMapOffset);
@@ -113,6 +134,8 @@ void WritableJitAllocation::WriteHeaderSlot(Tagged<T> value, ReleaseStoreTag) {
 
 template <typename T, size_t offset>
 void WritableJitAllocation::WriteHeaderSlot(Tagged<T> value, RelaxedStoreTag) {
+  std::optional<RwxMemoryWriteScope> write_scope =
+      WriteScopeForApiEnforcement();
   if constexpr (offset == HeapObject::kMapOffset) {
     TaggedField<T, offset>::Relaxed_Store_Map_Word(
         HeapObject::FromAddress(address_), value);
@@ -126,7 +149,19 @@ template <typename T, size_t offset>
 void WritableJitAllocation::WriteProtectedPointerHeaderSlot(Tagged<T> value,
                                                             RelaxedStoreTag) {
   static_assert(offset != HeapObject::kMapOffset);
+  std::optional<RwxMemoryWriteScope> write_scope =
+      WriteScopeForApiEnforcement();
   TaggedField<T, offset, TrustedSpaceCompressionScheme>::Relaxed_Store(
+      HeapObject::FromAddress(address_), value);
+}
+
+template <typename T, size_t offset>
+void WritableJitAllocation::WriteProtectedPointerHeaderSlot(Tagged<T> value,
+                                                            ReleaseStoreTag) {
+  static_assert(offset != HeapObject::kMapOffset);
+  std::optional<RwxMemoryWriteScope> write_scope =
+      WriteScopeForApiEnforcement();
+  TaggedField<T, offset, TrustedSpaceCompressionScheme>::Release_Store(
       HeapObject::FromAddress(address_), value);
 }
 
@@ -152,17 +187,42 @@ V8_INLINE void WritableJitAllocation::WriteHeaderSlot(Address address, T value,
   }
 }
 
+template <typename T>
+V8_INLINE void WritableJitAllocation::WriteUnalignedValue(Address address,
+                                                          T value) {
+  std::optional<RwxMemoryWriteScope> write_scope =
+      WriteScopeForApiEnforcement();
+  DCHECK_GE(address, address_);
+  DCHECK_LT(address - address_, size());
+  base::WriteUnalignedValue<T>(address, value);
+}
+
+template <typename T>
+V8_INLINE void WritableJitAllocation::WriteValue(Address address, T value) {
+  std::optional<RwxMemoryWriteScope> write_scope =
+      WriteScopeForApiEnforcement();
+  DCHECK_GE(address, address_);
+  DCHECK_LT(address - address_, size());
+  base::Memory<T>(address) = value;
+}
+
 void WritableJitAllocation::CopyCode(size_t dst_offset, const uint8_t* src,
                                      size_t num_bytes) {
+  std::optional<RwxMemoryWriteScope> write_scope =
+      WriteScopeForApiEnforcement();
   CopyBytes(reinterpret_cast<uint8_t*>(address_ + dst_offset), src, num_bytes);
 }
 
 void WritableJitAllocation::CopyData(size_t dst_offset, const uint8_t* src,
                                      size_t num_bytes) {
+  std::optional<RwxMemoryWriteScope> write_scope =
+      WriteScopeForApiEnforcement();
   CopyBytes(reinterpret_cast<uint8_t*>(address_ + dst_offset), src, num_bytes);
 }
 
 void WritableJitAllocation::ClearBytes(size_t offset, size_t len) {
+  std::optional<RwxMemoryWriteScope> write_scope =
+      WriteScopeForApiEnforcement();
   memset(reinterpret_cast<void*>(address_ + offset), 0, len);
 }
 
@@ -209,14 +269,6 @@ void WritableFreeSpace::WriteHeaderSlot(Tagged<T> value,
   }
 }
 
-template <size_t offset>
-void WritableFreeSpace::ClearTagged(size_t count) const {
-  base::Address start = address_ + offset;
-  // TODO(v8:13355): add validation before the write.
-  MemsetTagged(ObjectSlot(start), Tagged<Object>(kClearedFreeMemoryValue),
-               count);
-}
-
 #if V8_HAS_PTHREAD_JIT_WRITE_PROTECT
 
 // static
@@ -250,10 +302,7 @@ void RwxMemoryWriteScope::SetExecutable() {
 bool RwxMemoryWriteScope::IsSupported() {
   static_assert(base::MemoryProtectionKey::kNoMemoryProtectionKey == -1);
   DCHECK(ThreadIsolation::initialized());
-  // TODO(sroettger): can we check this at initialization time instead? The
-  // tests won't be able to run with/without pkey support anymore in the same
-  // process.
-  return v8_flags.memory_protection_keys && ThreadIsolation::pkey() >= 0;
+  return ThreadIsolation::PkeyIsAvailable();
 }
 
 // static

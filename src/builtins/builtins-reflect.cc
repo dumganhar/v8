@@ -22,7 +22,7 @@ BUILTIN(ReflectDefineProperty) {
   DCHECK_LE(4, args.length());
   Handle<Object> target = args.at(1);
   Handle<Object> key = args.at(2);
-  Handle<Object> attributes = args.at(3);
+  Handle<JSAny> attributes = args.at<JSAny>(3);
 
   if (!IsJSReceiver(*target)) {
     THROW_NEW_ERROR_RETURN_FAILURE(
@@ -41,7 +41,7 @@ BUILTIN(ReflectDefineProperty) {
   }
 
   Maybe<bool> result = JSReceiver::DefineOwnProperty(
-      isolate, Handle<JSReceiver>::cast(target), name, &desc, Just(kDontThrow));
+      isolate, Cast<JSReceiver>(target), name, &desc, Just(kDontThrow));
   MAYBE_RETURN(result, ReadOnlyRoots(isolate).exception());
   return *isolate->factory()->ToBoolean(result.FromJust());
 }
@@ -62,7 +62,7 @@ BUILTIN(ReflectOwnKeys) {
   Handle<FixedArray> keys;
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, keys,
-      KeyAccumulator::GetKeys(isolate, Handle<JSReceiver>::cast(target),
+      KeyAccumulator::GetKeys(isolate, Cast<JSReceiver>(target),
                               KeyCollectionMode::kOwnOnly, ALL_PROPERTIES,
                               GetKeysConversion::kConvertToString));
   return *isolate->factory()->NewJSArrayWithElements(keys);
@@ -74,22 +74,23 @@ BUILTIN(ReflectSet) {
   Handle<Object> target = args.atOrUndefined(isolate, 1);
   Handle<Object> key = args.atOrUndefined(isolate, 2);
   Handle<Object> value = args.atOrUndefined(isolate, 3);
-  Handle<Object> receiver = args.length() > 4 ? args.at(4) : target;
 
-  if (!IsJSReceiver(*target)) {
+  Handle<JSReceiver> target_recv;
+  if (!TryCast<JSReceiver>(target, &target_recv)) {
     THROW_NEW_ERROR_RETURN_FAILURE(
         isolate, NewTypeError(MessageTemplate::kCalledOnNonObject,
                               isolate->factory()->NewStringFromAsciiChecked(
                                   "Reflect.set")));
   }
 
+  Handle<JSAny> receiver = args.length() > 4 ? args.at<JSAny>(4) : target_recv;
+
   Handle<Name> name;
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, name,
                                      Object::ToName(isolate, key));
 
   PropertyKey lookup_key(isolate, name);
-  LookupIterator it(isolate, receiver, lookup_key,
-                    Handle<JSReceiver>::cast(target));
+  LookupIterator it(isolate, receiver, lookup_key, target_recv);
   Maybe<bool> result = Object::SetSuperProperty(
       &it, value, StoreOrigin::kMaybeKeyed, Just(ShouldThrow::kDontThrow));
   MAYBE_RETURN(result, ReadOnlyRoots(isolate).exception());

@@ -107,7 +107,7 @@ void OptimizingCompileDispatcher::CompileNext(TurbofanCompilationJob* job,
   if (finalize()) isolate_->stack_guard()->RequestInstallCode();
 }
 
-void OptimizingCompileDispatcher::FlushOutputQueue(bool restore_function_code) {
+void OptimizingCompileDispatcher::FlushOutputQueue() {
   for (;;) {
     std::unique_ptr<TurbofanCompilationJob> job;
     {
@@ -117,8 +117,7 @@ void OptimizingCompileDispatcher::FlushOutputQueue(bool restore_function_code) {
       output_queue_.pop();
     }
 
-    Compiler::DisposeTurbofanCompilationJob(isolate_, job.get(),
-                                            restore_function_code);
+    Compiler::DisposeTurbofanCompilationJob(isolate_, job.get());
   }
 }
 
@@ -129,7 +128,7 @@ void OptimizingCompileDispatcherQueue::Flush(Isolate* isolate) {
     DCHECK_NOT_NULL(job);
     shift_ = QueueIndex(1);
     length_--;
-    Compiler::DisposeTurbofanCompilationJob(isolate, job.get(), true);
+    Compiler::DisposeTurbofanCompilationJob(isolate, job.get());
   }
 }
 
@@ -140,7 +139,7 @@ void OptimizingCompileDispatcher::FlushInputQueue() {
 void OptimizingCompileDispatcher::AwaitCompileTasks() {
   {
     AllowGarbageCollection allow_before_parking;
-    isolate_->main_thread_local_isolate()->BlockMainThreadWhileParked(
+    isolate_->main_thread_local_isolate()->ExecuteMainThreadWhileParked(
         [this]() { job_handle_->Join(); });
   }
   // Join kills the job handle, so drop it and post a new one.
@@ -153,15 +152,15 @@ void OptimizingCompileDispatcher::AwaitCompileTasks() {
 }
 
 void OptimizingCompileDispatcher::FlushQueues(
-    BlockingBehavior blocking_behavior, bool restore_function_code) {
+    BlockingBehavior blocking_behavior) {
   FlushInputQueue();
   if (blocking_behavior == BlockingBehavior::kBlock) AwaitCompileTasks();
-  FlushOutputQueue(restore_function_code);
+  FlushOutputQueue();
 }
 
 void OptimizingCompileDispatcher::Flush(BlockingBehavior blocking_behavior) {
   HandleScope handle_scope(isolate_);
-  FlushQueues(blocking_behavior, true);
+  FlushQueues(blocking_behavior);
   if (v8_flags.trace_concurrent_recompilation) {
     PrintF("  ** Flushed concurrent recompilation queues. (mode: %s)\n",
            (blocking_behavior == BlockingBehavior::kBlock) ? "blocking"
@@ -171,7 +170,7 @@ void OptimizingCompileDispatcher::Flush(BlockingBehavior blocking_behavior) {
 
 void OptimizingCompileDispatcher::Stop() {
   HandleScope handle_scope(isolate_);
-  FlushQueues(BlockingBehavior::kBlock, false);
+  FlushQueues(BlockingBehavior::kBlock);
   // At this point the optimizing compiler thread's event loop has stopped.
   // There is no need for a mutex when reading input_queue_length_.
   DCHECK_EQ(input_queue_.Length(), 0);
@@ -189,7 +188,7 @@ void OptimizingCompileDispatcher::InstallOptimizedFunctions() {
       output_queue_.pop();
     }
     OptimizedCompilationInfo* info = job->compilation_info();
-    Handle<JSFunction> function(*info->closure(), isolate_);
+    DirectHandle<JSFunction> function(*info->closure(), isolate_);
 
     // If another racing task has already finished compiling and installing the
     // requested code kind on the function, throw out the current job.
@@ -200,7 +199,7 @@ void OptimizingCompileDispatcher::InstallOptimizedFunctions() {
         ShortPrint(*function);
         PrintF(" as it has already been optimized.\n");
       }
-      Compiler::DisposeTurbofanCompilationJob(isolate_, job.get(), false);
+      Compiler::DisposeTurbofanCompilationJob(isolate_, job.get());
       continue;
     }
 

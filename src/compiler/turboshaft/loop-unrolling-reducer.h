@@ -5,7 +5,10 @@
 #ifndef V8_COMPILER_TURBOSHAFT_LOOP_UNROLLING_REDUCER_H_
 #define V8_COMPILER_TURBOSHAFT_LOOP_UNROLLING_REDUCER_H_
 
+#include <optional>
+
 #include "src/base/logging.h"
+#include "src/compiler/globals.h"
 #include "src/compiler/turboshaft/assembler.h"
 #include "src/compiler/turboshaft/copying-phase.h"
 #include "src/compiler/turboshaft/index.h"
@@ -188,9 +191,36 @@ class V8_EXPORT_PRIVATE LoopUnrollingAnalyzer {
 
   bool ShouldPartiallyUnrollLoop(const Block* loop_header) const {
     DCHECK(loop_header->IsLoop());
-    auto info = loop_finder_.GetLoopInfo(loop_header);
+    LoopFinder::LoopInfo info = loop_finder_.GetLoopInfo(loop_header);
     return !info.has_inner_loops &&
            info.op_count < kMaxLoopSizeForPartialUnrolling;
+  }
+
+  // The returned unroll count is the total number of copies of the loop body
+  // in the resulting graph, i.e., an unroll count of N means N-1 copies of the
+  // body which were partially unrolled, and 1 for the original/remaining body.
+  size_t GetPartialUnrollCount(const Block* loop_header) const {
+    // Don't unroll if the function is already huge.
+    // Otherwise we have run into pathological runtimes or large memory usage,
+    // e.g., in register allocation in the past, see https://crbug.com/383661627
+    // for an example / reproducer.
+    // Even though we return an unroll count of one (i.e., don't unroll at all
+    // really), running this phase can speed up subsequent optimizations,
+    // probably because it produces loops in a "compact"/good block order for
+    // analyses, namely <loop header>, <loop body>, <loop exit>, <rest of code>.
+    // In principle, we should fix complexity problems in analyses, make sure
+    // loops are already produced in this order, and not rely on the "unrolling"
+    // here for the order alone, but this is a longer standing issue.
+    if (input_graph_->op_id_count() > kMaxFunctionSizeForPartialUnrolling) {
+      return 1;
+    }
+    if (is_wasm_) {
+      LoopFinder::LoopInfo info = loop_finder_.GetLoopInfo(loop_header);
+      return std::min(
+          LoopUnrollingAnalyzer::kMaxPartialUnrollingCount,
+          LoopUnrollingAnalyzer::kWasmMaxUnrolledLoopSize / info.op_count);
+    }
+    return LoopUnrollingAnalyzer::kMaxPartialUnrollingCount;
   }
 
   bool ShouldRemoveLoop(const Block* loop_header) const {
@@ -220,10 +250,16 @@ class V8_EXPORT_PRIVATE LoopUnrollingAnalyzer {
   // trade-off. In particular, having the number of iterations to unroll be a
   // function of the loop's size and a MaxLoopSize could make sense.
   static constexpr size_t kMaxLoopSizeForFullUnrolling = 150;
+  // This function size limit is quite arbitrary. It is large enough that we
+  // probably never hit it in JavaScript and it is lower than the operation
+  // count we have seen in some huge Wasm functions in the past, e.g., function
+  // #21937 of https://crbug.com/383661627 (1.7M operations, 2.7MB wire bytes).
+  static constexpr size_t kMaxFunctionSizeForPartialUnrolling = 1'000'000;
   static constexpr size_t kJSMaxLoopSizeForPartialUnrolling = 50;
   static constexpr size_t kWasmMaxLoopSizeForPartialUnrolling = 80;
+  static constexpr size_t kWasmMaxUnrolledLoopSize = 240;
   static constexpr size_t kMaxLoopIterationsForFullUnrolling = 4;
-  static constexpr size_t kPartialUnrollingCount = 4;
+  static constexpr size_t kMaxPartialUnrollingCount = 4;
   static constexpr size_t kMaxIterForStackCheckRemoval = 5000;
 
  private:
@@ -284,24 +320,27 @@ class LoopStackCheckElisionReducer : public Next {
     goto no_change;
   }
 
-  V<None> REDUCE_INPUT_GRAPH(JSLoopStackCheck)(
-      V<None> ig_idx, const JSLoopStackCheckOp& stack_check) {
-    if (skip_next_stack_check_) {
+  V<None> REDUCE_INPUT_GRAPH(JSStackCheck)(V<None> ig_idx,
+                                           const JSStackCheckOp& stack_check) {
+    if (skip_next_stack_check_ &&
+        stack_check.kind == JSStackCheckOp::Kind::kLoop) {
       skip_next_stack_check_ = false;
       return {};
     }
-    return Next::ReduceInputGraphJSLoopStackCheck(ig_idx, stack_check);
+    return Next::ReduceInputGraphJSStackCheck(ig_idx, stack_check);
   }
 
-  V<None> REDUCE_INPUT_GRAPH(StackCheck)(V<None> ig_idx,
-                                         const StackCheckOp& stack_check) {
+#if V8_ENABLE_WEBASSEMBLY
+  V<None> REDUCE_INPUT_GRAPH(WasmStackCheck)(
+      V<None> ig_idx, const WasmStackCheckOp& stack_check) {
     if (skip_next_stack_check_ &&
-        stack_check.check_kind == StackCheckOp::Kind::kWasmLoop) {
+        stack_check.kind == WasmStackCheckOp::Kind::kLoop) {
       skip_next_stack_check_ = false;
       return {};
     }
-    return Next::ReduceInputGraphStackCheck(ig_idx, stack_check);
+    return Next::ReduceInputGraphWasmStackCheck(ig_idx, stack_check);
   }
+#endif
 
  private:
   bool skip_next_stack_check_ = false;
@@ -354,8 +393,7 @@ class LoopUnrollingReducer : public Next {
         PartiallyUnrollLoop(dst);
         return {};
       }
-    } else if ((unrolling_ == UnrollingStatus::kUnrolling ||
-                unrolling_ == UnrollingStatus::kUnrollingFirstIteration) &&
+    } else if ((unrolling_ == UnrollingStatus::kUnrolling) &&
                dst == current_loop_header_) {
       // Skipping the backedge of the loop: FullyUnrollLoop and
       // PartiallyUnrollLoop will emit a Goto to the next unrolled iteration.
@@ -403,49 +441,41 @@ class LoopUnrollingReducer : public Next {
     if (ShouldSkipOptimizationStep()) goto no_change;
 
     if (V8_LIKELY(!IsRunningBuiltinPipeline())) {
-      if (unrolling_ == UnrollingStatus::kUnrolling) {
-        if (call.IsStackCheck(__ input_graph(), broker_,
-                              StackCheckKind::kJSIterationBody)) {
-          // When we unroll a loop, we get rid of its stack checks. (note that
-          // we don't do this for the 1st folded body of partially unrolled
-          // loops so that the loop keeps a stack check).
-          DCHECK_NE(unrolling_, UnrollingStatus::kUnrollingFirstIteration);
-          return {};
-        }
+      if (skip_next_stack_check_ &&
+          call.IsStackCheck(__ input_graph(), broker_,
+                            StackCheckKind::kJSIterationBody)) {
+        // When we unroll a loop, we get rid of its stack checks. (note that
+        // we don't do this for the last folded body of partially unrolled
+        // loops so that the loop keeps one stack check).
+        return {};
       }
     }
 
     goto no_change;
   }
 
-  // TODO(dmercadier): also special case JSLoopStackCheck.
-  OpIndex REDUCE_INPUT_GRAPH(StackCheck)(OpIndex ig_idx,
-                                         const StackCheckOp& check) {
-    LABEL_BLOCK(no_change) {
-      return Next::ReduceInputGraphStackCheck(ig_idx, check);
+  V<None> REDUCE_INPUT_GRAPH(JSStackCheck)(V<None> ig_idx,
+                                           const JSStackCheckOp& check) {
+    if (ShouldSkipOptimizationStep() || !skip_next_stack_check_) {
+      return Next::ReduceInputGraphJSStackCheck(ig_idx, check);
     }
-    if (ShouldSkipOptimizationStep()) goto no_change;
-
-    if (unrolling_ == UnrollingStatus::kUnrolling) {
-      DCHECK(!IsRunningBuiltinPipeline());
-      if (check.check_kind == StackCheckOp::Kind::kWasmLoop) {
-        // When we unroll a loop, we get rid of its stack checks. (note that we
-        // don't do this for the 1st folded body of partially unrolled loops so
-        // that the loop keeps a stack check).
-        DCHECK_NE(unrolling_, UnrollingStatus::kUnrollingFirstIteration);
-        return OpIndex::Invalid();
-      }
-    }
-
-    goto no_change;
+    return V<None>::Invalid();
   }
+
+#if V8_ENABLE_WEBASSEMBLY
+  V<None> REDUCE_INPUT_GRAPH(WasmStackCheck)(V<None> ig_idx,
+                                             const WasmStackCheckOp& check) {
+    if (ShouldSkipOptimizationStep() || !skip_next_stack_check_) {
+      return Next::ReduceInputGraphWasmStackCheck(ig_idx, check);
+    }
+    return V<None>::Invalid();
+  }
+#endif
 
  private:
   enum class UnrollingStatus {
     // Not currently unrolling a loop.
     kNotUnrolling,
-    // Currently on the 1st iteration of a partially unrolled loop.
-    kUnrollingFirstIteration,
     // Currently unrolling a loop.
     kUnrolling,
     // We use kRemoveLoop in 2 cases:
@@ -465,7 +495,7 @@ class LoopUnrollingReducer : public Next {
     return __ data() -> pipeline_kind() == TurboshaftPipelineKind::kCSA;
   }
   bool StopUnrollingIfUnreachable(
-      base::Optional<Block*> output_graph_header = base::nullopt) {
+      std::optional<Block*> output_graph_header = std::nullopt) {
     if (__ generating_unreachable_operations()) {
       // By unrolling the loop, we realized that it was actually exiting early
       // (probably because a Branch inside the loop was using a loop Phi in a
@@ -490,6 +520,8 @@ class LoopUnrollingReducer : public Next {
       *__ input_graph().loop_unrolling_analyzer();
   // {unrolling_} is true if a loop is currently being unrolled.
   UnrollingStatus unrolling_ = UnrollingStatus::kNotUnrolling;
+  bool skip_next_stack_check_ = false;
+
   const Block* current_loop_header_ = nullptr;
   JSHeapBroker* broker_ = __ data() -> broker();
 };
@@ -497,21 +529,22 @@ class LoopUnrollingReducer : public Next {
 template <class Next>
 void LoopUnrollingReducer<Next>::PartiallyUnrollLoop(const Block* header) {
   DCHECK_EQ(unrolling_, UnrollingStatus::kNotUnrolling);
-  // When unrolling the 1st iteration,
+  DCHECK(!skip_next_stack_check_);
+  unrolling_ = UnrollingStatus::kUnrolling;
 
   auto loop_body = analyzer_.GetLoopBody(header);
   current_loop_header_ = header;
 
-  int unroll_count = LoopUnrollingAnalyzer::kPartialUnrollingCount;
+  size_t unroll_count = analyzer_.GetPartialUnrollCount(header);
+  DCHECK_GT(unroll_count, 0);
 
   ScopedModification<bool> set_true(__ turn_loop_without_backedge_into_merge(),
                                     false);
 
-  // Emitting the 1st iteration of the loop (with a proper loop header). We set
-  // UnrollingStatus to kUnrollingFirstIteration instead of kUnrolling so that
-  // the stack check still gets emitted. For the subsequent iterations, we'll
-  // set it to kUnrolling so that stack checks are skipped.
-  unrolling_ = UnrollingStatus::kUnrollingFirstIteration;
+  // We remove the stack check of all iterations but the last one.
+  // Emitting the 1st iteration of the loop (with a proper loop header). We
+  // remove the stack check of all iterations except the last one.
+  ScopedModification<bool> skip_stack_checks(&skip_next_stack_check_, true);
   Block* output_graph_header =
       __ CloneSubGraph(loop_body, /* keep_loop_kinds */ true);
   if (StopUnrollingIfUnreachable(output_graph_header)) return;
@@ -519,7 +552,12 @@ void LoopUnrollingReducer<Next>::PartiallyUnrollLoop(const Block* header) {
   // Emitting the subsequent folded iterations. We set `unrolling_` to
   // kUnrolling so that stack checks are skipped.
   unrolling_ = UnrollingStatus::kUnrolling;
-  for (int i = 0; i < unroll_count - 1; i++) {
+  for (size_t i = 0; i < unroll_count - 1; i++) {
+    // We remove the stack check of all iterations but the last one.
+    bool is_last_iteration = i == unroll_count - 2;
+    ScopedModification<bool> skip_stack_checks(&skip_next_stack_check_,
+                                               !is_last_iteration);
+
     __ CloneSubGraph(loop_body, /* keep_loop_kinds */ false);
     if (StopUnrollingIfUnreachable(output_graph_header)) return;
   }
@@ -593,6 +631,7 @@ void LoopUnrollingReducer<Next>::FixLoopPhis(const Block* input_graph_loop,
 template <class Next>
 void LoopUnrollingReducer<Next>::RemoveLoop(const Block* header) {
   DCHECK_EQ(unrolling_, UnrollingStatus::kNotUnrolling);
+  DCHECK(!skip_next_stack_check_);
   // When removing a loop, we still need to emit the header (since it has to
   // always be executed before the 1st iteration anyways), but by setting
   // {unrolling_} to `kRemoveLoop`, the final Branch of the loop will become a
@@ -605,6 +644,8 @@ void LoopUnrollingReducer<Next>::RemoveLoop(const Block* header) {
 template <class Next>
 void LoopUnrollingReducer<Next>::FullyUnrollLoop(const Block* header) {
   DCHECK_EQ(unrolling_, UnrollingStatus::kNotUnrolling);
+  DCHECK(!skip_next_stack_check_);
+  ScopedModification<bool> skip_stack_checks(&skip_next_stack_check_, true);
 
   size_t iter_count = analyzer_.GetIterationCount(header).exact_count();
 

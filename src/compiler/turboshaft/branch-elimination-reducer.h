@@ -5,9 +5,10 @@
 #ifndef V8_COMPILER_TURBOSHAFT_BRANCH_ELIMINATION_REDUCER_H_
 #define V8_COMPILER_TURBOSHAFT_BRANCH_ELIMINATION_REDUCER_H_
 
+#include <optional>
+
 #include "src/base/bits.h"
 #include "src/base/logging.h"
-#include "src/base/optional.h"
 #include "src/compiler/turboshaft/assembler.h"
 #include "src/compiler/turboshaft/index.h"
 #include "src/compiler/turboshaft/layered-hash-map.h"
@@ -326,7 +327,7 @@ class BranchEliminationReducer : public Next {
       V<Word32> condition =
           __ template MapToNewGraph<true>(branch->condition());
       if (condition.valid()) {
-        base::Optional<bool> condition_value = known_conditions_.Get(condition);
+        std::optional<bool> condition_value = known_conditions_.Get(condition);
         if (!condition_value.has_value()) {
           // We've already visited the subsequent block's Branch condition, but
           // we don't know its value right now.
@@ -361,8 +362,30 @@ class BranchEliminationReducer : public Next {
           }
         }
       }
-    } else if ([[maybe_unused]] const ReturnOp* return_op =
-                   last_op.template TryCast<ReturnOp>()) {
+    } else if (last_op.template Is<ReturnOp>()) {
+      // In case of the following pattern, the `Goto` is most likely going to be
+      // folded into a jump table, so duplicating Block 5 will only increase the
+      // amount of different targets within the jump table.
+      //
+      // Block 1:
+      // [...]
+      // SwitchOp()[2, 3, 4]
+      //
+      // Block 2:    Block 3:    Block 4:
+      // Goto  5     Goto  5     Goto  6
+      //
+      // Block 5:                Block 6:
+      // [...]                   [...]
+      // ReturnOp
+      if (Asm().current_block()->PredecessorCount() == 1 &&
+          Asm().current_block()->begin() ==
+              __ output_graph().next_operation_index()) {
+        const Block* prev_block = Asm().current_block()->LastPredecessor();
+        if (prev_block->LastOperation(__ output_graph())
+                .template Is<SwitchOp>()) {
+          goto no_change;
+        }
+      }
       // The destination block in the old graph ends with a Return
       // and the old destination is a merge block, so we can directly
       // inline the destination block in place of the Goto.
@@ -382,7 +405,7 @@ class BranchEliminationReducer : public Next {
     }
     if (ShouldSkipOptimizationStep()) goto no_change;
 
-    base::Optional<bool> condition_value = known_conditions_.Get(condition);
+    std::optional<bool> condition_value = known_conditions_.Get(condition);
     if (!condition_value.has_value()) {
       known_conditions_.InsertNewKey(condition, negated);
       goto no_change;
@@ -405,7 +428,7 @@ class BranchEliminationReducer : public Next {
     }
     if (ShouldSkipOptimizationStep()) goto no_change;
 
-    base::Optional<bool> condition_value = known_conditions_.Get(condition);
+    std::optional<bool> condition_value = known_conditions_.Get(condition);
     if (!condition_value.has_value()) {
       known_conditions_.InsertNewKey(condition, negated);
       goto no_change;

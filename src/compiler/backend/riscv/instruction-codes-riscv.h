@@ -161,8 +161,6 @@ namespace compiler {
   V(RiscvAnd32)                           \
   V(RiscvOr)                              \
   V(RiscvOr32)                            \
-  V(RiscvNor)                             \
-  V(RiscvNor32)                           \
   V(RiscvXor)                             \
   V(RiscvXor32)                           \
   V(RiscvClz32)                           \
@@ -228,6 +226,8 @@ namespace compiler {
   V(RiscvULoadFloat)                      \
   V(RiscvULoadDouble)                     \
   V(RiscvUStoreDouble)                    \
+  V(RiscvEnableDebugTrace)                \
+  V(RiscvDisableDebugTrace)               \
   V(RiscvBitcastInt32ToFloat32)           \
   V(RiscvBitcastFloat32ToInt32)           \
   V(RiscvFloat64ExtractLowWord32)         \

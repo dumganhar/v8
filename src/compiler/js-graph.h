@@ -7,9 +7,9 @@
 
 #include "src/common/globals.h"
 #include "src/compiler/common-operator.h"
-#include "src/compiler/graph.h"
 #include "src/compiler/js-operator.h"
 #include "src/compiler/machine-graph.h"
+#include "src/compiler/turbofan-graph.h"
 #include "src/execution/isolate.h"
 #include "src/objects/oddball.h"
 
@@ -61,6 +61,11 @@ class V8_EXPORT_PRIVATE JSGraph : public MachineGraph {
   // This is only used to emit hole values. Use this if you are sure that you
   // only emit a Hole value.
   Node* HeapConstantHole(Handle<HeapObject> value);
+
+  // Createas a TrustedHeapConstant node.
+  // This is similar to HeapConstant, but for constants that live in trusted
+  // space (having a different cage base) and therefore shouldn't be compressed.
+  Node* TrustedHeapConstant(Handle<HeapObject> value);
 
   // Creates a Constant node of the appropriate type for
   // the given object.  Inspect the (serialized) object and determine whether

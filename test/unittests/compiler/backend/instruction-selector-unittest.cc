@@ -7,8 +7,8 @@
 #include "src/codegen/code-factory.h"
 #include "src/codegen/tick-counter.h"
 #include "src/compiler/compiler-source-position-table.h"
-#include "src/compiler/graph.h"
 #include "src/compiler/schedule.h"
+#include "src/compiler/turbofan-graph.h"
 #include "src/flags/flags.h"
 #include "src/objects/objects-inl.h"
 #include "test/unittests/compiler/compiler-test-utils.h"
@@ -154,10 +154,11 @@ bool InstructionSelectorTest::Stream::IsUsedAtStart(
 
 const FrameStateFunctionInfo*
 InstructionSelectorTest::StreamBuilder::GetFrameStateFunctionInfo(
-    int parameter_count, int local_count) {
+    uint16_t parameter_count, int local_count) {
+  const uint16_t max_arguments = 0;
   return common()->CreateFrameStateFunctionInfo(
-      FrameStateType::kUnoptimizedFunction, parameter_count, local_count,
-      Handle<SharedFunctionInfo>());
+      FrameStateType::kUnoptimizedFunction, parameter_count, max_arguments,
+      local_count, {}, {});
 }
 
 // -----------------------------------------------------------------------------
@@ -371,8 +372,16 @@ TARGET_TEST_F(InstructionSelectorTest, CallJSFunctionWithDeopt) {
       m.graph()->start());
 
   // Build the call.
-  Node* nodes[] = {function_node,      receiver, m.UndefinedConstant(),
-                   m.Int32Constant(1), context,  state_node};
+  Node* argc = m.Int32Constant(1);
+#ifdef V8_ENABLE_LEAPTIERING
+  Node* dispatch_handle = m.Int32Constant(-1);
+  Node* nodes[] = {function_node, receiver,        m.UndefinedConstant(),
+                   argc,          dispatch_handle, context,
+                   state_node};
+#else
+  Node* nodes[] = {function_node, receiver, m.UndefinedConstant(),
+                   argc,          context,  state_node};
+#endif
   Node* call = m.CallNWithFrameState(call_descriptor, arraysize(nodes), nodes);
   m.Return(call);
 

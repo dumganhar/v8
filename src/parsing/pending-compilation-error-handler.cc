@@ -147,11 +147,10 @@ void PendingCompilationErrorHandler::ReportWarnings(
 
   for (const MessageDetails& warning : warning_messages_) {
     MessageLocation location = warning.GetLocation(script);
-    Handle<String> argument = warning.ArgString(isolate, 0);
+    DirectHandle<String> argument = warning.ArgString(isolate, 0);
     DCHECK_LT(warning.ArgCount(), 2);  // Arg1 is only used for errors.
-    Handle<JSMessageObject> message =
-        MessageHandler::MakeMessageObject(isolate, warning.message(), &location,
-                                          argument, Handle<FixedArray>::null());
+    DirectHandle<JSMessageObject> message = MessageHandler::MakeMessageObject(
+        isolate, warning.message(), &location, argument);
     message->set_error_level(v8::Isolate::kMessageWarning);
     MessageHandler::ReportMessage(isolate, &location, message);
   }

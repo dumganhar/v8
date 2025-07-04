@@ -239,6 +239,7 @@ if (host_toolchain == "") {
 _default_toolchain = ""
 
 if (target_os == "android") {
+  # Targeting android on Mac is best-effort and not guaranteed to work.
   assert(host_os == "linux", "Android builds are only supported on Linux.")
   _default_toolchain = "//build/toolchain/android:android_clang_$target_cpu"
 } else if (target_os == "chromeos" || target_os == "linux") {
@@ -348,6 +349,9 @@ default_compiler_configs = [
   "//build/config/compiler:default_optimization",
   "//build/config/compiler:default_stack_frames",
   "//build/config/compiler:default_symbols",
+  "//build/config/compiler:disallow_unstable_features",
+  "//build/config/compiler:libcxx_hardening",
+  "//build/config/compiler:libcxx_module",
   "//build/config/compiler:no_exceptions",
   "//build/config/compiler:no_rtti",
   "//build/config/compiler:no_unresolved_symbols",
@@ -667,7 +671,7 @@ foreach(_target_type,
 # case by setting static_component_type to either "source_set" or
 # "static_library". If unset, the default will be used.
 template("component") {
-  if (is_component_build && target_name != "absl" && target_name != "zlib") {
+  if (is_component_build) {
     _component_mode = "shared_library"
 
     # Generate a unique output_name for a shared library if not set by invoker.
@@ -782,7 +786,7 @@ foreach(_target_type, [ "action" ]) {
       # Siso doesn't use action_remote.py wrapper because it sends requests to
       # Reproxy directly without actions_remote.py/rewrapper.
       # TODO(b/259381924): Investigate enabling in nacl config.
-      if (allow_remote && use_remoteexec && !is_nacl && !use_siso) {
+      if (allow_remote && use_reclient && !is_nacl && !use_siso) {
         pool = "//build/toolchain:remote_action_pool($default_toolchain)"
         script = "//build/util/action_remote.py"
         inputs = [ invoker.script ]
@@ -814,16 +818,16 @@ foreach(_target_type, [ "action" ]) {
         re_outputs_file = "$target_gen_dir/${target_name}__remote_outputs.rsp"
         write_file(re_outputs_file, re_outputs)
 
-        rewrapper_cfg = "$rbe_py_cfg_file"
+        rewrapper_cfg = "$reclient_py_cfg_file"
         if (defined(invoker.remote_worker)) {
           remote_worker = invoker.remote_worker
           assert(remote_worker == "large",
                  "remote_worker = " + remote_worker + " is not supported")
-          rewrapper_cfg = "$rbe_py_large_cfg_file"
+          rewrapper_cfg = "$reclient_py_large_cfg_file"
         }
 
         args = []
-        args += [ "$rbe_bin_dir/rewrapper" ]
+        args += [ "$reclient_bin_dir/rewrapper" ]
         if (defined(invoker.custom_processor)) {
           args += [ "--custom_processor=" + invoker.custom_processor ]
         }

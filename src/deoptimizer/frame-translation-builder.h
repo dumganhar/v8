@@ -5,6 +5,8 @@
 #ifndef V8_DEOPTIMIZER_FRAME_TRANSLATION_BUILDER_H_
 #define V8_DEOPTIMIZER_FRAME_TRANSLATION_BUILDER_H_
 
+#include <optional>
+
 #include "src/codegen/register.h"
 #include "src/deoptimizer/translation-opcode.h"
 #include "src/objects/deoptimization-data.h"
@@ -35,8 +37,8 @@ class FrameTranslationBuilder {
                        bool update_feedback);
 
   void BeginInterpretedFrame(BytecodeOffset bytecode_offset, int literal_id,
-                             unsigned height, int return_value_offset,
-                             int return_value_count);
+                             int bytecode_array_id, unsigned height,
+                             int return_value_offset, int return_value_count);
   void BeginInlinedExtraArguments(int literal_id, unsigned height);
   void BeginConstructCreateStubFrame(int literal_id, unsigned height);
   void BeginConstructInvokeStubFrame(int literal_id);
@@ -45,10 +47,11 @@ class FrameTranslationBuilder {
 #if V8_ENABLE_WEBASSEMBLY
   void BeginJSToWasmBuiltinContinuationFrame(
       BytecodeOffset bailout_id, int literal_id, unsigned height,
-      base::Optional<wasm::ValueKind> return_kind);
+      std::optional<wasm::ValueKind> return_kind);
   void BeginWasmInlinedIntoJSFrame(BytecodeOffset bailout_id, int literal_id,
                                    unsigned height);
-  void BeginLiftoffFrame(BytecodeOffset bailout_id, unsigned height);
+  void BeginLiftoffFrame(BytecodeOffset bailout_id, unsigned height,
+                         uint32_t wasm_function_index);
 #endif  // V8_ENABLE_WEBASSEMBLY
   void BeginJavaScriptBuiltinContinuationFrame(BytecodeOffset bailout_id,
                                                int literal_id, unsigned height);
@@ -71,6 +74,7 @@ class FrameTranslationBuilder {
   void StoreFloatRegister(FloatRegister reg);
   void StoreDoubleRegister(DoubleRegister reg);
   void StoreHoleyDoubleRegister(DoubleRegister reg);
+  void StoreSimd128Register(Simd128Register reg);
   void StoreStackSlot(int index);
   void StoreInt32StackSlot(int index);
   void StoreInt64StackSlot(int index);
@@ -80,6 +84,7 @@ class FrameTranslationBuilder {
   void StoreBoolStackSlot(int index);
   void StoreFloatStackSlot(int index);
   void StoreDoubleStackSlot(int index);
+  void StoreSimd128StackSlot(int index);
   void StoreHoleyDoubleStackSlot(int index);
   void StoreLiteral(int literal_id);
   void StoreOptimizedOut();

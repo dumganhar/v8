@@ -8,6 +8,7 @@
 #include "src/base/memory.h"
 #include "src/common/assert-scope.h"
 #include "src/common/globals.h"
+#include "src/objects/tagged-field.h"
 #include "src/sandbox/external-pointer-table.h"
 #include "src/sandbox/external-pointer.h"
 #include "src/sandbox/indirect-pointer-tag.h"
@@ -108,6 +109,11 @@ class FullObjectSlot : public SlotBase<FullObjectSlot, Address> {
   explicit FullObjectSlot(const Address* ptr)
       : SlotBase(reinterpret_cast<Address>(ptr)) {}
   inline explicit FullObjectSlot(TaggedBase* object);
+#if defined(V8_HOST_ARCH_32_BIT) || \
+    defined(V8_HOST_ARCH_64_BIT) && !V8_COMPRESS_POINTERS_BOOL
+  explicit FullObjectSlot(const TaggedMemberBase* member)
+      : SlotBase(reinterpret_cast<Address>(member->ptr_location())) {}
+#endif
   template <typename T>
   explicit FullObjectSlot(SlotBase<T, TData, kSlotDataAlignment> slot)
       : SlotBase(slot.address()) {}
@@ -157,6 +163,11 @@ class FullMaybeObjectSlot
   explicit FullMaybeObjectSlot(Address ptr) : SlotBase(ptr) {}
   explicit FullMaybeObjectSlot(TaggedBase* ptr)
       : SlotBase(reinterpret_cast<Address>(ptr)) {}
+#if defined(V8_HOST_ARCH_32_BIT) || \
+    defined(V8_HOST_ARCH_64_BIT) && !V8_COMPRESS_POINTERS_BOOL
+  explicit FullMaybeObjectSlot(const TaggedMemberBase* member)
+      : SlotBase(reinterpret_cast<Address>(member->ptr_location())) {}
+#endif
   explicit FullMaybeObjectSlot(Tagged<MaybeObject>* ptr)
       : SlotBase(reinterpret_cast<Address>(ptr)) {}
   template <typename T>
@@ -190,6 +201,11 @@ class FullHeapObjectSlot : public SlotBase<FullHeapObjectSlot, Address> {
   explicit FullHeapObjectSlot(Address ptr) : SlotBase(ptr) {}
   explicit FullHeapObjectSlot(TaggedBase* ptr)
       : SlotBase(reinterpret_cast<Address>(ptr)) {}
+#if defined(V8_HOST_ARCH_32_BIT) || \
+    defined(V8_HOST_ARCH_64_BIT) && !V8_COMPRESS_POINTERS_BOOL
+  explicit FullHeapObjectSlot(const TaggedMemberBase* member)
+      : SlotBase(reinterpret_cast<Address>(member->ptr_location())) {}
+#endif
   template <typename T>
   explicit FullHeapObjectSlot(SlotBase<T, TData, kSlotDataAlignment> slot)
       : SlotBase(slot.address()) {}
@@ -346,7 +362,8 @@ class ExternalPointerSlot
   // TODO(wingo): Remove if we switch to use the EPT for all external pointers
   // when pointer compression is enabled.
   bool HasExternalPointerHandle() const {
-    return V8_ENABLE_SANDBOX_BOOL || tag() == kArrayBufferExtensionTag;
+    return V8_ENABLE_SANDBOX_BOOL || tag() == kArrayBufferExtensionTag ||
+           tag() == kWaiterQueueNodeTag;
   }
   inline ExternalPointerHandle Relaxed_LoadHandle() const;
   inline void Relaxed_StoreHandle(ExternalPointerHandle handle) const;
@@ -400,23 +417,9 @@ class CppHeapPointerSlot
     : public SlotBase<CppHeapPointerSlot, CppHeapPointer_t,
                       /*SlotDataAlignment=*/sizeof(CppHeapPointer_t)> {
  public:
-  CppHeapPointerSlot()
-      : SlotBase(kNullAddress)
-#ifdef V8_COMPRESS_POINTERS
-        ,
-        tag_(kExternalPointerNullTag)
-#endif
-  {
-  }
+  CppHeapPointerSlot() : SlotBase(kNullAddress) {}
 
-  CppHeapPointerSlot(Address ptr, ExternalPointerTag tag)
-      : SlotBase(ptr)
-#ifdef V8_COMPRESS_POINTERS
-        ,
-        tag_(tag)
-#endif
-  {
-  }
+  CppHeapPointerSlot(Address ptr) : SlotBase(ptr) {}
 
 #ifdef V8_COMPRESS_POINTERS
 
@@ -432,21 +435,11 @@ class CppHeapPointerSlot
 
 #endif  // V8_COMPRESS_POINTERS
 
-  inline Address try_load(IsolateForPointerCompression isolate) const;
-  inline void store(IsolateForPointerCompression isolate, Address value) const;
+  inline Address try_load(IsolateForPointerCompression isolate,
+                          CppHeapPointerTagRange tag_range) const;
+  inline void store(IsolateForPointerCompression isolate, Address value,
+                    CppHeapPointerTag tag) const;
   inline void init() const;
-
-#ifdef V8_COMPRESS_POINTERS
-  ExternalPointerTag tag() const { return tag_; }
-#else
-  ExternalPointerTag tag() const { return kExternalPointerNullTag; }
-#endif  // V8_COMPRESS_POINTERS
-
- private:
-#ifdef V8_COMPRESS_POINTERS
-  // The tag associated with this slot.
-  ExternalPointerTag tag_;
-#endif  // V8_COMPRESS_POINTERS
 };
 
 // An IndirectPointerSlot instance describes a 32-bit field ("slot") containing

@@ -446,7 +446,7 @@ void MipsDebugger::Debug() {
           Heap* current_heap = sim_->isolate_->heap();
           if (!skip_obj_print) {
             if (IsSmi(obj) ||
-                IsValidHeapObject(current_heap, HeapObject::cast(obj))) {
+                IsValidHeapObject(current_heap, Cast<HeapObject>(obj))) {
               PrintF(" (");
               if (IsSmi(obj)) {
                 PrintF("smi %d", Smi::ToInt(obj));
@@ -2182,12 +2182,13 @@ uintptr_t Simulator::StackLimit(uintptr_t c_limit) const {
   return stack_limit_ + kAdditionalStackMargin;
 }
 
-base::Vector<uint8_t> Simulator::GetCurrentStackView() const {
+base::Vector<uint8_t> Simulator::GetCentralStackView() const {
   // We do not add an additional safety margin as above in
   // Simulator::StackLimit, as users of this method are expected to add their
   // own margin.
-  return base::VectorOf(reinterpret_cast<uint8_t*>(stack_limit_),
-                        UsableStackSize());
+  return base::VectorOf(
+      reinterpret_cast<uint8_t*>(stack_) + kStackProtectionSize,
+      UsableStackSize());
 }
 
 // Unsupported instructions use Format to print an error and stop execution.

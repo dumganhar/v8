@@ -15,6 +15,7 @@
 #include "src/base/virtual-address-space-page-allocator.h"
 #include "src/base/virtual-address-space.h"
 #include "src/flags/flags.h"
+#include "src/sandbox/hardware-support.h"
 #include "src/sandbox/sandboxed-pointer.h"
 #include "src/trap-handler/trap-handler.h"
 #include "src/utils/allocation.h"
@@ -23,6 +24,8 @@ namespace v8 {
 namespace internal {
 
 #ifdef V8_ENABLE_SANDBOX
+
+bool Sandbox::first_four_gb_of_address_space_are_reserved_ = false;
 
 // Best-effort function to determine the approximate size of the virtual
 // address space that can be addressed by this process. Used to determine
@@ -141,6 +144,8 @@ void Sandbox::Initialize(v8::VirtualAddressSpace* vas) {
   trap_handler::SetV8SandboxBaseAndSize(base(), size());
 #endif  // V8_ENABLE_WEBASSEMBLY && V8_TRAP_HANDLER_SUPPORTED
 
+  SandboxHardwareSupport::TryEnable(base(), size());
+
   DCHECK(initialized_);
 }
 
@@ -184,6 +189,20 @@ bool Sandbox::Initialize(v8::VirtualAddressSpace* vas, size_t size,
     // These must succeed since nothing was allocated in the subspace yet.
     CHECK(address_space_->AllocateGuardRegion(front, kSandboxGuardRegionSize));
     CHECK(address_space_->AllocateGuardRegion(back, kSandboxGuardRegionSize));
+  }
+
+  // Also try to reserve the first 4GB of the process' address space. This
+  // mitigates Smi<->HeapObject confusion bugs in which we end up treating a
+  // Smi value as a pointer.
+  if (!first_four_gb_of_address_space_are_reserved_) {
+    Address end = 4UL * GB;
+    size_t step = address_space_->allocation_granularity();
+    for (Address start = 0; start <= 1 * MB; start += step) {
+      if (vas->AllocateGuardRegion(start, end - start)) {
+        first_four_gb_of_address_space_are_reserved_ = true;
+        break;
+      }
+    }
   }
 
   initialized_ = true;
@@ -263,7 +282,7 @@ void Sandbox::FinishInitialization() {
   // to cause a fault on any accidental access.
   // Further, this also prevents the accidental construction of invalid
   // SandboxedPointers: if an ArrayBuffer is placed right at the end of the
-  // sandbox, a ArrayBufferView could be constructed with byteLength=0 and
+  // sandbox, an ArrayBufferView could be constructed with byteLength=0 and
   // offset=buffer.byteLength, which would lead to a pointer that points just
   // outside of the sandbox.
   size_t allocation_granularity = address_space_->allocation_granularity();

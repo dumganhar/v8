@@ -5,7 +5,8 @@
 #ifndef V8_IC_ACCESSOR_ASSEMBLER_H_
 #define V8_IC_ACCESSOR_ASSEMBLER_H_
 
-#include "src/base/optional.h"
+#include <optional>
+
 #include "src/codegen/code-stub-assembler.h"
 #include "src/compiler/code-assembler.h"
 #include "src/objects/dictionary.h"
@@ -67,8 +68,10 @@ class V8_EXPORT_PRIVATE AccessorAssembler : public CodeStubAssembler {
   void GenerateLookupGlobalIC(TypeofMode typeof_mode);
   void GenerateLookupGlobalICTrampoline(TypeofMode typeof_mode);
   void GenerateLookupGlobalICBaseline(TypeofMode typeof_mode);
-  void GenerateLookupContextTrampoline(TypeofMode typeof_mode);
-  void GenerateLookupContextBaseline(TypeofMode typeof_mode);
+  void GenerateLookupContextTrampoline(TypeofMode typeof_mode,
+                                       ContextKind context_kind);
+  void GenerateLookupContextBaseline(TypeofMode typeof_mode,
+                                     ContextKind context_kind);
 
   void GenerateKeyedStoreIC();
   void GenerateKeyedStoreICTrampoline();
@@ -109,9 +112,9 @@ class V8_EXPORT_PRIVATE AccessorAssembler : public CodeStubAssembler {
     LoadICParameters(
         TNode<Context> context, TNode<Object> receiver, TNode<Object> name,
         TNode<TaggedIndex> slot, TNode<HeapObject> vector,
-        base::Optional<TNode<Object>> lookup_start_object = base::nullopt,
-        base::Optional<TNode<TaggedIndex>> enum_index = base::nullopt,
-        base::Optional<TNode<Object>> cache_type = base::nullopt)
+        std::optional<TNode<Object>> lookup_start_object = std::nullopt,
+        std::optional<TNode<Smi>> enum_index = std::nullopt,
+        std::optional<TNode<Object>> cache_type = std::nullopt)
         : context_(context),
           receiver_(receiver),
           name_(name),
@@ -138,7 +141,7 @@ class V8_EXPORT_PRIVATE AccessorAssembler : public CodeStubAssembler {
     TNode<Object> lookup_start_object() const {
       return lookup_start_object_.value();
     }
-    TNode<TaggedIndex> enum_index() const { return *enum_index_; }
+    TNode<Smi> enum_index() const { return *enum_index_; }
     TNode<Object> cache_type() const { return *cache_type_; }
 
     // Usable in cases where the receiver and the lookup start object are
@@ -149,7 +152,7 @@ class V8_EXPORT_PRIVATE AccessorAssembler : public CodeStubAssembler {
       return receiver_;
     }
 
-    bool IsEnumeratedKeyedLoad() const { return enum_index_ != base::nullopt; }
+    bool IsEnumeratedKeyedLoad() const { return enum_index_ != std::nullopt; }
 
    private:
     TNode<Context> context_;
@@ -157,9 +160,9 @@ class V8_EXPORT_PRIVATE AccessorAssembler : public CodeStubAssembler {
     TNode<Object> name_;
     TNode<TaggedIndex> slot_;
     TNode<HeapObject> vector_;
-    base::Optional<TNode<Object>> lookup_start_object_;
-    base::Optional<TNode<TaggedIndex>> enum_index_;
-    base::Optional<TNode<Object>> cache_type_;
+    std::optional<TNode<Object>> lookup_start_object_;
+    std::optional<TNode<Smi>> enum_index_;
+    std::optional<TNode<Object>> cache_type_;
   };
 
   struct LazyLoadICParameters {
@@ -167,7 +170,7 @@ class V8_EXPORT_PRIVATE AccessorAssembler : public CodeStubAssembler {
         LazyNode<Context> context, TNode<Object> receiver,
         LazyNode<Object> name, LazyNode<TaggedIndex> slot,
         TNode<HeapObject> vector,
-        base::Optional<TNode<Object>> lookup_start_object = base::nullopt)
+        std::optional<TNode<Object>> lookup_start_object = std::nullopt)
         : context_(context),
           receiver_(receiver),
           name_(name),
@@ -233,10 +236,10 @@ class V8_EXPORT_PRIVATE AccessorAssembler : public CodeStubAssembler {
   };
   struct StoreICParameters {
     StoreICParameters(TNode<Context> context,
-                      base::Optional<TNode<Object>> receiver,
-                      TNode<Object> name, TNode<Object> value,
-                      base::Optional<TNode<Smi>> flags, TNode<TaggedIndex> slot,
-                      TNode<HeapObject> vector, StoreICMode mode)
+                      std::optional<TNode<Object>> receiver, TNode<Object> name,
+                      TNode<Object> value, std::optional<TNode<Smi>> flags,
+                      TNode<TaggedIndex> slot, TNode<HeapObject> vector,
+                      StoreICMode mode)
         : context_(context),
           receiver_(receiver),
           name_(name),
@@ -276,10 +279,10 @@ class V8_EXPORT_PRIVATE AccessorAssembler : public CodeStubAssembler {
 
    private:
     TNode<Context> context_;
-    base::Optional<TNode<Object>> receiver_;
+    std::optional<TNode<Object>> receiver_;
     TNode<Object> name_;
     TNode<Object> value_;
-    base::Optional<TNode<Smi>> flags_;
+    std::optional<TNode<Smi>> flags_;
     TNode<TaggedIndex> slot_;
     TNode<HeapObject> vector_;
     StoreICMode mode_;
@@ -311,7 +314,7 @@ class V8_EXPORT_PRIVATE AccessorAssembler : public CodeStubAssembler {
                           Label* readonly);
 
   void InvalidateValidityCellIfPrototype(
-      TNode<Map> map, base::Optional<TNode<Uint32T>> bitfield3 = base::nullopt);
+      TNode<Map> map, std::optional<TNode<Uint32T>> bitfield3 = std::nullopt);
 
   void OverwriteExistingFastDataProperty(TNode<HeapObject> object,
                                          TNode<Map> object_map,
@@ -380,7 +383,7 @@ class V8_EXPORT_PRIVATE AccessorAssembler : public CodeStubAssembler {
                       TypeofMode typeof_mode);
   void LookupContext(LazyNode<Object> lazy_name, TNode<TaggedIndex> depth,
                      LazyNode<TaggedIndex> lazy_slot, TNode<Context> context,
-                     TypeofMode typeof_mode);
+                     TypeofMode typeof_mode, ContextKind context_kind);
 
   void GotoIfNotSameNumberBitPattern(TNode<Float64T> left,
                                      TNode<Float64T> right, Label* miss);
@@ -511,7 +514,7 @@ class V8_EXPORT_PRIVATE AccessorAssembler : public CodeStubAssembler {
       TNode<JSObject> holder, TNode<Object> value);
   void HandleStoreFieldAndReturn(TNode<Word32T> handler_word,
                                  TNode<JSObject> holder, TNode<Object> value,
-                                 base::Optional<TNode<Float64T>> double_value,
+                                 std::optional<TNode<Float64T>> double_value,
                                  Representation representation, Label* miss);
 
   void CheckPrototypeValidityCell(TNode<Object> maybe_validity_cell,

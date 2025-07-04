@@ -4,8 +4,9 @@
 
 #include "src/ic/accessor-assembler.h"
 
+#include <optional>
+
 #include "src/ast/ast.h"
-#include "src/base/optional.h"
 #include "src/builtins/builtins-constructor-gen.h"
 #include "src/builtins/builtins-inl.h"
 #include "src/codegen/code-stub-assembler-inl.h"
@@ -28,6 +29,8 @@
 
 namespace v8 {
 namespace internal {
+
+#include "src/codegen/define-code-stub-assembler-macros.inc"
 
 //////////////////// Private helpers.
 
@@ -203,7 +206,7 @@ void AccessorAssembler::TryEnumeratedKeyedLoad(
     ExitPoint* exit_point) {
   if (!p->IsEnumeratedKeyedLoad()) return;
   Label no_enum_cache(this);
-  // p->cache_type() comes from the outer loop's ForIn state.
+  // |p->cache_type()| comes from the outer loop's ForIn state.
   GotoIf(TaggedNotEqual(p->cache_type(), lookup_start_object_map),
          &no_enum_cache);
 
@@ -214,19 +217,18 @@ void AccessorAssembler::TryEnumeratedKeyedLoad(
       descriptors, DescriptorArray::kEnumCacheOffset);
   TNode<FixedArray> enum_keys =
       LoadObjectField<FixedArray>(enum_cache, EnumCache::kKeysOffset);
-  // p->enum_index() comes from the outer loop's ForIn state.
-  TNode<Object> key =
-      LoadFixedArrayElement(enum_keys, TaggedIndexToSmi(p->enum_index()));
-  // Check if the key in parameters match the one in enum cache. Debugger might
-  // change the value in key register, in this case we should not use the field
-  // index in enum cache.
+  // |p->enum_index()| comes from the outer loop's ForIn state.
+  TNode<Object> key = LoadFixedArrayElement(enum_keys, p->enum_index());
+  // Check if |p->name()| matches the key in enum cache. |p->name()| is the
+  // "each" variable of a for-in loop, but it can be modified by debugger or
+  // other bytecodes.
   GotoIf(TaggedNotEqual(key, p->name()), &no_enum_cache);
   TNode<FixedArray> enum_indices =
       LoadObjectField<FixedArray>(enum_cache, EnumCache::kIndicesOffset);
   // Check if we have enum indices available.
   GotoIf(IsEmptyFixedArray(enum_indices), &no_enum_cache);
-  TNode<Int32T> field_index = SmiToInt32(CAST(
-      LoadFixedArrayElement(enum_indices, TaggedIndexToSmi(p->enum_index()))));
+  TNode<Int32T> field_index =
+      SmiToInt32(CAST(LoadFixedArrayElement(enum_indices, p->enum_index())));
 
   TVARIABLE(Object, result);
   Label if_double(this, Label::kDeferred), done(this, &result);
@@ -256,10 +258,10 @@ void AccessorAssembler::TryEnumeratedKeyedLoad(
     {
       TNode<PropertyArray> properties = CAST(LoadFastProperties(
           CAST(p->receiver_and_lookup_start_object()), true));
-      TNode<IntPtrT> offset = Signed(ChangeUint32ToWord(
-          Int32Add(Word32Shl(Int32Sub(zero, field_index),
-                             Int32Constant(kTaggedSizeLog2 - 1)),
-                   Int32Constant(FixedArray::kHeaderSize - kTaggedSize))));
+      TNode<IntPtrT> offset = Signed(ChangeUint32ToWord(Int32Add(
+          Word32Shl(Int32Sub(zero, field_index),
+                    Int32Constant(kTaggedSizeLog2 - 1)),
+          Int32Constant(OFFSET_OF_DATA_START(FixedArray) - kTaggedSize))));
       result = LoadObjectField(properties, offset);
       Goto(&done);
     }
@@ -289,10 +291,10 @@ void AccessorAssembler::TryEnumeratedKeyedLoad(
     {
       TNode<PropertyArray> properties = CAST(LoadFastProperties(
           CAST(p->receiver_and_lookup_start_object()), true));
-      TNode<IntPtrT> offset = Signed(ChangeUint32ToWord(
-          Int32Add(Word32Shl(Int32Sub(zero, field_index),
-                             Int32Constant(kTaggedSizeLog2)),
-                   Int32Constant(FixedArray::kHeaderSize - kTaggedSize))));
+      TNode<IntPtrT> offset = Signed(ChangeUint32ToWord(Int32Add(
+          Word32Shl(Int32Sub(zero, field_index),
+                    Int32Constant(kTaggedSizeLog2)),
+          Int32Constant(OFFSET_OF_DATA_START(FixedArray) - kTaggedSize))));
       field = LoadObjectField(properties, offset);
       Goto(&loaded_field);
     }
@@ -416,8 +418,8 @@ void AccessorAssembler::HandleLoadAccessor(
   TNode<MaybeObject> maybe_context = Select<MaybeObject>(
       IsSetWord32<LoadHandler::DoAccessCheckOnLookupStartObjectBits>(
           handler_word),
-      [=] { return LoadHandlerDataField(handler, 3); },
-      [=] { return LoadHandlerDataField(handler, 2); });
+      [=, this] { return LoadHandlerDataField(handler, 3); },
+      [=, this] { return LoadHandlerDataField(handler, 2); });
 
   CSA_DCHECK(this, IsWeakOrCleared(maybe_context));
   CSA_CHECK(this, IsNotCleared(maybe_context));
@@ -1220,7 +1222,8 @@ void AccessorAssembler::HandleLoadICProtoHandler(
       // Code sub-handlers are not expected in LoadICs, so no |on_code_handler|.
       nullptr,
       // on_found_on_lookup_start_object
-      [=](TNode<PropertyDictionary> properties, TNode<IntPtrT> name_index) {
+      [=, this](TNode<PropertyDictionary> properties,
+                TNode<IntPtrT> name_index) {
         if (access_mode == LoadAccessMode::kHas) {
           exit_point->Return(TrueConstant());
         } else {
@@ -1683,24 +1686,27 @@ void AccessorAssembler::CheckFieldType(TNode<DescriptorArray> descriptors,
     GotoIf(TaggedIsSmi(value), bailout);
     TNode<MaybeObject> field_type =
         LoadFieldTypeByKeyIndex(descriptors, name_index);
-    const Address kNoneType = FieldType::None().ptr();
     const Address kAnyType = FieldType::Any().ptr();
-    DCHECK_NE(static_cast<uint32_t>(kNoneType), kClearedWeakHeapObjectLower32);
-    DCHECK_NE(static_cast<uint32_t>(kAnyType), kClearedWeakHeapObjectLower32);
-    // FieldType::None can't hold any value.
-    GotoIf(
-        TaggedEqual(field_type, BitcastWordToTagged(IntPtrConstant(kNoneType))),
-        bailout);
     // FieldType::Any can hold any value.
     GotoIf(
         TaggedEqual(field_type, BitcastWordToTagged(IntPtrConstant(kAnyType))),
         &all_fine);
-    // Cleared weak references count as FieldType::None, which can't hold any
-    // value.
-    TNode<Map> field_type_map =
-        CAST(GetHeapObjectAssumeWeak(field_type, bailout));
     // FieldType::Class(...) performs a map check.
-    Branch(TaggedEqual(LoadMap(CAST(value)), field_type_map), &all_fine,
+    // If the type is None we want this check to fail too, thus we compare the
+    // maybe weak field type as is against a weak map ptr.
+#ifdef DEBUG
+    {
+      // Check the field type is None or a weak map.
+      Label check_done(this);
+      GotoIf(TaggedEqual(field_type, BitcastWordToTagged(IntPtrConstant(
+                                         FieldType::None().ptr()))),
+             &check_done);
+      CSA_DCHECK(this, IsMap(GetHeapObjectAssumeWeak(field_type)));
+      Goto(&check_done);
+      BIND(&check_done);
+    }
+#endif  // DEBUG
+    Branch(TaggedEqual(MakeWeak(LoadMap(CAST(value))), field_type), &all_fine,
            bailout);
   }
 
@@ -1933,7 +1939,7 @@ void AccessorAssembler::HandleStoreICProtoHandler(
   OnCodeHandler on_code_handler;
   if (support_elements == kSupportElements) {
     // Code sub-handlers are expected only in KeyedStoreICs.
-    on_code_handler = [=](TNode<Code> code_handler) {
+    on_code_handler = [=, this](TNode<Code> code_handler) {
       // This is either element store or transitioning element store.
       Label if_element_store(this), if_transitioning_element_store(this);
       Branch(IsStoreHandler0Map(LoadMap(handler)), &if_element_store,
@@ -1964,7 +1970,8 @@ void AccessorAssembler::HandleStoreICProtoHandler(
   TNode<Object> smi_handler = HandleProtoHandler<StoreHandler>(
       p, handler, on_code_handler,
       // on_found_on_lookup_start_object
-      [=](TNode<PropertyDictionary> properties, TNode<IntPtrT> name_index) {
+      [=, this](TNode<PropertyDictionary> properties,
+                TNode<IntPtrT> name_index) {
         TNode<Uint32T> details = LoadDetailsByKeyIndex(properties, name_index);
         // Check that the property is a writable data property (no accessor).
         const int kTypeAndReadOnlyMask =
@@ -2063,13 +2070,13 @@ void AccessorAssembler::HandleStoreICProtoHandler(
       TNode<MaybeObject> maybe_context = Select<MaybeObject>(
           IsSetWord32<StoreHandler::DoAccessCheckOnLookupStartObjectBits>(
               handler_word),
-          [=] { return LoadHandlerDataField(handler, 3); },
-          [=] { return LoadHandlerDataField(handler, 2); });
+          [=, this] { return LoadHandlerDataField(handler, 3); },
+          [=, this] { return LoadHandlerDataField(handler, 2); });
 
       CSA_DCHECK(this, IsWeakOrCleared(maybe_context));
       TNode<Object> context = Select<Object>(
-          IsCleared(maybe_context), [=] { return SmiConstant(0); },
-          [=] { return GetHeapObjectAssumeWeak(maybe_context); });
+          IsCleared(maybe_context), [=, this] { return SmiConstant(0); },
+          [=, this] { return GetHeapObjectAssumeWeak(maybe_context); });
 
       TVARIABLE(Object, api_holder, p->receiver());
       Label store(this);
@@ -2166,7 +2173,7 @@ void AccessorAssembler::HandleStoreICSmiHandlerCase(TNode<Word32T> handler_word,
   BIND(&if_tagged_field);
   {
     Comment("store tagged field");
-    HandleStoreFieldAndReturn(handler_word, holder, value, base::nullopt,
+    HandleStoreFieldAndReturn(handler_word, holder, value, std::nullopt,
                               Representation::Tagged(), miss);
   }
 
@@ -2176,7 +2183,7 @@ void AccessorAssembler::HandleStoreICSmiHandlerCase(TNode<Word32T> handler_word,
     CheckHeapObjectTypeMatchesDescriptor(handler_word, holder, value, miss);
 
     Comment("store heap object field");
-    HandleStoreFieldAndReturn(handler_word, holder, value, base::nullopt,
+    HandleStoreFieldAndReturn(handler_word, holder, value, std::nullopt,
                               Representation::HeapObject(), miss);
   }
 
@@ -2186,7 +2193,7 @@ void AccessorAssembler::HandleStoreICSmiHandlerCase(TNode<Word32T> handler_word,
     GotoIfNot(TaggedIsSmi(value), miss);
 
     Comment("store smi field");
-    HandleStoreFieldAndReturn(handler_word, holder, value, base::nullopt,
+    HandleStoreFieldAndReturn(handler_word, holder, value, std::nullopt,
                               Representation::Smi(), miss);
   }
 
@@ -2217,15 +2224,30 @@ void AccessorAssembler::CheckHeapObjectTypeMatchesDescriptor(
          &done);
   TNode<IntPtrT> descriptor =
       Signed(DecodeWordFromWord32<StoreHandler::DescriptorBits>(handler_word));
-  TNode<MaybeObject> maybe_field_type =
+  TNode<MaybeObject> field_type =
       LoadDescriptorValueOrFieldType(LoadMap(holder), descriptor);
 
-  GotoIf(TaggedIsSmi(maybe_field_type), &done);
+  const Address kAnyType = FieldType::Any().ptr();
+  GotoIf(TaggedEqual(field_type, BitcastWordToTagged(IntPtrConstant(kAnyType))),
+         &done);
   // Check that value type matches the field type.
   {
-    TNode<HeapObject> field_type =
-        GetHeapObjectAssumeWeak(maybe_field_type, bailout);
-    Branch(TaggedEqual(LoadMap(CAST(value)), field_type), &done, bailout);
+    // If the type is None we want this check to fail too, thus we compare the
+    // maybe weak field type as is against a weak map ptr.
+#ifdef DEBUG
+    {
+      // Check the field type is None or a weak map.
+      Label check_done(this);
+      GotoIf(TaggedEqual(field_type, BitcastWordToTagged(IntPtrConstant(
+                                         FieldType::None().ptr()))),
+             &check_done);
+      CSA_DCHECK(this, IsMap(GetHeapObjectAssumeWeak(field_type)));
+      Goto(&check_done);
+      BIND(&check_done);
+    }
+#endif  // DEBUG
+    Branch(TaggedEqual(MakeWeak(LoadMap(CAST(value))), field_type), &done,
+           bailout);
   }
   BIND(&done);
 }
@@ -2266,7 +2288,7 @@ void AccessorAssembler::GotoIfNotSameNumberBitPattern(TNode<Float64T> left,
 
 void AccessorAssembler::HandleStoreFieldAndReturn(
     TNode<Word32T> handler_word, TNode<JSObject> holder, TNode<Object> value,
-    base::Optional<TNode<Float64T>> double_value, Representation representation,
+    std::optional<TNode<Float64T>> double_value, Representation representation,
     Label* miss) {
   bool store_value_as_double = representation.IsDouble();
 
@@ -2685,7 +2707,8 @@ void AccessorAssembler::EmitElementLoad(
         {
           Comment("FLOAT16_ELEMENTS");
           TNode<IntPtrT> index = WordShl(intptr_index, IntPtrConstant(1));
-          TNode<Float16T> raw_element = Load<Float16T>(data_ptr.value(), index);
+          TNode<Float16RawBitsT> raw_element =
+              Load<Float16RawBitsT>(data_ptr.value(), index);
           *var_double_value = ChangeFloat16ToFloat64(raw_element);
           Goto(rebox_double);
         }
@@ -2723,7 +2746,7 @@ void AccessorAssembler::EmitElementLoad(
 }
 
 void AccessorAssembler::InvalidateValidityCellIfPrototype(
-    TNode<Map> map, base::Optional<TNode<Uint32T>> maybe_bitfield3) {
+    TNode<Map> map, std::optional<TNode<Uint32T>> maybe_bitfield3) {
   Label is_prototype(this), cont(this);
   TNode<Uint32T> bitfield3;
   if (maybe_bitfield3) {
@@ -3527,7 +3550,7 @@ void AccessorAssembler::ScriptContextTableLookup(
   TVARIABLE(IntPtrT, context_index, IntPtrConstant(-1));
   Label loop(this, &context_index);
   TNode<IntPtrT> num_script_contexts = PositiveSmiUntag(CAST(LoadObjectField(
-      script_context_table, ScriptContextTable::kLengthOffset)));
+      script_context_table, offsetof(ScriptContextTable, length_))));
   Goto(&loop);
 
   BIND(&loop);
@@ -3933,7 +3956,7 @@ void AccessorAssembler::StoreGlobalIC(const StoreICParameters* pp) {
       StoreICParameters p(
           pp->context(),
           LoadContextElement(native_context, Context::GLOBAL_PROXY_INDEX),
-          pp->name(), pp->value(), base::nullopt, pp->slot(), pp->vector(),
+          pp->name(), pp->value(), std::nullopt, pp->slot(), pp->vector(),
           StoreICMode::kDefault);
 
       HandleStoreICHandlerCase(&p, handler, &miss, ICMode::kGlobalIC);
@@ -4534,7 +4557,8 @@ void AccessorAssembler::LookupContext(LazyNode<Object> lazy_name,
                                       TNode<TaggedIndex> depth,
                                       LazyNode<TaggedIndex> lazy_slot,
                                       TNode<Context> context,
-                                      TypeofMode typeof_mode) {
+                                      TypeofMode typeof_mode,
+                                      ContextKind context_kind) {
   Label slowpath(this, Label::kDeferred);
 
   // Check for context extensions to allow the fast path.
@@ -4545,7 +4569,10 @@ void AccessorAssembler::LookupContext(LazyNode<Object> lazy_name,
   // Fast path does a normal load context.
   {
     auto slot = lazy_slot();
-    Return(LoadContextElement(slot_context, TaggedIndexToIntPtr(slot)));
+    Return(
+        context_kind == ContextKind::kScriptContext
+            ? LoadScriptContextElement(slot_context, TaggedIndexToIntPtr(slot))
+            : LoadContextElement(slot_context, TaggedIndexToIntPtr(slot)));
   }
 
   // Slow path when we have to call out to the runtime.
@@ -4560,20 +4587,22 @@ void AccessorAssembler::LookupContext(LazyNode<Object> lazy_name,
 }
 
 void AccessorAssembler::GenerateLookupContextTrampoline(
-    TypeofMode typeof_mode) {
+    TypeofMode typeof_mode, ContextKind context_kind) {
   using Descriptor = LookupTrampolineDescriptor;
   LookupContext([&] { return Parameter<Object>(Descriptor::kName); },
                 Parameter<TaggedIndex>(Descriptor::kDepth),
                 [&] { return Parameter<TaggedIndex>(Descriptor::kSlot); },
-                Parameter<Context>(Descriptor::kContext), typeof_mode);
+                Parameter<Context>(Descriptor::kContext), typeof_mode,
+                context_kind);
 }
 
-void AccessorAssembler::GenerateLookupContextBaseline(TypeofMode typeof_mode) {
+void AccessorAssembler::GenerateLookupContextBaseline(
+    TypeofMode typeof_mode, ContextKind context_kind) {
   using Descriptor = LookupBaselineDescriptor;
   LookupContext([&] { return Parameter<Object>(Descriptor::kName); },
                 Parameter<TaggedIndex>(Descriptor::kDepth),
                 [&] { return Parameter<TaggedIndex>(Descriptor::kSlot); },
-                LoadContextFromBaseline(), typeof_mode);
+                LoadContextFromBaseline(), typeof_mode, context_kind);
 }
 
 void AccessorAssembler::LookupGlobalIC(
@@ -4648,12 +4677,12 @@ void AccessorAssembler::GenerateEnumeratedKeyedLoadIC() {
 
   auto receiver = Parameter<Object>(Descriptor::kReceiver);
   auto name = Parameter<Object>(Descriptor::kName);
-  auto enum_index = Parameter<TaggedIndex>(Descriptor::kEnumIndex);
+  auto enum_index = Parameter<Smi>(Descriptor::kEnumIndex);
   auto cache_type = Parameter<Object>(Descriptor::kCacheType);
   auto slot = Parameter<TaggedIndex>(Descriptor::kSlot);
   auto vector = Parameter<HeapObject>(Descriptor::kVector);
   auto context = Parameter<Context>(Descriptor::kContext);
-  auto lookup_start_object = base::nullopt;
+  auto lookup_start_object = std::nullopt;
 
   LoadICParameters p(context, receiver, name, slot, vector, lookup_start_object,
                      enum_index, cache_type);
@@ -4702,7 +4731,7 @@ void AccessorAssembler::GenerateEnumeratedKeyedLoadICBaseline() {
 
   auto receiver = Parameter<Object>(Descriptor::kReceiver);
   auto name = Parameter<Object>(Descriptor::kName);
-  auto enum_index = Parameter<TaggedIndex>(Descriptor::kEnumIndex);
+  auto enum_index = Parameter<Smi>(Descriptor::kEnumIndex);
   auto cache_type = Parameter<Object>(Descriptor::kCacheType);
   auto slot = Parameter<TaggedIndex>(Descriptor::kSlot);
   TNode<FeedbackVector> vector = LoadFeedbackVectorFromBaseline();
@@ -4744,11 +4773,11 @@ void AccessorAssembler::GenerateStoreGlobalIC() {
   auto name = Parameter<Object>(Descriptor::kName);
   auto value = Parameter<Object>(Descriptor::kValue);
   auto slot = Parameter<TaggedIndex>(Descriptor::kSlot);
-  auto flags = base::nullopt;
+  auto flags = std::nullopt;
   auto vector = Parameter<HeapObject>(Descriptor::kVector);
   auto context = Parameter<Context>(Descriptor::kContext);
 
-  StoreICParameters p(context, base::nullopt, name, value, flags, slot, vector,
+  StoreICParameters p(context, std::nullopt, name, value, flags, slot, vector,
                       StoreICMode::kDefault);
   StoreGlobalIC(&p);
 }
@@ -4783,7 +4812,7 @@ void AccessorAssembler::GenerateStoreIC() {
   auto receiver = Parameter<Object>(Descriptor::kReceiver);
   auto name = Parameter<Object>(Descriptor::kName);
   auto value = Parameter<Object>(Descriptor::kValue);
-  auto flags = base::nullopt;
+  auto flags = std::nullopt;
   auto slot = Parameter<TaggedIndex>(Descriptor::kSlot);
   auto vector = Parameter<HeapObject>(Descriptor::kVector);
   auto context = Parameter<Context>(Descriptor::kContext);
@@ -4799,7 +4828,7 @@ void AccessorAssembler::GenerateStoreIC_Megamorphic() {
   auto receiver = Parameter<Object>(Descriptor::kReceiver);
   auto name = Parameter<Object>(Descriptor::kName);
   auto value = Parameter<Object>(Descriptor::kValue);
-  auto flags = base::nullopt;
+  auto flags = std::nullopt;
   auto slot = Parameter<TaggedIndex>(Descriptor::kSlot);
   auto vector = Parameter<HeapObject>(Descriptor::kVector);
   auto context = Parameter<Context>(Descriptor::kContext);
@@ -4877,7 +4906,7 @@ void AccessorAssembler::GenerateDefineNamedOwnIC() {
   auto receiver = Parameter<Object>(Descriptor::kReceiver);
   auto name = Parameter<Object>(Descriptor::kName);
   auto value = Parameter<Object>(Descriptor::kValue);
-  auto flags = base::nullopt;
+  auto flags = std::nullopt;
   auto slot = Parameter<TaggedIndex>(Descriptor::kSlot);
   auto vector = Parameter<HeapObject>(Descriptor::kVector);
   auto context = Parameter<Context>(Descriptor::kContext);
@@ -4923,7 +4952,7 @@ void AccessorAssembler::GenerateKeyedStoreIC() {
   auto receiver = Parameter<Object>(Descriptor::kReceiver);
   auto name = Parameter<Object>(Descriptor::kName);
   auto value = Parameter<Object>(Descriptor::kValue);
-  auto flags = base::nullopt;
+  auto flags = std::nullopt;
   auto slot = Parameter<TaggedIndex>(Descriptor::kSlot);
   auto vector = Parameter<HeapObject>(Descriptor::kVector);
   auto context = Parameter<Context>(Descriptor::kContext);
@@ -5027,7 +5056,7 @@ void AccessorAssembler::GenerateStoreInArrayLiteralIC() {
   auto array = Parameter<Object>(Descriptor::kReceiver);
   auto index = Parameter<Object>(Descriptor::kName);
   auto value = Parameter<Object>(Descriptor::kValue);
-  auto flags = base::nullopt;
+  auto flags = std::nullopt;
   auto slot = Parameter<TaggedIndex>(Descriptor::kSlot);
   auto vector = Parameter<HeapObject>(Descriptor::kVector);
   auto context = Parameter<Context>(Descriptor::kContext);
@@ -5124,7 +5153,7 @@ void AccessorAssembler::GenerateCloneObjectIC_Slow() {
   // similar here?
   ForEachEnumerableOwnProperty(
       context, source_map, CAST(source), kPropertyAdditionOrder,
-      [=](TNode<Name> key, LazyNode<Object> value) {
+      [=, this](TNode<Name> key, LazyNode<Object> value) {
         CreateDataProperty(context, result, key, value());
       },
       &runtime_copy);
@@ -5214,6 +5243,7 @@ void AccessorAssembler::GenerateCloneObjectIC() {
     // Handlers for the CloneObjectIC stub are weak references to the Map of
     // a result object.
     result_map = CAST(GetHeapObjectAssumeWeak(var_handler.value(), &miss));
+    GotoIf(IsDeprecatedMap(result_map.value()), &miss);
     Goto(&if_result_map);
   }
 
@@ -5222,103 +5252,15 @@ void AccessorAssembler::GenerateCloneObjectIC() {
     BIND(&if_result_map);
     Comment("CloneObjectIC_if_result_map");
 
-    // Next to the trivial case above the IC supports only JSObjects.
-    // TODO(olivf): To support JSObjects other than JS_OBJECT_TYPE we need to
-    // initialize the the in-object properties below in
-    // `AllocateJSObjectFromMap`.
-    CSA_DCHECK(this, InstanceTypeEqual(LoadMapInstanceType(source_map),
-                                       JS_OBJECT_TYPE));
-    CSA_DCHECK(this, IsStrong(TNode<MaybeObject>(result_map.value())));
-    CSA_DCHECK(this, InstanceTypeEqual(LoadMapInstanceType(result_map.value()),
-                                       JS_OBJECT_TYPE));
-
-    TVARIABLE(HeapObject, var_properties, EmptyFixedArrayConstant());
-    TVARIABLE(FixedArray, var_elements, EmptyFixedArrayConstant());
-
-    // The IC fast case should only be taken if the result map a compatible
-    // elements kind with the source object.
-    TNode<FixedArrayBase> source_elements = LoadElements(CAST(source));
-
-    auto flag = ExtractFixedArrayFlag::kAllFixedArraysDontCopyCOW;
-    var_elements = CAST(CloneFixedArray(source_elements, flag));
-
-    Label allocate_object(this);
-    // Copy the PropertyArray backing store. The source PropertyArray must be
-    // either an Smi, or a PropertyArray.
-    // FIXME: Make a CSA macro for this
-    TNode<Object> source_properties =
-        LoadObjectField(CAST(source), JSObject::kPropertiesOrHashOffset);
-    {
-      GotoIf(TaggedIsSmi(source_properties), &allocate_object);
-      GotoIf(IsEmptyFixedArray(source_properties), &allocate_object);
-
-      // This IC requires that the source object has fast properties.
-      TNode<PropertyArray> source_property_array = CAST(source_properties);
-
-      TNode<IntPtrT> length = LoadPropertyArrayLength(source_property_array);
-      GotoIf(IntPtrEqual(length, IntPtrConstant(0)), &allocate_object);
-
-      TNode<PropertyArray> property_array = AllocatePropertyArray(length);
-      FillPropertyArrayWithUndefined(property_array, IntPtrConstant(0), length);
-      CopyPropertyArrayValues(source_property_array, property_array, length,
-                              SKIP_WRITE_BARRIER, DestroySource::kNo);
-      var_properties = property_array;
-    }
-
-    Goto(&allocate_object);
-    BIND(&allocate_object);
-
-    // Both maps need to be in the same slack tracking state or the unused
-    // fields will be wrongly initialized.
-    static_assert(Map::kNoSlackTracking == 0);
-    CSA_DCHECK(this,
-               Word32Equal(IsSetWord32<Map::Bits3::ConstructionCounterBits>(
-                               LoadMapBitField3(source_map)),
-                           IsSetWord32<Map::Bits3::ConstructionCounterBits>(
-                               LoadMapBitField3(result_map.value()))));
-    TNode<JSObject> object = UncheckedCast<JSObject>(AllocateJSObjectFromMap(
-        result_map.value(), var_properties.value(), var_elements.value(),
-        AllocationFlag::kNone,
-        SlackTrackingMode::kDontInitializeInObjectProperties));
-
-    // Lastly, clone any in-object properties.
-    TNode<IntPtrT> source_start =
-        LoadMapInobjectPropertiesStartInWords(source_map);
-    TNode<IntPtrT> result_start =
-        LoadMapInobjectPropertiesStartInWords(result_map.value());
-    TNode<IntPtrT> result_size = LoadMapInstanceSizeInWords(result_map.value());
-    TNode<IntPtrT> field_offset_difference =
-        TimesTaggedSize(IntPtrSub(result_start, source_start));
-#ifdef DEBUG
-    TNode<IntPtrT> source_size = LoadMapInstanceSizeInWords(source_map);
-    CSA_DCHECK(this, IntPtrGreaterThanOrEqual(
-                         IntPtrSub(source_size, field_offset_difference),
-                         result_size));
-#endif
-
-    // Just copy the fields as raw data (pretending that there are no mutable
-    // HeapNumbers). This doesn't need write barriers.
-    BuildFastLoop<IntPtrT>(
-        result_start, result_size,
-        [=](TNode<IntPtrT> field_index) {
-          TNode<IntPtrT> field_offset = TimesTaggedSize(field_index);
-          TNode<TaggedT> field =
-              LoadObjectField<TaggedT>(CAST(source), field_offset);
-          TNode<IntPtrT> result_offset =
-              IntPtrSub(field_offset, field_offset_difference);
-          StoreObjectFieldNoWriteBarrier(object, result_offset, field);
+    TNode<Object> object = FastCloneJSObject(
+        CAST(source), source_map, result_map.value(),
+        [&](TNode<Map> map, TNode<HeapObject> properties,
+            TNode<FixedArray> elements) {
+          return UncheckedCast<JSObject>(AllocateJSObjectFromMap(
+              map, properties, elements, AllocationFlag::kNone,
+              SlackTrackingMode::kDontInitializeInObjectProperties));
         },
-        1, LoopUnrollingMode::kYes, IndexAdvanceMode::kPost);
-
-    // We need to go through the {object} again here and properly clone them. We
-    // use a second loop here to ensure that the GC (and heap verifier) always
-    // sees properly initialized objects, i.e. never hits undefined values in
-    // double fields.
-    TNode<IntPtrT> start_offset = TimesTaggedSize(result_start);
-    TNode<IntPtrT> end_offset =
-        IntPtrAdd(TimesTaggedSize(result_size), field_offset_difference);
-    ConstructorBuiltinsAssembler(state()).CopyMutableHeapNumbersInObject(
-        object, start_offset, end_offset);
+        true /* target_is_new */);
 
     Return(object);
   }
@@ -5458,6 +5400,8 @@ void AccessorAssembler::BranchIfPrototypesHaveNoElements(
 
 #undef LOAD_KIND
 #undef STORE_KIND
+
+#include "src/codegen/undef-code-stub-assembler-macros.inc"
 
 }  // namespace internal
 }  // namespace v8

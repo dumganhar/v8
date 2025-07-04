@@ -5,6 +5,8 @@
 #ifndef V8_LOGGING_RUNTIME_CALL_STATS_H_
 #define V8_LOGGING_RUNTIME_CALL_STATS_H_
 
+#include <optional>
+
 #include "src/base/macros.h"
 
 #ifdef V8_RUNTIME_CALL_STATS
@@ -132,6 +134,7 @@ class RuntimeCallTimer final {
   V(AccessorPair_New)                                      \
   V(ArrayBuffer_Cast)                                      \
   V(ArrayBuffer_Detach)                                    \
+  V(ArrayBuffer_MaybeNew)                                  \
   V(ArrayBuffer_New)                                       \
   V(ArrayBuffer_NewBackingStore)                           \
   V(ArrayBuffer_BackingStore_Reallocate)                   \
@@ -150,7 +153,6 @@ class RuntimeCallTimer final {
   V(Context_NewRemoteContext)                              \
   V(DataView_New)                                          \
   V(Date_New)                                              \
-  V(Date_NumberValue)                                      \
   V(Date_Parse)                                            \
   V(Debug_Call)                                            \
   V(debug_GetPrivateMembers)                               \
@@ -328,7 +330,7 @@ class RuntimeCallTimer final {
   ADD_THREAD_SPECIFIC_COUNTER(V, Compile, Script)                             \
   ADD_THREAD_SPECIFIC_COUNTER(V, Compile, CompileTask)                        \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, AllocateFPRegisters)               \
-  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, AllocateSIMD128Registers)          \
+  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, AllocateSimd128Registers)          \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, AllocateGeneralRegisters)          \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, AssembleCode)                      \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, AssignSpillSlots)                  \
@@ -362,7 +364,7 @@ class RuntimeCallTimer final {
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, MeetRegisterConstraints)           \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, MemoryOptimization)                \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, OptimizeMoves)                     \
-  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, PopulatePointerMaps)               \
+  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, PopulateReferenceMaps)             \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, PrintGraph)                        \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, PrintTurboshaftGraph)              \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, ResolveControlFlow)                \
@@ -375,10 +377,12 @@ class RuntimeCallTimer final {
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, SimplifiedLowering)                \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, SimplifyLoops)                     \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TraceScheduleAndVerify)            \
+  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftBlockInstrumentation)    \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftBuildGraph)              \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize,                                    \
                               TurboshaftCodeEliminationAndSimplification)     \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftCsaBranchElimination)    \
+  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftWasmInJSInlining)        \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize,                                    \
                               TurboshaftCsaEarlyMachineOptimization)          \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftCsaLateEscapeAnalysis)   \
@@ -395,8 +399,8 @@ class RuntimeCallTimer final {
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftMachineLowering)         \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftMaglevGraphBuilding)     \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftOptimize)                \
+  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftProfileApplication)      \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftRecreateSchedule)        \
-  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftSimplifiedLowering)      \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftSpecialRPOScheduling)    \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftStoreStoreElimination)   \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftTagUntagLowering)        \
@@ -598,7 +602,7 @@ enum RuntimeCallCounterId {
 #define CALL_RUNTIME_COUNTER(name, nargs, ressize) kRuntime_##name,
           FOR_EACH_INTRINSIC(CALL_RUNTIME_COUNTER)
 #undef CALL_RUNTIME_COUNTER
-#define CALL_BUILTIN_COUNTER(name) kBuiltin_##name,
+#define CALL_BUILTIN_COUNTER(name, Argc) kBuiltin_##name,
               BUILTIN_LIST_C(CALL_BUILTIN_COUNTER)
 #undef CALL_BUILTIN_COUNTER
 #define CALL_BUILTIN_COUNTER(name) kAPI_##name,
@@ -718,7 +722,7 @@ class WorkerThreadRuntimeCallStats final {
  private:
   base::Mutex mutex_;
   std::vector<std::unique_ptr<RuntimeCallStats>> tables_;
-  base::Optional<base::Thread::LocalStorageKey> tls_key_;
+  std::optional<base::Thread::LocalStorageKey> tls_key_;
   // Since this is for creating worker thread runtime-call stats, record the
   // main thread ID to ensure we never create a worker RCS table for the main
   // thread.

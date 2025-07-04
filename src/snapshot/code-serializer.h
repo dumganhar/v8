@@ -66,8 +66,8 @@ class CodeSerializer : public Serializer {
 
    private:
     friend class CodeSerializer;
-    MaybeHandle<SharedFunctionInfo> maybe_result;
-    std::vector<Handle<Script>> scripts;
+    MaybeIndirectHandle<SharedFunctionInfo> maybe_result;
+    std::vector<IndirectHandle<Script>> scripts;
     std::unique_ptr<PersistentHandles> persistent_handles;
     SerializedCodeSanityCheckResult sanity_check_result;
   };
@@ -80,10 +80,10 @@ class CodeSerializer : public Serializer {
   AlignedCachedData* SerializeSharedFunctionInfo(
       Handle<SharedFunctionInfo> info);
 
-  V8_WARN_UNUSED_RESULT static MaybeHandle<SharedFunctionInfo> Deserialize(
-      Isolate* isolate, AlignedCachedData* cached_data, Handle<String> source,
-      const ScriptDetails& script_details,
-      MaybeHandle<Script> maybe_cached_script = {});
+  V8_WARN_UNUSED_RESULT static MaybeDirectHandle<SharedFunctionInfo>
+  Deserialize(Isolate* isolate, AlignedCachedData* cached_data,
+              Handle<String> source, const ScriptDetails& script_details,
+              MaybeHandle<Script> maybe_cached_script = {});
 
   V8_WARN_UNUSED_RESULT static OffThreadDeserializeData
   StartDeserializeOffThread(LocalIsolate* isolate,
@@ -92,7 +92,7 @@ class CodeSerializer : public Serializer {
   V8_WARN_UNUSED_RESULT static MaybeHandle<SharedFunctionInfo>
   FinishOffThreadDeserialize(
       Isolate* isolate, OffThreadDeserializeData&& data,
-      AlignedCachedData* cached_data, Handle<String> source,
+      AlignedCachedData* cached_data, DirectHandle<String> source,
       const ScriptDetails& script_details,
       BackgroundMergeTask* background_merge_task = nullptr);
 
@@ -152,7 +152,7 @@ class SerializedCodeData : public SerializedData {
 
   base::Vector<const uint8_t> Payload() const;
 
-  static uint32_t SourceHash(Handle<String> source,
+  static uint32_t SourceHash(DirectHandle<String> source,
                              ScriptOriginOptions origin_options);
 
  private:

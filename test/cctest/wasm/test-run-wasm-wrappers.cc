@@ -17,8 +17,9 @@ namespace test_run_wasm_wrappers {
 
 using testing::CompileAndInstantiateForTesting;
 
-#if V8_COMPRESS_POINTERS && (V8_TARGET_ARCH_X64 || V8_TARGET_ARCH_ARM64 || \
-                             V8_TARGET_ARCH_IA32 || V8_TARGET_ARCH_ARM)
+#if V8_COMPRESS_POINTERS &&                                               \
+    (V8_TARGET_ARCH_X64 || V8_TARGET_ARCH_ARM64 || V8_TARGET_ARCH_IA32 || \
+     V8_TARGET_ARCH_ARM || V8_TARGET_ARCH_LOONG64)
 namespace {
 Handle<WasmInstanceObject> CompileModule(Zone* zone, Isolate* isolate,
                                          WasmModuleBuilder* builder) {
@@ -49,10 +50,11 @@ Handle<Object> SmiHandle(Isolate* isolate, int value) {
 void SmiCall(Isolate* isolate, Handle<WasmExportedFunction> exported_function,
              int argc, Handle<Object>* argv, int expected_result) {
   Handle<Object> receiver = isolate->factory()->undefined_value();
-  Handle<Object> result =
+  DirectHandle<Object> result =
       Execution::Call(isolate, exported_function, receiver, argc, argv)
           .ToHandleChecked();
-  CHECK(IsSmi(*result) && Smi::ToInt(*result) == expected_result);
+  CHECK(IsSmi(*result));
+  CHECK_EQ(expected_result, Smi::ToInt(*result));
 }
 
 void Cleanup() {
@@ -82,9 +84,7 @@ TEST(WrapperBudget) {
     TestSignatures sigs;
     WasmFunctionBuilder* f = builder->AddFunction(sigs.i_ii());
     f->builder()->AddExport(base::CStrVector("main"), f);
-    uint8_t code[] = {WASM_I32_MUL(WASM_LOCAL_GET(0), WASM_LOCAL_GET(1)),
-                      WASM_END};
-    f->EmitCode(code, sizeof(code));
+    f->EmitCode({WASM_I32_MUL(WASM_LOCAL_GET(0), WASM_LOCAL_GET(1)), WASM_END});
 
     // Compile the module.
     Handle<WasmInstanceObject> instance =
@@ -94,8 +94,8 @@ TEST(WrapperBudget) {
     Handle<WasmExportedFunction> main_export =
         testing::GetExportedFunction(isolate, instance, "main")
             .ToHandleChecked();
-    Handle<WasmExportedFunctionData> main_function_data =
-        handle(main_export->shared()->wasm_exported_function_data(), isolate);
+    DirectHandle<WasmExportedFunctionData> main_function_data(
+        main_export->shared()->wasm_exported_function_data(), isolate);
 
     // Check that the generic-wrapper budget has initially a value of
     // kGenericWrapperBudget.
@@ -131,8 +131,7 @@ TEST(WrapperReplacement) {
     TestSignatures sigs;
     WasmFunctionBuilder* f = builder->AddFunction(sigs.i_i());
     f->builder()->AddExport(base::CStrVector("main"), f);
-    uint8_t code[] = {WASM_LOCAL_GET(0), WASM_END};
-    f->EmitCode(code, sizeof(code));
+    f->EmitCode({WASM_LOCAL_GET(0), WASM_END});
 
     // Compile the module.
     Handle<WasmInstanceObject> instance =
@@ -142,8 +141,8 @@ TEST(WrapperReplacement) {
     Handle<WasmExportedFunction> main_export =
         testing::GetExportedFunction(isolate, instance, "main")
             .ToHandleChecked();
-    Handle<WasmExportedFunctionData> main_function_data =
-        handle(main_export->shared()->wasm_exported_function_data(), isolate);
+    DirectHandle<WasmExportedFunctionData> main_function_data(
+        main_export->shared()->wasm_exported_function_data(), isolate);
 
     // Check that the generic-wrapper budget has initially a value of
     // kGenericWrapperBudget.
@@ -160,11 +159,11 @@ TEST(WrapperReplacement) {
 
     // Call the exported Wasm function as many times as required to almost
     // exhaust the remaining budget for using the generic wrapper.
-    Handle<Code> wrapper_before_call;
+    DirectHandle<Code> wrapper_before_call;
     for (int i = remaining_budget; i > 0; --i) {
       // Verify that the wrapper to be used is the generic one.
       wrapper_before_call =
-          handle(main_function_data->wrapper_code(isolate), isolate);
+          direct_handle(main_function_data->wrapper_code(isolate), isolate);
       CHECK(IsGeneric(*wrapper_before_call));
       // Call the function.
       Handle<Object> params[1] = {SmiHandle(isolate, i)};
@@ -209,18 +208,15 @@ TEST(EagerWrapperReplacement) {
     TestSignatures sigs;
     WasmFunctionBuilder* add = builder->AddFunction(sigs.i_ii());
     add->builder()->AddExport(base::CStrVector("add"), add);
-    uint8_t add_code[] = {WASM_I32_ADD(WASM_LOCAL_GET(0), WASM_LOCAL_GET(1)),
-                          WASM_END};
-    add->EmitCode(add_code, sizeof(add_code));
+    add->EmitCode(
+        {WASM_I32_ADD(WASM_LOCAL_GET(0), WASM_LOCAL_GET(1)), WASM_END});
     WasmFunctionBuilder* mult = builder->AddFunction(sigs.i_ii());
     mult->builder()->AddExport(base::CStrVector("mult"), mult);
-    uint8_t mult_code[] = {WASM_I32_MUL(WASM_LOCAL_GET(0), WASM_LOCAL_GET(1)),
-                           WASM_END};
-    mult->EmitCode(mult_code, sizeof(mult_code));
+    mult->EmitCode(
+        {WASM_I32_MUL(WASM_LOCAL_GET(0), WASM_LOCAL_GET(1)), WASM_END});
     WasmFunctionBuilder* id = builder->AddFunction(sigs.i_i());
     id->builder()->AddExport(base::CStrVector("id"), id);
-    uint8_t id_code[] = {WASM_LOCAL_GET(0), WASM_END};
-    id->EmitCode(id_code, sizeof(id_code));
+    id->EmitCode({WASM_LOCAL_GET(0), WASM_END});
 
     // Compile the module.
     Handle<WasmInstanceObject> instance =
@@ -237,12 +233,12 @@ TEST(EagerWrapperReplacement) {
         testing::GetExportedFunction(isolate, instance, "id").ToHandleChecked();
 
     // Get the function data for all exported functions.
-    Handle<WasmExportedFunctionData> add_function_data =
-        handle(add_export->shared()->wasm_exported_function_data(), isolate);
-    Handle<WasmExportedFunctionData> mult_function_data =
-        handle(mult_export->shared()->wasm_exported_function_data(), isolate);
-    Handle<WasmExportedFunctionData> id_function_data =
-        handle(id_export->shared()->wasm_exported_function_data(), isolate);
+    DirectHandle<WasmExportedFunctionData> add_function_data(
+        add_export->shared()->wasm_exported_function_data(), isolate);
+    DirectHandle<WasmExportedFunctionData> mult_function_data(
+        mult_export->shared()->wasm_exported_function_data(), isolate);
+    DirectHandle<WasmExportedFunctionData> id_function_data(
+        id_export->shared()->wasm_exported_function_data(), isolate);
 
     // Set the remaining generic-wrapper budget for add to 1,
     // so that the next call to it will cause the function to tier up.
@@ -317,8 +313,7 @@ TEST(WrapperReplacement_IndirectExport) {
     // Define a Wasm function, but do not add it to the exports.
     TestSignatures sigs;
     WasmFunctionBuilder* f = builder->AddFunction(sigs.i_i());
-    uint8_t code[] = {WASM_LOCAL_GET(0), WASM_END};
-    f->EmitCode(code, sizeof(code));
+    f->EmitCode({WASM_LOCAL_GET(0), WASM_END});
     uint32_t function_index = f->func_index();
 
     // Export a table of indirect functions.
@@ -333,24 +328,23 @@ TEST(WrapperReplacement_IndirectExport) {
         WasmModuleBuilder::WasmElemSegment::kRelativeToImports);
 
     // Compile the module.
-    Handle<WasmInstanceObject> instance =
+    DirectHandle<WasmInstanceObject> instance =
         CompileModule(&zone, isolate, builder);
 
     // Get the exported table.
-    Handle<WasmTableObject> table(
-        WasmTableObject::cast(
+    DirectHandle<WasmTableObject> table(
+        Cast<WasmTableObject>(
             instance->trusted_data(isolate)->tables()->get(table_index)),
         isolate);
     // Get the Wasm function through the exported table.
-    Handle<WasmFuncRef> func_ref = Handle<WasmFuncRef>::cast(
-        WasmTableObject::Get(isolate, table, function_index));
-    Handle<WasmInternalFunction> internal_function{func_ref->internal(isolate),
-                                                   isolate};
-    Handle<WasmExportedFunction> indirect_function =
-        Handle<WasmExportedFunction>::cast(
-            WasmInternalFunction::GetOrCreateExternal(internal_function));
+    DirectHandle<WasmFuncRef> func_ref =
+        Cast<WasmFuncRef>(WasmTableObject::Get(isolate, table, function_index));
+    DirectHandle<WasmInternalFunction> internal_function{
+        func_ref->internal(isolate), isolate};
+    Handle<WasmExportedFunction> indirect_function = Cast<WasmExportedFunction>(
+        WasmInternalFunction::GetOrCreateExternal(internal_function));
     // Get the function data.
-    Handle<WasmExportedFunctionData> indirect_function_data(
+    DirectHandle<WasmExportedFunctionData> indirect_function_data(
         indirect_function->shared()->wasm_exported_function_data(), isolate);
 
     // Verify that the generic-wrapper budget has initially a value of
@@ -374,6 +368,80 @@ TEST(WrapperReplacement_IndirectExport) {
     CHECK(IsSpecific(indirect_function_data->wrapper_code(isolate)));
   }
   Cleanup();
+}
+
+TEST(JSToWasmWrapperGarbageCollection) {
+  Isolate* isolate = CcTest::InitIsolateOnce();
+  auto NumCompiledJSToWasmWrappers = [isolate]() {
+    int num_wrappers = 0;
+    Tagged<WeakFixedArray> wrappers = isolate->heap()->js_to_wasm_wrappers();
+    for (int i = 0, e = wrappers->length(); i < e; ++i) {
+      // Entries are either weak code wrappers, cleared entries, or undefined.
+      Tagged<MaybeObject> maybe_wrapper = wrappers->get(i);
+      if (maybe_wrapper.IsCleared()) continue;
+      CHECK(maybe_wrapper.IsWeak());
+      CHECK(IsCodeWrapper(maybe_wrapper.GetHeapObjectAssumeWeak()));
+      Tagged<Code> code =
+          Cast<CodeWrapper>(maybe_wrapper.GetHeapObjectAssumeWeak())
+              ->code(isolate);
+      CHECK_EQ(CodeKind::JS_TO_WASM_FUNCTION, code->kind());
+      ++num_wrappers;
+    }
+    return num_wrappers;
+  };
+
+  {
+    // Initialize the environment and create a module builder.
+    AccountingAllocator allocator;
+    Zone zone{&allocator, ZONE_NAME};
+    HandleScope scope{isolate};
+    WasmModuleBuilder builder{&zone};
+
+    // Define an exported Wasm function.
+    TestSignatures sigs;
+    WasmFunctionBuilder* f = builder.AddFunction(sigs.i_v());
+    builder.AddExport(base::CStrVector("main"), f);
+    f->EmitCode({WASM_ONE, WASM_END});
+
+    // Before compilation there should be no compiled wrappers.
+    CHECK_EQ(0, NumCompiledJSToWasmWrappers());
+
+    // Compile the module.
+    Handle<WasmInstanceObject> instance =
+        CompileModule(&zone, isolate, &builder);
+
+    // If the generic wrapper is disabled, this should have compiled a wrapper.
+    CHECK_EQ(v8_flags.wasm_generic_wrapper ? 0 : 1,
+             NumCompiledJSToWasmWrappers());
+
+    // Get the exported function and the function data.
+    Handle<WasmExportedFunction> main_function =
+        testing::GetExportedFunction(isolate, instance, "main")
+            .ToHandleChecked();
+    Handle<WasmExportedFunctionData> main_function_data(
+        main_function->shared()->wasm_exported_function_data(), isolate);
+
+    // Set the remaining generic-wrapper budget for add to 1,
+    // so that the next call to it will cause the function to tier up.
+    main_function_data->wrapper_budget()->set_value(Smi::FromInt(1));
+
+    // Call the Wasm function.
+    SmiCall(isolate, main_function, 0, nullptr, 1);
+
+    // There should be exactly one compiled wrapper now.
+    CHECK_EQ(1, NumCompiledJSToWasmWrappers());
+  }
+
+  // After GC all compiled wrappers must be cleared again.
+  {
+    // Disable stack scanning in case CSS is being used to prevent references
+    // that leaked to the C++ stack from keeping the wrapper alive.
+    DisableConservativeStackScanningScopeForTesting no_stack_scanning(
+        isolate->heap());
+    Cleanup();
+  }
+
+  CHECK_EQ(0, NumCompiledJSToWasmWrappers());
 }
 #endif
 

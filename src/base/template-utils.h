@@ -53,13 +53,8 @@ struct pass_value_or_ref {
                                          decay_t, const decay_t&>::type;
 };
 
-// Uses expression SFINAE to detect whether using operator<< would work.
-template <typename T, typename TStream = std::ostream, typename = void>
-struct has_output_operator : std::false_type {};
-template <typename T, typename TStream>
-struct has_output_operator<
-    T, TStream, decltype(void(std::declval<TStream&>() << std::declval<T>()))>
-    : std::true_type {};
+template <typename T, typename TStream = std::ostream>
+concept has_output_operator = requires(T t, TStream stream) { stream << t; };
 
 // Turn std::tuple<A...> into std::tuple<A..., T>.
 template <class Tuple, class T>
@@ -94,6 +89,32 @@ constexpr auto tuple_for_each_with_index_impl(const Tuple& tpl,
                                               std::index_sequence<Index...>) {
   (function(std::get<Index>(tpl), std::integral_constant<size_t, Index>()),
    ...);
+}
+
+template <typename Tuple, typename Function, size_t... Index>
+constexpr auto tuple_map_impl(Tuple&& tpl, const Function& function,
+                              std::index_sequence<Index...>) {
+  return std::make_tuple(
+      function(std::get<Index>(std::forward<Tuple>(tpl)))...);
+}
+
+template <typename TupleV, typename TupleU, typename Function, size_t... Index>
+constexpr auto tuple_map2_impl(TupleV&& tplv, TupleU&& tplu,
+                               const Function& function,
+                               std::index_sequence<Index...>) {
+  return std::make_tuple(
+      function(std::get<Index>(tplv), std::get<Index>(tplu))...);
+}
+
+template <size_t I, typename T, typename Tuple, typename Function>
+constexpr auto tuple_fold_impl(T&& initial, Tuple&& tpl, Function&& function) {
+  if constexpr (I == 0) {
+    return function(std::forward<T>(initial), std::get<0>(tpl));
+  } else {
+    return function(tuple_fold_impl<I - 1>(std::forward<T>(initial),
+                                           std::forward<Tuple>(tpl), function),
+                    std::get<I>(tpl));
+  }
 }
 
 }  // namespace detail
@@ -140,6 +161,34 @@ constexpr void tuple_for_each_with_index(Tuple&& tpl, Function&& function) {
       std::make_index_sequence<std::tuple_size_v<std::decay_t<Tuple>>>());
 }
 
+// Calls `function(v)` for each `v` in the tuple and returns a new tuple with
+// all the results.
+template <typename Tuple, typename Function>
+constexpr auto tuple_map(Tuple&& tpl, Function&& function) {
+  return detail::tuple_map_impl(
+      std::forward<Tuple>(tpl), function,
+      std::make_index_sequence<std::tuple_size_v<std::decay_t<Tuple>>>());
+}
+
+// Calls `function(v, u)` for pairs `v<I>, u<I>` in the
+// tuples and returns a new tuple with all the results.
+template <typename TupleV, typename TupleU, typename Function>
+constexpr auto tuple_map2(TupleV&& tplv, TupleU&& tplu, Function&& function) {
+  constexpr size_t S = std::tuple_size_v<std::decay_t<TupleV>>;
+  static_assert(S == std::tuple_size_v<std::decay_t<TupleU>>);
+  return detail::tuple_map2_impl(std::forward<TupleV>(tplv),
+                                 std::forward<TupleU>(tplu), function,
+                                 std::make_index_sequence<S>());
+}
+
+// Left fold (reduce) the tuple starting with an initial value by applying
+// function(...function(initial, tpl<0>)..., tpl<size-1>)
+template <typename T, typename Tuple, typename Function>
+constexpr auto tuple_fold(T&& initial, Tuple&& tpl, Function&& function) {
+  return detail::tuple_fold_impl<std::tuple_size_v<std::decay_t<Tuple>> - 1>(
+      std::forward<T>(initial), std::forward<Tuple>(tpl), function);
+}
+
 #ifdef __clang__
 
 template <size_t N, typename... Ts>
@@ -170,6 +219,12 @@ using nth_type_t = typename detail::nth_type<N, T...>::type;
 template <typename SearchT, typename... Ts>
 struct index_of_type;
 
+template <typename SearchT, typename... Ts>
+constexpr size_t index_of_type_v = index_of_type<SearchT, Ts...>::value;
+template <typename SearchT, typename... Ts>
+constexpr bool has_type_v =
+    index_of_type<SearchT, Ts...>::value < sizeof...(Ts);
+
 // Not found / empty list.
 template <typename SearchT>
 struct index_of_type<SearchT> : public std::integral_constant<size_t, 0> {};
@@ -179,7 +234,7 @@ template <typename SearchT, typename... Ts>
 struct index_of_type<SearchT, SearchT, Ts...>
     : public std::integral_constant<size_t, 0> {
   // SearchT is not allowed to be anywhere else in the list.
-  static_assert(index_of_type<SearchT, Ts...>::value == sizeof...(Ts));
+  static_assert(!has_type_v<SearchT, Ts...>);
 };
 
 // Recursion, SearchT not found at head of list.
@@ -188,9 +243,6 @@ struct index_of_type<SearchT, T, Ts...>
     : public std::integral_constant<size_t,
                                     1 + index_of_type<SearchT, Ts...>::value> {
 };
-
-template <typename SearchT, typename... Ts>
-constexpr size_t index_of_type_v = index_of_type<SearchT, Ts...>::value;
 
 }  // namespace base
 }  // namespace v8

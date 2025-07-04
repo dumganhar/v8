@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <set>
 #include <unordered_set>
 #include <utility>
@@ -21,7 +22,7 @@
 #include "src/common/globals.h"
 #include "src/heap/code-range.h"
 #include "src/heap/memory-chunk-metadata.h"
-#include "src/heap/mutable-page.h"
+#include "src/heap/mutable-page-metadata.h"
 #include "src/heap/spaces.h"
 #include "src/tasks/cancelable-task.h"
 #include "src/utils/allocation.h"
@@ -117,12 +118,6 @@ class MemoryAllocator {
     DCHECK_LT(0, commit_page_size_bits_);
     return commit_page_size_bits_;
   }
-
-  // Computes the memory area of discardable memory within a given memory area
-  // [addr, addr+size) and returns the result as base::AddressRegion. If the
-  // memory is not discardable base::AddressRegion is an empty region.
-  V8_EXPORT_PRIVATE static base::AddressRegion ComputeDiscardMemoryArea(
-      Address addr, size_t size);
 
   V8_EXPORT_PRIVATE MemoryAllocator(Isolate* isolate,
                                     v8::PageAllocator* code_page_allocator,
@@ -272,13 +267,13 @@ class MemoryAllocator {
 
   // Internal allocation method for all pages/memory chunks. Returns data about
   // the unintialized memory region.
-  V8_WARN_UNUSED_RESULT base::Optional<MemoryChunkAllocationResult>
+  V8_WARN_UNUSED_RESULT std::optional<MemoryChunkAllocationResult>
   AllocateUninitializedChunk(BaseSpace* space, size_t area_size,
                              Executability executable, PageSize page_size) {
     return AllocateUninitializedChunkAt(space, area_size, executable,
                                         kNullAddress, page_size);
   }
-  V8_WARN_UNUSED_RESULT base::Optional<MemoryChunkAllocationResult>
+  V8_WARN_UNUSED_RESULT std::optional<MemoryChunkAllocationResult>
   AllocateUninitializedChunkAt(BaseSpace* space, size_t area_size,
                                Executability executable, Address hint,
                                PageSize page_size);
@@ -319,7 +314,7 @@ class MemoryAllocator {
 
   // See AllocatePage for public interface. Note that currently we only
   // support pools for NOT_EXECUTABLE pages of size MemoryChunk::kPageSize.
-  base::Optional<MemoryChunkAllocationResult> AllocateUninitializedPageFromPool(
+  std::optional<MemoryChunkAllocationResult> AllocateUninitializedPageFromPool(
       Space* space);
 
   // Initializes pages in a chunk. Returns the first page address.
@@ -368,10 +363,10 @@ class MemoryAllocator {
 
   // Performs all necessary bookkeeping to free the memory, but does not free
   // it.
-  void UnregisterMemoryChunk(MutablePageMetadata* chunk);
-  void UnregisterSharedBasicMemoryChunk(MemoryChunkMetadata* chunk);
-  void UnregisterBasicMemoryChunk(MemoryChunkMetadata* chunk,
-                                  Executability executable = NOT_EXECUTABLE);
+  void UnregisterMutableMemoryChunk(MutablePageMetadata* chunk);
+  void UnregisterSharedMemoryChunk(MemoryChunkMetadata* chunk);
+  void UnregisterMemoryChunk(MemoryChunkMetadata* chunk,
+                             Executability executable = NOT_EXECUTABLE);
 
   void RegisterReadOnlyMemory(ReadOnlyPageMetadata* page);
 
@@ -432,7 +427,7 @@ class MemoryAllocator {
       static_cast<Address>(-1ll)};
   std::atomic<Address> highest_executable_ever_allocated_{kNullAddress};
 
-  base::Optional<VirtualMemory> reserved_chunk_at_virtual_memory_limit_;
+  std::optional<VirtualMemory> reserved_chunk_at_virtual_memory_limit_;
   Pool pool_;
   std::vector<MutablePageMetadata*> queued_pages_to_be_freed_;
 

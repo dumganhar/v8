@@ -20,6 +20,7 @@ namespace compiler {
   V(Arm64Ldrh)                                             \
   V(Arm64LdrQ)                                             \
   V(Arm64LdrS)                                             \
+  V(Arm64LdrH)                                             \
   V(Arm64Ldrsb)                                            \
   V(Arm64LdrsbW)                                           \
   V(Arm64Ldrsh)                                            \
@@ -42,6 +43,7 @@ namespace compiler {
   V(Arm64Strh)                                             \
   V(Arm64StrQ)                                             \
   V(Arm64StrS)                                             \
+  V(Arm64StrH)                                             \
   V(Arm64StrW)                                             \
   V(Arm64StrWPair)                                         \
   V(Arm64LdrDecompressTaggedSigned)                        \
@@ -66,6 +68,17 @@ namespace compiler {
   V(Arm64F32x4Pmin)                     \
   V(Arm64F32x4Pmax)                     \
   V(Arm64F32x4DemoteF64x2Zero)          \
+  V(Arm64F16x8Pmin)                     \
+  V(Arm64F16x8Pmax)                     \
+  V(Arm64F32x4PromoteLowF16x8)          \
+  V(Arm64F16x8SConvertI16x8)            \
+  V(Arm64F16x8UConvertI16x8)            \
+  V(Arm64F16x8DemoteF32x4Zero)          \
+  V(Arm64F16x8DemoteF64x2Zero)          \
+  V(Arm64I16x8SConvertF16x8)            \
+  V(Arm64I16x8UConvertF16x8)            \
+  V(Arm64F16x8Qfma)                     \
+  V(Arm64F16x8Qfms)                     \
   V(Arm64I64x2ShrU)                     \
   V(Arm64I64x2BitMask)                  \
   V(Arm64I32x4SConvertF32x4)            \
@@ -149,6 +162,12 @@ namespace compiler {
   V(Arm64I32x4DotI16x8S)                \
   V(Arm64I16x8DotI8x16S)                \
   V(Arm64I32x4DotI8x16AddS)             \
+  V(Arm64I8x16Addv)                     \
+  V(Arm64I16x8Addv)                     \
+  V(Arm64I32x4Addv)                     \
+  V(Arm64I64x2AddPair)                  \
+  V(Arm64F32x4AddReducePairwise)        \
+  V(Arm64F64x2AddPair)                  \
   V(Arm64I32x4TruncSatF64x2SZero)       \
   V(Arm64I32x4TruncSatF64x2UZero)       \
   V(Arm64IExtractLaneU)                 \
@@ -288,6 +307,10 @@ namespace compiler {
   V(Arm64Poke)                                       \
   V(Arm64PokePair)                                   \
   V(Arm64Peek)                                       \
+  V(Arm64Float16RoundDown)                           \
+  V(Arm64Float16RoundUp)                             \
+  V(Arm64Float16RoundTruncate)                       \
+  V(Arm64Float16RoundTiesEven)                       \
   V(Arm64Float32Cmp)                                 \
   V(Arm64Float32Add)                                 \
   V(Arm64Float32Sub)                                 \
@@ -325,6 +348,7 @@ namespace compiler {
   V(Arm64Float64SilenceNaN)                          \
   V(Arm64Float32ToFloat64)                           \
   V(Arm64Float64ToFloat32)                           \
+  V(Arm64Float64ToFloat16)                           \
   V(Arm64Float32ToInt32)                             \
   V(Arm64Float64ToInt32)                             \
   V(Arm64Float32ToUint32)                            \
@@ -343,7 +367,6 @@ namespace compiler {
   V(Arm64Uint64ToFloat64)                            \
   V(Arm64Float64ExtractLowWord32)                    \
   V(Arm64Float64ExtractHighWord32)                   \
-  V(Arm64Float64FromWord32Pair)                      \
   V(Arm64Float64InsertLowWord32)                     \
   V(Arm64Float64InsertHighWord32)                    \
   V(Arm64Float64MoveU64)                             \

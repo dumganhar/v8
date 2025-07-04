@@ -23,35 +23,95 @@ class StackCheckLoweringReducer : public Next {
  public:
   TURBOSHAFT_REDUCER_BOILERPLATE(StackCheckLowering)
 
-  OpIndex REDUCE(StackCheck)(StackCheckOp::Kind kind) {
-#ifdef V8_ENABLE_WEBASSEMBLY
-    if (kind == StackCheckOp::Kind::kWasmFunctionHeader &&
-        __ IsLeafFunction()) {
-      return OpIndex::Invalid();
+  V<None> REDUCE(JSStackCheck)(V<Context> context,
+                               OptionalV<FrameState> frame_state,
+                               JSStackCheckOp::Kind kind) {
+    switch (kind) {
+      case JSStackCheckOp::Kind::kFunctionEntry: {
+        // Loads of the stack limit should not be load-eliminated as it can be
+        // modified by another thread.
+        V<WordPtr> limit =
+            __ Load(__ ExternalConstant(
+                        ExternalReference::address_of_jslimit(isolate())),
+                    LoadOp::Kind::RawAligned().NotLoadEliminable(),
+                    MemoryRepresentation::UintPtr());
+
+        IF_NOT (LIKELY(__ StackPointerGreaterThan(
+                    limit, StackCheckKind::kJSFunctionEntry))) {
+          __ CallRuntime_StackGuardWithGap(isolate(), frame_state.value(),
+                                           context, __ StackCheckOffset());
+        }
+        break;
+      }
+      case JSStackCheckOp::Kind::kBuiltinEntry: {
+        V<WordPtr> stack_limit = __ LoadOffHeap(
+            __ ExternalConstant(
+                ExternalReference::address_of_jslimit(isolate())),
+            MemoryRepresentation::UintPtr());
+        IF_NOT (LIKELY(__ StackPointerGreaterThan(
+                    stack_limit, StackCheckKind::kCodeStubAssembler))) {
+          __ CallRuntime_StackGuard(isolate(), context);
+        }
+        break;
+      }
+      case JSStackCheckOp::Kind::kLoop: {
+        V<Word32> limit = __ Load(
+            __ ExternalConstant(
+                ExternalReference::address_of_no_heap_write_interrupt_request(
+                    isolate())),
+            LoadOp::Kind::RawAligned().NotLoadEliminable(),
+            MemoryRepresentation::Uint8());
+
+        IF_NOT (LIKELY(__ Word32Equal(limit, 0))) {
+          __ CallRuntime_HandleNoHeapWritesInterrupts(
+              isolate(), frame_state.value(), context);
+        }
+        break;
+      }
     }
-#endif  // V8_ENABLE_WEBASSEMBLY
+
+    return V<None>::Invalid();
+  }
+
+#ifdef V8_ENABLE_WEBASSEMBLY
+  V<None> REDUCE(WasmStackCheck)(WasmStackCheckOp::Kind kind,
+                                 int parameter_slots) {
+    if (kind == WasmStackCheckOp::Kind::kFunctionEntry && __ IsLeafFunction()) {
+      return V<None>::Invalid();
+    }
+
     // Loads of the stack limit should not be load-eliminated as it can be
     // modified by another thread.
     V<WordPtr> limit = __ Load(
         __ LoadRootRegister(), LoadOp::Kind::RawAligned().NotLoadEliminable(),
         MemoryRepresentation::UintPtr(), IsolateData::jslimit_offset());
-    compiler::StackCheckKind check_kind =
-        kind == StackCheckOp::Kind::kJSFunctionHeader
-            ? compiler::StackCheckKind::kJSFunctionEntry
-            : compiler::StackCheckKind::kWasm;
-    V<Word32> check = __ StackPointerGreaterThan(limit, check_kind);
-    IF_NOT (LIKELY(check)) {
-      if (kind == StackCheckOp::Kind::kJSFunctionHeader) {
-        __ CallRuntime_StackGuardWithGap(isolate(), __ NoContextConstant(),
-                                         __ StackCheckOffset());
-      }
-#ifdef V8_ENABLE_WEBASSEMBLY
-      else {
-        DCHECK(kind == StackCheckOp::Kind::kWasmFunctionHeader ||
-               kind == StackCheckOp::Kind::kWasmLoop);
-        // TODO(14108): Cache descriptor.
-        V<WordPtr> builtin =
-            __ RelocatableWasmBuiltinCallTarget(Builtin::kWasmStackGuard);
+
+    IF_NOT (LIKELY(__ StackPointerGreaterThan(limit, StackCheckKind::kWasm))) {
+      bool growable_stacks = kind == WasmStackCheckOp::Kind::kFunctionEntry &&
+                             v8_flags.experimental_wasm_growable_stacks;
+      // TODO(14108): Cache descriptor.
+      if (growable_stacks) {
+        const CallDescriptor* call_descriptor =
+            compiler::Linkage::GetStubCallDescriptor(
+                __ graph_zone(),                      // zone
+                WasmGrowableStackGuardDescriptor{},   // descriptor
+                0,                                    // stack parameter count
+                CallDescriptor::kNoFlags,             // flags
+                Operator::kNoProperties,              // properties
+                StubCallMode::kCallWasmRuntimeStub);  // stub call mode
+        const TSCallDescriptor* ts_call_descriptor =
+            TSCallDescriptor::Create(call_descriptor, compiler::CanThrow::kNo,
+                                     LazyDeoptOnThrow::kNo, __ graph_zone());
+        V<WordPtr> builtin = __ RelocatableWasmBuiltinCallTarget(
+            Builtin::kWasmGrowableStackGuard);
+        auto param_slots_size =
+            __ IntPtrConstant(parameter_slots * kSystemPointerSize);
+        __ Call(builtin, {param_slots_size}, ts_call_descriptor,
+                OpEffects()
+                    .CanReadMemory()
+                    .RequiredWhenUnused()
+                    .CanCreateIdentity());
+      } else {
         const CallDescriptor* call_descriptor =
             compiler::Linkage::GetStubCallDescriptor(
                 __ graph_zone(),                      // zone
@@ -60,8 +120,11 @@ class StackCheckLoweringReducer : public Next {
                 CallDescriptor::kNoFlags,             // flags
                 Operator::kNoProperties,              // properties
                 StubCallMode::kCallWasmRuntimeStub);  // stub call mode
-        const TSCallDescriptor* ts_call_descriptor = TSCallDescriptor::Create(
-            call_descriptor, compiler::CanThrow::kNo, __ graph_zone());
+        const TSCallDescriptor* ts_call_descriptor =
+            TSCallDescriptor::Create(call_descriptor, compiler::CanThrow::kNo,
+                                     LazyDeoptOnThrow::kNo, __ graph_zone());
+        V<WordPtr> builtin =
+            __ RelocatableWasmBuiltinCallTarget(Builtin::kWasmStackGuard);
         // Pass custom effects to the `Call` node to mark it as non-writing.
         __ Call(builtin, {}, ts_call_descriptor,
                 OpEffects()
@@ -69,28 +132,11 @@ class StackCheckLoweringReducer : public Next {
                     .RequiredWhenUnused()
                     .CanCreateIdentity());
       }
+    }
+
+    return V<None>::Invalid();
+  }
 #endif  // V8_ENABLE_WEBASSEMBLY
-    }
-
-    return OpIndex::Invalid();
-  }
-
-  OpIndex REDUCE(JSLoopStackCheck)(V<Context> context,
-                                   V<FrameState> frame_state) {
-    V<Word32> limit = __ Load(
-        __ ExternalConstant(
-            ExternalReference::address_of_no_heap_write_interrupt_request(
-                isolate())),
-        LoadOp::Kind::RawAligned().NotLoadEliminable(),
-        MemoryRepresentation::Uint8());
-
-    IF_NOT (LIKELY(__ Word32Equal(limit, 0))) {
-      __ CallRuntime_HandleNoHeapWritesInterrupts(isolate(), frame_state,
-                                                  context);
-    }
-
-    return OpIndex::Invalid();
-  }
 
  private:
   Isolate* isolate() {
@@ -104,4 +150,5 @@ class StackCheckLoweringReducer : public Next {
 #include "src/compiler/turboshaft/undef-assembler-macros.inc"
 
 }  // namespace v8::internal::compiler::turboshaft
+
 #endif  // V8_COMPILER_TURBOSHAFT_STACK_CHECK_LOWERING_REDUCER_H_

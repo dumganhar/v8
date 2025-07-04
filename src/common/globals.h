@@ -46,16 +46,13 @@ namespace internal {
 #if (V8_TARGET_ARCH_ARM && !V8_HOST_ARCH_ARM)
 #define USE_SIMULATOR 1
 #endif
-#if (V8_TARGET_ARCH_PPC && !V8_HOST_ARCH_PPC)
-#define USE_SIMULATOR 1
-#endif
 #if (V8_TARGET_ARCH_PPC64 && !V8_HOST_ARCH_PPC64)
 #define USE_SIMULATOR 1
 #endif
 #if (V8_TARGET_ARCH_MIPS64 && !V8_HOST_ARCH_MIPS64)
 #define USE_SIMULATOR 1
 #endif
-#if (V8_TARGET_ARCH_S390 && !V8_HOST_ARCH_S390)
+#if (V8_TARGET_ARCH_S390X && !V8_HOST_ARCH_S390X)
 #define USE_SIMULATOR 1
 #endif
 #if (V8_TARGET_ARCH_RISCV64 && !V8_HOST_ARCH_RISCV64)
@@ -77,7 +74,7 @@ namespace internal {
 
 // Determine whether the architecture uses an embedded constant pool
 // (contiguous constant pool embedded in code object).
-#if V8_TARGET_ARCH_PPC || V8_TARGET_ARCH_PPC64
+#if V8_TARGET_ARCH_PPC64
 #define V8_EMBEDDED_CONSTANT_POOL_BOOL true
 #else
 #define V8_EMBEDDED_CONSTANT_POOL_BOOL false
@@ -119,10 +116,7 @@ namespace internal {
 #define COMPRESS_POINTERS_IN_MULTIPLE_CAGES_BOOL false
 #endif
 
-#if defined(V8_SHARED_RO_HEAP) &&                     \
-    (!defined(V8_COMPRESS_POINTERS) ||                \
-     defined(V8_COMPRESS_POINTERS_IN_SHARED_CAGE)) && \
-    !defined(V8_DISABLE_WRITE_BARRIERS)
+#if defined(V8_SHARED_RO_HEAP) && !defined(V8_DISABLE_WRITE_BARRIERS)
 #define V8_CAN_CREATE_SHARED_HEAP_BOOL true
 #else
 #define V8_CAN_CREATE_SHARED_HEAP_BOOL false
@@ -140,16 +134,28 @@ namespace internal {
 #define V8_ENABLE_SANDBOX_BOOL false
 #endif
 
+#if defined(V8_ENABLE_SANDBOX) && !defined(V8_DISABLE_LEAPTIERING)
+// Initially, Leaptiering is only available on sandbox-enabled builds, and so
+// V8_ENABLE_SANDBOX and V8_ENABLE_LEAPTIERING are effectively equivalent. Once
+// completed there, it will be ported to non-sandbox builds, at which point the
+// two defines will be separated from each other. Finally, once Leaptiering is
+// used on all configurations, the define will be removed completely.
+#define V8_ENABLE_LEAPTIERING 1
+#define V8_ENABLE_LEAPTIERING_BOOL true
+#else
+#define V8_ENABLE_LEAPTIERING_BOOL false
+#endif
+
 #ifdef V8_ENABLE_CONTROL_FLOW_INTEGRITY
 #define ENABLE_CONTROL_FLOW_INTEGRITY_BOOL true
 #else
 #define ENABLE_CONTROL_FLOW_INTEGRITY_BOOL false
 #endif
 
-#ifdef V8_MOVE_PROTOYPE_TRANSITIONS_FIRST
-#define V8_MOVE_PROTOYPE_TRANSITIONS_FIRST_BOOL true
+#ifdef V8_ENABLE_WASM_CODE_POINTER_TABLE
+#define V8_ENABLE_WASM_CODE_POINTER_TABLE_BOOL true
 #else
-#define V8_MOVE_PROTOYPE_TRANSITIONS_FIRST_BOOL false
+#define V8_ENABLE_WASM_CODE_POINTER_TABLE_BOOL false
 #endif
 
 #if V8_TARGET_ARCH_ARM || V8_TARGET_ARCH_ARM64
@@ -183,7 +189,7 @@ namespace internal {
 // Helper macros to enable handling of direct C calls in the simulator.
 #if defined(USE_SIMULATOR) &&                                           \
     (defined(V8_TARGET_ARCH_ARM64) || defined(V8_TARGET_ARCH_MIPS64) || \
-     defined(V8_TARGET_ARCH_LOONG64))
+     defined(V8_TARGET_ARCH_LOONG64) || defined(V8_TARGET_ARCH_RISCV64))
 #define V8_USE_SIMULATOR_WITH_GENERIC_C_CALLS
 #define V8_IF_USE_SIMULATOR(V) , V
 #else
@@ -244,6 +250,13 @@ const size_t kShortBuiltinCallsOldSpaceSizeThreshold = size_t{2} * GB;
 #define V8_EXTERNAL_CODE_SPACE_BOOL false
 #endif
 
+// Support for builtin jump table disassembly.
+#if defined(V8_ENABLE_BUILTIN_JUMP_TABLE_SWITCH) && defined(ENABLE_DISASSEMBLER)
+#define V8_BUILTIN_JUMP_TABLE_INFO_BOOL true
+#else
+#define V8_BUILTIN_JUMP_TABLE_INFO_BOOL false
+#endif
+
 // V8_HEAP_USE_PTHREAD_JIT_WRITE_PROTECT controls how V8 sets permissions for
 // executable pages.
 // In particular,
@@ -295,6 +308,16 @@ const size_t kShortBuiltinCallsOldSpaceSizeThreshold = size_t{2} * GB;
 #define V8_HEAP_USE_PKU_JIT_WRITE_PROTECT false
 #endif
 
+// Enable hardware features to make the sandbox memory temporarily inaccessible.
+// This is currently only used with pkeys and in debug mode.
+// TODO(sroettger): add a gn arg to toggle this once we enable it in non-debug
+//                  builds.
+#if V8_HAS_PKU_JIT_WRITE_PROTECT && defined(V8_ENABLE_SANDBOX) && defined(DEBUG)
+#define V8_ENABLE_SANDBOX_HARDWARE_SUPPORT true
+#else
+#define V8_ENABLE_SANDBOX_HARDWARE_SUPPORT false
+#endif
+
 // Determine whether tagged pointers are 8 bytes (used in Torque layouts for
 // choosing where to insert padding).
 #if V8_TARGET_ARCH_64_BIT && !defined(V8_COMPRESS_POINTERS)
@@ -319,8 +342,9 @@ const size_t kShortBuiltinCallsOldSpaceSizeThreshold = size_t{2} * GB;
 // It's currently enabled only for the platforms listed below. We don't plan
 // to add support for IA32, because it has a totally different approach
 // (using FP stack).
-#if defined(V8_TARGET_ARCH_X64) || defined(V8_TARGET_ARCH_ARM64) || \
-    defined(V8_TARGET_ARCH_MIPS64) || defined(V8_TARGET_ARCH_LOONG64)
+#if defined(V8_TARGET_ARCH_X64) || defined(V8_TARGET_ARCH_ARM64) ||      \
+    defined(V8_TARGET_ARCH_MIPS64) || defined(V8_TARGET_ARCH_LOONG64) || \
+    defined(V8_TARGET_ARCH_RISCV64)
 #define V8_ENABLE_FP_PARAMS_IN_C_LINKAGE 1
 #endif
 
@@ -364,6 +388,7 @@ constexpr int kInt32Size = sizeof(int32_t);
 constexpr int kInt64Size = sizeof(int64_t);
 constexpr int kUInt32Size = sizeof(uint32_t);
 constexpr int kSizetSize = sizeof(size_t);
+constexpr int kFloat16Size = sizeof(uint16_t);
 constexpr int kFloatSize = sizeof(float);
 constexpr int kDoubleSize = sizeof(double);
 constexpr int kIntptrSize = sizeof(intptr_t);
@@ -421,8 +446,7 @@ constexpr int kSystemPointerSizeLog2 = 3;
 constexpr intptr_t kIntptrSignBit =
     static_cast<intptr_t>(uintptr_t{0x8000000000000000});
 constexpr bool kPlatformRequiresCodeRange = true;
-#if (V8_HOST_ARCH_PPC || V8_HOST_ARCH_PPC64) && \
-    (V8_TARGET_ARCH_PPC || V8_TARGET_ARCH_PPC64) && V8_OS_LINUX
+#if V8_HOST_ARCH_PPC64 && V8_TARGET_ARCH_PPC64 && V8_OS_LINUX
 constexpr size_t kMaximalCodeRangeSize = 512 * MB;
 constexpr size_t kMinExpectedOSPageSize = 64 * KB;  // OS page on PPC Linux
 #elif V8_TARGET_ARCH_ARM64 || V8_TARGET_ARCH_LOONG64 || V8_TARGET_ARCH_RISCV64
@@ -455,8 +479,7 @@ constexpr size_t kMinimumTrustedRangeSize = 32 * MB;
 
 constexpr int kSystemPointerSizeLog2 = 2;
 constexpr intptr_t kIntptrSignBit = 0x80000000;
-#if (V8_HOST_ARCH_PPC || V8_HOST_ARCH_PPC64) && \
-    (V8_TARGET_ARCH_PPC || V8_TARGET_ARCH_PPC64) && V8_OS_LINUX
+#if V8_HOST_ARCH_PPC64 && V8_TARGET_ARCH_PPC64 && V8_OS_LINUX
 constexpr bool kPlatformRequiresCodeRange = false;
 constexpr size_t kMaximalCodeRangeSize = 0 * MB;
 constexpr size_t kMinimumCodeRangeSize = 0 * MB;
@@ -559,8 +582,10 @@ constexpr int kIndirectPointerSize = sizeof(IndirectPointerHandle);
 // tagged pointers.
 #ifdef V8_ENABLE_SANDBOX
 constexpr int kTrustedPointerSize = kIndirectPointerSize;
+using TrustedPointer_t = TrustedPointerHandle;
 #else
 constexpr int kTrustedPointerSize = kTaggedSize;
+using TrustedPointer_t = Tagged_t;
 #endif
 constexpr int kCodePointerSize = kTrustedPointerSize;
 
@@ -569,13 +594,32 @@ constexpr int kCodePointerSize = kTrustedPointerSize;
 // pointers. Either way, they are always kTaggedSize fields.
 constexpr int kProtectedPointerSize = kTaggedSize;
 
+#ifdef V8_ENABLE_LEAPTIERING
+constexpr int kJSDispatchHandleSize = sizeof(JSDispatchHandle);
+#endif
+
+// Dispatch handle constant used as a placeholder. This is currently used by
+// compilers when generating JS calls. In that case, the actual dispatch handle
+// value is only loaded by the low-level MacroAssembler operations, but a
+// placeholder value is necessary prior to that to satisfy linkage constraints.
+// TODO(saelo): instead, we could let the compiler load the dispatch handle
+// from the JSFunction and then use a MacroAssembler operation that uses the
+// dispatch handle directly. We just need to be sure that no GC can happen
+// between the load of the dispatch handle and the use.
+constexpr JSDispatchHandle kPlaceholderDispatchHandle = 0x0;
+// Dispatch handle constant that can be used for direct calls when it is known
+// that the callee doesn't use the dispatch handle. This is for example the
+// case when performing direct calls to JS builtins.
+constexpr JSDispatchHandle kInvalidDispatchHandle =
+    static_cast<JSDispatchHandle>(0xffffffff << kJSDispatchHandleShift);
+
 constexpr int kEmbedderDataSlotSize = kSystemPointerSize;
 
 constexpr int kEmbedderDataSlotSizeInTaggedSlots =
     kEmbedderDataSlotSize / kTaggedSize;
 static_assert(kEmbedderDataSlotSize >= kSystemPointerSize);
 
-constexpr int kExternalAllocationSoftLimit =
+constexpr size_t kExternalAllocationSoftLimit =
     internal::Internals::kExternalAllocationSoftLimit;
 
 // Maximum object size that gets allocated into regular pages. Objects larger
@@ -616,9 +660,6 @@ constexpr int kSimd128Size = 16;
 // 256 bit SIMD value size.
 constexpr int kSimd256Size = 32;
 
-// Maximum ordinal used for tracking asynchronous module evaluation order.
-constexpr unsigned kMaxModuleAsyncEvaluatingOrdinal = (1 << 30) - 1;
-
 // FUNCTION_ADDR(f) gets the address of a C function f.
 #define FUNCTION_ADDR(f) (reinterpret_cast<v8::internal::Address>(f))
 
@@ -637,7 +678,7 @@ F FUNCTION_CAST(Address addr) {
 // Determine whether the architecture uses function descriptors
 // which provide a level of indirection between the function pointer
 // and the function entrypoint.
-#if (V8_HOST_ARCH_PPC || V8_HOST_ARCH_PPC64) &&                    \
+#if V8_HOST_ARCH_PPC64 &&                                          \
     (V8_OS_AIX || (V8_TARGET_ARCH_PPC64 && V8_TARGET_BIG_ENDIAN && \
                    (!defined(_CALL_ELF) || _CALL_ELF == 1)))
 #define USES_FUNCTION_DESCRIPTORS 1
@@ -712,6 +753,8 @@ inline LanguageMode stricter_language_mode(LanguageMode mode1,
 enum class StoreOrigin { kMaybeKeyed, kNamed };
 
 enum class TypeofMode { kInside, kNotInside };
+
+enum class ContextKind { kDefault, kScriptContext };
 
 // Whether floating point registers should be saved (and restored).
 enum class SaveFPRegsMode { kIgnore, kSave };
@@ -896,6 +939,14 @@ constexpr uint64_t kClearedFreeMemoryValue = 0;
 constexpr uint64_t kZapValue = uint64_t{0xdeadbeedbeadbeef};
 constexpr uint64_t kHandleZapValue = uint64_t{0x1baddead0baddeaf};
 constexpr uint64_t kGlobalHandleZapValue = uint64_t{0x1baffed00baffedf};
+constexpr uint64_t kTracedHandleEagerResetZapValue =
+    uint64_t{0x1beffedaabaffedf};
+constexpr uint64_t kTracedHandleMinorGCResetZapValue =
+    uint64_t{0x1beffedeebaffedf};
+constexpr uint64_t kTracedHandleMinorGCWeakResetZapValue =
+    uint64_t{0x1beffed11baffedf};
+constexpr uint64_t kTracedHandleFullGCResetZapValue =
+    uint64_t{0x1beffed77baffedf};
 constexpr uint64_t kFromSpaceZapValue = uint64_t{0x1beefdad0beefdaf};
 constexpr uint64_t kDebugZapValue = uint64_t{0xbadbaddbbadbaddb};
 constexpr uint64_t kSlotsZapValue = uint64_t{0xbeefdeadbeefdeef};
@@ -905,6 +956,10 @@ constexpr uint32_t kClearedFreeMemoryValue = 0;
 constexpr uint32_t kZapValue = 0xdeadbeef;
 constexpr uint32_t kHandleZapValue = 0xbaddeaf;
 constexpr uint32_t kGlobalHandleZapValue = 0xbaffedf;
+constexpr uint32_t kTracedHandleEagerResetZapValue = 0xbeffedf;
+constexpr uint32_t kTracedHandleMinorGCResetZapValue = 0xbeffadf;
+constexpr uint32_t kTracedHandleMinorGCWeakResetZapValue = 0xbe11adf;
+constexpr uint32_t kTracedHandleFullGCResetZapValue = 0xbe77adf;
 constexpr uint32_t kFromSpaceZapValue = 0xbeefdaf;
 constexpr uint32_t kSlotsZapValue = 0xbeefdeef;
 constexpr uint32_t kDebugZapValue = 0xbadbaddb;
@@ -944,6 +999,7 @@ using JavaScriptArguments = Arguments<ArgumentsType::kJS>;
 class Assembler;
 class ClassScope;
 class InstructionStream;
+class BigInt;
 class Code;
 class CodeSpace;
 class Context;
@@ -952,9 +1008,9 @@ class Debug;
 class DebugInfo;
 class Descriptor;
 class DescriptorArray;
-#ifdef V8_ENABLE_DIRECT_HANDLE
 template <typename T>
 class DirectHandle;
+#ifdef V8_ENABLE_DIRECT_HANDLE
 template <typename T>
 class DirectHandleVector;
 #endif
@@ -969,11 +1025,11 @@ class FunctionTemplateInfo;
 class GlobalDictionary;
 template <typename T>
 class Handle;
-#ifndef V8_ENABLE_DIRECT_HANDLE
-template <typename T>
-using DirectHandle = Handle<T>;
-#endif
 class Heap;
+class HeapNumber;
+class Boolean;
+class Null;
+class Undefined;
 class HeapObject;
 class IC;
 template <typename T>
@@ -984,6 +1040,9 @@ class JSReceiver;
 class JSArray;
 class JSFunction;
 class JSObject;
+class JSProxy;
+class JSBoundFunction;
+class JSWrappedFunction;
 class LocalIsolate;
 class MacroAssembler;
 class Map;
@@ -994,19 +1053,12 @@ class MaybeDirectHandle;
 #endif
 template <typename T>
 class MaybeHandle;
-#ifndef V8_ENABLE_DIRECT_HANDLE
 template <typename T>
-using MaybeDirectHandle = MaybeHandle<T>;
-#endif
+class MaybeDirectHandle;
 template <typename T>
 using MaybeIndirectHandle = MaybeHandle<T>;
-#ifdef V8_ENABLE_DIRECT_HANDLE
-class MaybeObjectDirectHandle;
-#endif
 class MaybeObjectHandle;
-#ifndef V8_ENABLE_DIRECT_HANDLE
-using MaybeObjectDirectHandle = MaybeObjectHandle;
-#endif
+class MaybeObjectDirectHandle;
 using MaybeObjectIndirectHandle = MaybeObjectHandle;
 template <typename T>
 class MaybeWeak;
@@ -1063,6 +1115,8 @@ class Struct;
 class Symbol;
 template <typename T>
 class Tagged;
+template <typename... Ts>
+class Union;
 class Variable;
 namespace maglev {
 class MaglevAssembler;
@@ -1071,8 +1125,31 @@ namespace compiler {
 class AccessBuilder;
 }
 
+// Number is either a Smi or a HeapNumber.
+using Number = Union<Smi, HeapNumber>;
+// Numeric is either a Number or a BigInt.
+using Numeric = Union<Smi, HeapNumber, BigInt>;
+// A primitive JavaScript value, which excludes JS objects.
+using JSPrimitive =
+    Union<Smi, HeapNumber, BigInt, String, Symbol, Boolean, Null, Undefined>;
+// A user-exposed JavaScript value, as opposed to V8-internal values like Holes
+// or a FixedArray.
+using JSAny = Union<Smi, HeapNumber, BigInt, String, Symbol, Boolean, Null,
+                    Undefined, JSReceiver>;
+using JSAnyNotNumeric =
+    Union<String, Symbol, Boolean, Null, Undefined, JSReceiver>;
+using JSAnyNotNumber =
+    Union<BigInt, String, Symbol, Boolean, Null, Undefined, JSReceiver>;
+using JSCallable =
+    Union<JSBoundFunction, JSFunction, JSObject, JSProxy, JSWrappedFunction>;
+// Object prototypes are either JSReceivers or null -- they are not allowed to
+// be any other primitive value.
+using JSPrototype = Union<JSReceiver, Null>;
+
 using MaybeObject = MaybeWeak<Object>;
 using HeapObjectReference = MaybeWeak<HeapObject>;
+
+using JSObjectOrUndefined = Union<JSObject, Undefined>;
 
 // Slots are either full-pointer slots or compressed slots depending on whether
 // pointer compression is enabled or not.
@@ -1124,7 +1201,7 @@ using HeapObjectSlot = SlotTraits::THeapObjectSlot;
 using OffHeapObjectSlot = SlotTraits::TOffHeapObjectSlot;
 
 // A InstructionStreamSlot instance describes a kTaggedSize-sized field
-// ("slot") holding a strong pointer to a InstructionStream object. The
+// ("slot") holding a strong pointer to an InstructionStream object. The
 // InstructionStream object slots might be compressed and since code space might
 // be allocated off the main heap the load operations require explicit cage base
 // value for code space.
@@ -1171,7 +1248,7 @@ enum AllocationSpace {
   FIRST_GROWABLE_PAGED_SPACE = OLD_SPACE,
   LAST_GROWABLE_PAGED_SPACE = TRUSTED_SPACE,
   FIRST_SWEEPABLE_SPACE = NEW_SPACE,
-  LAST_SWEEPABLE_SPACE = TRUSTED_SPACE
+  LAST_SWEEPABLE_SPACE = SHARED_TRUSTED_SPACE
 };
 constexpr int kSpaceTagSize = 4;
 static_assert(FIRST_SPACE == 0);
@@ -1186,6 +1263,9 @@ constexpr bool IsAnyTrustedSpace(AllocationSpace space) {
 constexpr bool IsAnySharedSpace(AllocationSpace space) {
   return space == SHARED_SPACE || space == SHARED_LO_SPACE ||
          space == SHARED_TRUSTED_SPACE || space == SHARED_TRUSTED_LO_SPACE;
+}
+constexpr bool IsAnyNewSpace(AllocationSpace space) {
+  return space == NEW_SPACE || space == NEW_LO_SPACE;
 }
 
 constexpr const char* ToString(AllocationSpace space) {
@@ -1552,8 +1632,16 @@ enum WhereToStart { kStartAtReceiver, kStartAtPrototype };
 enum ResultSentinel { kNotFound = -1, kUnsupported = -2 };
 
 enum ShouldThrow {
+  kDontThrow = Internals::kDontThrow,
   kThrowOnError = Internals::kThrowOnError,
-  kDontThrow = Internals::kDontThrow
+};
+
+// The result that might be returned by Setter/Definer/Deleter interceptor
+// callback when it doesn't throw an exception.
+enum class InterceptorResult {
+  kFalse = 0,
+  kTrue = 1,
+  kNotIntercepted = 2,
 };
 
 enum class ThreadKind { kMain, kBackground };
@@ -1712,15 +1800,16 @@ inline std::ostream& operator<<(std::ostream& os, CreateArgumentsType type) {
 constexpr int kScopeInfoMaxInlinedLocalNamesSize = 75;
 
 enum ScopeType : uint8_t {
-  CLASS_SCOPE,        // The scope introduced by a class.
-  EVAL_SCOPE,         // The top-level scope for an eval source.
-  FUNCTION_SCOPE,     // The top-level scope for a function.
-  MODULE_SCOPE,       // The scope introduced by a module literal
-  SCRIPT_SCOPE,       // The top-level scope for a script or a top-level eval.
-  CATCH_SCOPE,        // The scope introduced by catch.
-  BLOCK_SCOPE,        // The scope introduced by a new block.
-  WITH_SCOPE,         // The scope introduced by with.
-  SHADOW_REALM_SCOPE  // Synthetic scope for ShadowRealm NativeContexts.
+  SCRIPT_SCOPE,        // The top-level scope for a script or a top-level eval.
+  REPL_MODE_SCOPE,     // The top-level scope for a repl-mode script.
+  CLASS_SCOPE,         // The scope introduced by a class.
+  EVAL_SCOPE,          // The top-level scope for an eval source.
+  FUNCTION_SCOPE,      // The top-level scope for a function.
+  MODULE_SCOPE,        // The scope introduced by a module literal
+  CATCH_SCOPE,         // The scope introduced by catch.
+  BLOCK_SCOPE,         // The scope introduced by a new block.
+  WITH_SCOPE,          // The scope introduced by with.
+  SHADOW_REALM_SCOPE,  // Synthetic scope for ShadowRealm NativeContexts.
 };
 
 inline std::ostream& operator<<(std::ostream& os, ScopeType type) {
@@ -1743,6 +1832,8 @@ inline std::ostream& operator<<(std::ostream& os, ScopeType type) {
       return os << "WITH_SCOPE";
     case ScopeType::SHADOW_REALM_SCOPE:
       return os << "SHADOW_REALM_SCOPE";
+    case ScopeType::REPL_MODE_SCOPE:
+      return os << "REPL_MODE_SCOPE";
   }
   UNREACHABLE();
 }
@@ -1786,8 +1877,11 @@ enum class VariableMode : uint8_t {
 
   kConst,  // declared via 'const' declarations
 
-  kUsing,  // declared via 'using' declaration for explicit memory management
-           // (last lexical)
+  kUsing,  // declared via 'using' declaration for explicit resource management
+
+  kAwaitUsing,  // declared via 'await using' declaration for explicit resource
+                // management
+                // (last lexical)
 
   kVar,  // declared via 'var', and 'function' declarations
 
@@ -1826,7 +1920,7 @@ enum class VariableMode : uint8_t {
   kPrivateGetterAndSetter,  // Does not coexist with any other variable with the
                             // same name in the same scope.
 
-  kLastLexicalVariableMode = kUsing,
+  kLastLexicalVariableMode = kAwaitUsing,
 };
 
 // Printing support
@@ -1857,6 +1951,8 @@ inline const char* VariableMode2String(VariableMode mode) {
       return "TEMPORARY";
     case VariableMode::kUsing:
       return "USING";
+    case VariableMode::kAwaitUsing:
+      return "AWAIT_USING";
   }
   UNREACHABLE();
 }
@@ -1900,7 +1996,8 @@ inline bool IsSerializableVariableMode(VariableMode mode) {
 }
 
 inline bool IsImmutableLexicalVariableMode(VariableMode mode) {
-  return mode == VariableMode::kConst || mode == VariableMode::kUsing;
+  return mode == VariableMode::kConst || mode == VariableMode::kUsing ||
+         mode == VariableMode::kAwaitUsing;
 }
 
 inline bool IsImmutableLexicalOrPrivateVariableMode(VariableMode mode) {
@@ -2092,6 +2189,23 @@ class CompareOperationFeedback {
   };
 };
 
+class TypeOfFeedback {
+  enum {
+    kNumberFlag = 1,
+    kFunctionFlag = 1 << 1,
+    kStringFlag = 1 << 2,
+  };
+
+ public:
+  enum Result {
+    kNone = 0,
+    kNumber = kNumberFlag,
+    kFunction = kFunctionFlag,
+    kString = kStringFlag,
+    kAny = kNumberFlag | kFunctionFlag | kStringFlag,
+  };
+};
+
 // Type feedback is encoded in such a way that, we can combine the feedback
 // at different points by performing an 'OR' operation. Type feedback moves
 // to a more generic type when we combine feedback.
@@ -2280,24 +2394,30 @@ inline std::ostream& operator<<(std::ostream& os, TieringState marker) {
 
 // State machine:
 // S(tate)0: kPending
-// S1: kEarlyMaglev
-// S2: kEarlyTurbofan
-// S3: kNormal
+// S1: kEarlySparkplug
+// S2: kDelayMaglev
+// S3: kEarlyMaglev
+// S4: kEarlyTurbofan
+// S5: kNormal
 //
-// C(ondition)0: maglev compile
-// C1: ic was stable early
-// C2: turbofan compile
-// C3: ic change or deopt
+// C(ondition)0: sparkplug compile
+// C1: maglev compile
+// C2: deopt early
+// C3: ic was stable early
+// C4: turbofan compile
+// C5: ic change or deopt
 //
-// S0 -- C0 -- C1 --> S1 -- C2 -- C3 --> S2 --|
-//             |      |                       |
-//             |      |-----------------------|
-//             |                 |
-//             |                 C3
-//             |                 |
-//             |-----------------------> S3
+// S0 - C0 -> S1 - C1 - C3 -> S3 - C4 -> S4 -|
+//                 |    |                    |
+//                 |    |--------------------|
+//                 |             |
+//                 C2            C5
+//                 |             |
+//                 --> S2        --> S5
 enum class CachedTieringDecision : int32_t {
   kPending,
+  kEarlySparkplug,
+  kDelayMaglev,
   kEarlyMaglev,
   kEarlyTurbofan,
   kNormal,
@@ -2490,13 +2610,17 @@ enum class StubCallMode {
 
 enum class NeedsContext { kYes, kNo };
 
-constexpr int kFunctionLiteralIdInvalid = -1;
+constexpr int kInvalidInfoId = -1;
 constexpr int kFunctionLiteralIdTopLevel = 0;
 
 constexpr int kSwissNameDictionaryInitialCapacity = 4;
 
 constexpr int kSmallOrderedHashSetMinCapacity = 4;
 constexpr int kSmallOrderedHashMapMinCapacity = 4;
+
+enum class AdaptArguments { kYes, kNo };
+constexpr AdaptArguments kAdapt = AdaptArguments::kYes;
+constexpr AdaptArguments kDontAdapt = AdaptArguments::kNo;
 
 constexpr int kJSArgcReceiverSlots = 1;
 constexpr uint16_t kDontAdaptArgumentsSentinel = 0;
@@ -2522,8 +2646,6 @@ enum class ExceptionStatus : bool { kException = false, kSuccess = true };
 V8_INLINE bool operator!(ExceptionStatus status) {
   return !static_cast<bool>(status);
 }
-
-enum class TraceRetainingPathMode { kEnabled, kDisabled };
 
 // Used in the ScopeInfo flags fields for the function name variable for named
 // function expressions, and for the receiver. Must be declared here so that it
@@ -2594,6 +2716,14 @@ enum class StringTransitionStrategy {
   // The string is already transitioned to the desired representation.
   kAlreadyTransitioned
 };
+
+#ifdef V8_ENABLE_WASM_CODE_POINTER_TABLE
+using WasmCodePointer = uint32_t;
+#else
+using WasmCodePointer = Address;
+#endif
+
+enum CallJumpMode { kCall, kTailCall };
 
 }  // namespace internal
 

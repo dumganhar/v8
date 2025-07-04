@@ -43,8 +43,6 @@ enum class WasmValueType {
 // TODO(ishell): move to load-handler.h
 class LoadHandler final : public DataHandler {
  public:
-  DECL_CAST(LoadHandler)
-
   DECL_PRINTER(LoadHandler)
   DECL_VERIFIER(LoadHandler)
 
@@ -160,7 +158,7 @@ class LoadHandler final : public DataHandler {
   // interceptor.
   static inline Handle<Smi> LoadInterceptor(Isolate* isolate);
 
-  // Creates a Smi-handler for loading a property from a object.
+  // Creates a Smi-handler for loading a property from an object.
   static inline Handle<Smi> LoadSlow(Isolate* isolate);
 
   // Creates a Smi-handler for loading a field from fast object.
@@ -244,8 +242,6 @@ class LoadHandler final : public DataHandler {
 // TODO(ishell): move to store-handler.h
 class StoreHandler final : public DataHandler {
  public:
-  DECL_CAST(StoreHandler)
-
   DECL_PRINTER(StoreHandler)
   DECL_VERIFIER(StoreHandler)
 
@@ -337,9 +333,9 @@ class StoreHandler final : public DataHandler {
       MaybeObjectHandle maybe_data2 = MaybeObjectHandle());
 
   static Handle<Object> StoreElementTransition(
-      Isolate* isolate, Handle<Map> receiver_map, Handle<Map> transition,
-      KeyedAccessStoreMode store_mode,
-      MaybeHandle<Object> prev_validity_cell = MaybeHandle<Object>());
+      Isolate* isolate, DirectHandle<Map> receiver_map,
+      DirectHandle<Map> transition, KeyedAccessStoreMode store_mode,
+      MaybeHandle<UnionOf<Smi, Cell>> prev_validity_cell = kNullMaybeHandle);
 
   static Handle<Object> StoreProxy(Isolate* isolate, Handle<Map> receiver_map,
                                    Handle<JSProxy> proxy,

@@ -8,8 +8,8 @@
 #include "src/common/globals.h"
 #include "src/heap/free-list-inl.h"
 #include "src/heap/heap.h"
-#include "src/heap/mutable-page-inl.h"
-#include "src/heap/page-inl.h"
+#include "src/heap/mutable-page-metadata-inl.h"
+#include "src/heap/page-metadata-inl.h"
 #include "src/objects/free-space-inl.h"
 
 namespace v8 {
@@ -18,13 +18,17 @@ namespace internal {
 // -----------------------------------------------------------------------------
 // Free lists for old object spaces implementation
 
-void FreeListCategory::Reset(FreeList* owner) {
+void FreeListCategory::Unlink(FreeList* owner) {
   if (is_linked(owner) && !top().is_null()) {
     owner->DecreaseAvailableBytes(available_);
   }
-  set_top(FreeSpace());
   set_prev(nullptr);
   set_next(nullptr);
+}
+
+void FreeListCategory::Reset(FreeList* owner) {
+  Unlink(owner);
+  set_top(FreeSpace());
   available_ = 0;
 }
 
@@ -82,7 +86,7 @@ Tagged<FreeSpace> FreeListCategory::SearchForNodeInList(size_t minimum_size,
 void FreeListCategory::Free(const WritableFreeSpace& writable_free_space,
                             FreeMode mode, FreeList* owner) {
   Tagged<FreeSpace> free_space =
-      FreeSpace::cast(HeapObject::FromAddress(writable_free_space.Address()));
+      Cast<FreeSpace>(HeapObject::FromAddress(writable_free_space.Address()));
   DCHECK_EQ(free_space->Size(), writable_free_space.Size());
   free_space->SetNext(writable_free_space, top());
   set_top(free_space);
@@ -248,6 +252,11 @@ FreeListManyCached::FreeListManyCached() { ResetCache(); }
 void FreeListManyCached::Reset() {
   ResetCache();
   FreeListMany::Reset();
+}
+
+void FreeListManyCached::ResetForNonBlackAllocatedPages() {
+  ResetCache();
+  FreeListMany::ResetForNonBlackAllocatedPages();
 }
 
 bool FreeListManyCached::AddCategory(FreeListCategory* category) {
@@ -440,14 +449,33 @@ void FreeList::Reset() {
   available_ = 0;
 }
 
-size_t FreeList::EvictFreeListItems(PageMetadata* page) {
+void FreeList::ResetForNonBlackAllocatedPages() {
+  DCHECK(v8_flags.black_allocated_pages);
+  ForAllFreeListCategories([this](FreeListCategory* category) {
+    if (!category->is_empty()) {
+      auto* chunk = MemoryChunk::FromHeapObject(category->top());
+      if (chunk->IsFlagSet(MemoryChunk::BLACK_ALLOCATED)) {
+        category->Unlink(this);
+        return;
+      }
+    }
+    category->Reset(this);
+  });
+  for (int i = kFirstCategory; i < number_of_categories_; i++) {
+    categories_[i] = nullptr;
+  }
+  wasted_bytes_ = 0;
+  available_ = 0;
+}
+
+void FreeList::EvictFreeListItems(PageMetadata* page) {
   size_t sum = 0;
   page->ForAllFreeListCategories([this, &sum](FreeListCategory* category) {
     sum += category->available();
     RemoveCategory(category);
     category->Reset(this);
   });
-  return sum;
+  page->add_wasted_memory(sum);
 }
 
 void FreeList::RepairLists(Heap* heap) {

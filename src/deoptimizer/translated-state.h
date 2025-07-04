@@ -5,9 +5,11 @@
 #ifndef V8_DEOPTIMIZER_TRANSLATED_STATE_H_
 #define V8_DEOPTIMIZER_TRANSLATED_STATE_H_
 
+#include <optional>
 #include <stack>
 #include <vector>
 
+#include "src/common/simd128.h"
 #include "src/deoptimizer/frame-translation-builder.h"
 #include "src/objects/deoptimization-data.h"
 #include "src/objects/feedback-vector.h"
@@ -32,6 +34,7 @@ class TranslatedState;
 void DeoptimizationFrameTranslationPrintSingleOpcode(
     std::ostream& os, TranslationOpcode opcode,
     DeoptimizationFrameTranslation::Iterator& iterator,
+    Tagged<ProtectedDeoptimizationLiteralArray> protected_literal_array,
     Tagged<DeoptimizationLiteralArray> literal_array);
 
 // The Translated{Value,Frame,State} class hierarchy are a set of utility
@@ -83,6 +86,7 @@ class TranslatedValue {
     kFloat,
     kDouble,
     kHoleyDouble,
+    kSimd128,
     kCapturedObject,   // Object captured by the escape analysis.
                        // The number of nested objects can be obtained
                        // with the DeferredObjectLength() method
@@ -115,6 +119,7 @@ class TranslatedValue {
   static TranslatedValue NewDouble(TranslatedState* container, Float64 value);
   static TranslatedValue NewHoleyDouble(TranslatedState* container,
                                         Float64 value);
+  static TranslatedValue NewSimd128(TranslatedState* container, Simd128 value);
   static TranslatedValue NewInt32(TranslatedState* container, int32_t value);
   static TranslatedValue NewInt64(TranslatedState* container, int64_t value);
   static TranslatedValue NewInt64ToBigInt(TranslatedState* container,
@@ -174,6 +179,8 @@ class TranslatedValue {
     Float64 double_value_;
     // kind is kDuplicatedObject or kCapturedObject.
     MaterializedObjectInfo materialization_info_;
+    // kind is kSimd128.
+    Simd128 simd128_value_;
   };
 
   // Checked accessors for the union members.
@@ -184,6 +191,7 @@ class TranslatedValue {
   uint64_t uint64_value() const;
   Float32 float_value() const;
   Float64 double_value() const;
+  Simd128 simd_value() const;
   int object_length() const;
   int object_index() const;
 };
@@ -206,11 +214,18 @@ class TranslatedFrame {
     kInvalid
   };
 
-  int GetValueCount();
+  int GetValueCount() const;
 
   Kind kind() const { return kind_; }
   BytecodeOffset bytecode_offset() const { return bytecode_offset_; }
-  Handle<SharedFunctionInfo> shared_info() const { return shared_info_; }
+  Handle<SharedFunctionInfo> shared_info() const {
+    CHECK_EQ(handle_state_, kHandles);
+    return shared_info_;
+  }
+  Handle<BytecodeArray> bytecode_array() const {
+    CHECK_EQ(handle_state_, kHandles);
+    return bytecode_array_;
+  }
 
   // TODO(jgruber): Simplify/clarify the semantics of this field. The name
   // `height` is slightly misleading. Yes, this value is related to stack frame
@@ -223,8 +238,15 @@ class TranslatedFrame {
   int return_value_count() const { return return_value_count_; }
 
   Tagged<SharedFunctionInfo> raw_shared_info() const {
+    CHECK_EQ(handle_state_, kRawPointers);
     CHECK(!raw_shared_info_.is_null());
     return raw_shared_info_;
+  }
+
+  Tagged<BytecodeArray> raw_bytecode_array() const {
+    CHECK_EQ(handle_state_, kRawPointers);
+    CHECK(!raw_bytecode_array_.is_null());
+    return raw_bytecode_array_;
   }
 
   class iterator {
@@ -277,9 +299,14 @@ class TranslatedFrame {
 
 #if V8_ENABLE_WEBASSEMBLY
   // Only for Kind == kJSToWasmBuiltinContinuation
-  base::Optional<wasm::ValueKind> wasm_call_return_kind() const {
+  std::optional<wasm::ValueKind> wasm_call_return_kind() const {
     DCHECK_EQ(kind(), kJSToWasmBuiltinContinuation);
     return return_kind_;
+  }
+
+  int wasm_function_index() const {
+    DCHECK_EQ(kind(), kLiftoffFunction);
+    return wasm_function_index_;
   }
 #endif  // V8_ENABLE_WEBASSEMBLY
 
@@ -288,9 +315,10 @@ class TranslatedFrame {
   friend class Deoptimizer;
 
   // Constructor static methods.
-  static TranslatedFrame UnoptimizedFrame(
+  static TranslatedFrame UnoptimizedJSFrame(
       BytecodeOffset bytecode_offset, Tagged<SharedFunctionInfo> shared_info,
-      int height, int return_value_offset, int return_value_count);
+      Tagged<BytecodeArray> bytecode_array, int height, int return_value_offset,
+      int return_value_count);
   static TranslatedFrame AccessorFrame(Kind kind,
                                        Tagged<SharedFunctionInfo> shared_info);
   static TranslatedFrame InlinedExtraArguments(
@@ -308,8 +336,9 @@ class TranslatedFrame {
       int height);
   static TranslatedFrame JSToWasmBuiltinContinuationFrame(
       BytecodeOffset bailout_id, Tagged<SharedFunctionInfo> shared_info,
-      int height, base::Optional<wasm::ValueKind> return_type);
-  static TranslatedFrame LiftoffFrame(BytecodeOffset bailout_id, int height);
+      int height, std::optional<wasm::ValueKind> return_type);
+  static TranslatedFrame LiftoffFrame(BytecodeOffset bailout_id, int height,
+                                      int function_index);
 #endif  // V8_ENABLE_WEBASSEMBLY
   static TranslatedFrame JavaScriptBuiltinContinuationFrame(
       BytecodeOffset bailout_id, Tagged<SharedFunctionInfo> shared_info,
@@ -323,15 +352,19 @@ class TranslatedFrame {
 
   static void AdvanceIterator(std::deque<TranslatedValue>::iterator* iter);
 
-  explicit TranslatedFrame(
-      Kind kind, Tagged<SharedFunctionInfo> shared_info = SharedFunctionInfo(),
-      int height = 0, int return_value_offset = 0, int return_value_count = 0)
+  explicit TranslatedFrame(Kind kind,
+                           Tagged<SharedFunctionInfo> raw_shared_info = {},
+                           Tagged<BytecodeArray> raw_bytecode_array = {},
+                           int height = 0, int return_value_offset = 0,
+                           int return_value_count = 0)
       : kind_(kind),
         bytecode_offset_(BytecodeOffset::None()),
-        raw_shared_info_(shared_info),
+        raw_shared_info_(raw_shared_info),
+        raw_bytecode_array_(raw_bytecode_array),
         height_(height),
         return_value_offset_(return_value_offset),
-        return_value_count_(return_value_count) {}
+        return_value_count_(return_value_count),
+        handle_state_(kRawPointers) {}
 
   void Add(const TranslatedValue& value) { values_.push_back(value); }
   TranslatedValue* ValueAt(int index) { return &(values_[index]); }
@@ -339,11 +372,23 @@ class TranslatedFrame {
 
   Kind kind_;
   BytecodeOffset bytecode_offset_;
-  Tagged<SharedFunctionInfo> raw_shared_info_;
-  Handle<SharedFunctionInfo> shared_info_;
+
+  // Object references are stored as either raw pointers (before Handlify is
+  // called) or handles (afterward).
+  union {
+    Tagged<SharedFunctionInfo> raw_shared_info_;
+    IndirectHandle<SharedFunctionInfo> shared_info_;
+  };
+  union {
+    Tagged<BytecodeArray> raw_bytecode_array_;
+    IndirectHandle<BytecodeArray> bytecode_array_;
+  };
+
   int height_;
   int return_value_offset_;
   int return_value_count_;
+
+  enum HandleState { kRawPointers, kHandles } handle_state_;
 
   using ValuesContainer = std::deque<TranslatedValue>;
 
@@ -351,7 +396,9 @@ class TranslatedFrame {
 
 #if V8_ENABLE_WEBASSEMBLY
   // Only for Kind == kJSToWasmBuiltinContinuation
-  base::Optional<wasm::ValueKind> return_kind_;
+  std::optional<wasm::ValueKind> return_kind_;
+  // Only for Kind == kLiftOffFunction
+  int wasm_function_index_ = -1;
 #endif  // V8_ENABLE_WEBASSEMBLY
 };
 
@@ -431,6 +478,7 @@ class TranslatedState {
 
   void Init(Isolate* isolate, Address input_frame_pointer,
             Address stack_frame_pointer, DeoptTranslationIterator* iterator,
+            Tagged<ProtectedDeoptimizationLiteralArray> protected_literal_array,
             const DeoptimizationLiteralProvider& literal_array,
             RegisterValues* registers, FILE* trace_file, int parameter_count,
             int actual_argument_count);
@@ -449,6 +497,7 @@ class TranslatedState {
 
   TranslatedFrame CreateNextTranslatedFrame(
       DeoptTranslationIterator* iterator,
+      Tagged<ProtectedDeoptimizationLiteralArray> protected_literal_array,
       const DeoptimizationLiteralProvider& literal_array, Address fp,
       FILE* trace_file);
   int CreateNextTranslatedValue(
@@ -463,7 +512,8 @@ class TranslatedState {
 
   void UpdateFromPreviouslyMaterializedObjects();
   void MaterializeFixedDoubleArray(TranslatedFrame* frame, int* value_index,
-                                   TranslatedValue* slot, Handle<Map> map);
+                                   TranslatedValue* slot,
+                                   DirectHandle<Map> map);
   void MaterializeHeapNumber(TranslatedFrame* frame, int* value_index,
                              TranslatedValue* slot);
 
@@ -472,9 +522,9 @@ class TranslatedState {
   void SkipSlots(int slots_to_skip, TranslatedFrame* frame, int* value_index);
 
   Handle<ByteArray> AllocateStorageFor(TranslatedValue* slot);
-  void EnsureJSObjectAllocated(TranslatedValue* slot, Handle<Map> map);
+  void EnsureJSObjectAllocated(TranslatedValue* slot, DirectHandle<Map> map);
   void EnsurePropertiesAllocatedAndMarked(TranslatedValue* properties_slot,
-                                          Handle<Map> map);
+                                          DirectHandle<Map> map);
   void EnsureChildrenAllocated(int count, TranslatedFrame* frame,
                                int* value_index, std::stack<int>* worklist);
   void EnsureCapturedObjectAllocatedAt(int object_index,
@@ -483,11 +533,11 @@ class TranslatedState {
   void InitializeCapturedObjectAt(int object_index, std::stack<int>* worklist,
                                   const DisallowGarbageCollection& no_gc);
   void InitializeJSObjectAt(TranslatedFrame* frame, int* value_index,
-                            TranslatedValue* slot, Handle<Map> map,
+                            TranslatedValue* slot, DirectHandle<Map> map,
                             const DisallowGarbageCollection& no_gc);
   void InitializeObjectWithTaggedFieldsAt(
       TranslatedFrame* frame, int* value_index, TranslatedValue* slot,
-      Handle<Map> map, const DisallowGarbageCollection& no_gc);
+      DirectHandle<Map> map, const DisallowGarbageCollection& no_gc);
 
   void ReadUpdateFeedback(DeoptTranslationIterator* iterator,
                           Tagged<DeoptimizationLiteralArray> literal_array,
@@ -504,6 +554,7 @@ class TranslatedState {
   static uint64_t GetUInt64Slot(Address fp, int slot_index);
   static Float32 GetFloatSlot(Address fp, int slot_index);
   static Float64 GetDoubleSlot(Address fp, int slot_index);
+  static Simd128 getSimd128Slot(Address fp, int slot_index);
 
   Purpose const purpose_;
   std::vector<TranslatedFrame> frames_;

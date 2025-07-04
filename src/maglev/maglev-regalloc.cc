@@ -31,8 +31,12 @@
 #include "src/codegen/arm/register-arm.h"
 #elif V8_TARGET_ARCH_ARM64
 #include "src/codegen/arm64/register-arm64.h"
+#elif V8_TARGET_ARCH_RISCV64
+#include "src/codegen/riscv/register-riscv.h"
 #elif V8_TARGET_ARCH_X64
 #include "src/codegen/x64/register-x64.h"
+#elif V8_TARGET_ARCH_S390X
+#include "src/codegen/s390/register-s390.h"
 #else
 #error "Maglev does not supported this architecture."
 #endif
@@ -391,6 +395,10 @@ void StraightForwardRegisterAllocator::AllocateRegisters() {
     constant->SetConstantLocation();
     USE(address);
   }
+  for (const auto& [ref, constant] : graph_->trusted_constants()) {
+    constant->SetConstantLocation();
+    USE(ref);
+  }
 
   for (block_it_ = graph_->begin(); block_it_ != graph_->end(); ++block_it_) {
     BasicBlock* block = *block_it_;
@@ -495,7 +503,7 @@ void StraightForwardRegisterAllocator::AllocateRegisters() {
           } else if (phi->owner().is_parameter() &&
                      phi->owner().is_receiver()) {
             // The receiver is a special case for a fairly silly reason:
-            // OptimizedFrame::Summarize requires the receiver (and the
+            // OptimizedJSFrame::Summarize requires the receiver (and the
             // function) to be in a stack slot, since its value must be
             // available even though we're not deoptimizing (and thus register
             // states are not available).
@@ -1157,7 +1165,7 @@ void StraightForwardRegisterAllocator::AddMoveBeforeCurrentNode(
           << PrintNodeLabel(graph_labeller(), node) << std::endl;
     }
     gap_move =
-        Node::New<ConstantGapMove>(compilation_info_->zone(), {}, node, target);
+        Node::New<ConstantGapMove>(compilation_info_->zone(), 0, node, target);
   } else {
     if (v8_flags.trace_maglev_regalloc) {
       printing_visitor_->os() << "  gap move: " << target << " ← "
@@ -1165,9 +1173,10 @@ void StraightForwardRegisterAllocator::AddMoveBeforeCurrentNode(
                               << source << std::endl;
     }
     gap_move =
-        Node::New<GapMove>(compilation_info_->zone(), {},
+        Node::New<GapMove>(compilation_info_->zone(), 0,
                            compiler::AllocatedOperand::cast(source), target);
   }
+  gap_move->InitTemporaries();
   if (compilation_info_->has_graph_labeller()) {
     graph_labeller()->RegisterNode(gap_move);
   }

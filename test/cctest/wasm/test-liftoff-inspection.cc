@@ -43,8 +43,8 @@ class LiftoffCompileEnvironment {
     // Now compile the function with Liftoff two times.
     CompilationEnv env = CompilationEnv::ForModule(
         wasm_runner_.builder().trusted_instance_data()->native_module());
-    WasmFeatures detected1;
-    WasmFeatures detected2;
+    WasmDetectedFeatures detected1;
+    WasmDetectedFeatures detected2;
     WasmCompilationResult result1 =
         ExecuteLiftoffCompilation(&env, test_func.body,
                                   LiftoffOptions{}
@@ -151,7 +151,7 @@ class LiftoffCompileEnvironment {
                                               function->code.end_offset());
 
     bool is_shared =
-        native_module->module()->types[function->sig_index].is_shared;
+        native_module->module()->type(function->sig_index).is_shared;
     FunctionBody body{sig, 0, function_wire_bytes.begin(),
                       function_wire_bytes.end(), is_shared};
     return {code, body};

@@ -30,6 +30,7 @@
 #include <utility>
 #include <vector>
 
+#include "./fuzztest/fuzztest.h"
 #include "absl/algorithm/container.h"
 #include "absl/functional/function_ref.h"
 #include "absl/strings/match.h"
@@ -37,10 +38,11 @@
 #include "absl/strings/string_view.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
-#include "./fuzztest/fuzztest.h"
 #include "./fuzztest/internal/logging.h"
 #include "./fuzztest/internal/test_protobuf.pb.h"
 #include "google/protobuf/descriptor.h"
+#include "google/protobuf/message.h"
+#include "google/protobuf/message_lite.h"
 
 namespace {
 
@@ -55,6 +57,7 @@ using ::fuzztest::StructOf;
 using ::fuzztest::TupleOf;
 using ::fuzztest::VectorOf;
 using ::fuzztest::internal::ProtoExtender;
+using ::fuzztest::internal::SingleInt32Field;
 using ::fuzztest::internal::TestProtobuf;
 using ::fuzztest::internal::TestProtobufWithExtension;
 using ::fuzztest::internal::TestProtobufWithRecursion;
@@ -106,6 +109,13 @@ auto SeedInputIsUsed(const std::vector<int>& s) {
   if (s == std::vector<int>{0x90091E, 0x15, 0xC001}) std::abort();
 }
 FUZZ_TEST(MySuite, SeedInputIsUsed).WithSeeds({{{0x90091E, 0x15, 0xC001}}});
+
+void LongInput(const std::vector<char>& input) {
+  if (input.size() == 5000) std::abort();
+}
+FUZZ_TEST(MySuite, LongInput)
+    .WithDomains(Arbitrary<std::vector<char>>().WithMaxSize(5000))
+    .WithSeeds({std::vector(5000, 'A')});
 
 TestProtobuf GetMagicalProto() {
   TestProtobuf result;
@@ -169,13 +179,13 @@ FUZZ_TEST(MySuite, RepeatedFieldHasMinimumSize)
     .WithDomains(Arbitrary<TestProtobuf>().WithRepeatedBoolField(
         "rep_b", VectorOf(Arbitrary<bool>()).WithMinSize(10)));
 
-void FailsWhenFieldI32HasNoValue(const TestProtobuf& proto) {
+void FailsWhenFieldI32HasNoValue(const SingleInt32Field& proto) {
   if (!proto.has_i32()) std::abort();
 }
 
 FUZZ_TEST(MySuite, FailsWhenFieldI32HasNoValue)
-    .WithDomains(Arbitrary<TestProtobuf>().WithInt32Field("i32",
-                                                          InRange(0, 1000)));
+    .WithDomains(
+        Arbitrary<SingleInt32Field>().WithInt32Field("i32", InRange(0, 1000)));
 
 void FailsWhenFieldI64HasValue(const TestProtobuf& proto) {
   if (proto.has_i64()) std::abort();
@@ -555,19 +565,19 @@ struct HasConstructor {
   HasConstructor(int a, std::string b) : a(a), b(b) {}
 };
 
-void FailsWhenI32IsSet(const std::unique_ptr<google::protobuf::Message>& m) {
-  if (m->GetDescriptor()->full_name() != "fuzztest.internal.TestProtobuf") {
+void FailsWhenI32IsSet(std::unique_ptr<google::protobuf::Message> m) {
+  if (m->GetDescriptor()->full_name() != "fuzztest.internal.SingleInt32Field") {
     return;
   }
-  auto* proto =
-      google::protobuf::DynamicCastToGenerated<fuzztest::internal::TestProtobuf>(&*m);
-  if (proto->has_i32()) {
+  const auto& proto =
+      google::protobuf::DynamicCastMessage<fuzztest::internal::SingleInt32Field>(*m);
+  if (proto.has_i32()) {
     absl::FPrintF(stderr, "The field i32 is set!\n");
     std::abort();
   }
 }
 FUZZ_TEST(MySuite, FailsWhenI32IsSet).WithDomains(fuzztest::ProtobufOf([]() {
-  return &fuzztest::internal::TestProtobuf::default_instance();
+  return &fuzztest::internal::SingleInt32Field::default_instance();
 }));
 
 void WorksWithStructsWithConstructors(const HasConstructor& h) {
@@ -752,6 +762,7 @@ void DetectRegressionAndCoverageInputs(const std::string& input) {
   if (absl::StartsWith(input, "coverage")) {
     std::cout << "coverage input detected: " << input << std::endl;
   }
+  absl::SleepFor(absl::Seconds(0.1));
 }
 FUZZ_TEST(MySuite, DetectRegressionAndCoverageInputs);
 
@@ -774,5 +785,37 @@ FUZZ_TEST(MySuite, LargeHeapAllocation)
     .WithDomains(Just(
         // 1 GiB
         1ULL << 30));
+
+// A fuzz test that is expected to accept and skip some inputs before hitting
+// the crash.
+void SkipInputs(uint32_t input) {
+  static bool skipped_input = false;
+  static bool accepted_input = false;
+  // Crash only when `input` is 123456789.
+  if (input != 123456789) {
+    // The condition below should have enough chance to either pass or not.
+    //
+    // Note that we want the input to here be accepted at least once so that the
+    // fuzzing engine can learn about the branch above.
+    if (input % 7 % 2 == 0) {
+      if (!skipped_input) {
+        skipped_input = true;
+        std::cerr << "Skipped input" << std::endl;
+      }
+      fuzztest::SkipTestsOrCurrentInput();
+      return;
+    }
+    if (!accepted_input) accepted_input = true;
+    return;
+  }
+  // This introduces statefulness which is undesired in real fuzz tests, but
+  // here it makes it more reliable for functional testing.
+  if (skipped_input && accepted_input) {
+    std::abort();
+  }
+}
+// Due to the limitation of the fuzzing engine, there must be an accepted input
+// when initializing the corpus for fuzzing. So we provide one.
+FUZZ_TEST(MySuite, SkipInputs).WithSeeds({1});
 
 }  // namespace

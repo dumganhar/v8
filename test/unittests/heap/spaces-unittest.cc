@@ -13,7 +13,7 @@
 #include "src/heap/heap.h"
 #include "src/heap/large-spaces.h"
 #include "src/heap/main-allocator.h"
-#include "src/heap/mutable-page.h"
+#include "src/heap/mutable-page-metadata.h"
 #include "src/heap/spaces-inl.h"
 #include "test/unittests/test-utils.h"
 
@@ -55,7 +55,8 @@ TEST_F(SpacesTest, CompactionSpaceMerge) {
 
   CompactionSpace* compaction_space =
       new CompactionSpace(heap, OLD_SPACE, NOT_EXECUTABLE,
-                          CompactionSpaceKind::kCompactionSpaceForMarkCompact);
+                          CompactionSpaceKind::kCompactionSpaceForMarkCompact,
+                          CompactionSpace::DestinationHeap::kSameHeap);
   MainAllocator allocator(heap, compaction_space, MainAllocator::kInGC);
   EXPECT_TRUE(compaction_space != nullptr);
 

@@ -17,8 +17,12 @@
 #include "src/maglev/arm/maglev-assembler-arm-inl.h"
 #elif V8_TARGET_ARCH_ARM64
 #include "src/maglev/arm64/maglev-assembler-arm64-inl.h"
+#elif V8_TARGET_ARCH_RISCV64
+#include "src/maglev/riscv/maglev-assembler-riscv-inl.h"
 #elif V8_TARGET_ARCH_X64
 #include "src/maglev/x64/maglev-assembler-x64-inl.h"
+#elif V8_TARGET_ARCH_S390X
+#include "src/maglev/s390/maglev-assembler-s390-inl.h"
 #else
 #error "Maglev does not supported this architecture."
 #endif
@@ -160,22 +164,20 @@ class DeferredCodeInfoImpl final : public DeferredCodeInfo {
       typename FunctionArgumentsTupleHelper<Function>::Tuple>::Stripped;
 
   template <typename... InArgs>
-  explicit DeferredCodeInfoImpl(MaglevCompilationInfo* compilation_info,
-                                RegList general_temporaries,
-                                DoubleRegList double_temporaries,
-                                FunctionPointer function, InArgs&&... args)
+  explicit DeferredCodeInfoImpl(
+      MaglevCompilationInfo* compilation_info,
+      MaglevAssembler::TemporaryRegisterScope::SavedData deferred_scratch,
+      FunctionPointer function, InArgs&&... args)
       : function(function),
         args(CopyForDeferred(compilation_info, std::forward<InArgs>(args))...),
-        general_temporaries_(general_temporaries),
-        double_temporaries_(double_temporaries) {}
+        deferred_scratch_(deferred_scratch) {}
 
   DeferredCodeInfoImpl(DeferredCodeInfoImpl&&) = delete;
   DeferredCodeInfoImpl(const DeferredCodeInfoImpl&) = delete;
 
   void Generate(MaglevAssembler* masm) override {
-    MaglevAssembler::ScratchRegisterScope scratch_scope(masm);
-    scratch_scope.SetAvailable(general_temporaries_);
-    scratch_scope.SetAvailableDouble(double_temporaries_);
+    MaglevAssembler::TemporaryRegisterScope scratch_scope(masm,
+                                                          deferred_scratch_);
 #ifdef DEBUG
     masm->set_allow_call(allow_call_);
     masm->set_allow_deferred_call(allow_call_);
@@ -198,8 +200,7 @@ class DeferredCodeInfoImpl final : public DeferredCodeInfo {
  private:
   FunctionPointer function;
   Tuple args;
-  RegList general_temporaries_;
-  DoubleRegList double_temporaries_;
+  MaglevAssembler::TemporaryRegisterScope::SavedData deferred_scratch_;
 
 #ifdef DEBUG
   bool allow_call_ = false;
@@ -222,12 +223,11 @@ inline Label* MaglevAssembler::MakeDeferredCode(Function&& deferred_code_gen,
       "Parameters of deferred_code_gen function should match arguments into "
       "MakeDeferredCode");
 
-  ScratchRegisterScope scratch_scope(this);
+  TemporaryRegisterScope scratch_scope(this);
   using DeferredCodeInfoT = detail::DeferredCodeInfoImpl<Function>;
   DeferredCodeInfoT* deferred_code =
       compilation_info()->zone()->New<DeferredCodeInfoT>(
-          compilation_info(), scratch_scope.Available(),
-          scratch_scope.AvailableDouble(), deferred_code_gen,
+          compilation_info(), scratch_scope.CopyForDefer(), deferred_code_gen,
           std::forward<Args>(args)...);
 
 #ifdef DEBUG
@@ -278,6 +278,57 @@ inline void MaglevAssembler::SmiToDouble(DoubleRegister result, Register smi) {
   SmiUntag(smi);
   Int32ToDouble(result, smi);
 }
+
+#if !defined(V8_TARGET_ARCH_RISCV64)
+
+inline void MaglevAssembler::CompareInstanceTypeAndJumpIf(
+    Register map, InstanceType type, Condition cond, Label* target,
+    Label::Distance distance) {
+  CompareInstanceType(map, type);
+  JumpIf(cond, target, distance);
+}
+
+template <typename NodeT>
+inline void MaglevAssembler::CompareInstanceTypeRangeAndEagerDeoptIf(
+    Register map, Register instance_type_out, InstanceType lower_limit,
+    InstanceType higher_limit, Condition cond, DeoptimizeReason reason,
+    NodeT* node) {
+  CompareInstanceTypeRange(map, instance_type_out, lower_limit, higher_limit);
+  EmitEagerDeoptIf(cond, reason, node);
+}
+
+template <typename NodeT>
+inline void MaglevAssembler::CompareRootAndEmitEagerDeoptIf(
+    Register reg, RootIndex index, Condition cond, DeoptimizeReason reason,
+    NodeT* node) {
+  CompareRoot(reg, index);
+  EmitEagerDeoptIf(cond, reason, node);
+}
+
+template <typename NodeT>
+inline void MaglevAssembler::CompareMapWithRootAndEmitEagerDeoptIf(
+    Register reg, RootIndex index, Register scratch, Condition cond,
+    DeoptimizeReason reason, NodeT* node) {
+  CompareMapWithRoot(reg, index, scratch);
+  EmitEagerDeoptIf(cond, reason, node);
+}
+
+template <typename NodeT>
+inline void MaglevAssembler::CompareTaggedRootAndEmitEagerDeoptIf(
+    Register reg, RootIndex index, Condition cond, DeoptimizeReason reason,
+    NodeT* node) {
+  CompareTaggedRoot(reg, index);
+  EmitEagerDeoptIf(cond, reason, node);
+}
+
+template <typename NodeT>
+inline void MaglevAssembler::CompareUInt32AndEmitEagerDeoptIf(
+    Register reg, int imm, Condition cond, DeoptimizeReason reason,
+    NodeT* node) {
+  Cmp(reg, imm);
+  EmitEagerDeoptIf(cond, reason, node);
+}
+#endif
 
 inline void MaglevAssembler::CompareInt32AndBranch(Register r1, int32_t value,
                                                    Condition cond,
@@ -339,12 +390,6 @@ inline void MaglevAssembler::LoadTaggedField(Register result, Register object,
   MacroAssembler::LoadTaggedField(result, FieldMemOperand(object, offset));
 }
 
-inline void MaglevAssembler::LoadTaggedFieldWithoutDecompressing(
-    Register result, Register object, int offset) {
-  MacroAssembler::LoadTaggedFieldWithoutDecompressing(
-      result, FieldMemOperand(object, offset));
-}
-
 inline void MaglevAssembler::LoadTaggedSignedField(Register result,
                                                    MemOperand operand) {
   MacroAssembler::LoadTaggedField(result, operand);
@@ -378,7 +423,8 @@ inline bool ClobberedBy(RegList written_registers, Register reg) {
 inline bool ClobberedBy(RegList written_registers, DoubleRegister reg) {
   return false;
 }
-inline bool ClobberedBy(RegList written_registers, Handle<Object> handle) {
+inline bool ClobberedBy(RegList written_registers,
+                        DirectHandle<Object> handle) {
   return false;
 }
 inline bool ClobberedBy(RegList written_registers, Tagged<Smi> smi) {
@@ -405,7 +451,7 @@ inline bool ClobberedBy(DoubleRegList written_registers, DoubleRegister reg) {
   return written_registers.has(reg);
 }
 inline bool ClobberedBy(DoubleRegList written_registers,
-                        Handle<Object> handle) {
+                        DirectHandle<Object> handle) {
   return false;
 }
 inline bool ClobberedBy(DoubleRegList written_registers, Tagged<Smi> smi) {
@@ -437,7 +483,8 @@ inline bool MachineTypeMatches(MachineType type, DoubleRegister reg) {
 inline bool MachineTypeMatches(MachineType type, MemOperand reg) {
   return true;
 }
-inline bool MachineTypeMatches(MachineType type, Handle<HeapObject> handle) {
+inline bool MachineTypeMatches(MachineType type,
+                               DirectHandle<HeapObject> handle) {
   return type.IsTagged() && !type.IsTaggedSigned();
 }
 inline bool MachineTypeMatches(MachineType type, Tagged<Smi> smi) {
@@ -661,7 +708,7 @@ inline void MaglevAssembler::CallBuiltin(Builtin builtin) {
 
   // Temporaries have to be reset before calling CallBuiltin, in case it uses
   // temporaries that alias register parameters.
-  ScratchRegisterScope reset_temps(this);
+  TemporaryRegisterScope reset_temps(this);
   reset_temps.ResetToDefault();
 
   // Make sure that none of the register parameters alias the default
@@ -688,7 +735,7 @@ inline void MaglevAssembler::CallRuntime(Runtime::FunctionId fid) {
   DCHECK(allow_call());
   // Temporaries have to be reset before calling CallRuntime, in case it uses
   // temporaries that alias register parameters.
-  ScratchRegisterScope reset_temps(this);
+  TemporaryRegisterScope reset_temps(this);
   reset_temps.ResetToDefault();
   MacroAssembler::CallRuntime(fid);
 }
@@ -698,14 +745,14 @@ inline void MaglevAssembler::CallRuntime(Runtime::FunctionId fid,
   DCHECK(allow_call());
   // Temporaries have to be reset before calling CallRuntime, in case it uses
   // temporaries that alias register parameters.
-  ScratchRegisterScope reset_temps(this);
+  TemporaryRegisterScope reset_temps(this);
   reset_temps.ResetToDefault();
   MacroAssembler::CallRuntime(fid, num_args);
 }
 
 inline void MaglevAssembler::SetMapAsRoot(Register object, RootIndex map) {
-  ScratchRegisterScope temps(this);
-  Register scratch = temps.GetDefaultScratchRegister();
+  TemporaryRegisterScope temps(this);
+  Register scratch = temps.AcquireScratch();
   LoadTaggedRoot(scratch, map);
   StoreTaggedFieldNoWriteBarrier(object, HeapObject::kMapOffset, scratch);
 }
@@ -807,7 +854,7 @@ inline void MaglevAssembler::JumpIfStringMap(Register map, Label* target,
   // All string maps are allocated at the start of the read only heap. Thus,
   // non-strings must have maps with larger (compressed) addresses.
   CompareInt32AndJumpIf(
-      map, InstanceTypeChecker::kLastStringMap,
+      map, InstanceTypeChecker::kStringMapUpperBound,
       jump_if_true ? kUnsignedLessThanEqual : kUnsignedGreaterThan, target,
       distance);
 #else
@@ -815,16 +862,17 @@ inline void MaglevAssembler::JumpIfStringMap(Register map, Label* target,
   DecompressTagged(map, map);
 #endif
   static_assert(FIRST_STRING_TYPE == FIRST_TYPE);
-  CompareInstanceType(map, LAST_STRING_TYPE);
-  JumpIf(jump_if_true ? kUnsignedLessThanEqual : kUnsignedGreaterThan, target,
-         distance);
+  CompareInstanceTypeAndJumpIf(
+      map, LAST_STRING_TYPE,
+      jump_if_true ? kUnsignedLessThanEqual : kUnsignedGreaterThan, target,
+      distance);
 #endif
 }
 
 inline void MaglevAssembler::JumpIfString(Register heap_object, Label* target,
                                           Label::Distance distance) {
-  ScratchRegisterScope temps(this);
-  Register scratch = temps.GetDefaultScratchRegister();
+  TemporaryRegisterScope temps(this);
+  Register scratch = temps.AcquireScratch();
 #ifdef V8_COMPRESS_POINTERS
   LoadCompressedMap(scratch, heap_object);
 #else
@@ -836,8 +884,8 @@ inline void MaglevAssembler::JumpIfString(Register heap_object, Label* target,
 inline void MaglevAssembler::JumpIfNotString(Register heap_object,
                                              Label* target,
                                              Label::Distance distance) {
-  ScratchRegisterScope temps(this);
-  Register scratch = temps.GetDefaultScratchRegister();
+  TemporaryRegisterScope temps(this);
+  Register scratch = temps.AcquireScratch();
 #ifdef V8_COMPRESS_POINTERS
   LoadCompressedMap(scratch, heap_object);
 #else
@@ -850,39 +898,16 @@ inline void MaglevAssembler::CheckJSAnyIsStringAndBranch(
     Register heap_object, Label* if_true, Label::Distance true_distance,
     bool fallthrough_when_true, Label* if_false, Label::Distance false_distance,
     bool fallthrough_when_false) {
-#if V8_STATIC_ROOTS_BOOL
-  ScratchRegisterScope temps(this);
-  Register scratch = temps.GetDefaultScratchRegister();
-  // All string maps are allocated at the start of the read only heap. Thus,
-  // non-strings must have maps with larger (compressed) addresses.
-#ifdef V8_COMPRESS_POINTERS
-  LoadCompressedMap(scratch, heap_object);
-#else
-  LoadMap(scratch, heap_object);
-#endif
-  CompareInt32AndBranch(scratch, InstanceTypeChecker::kLastStringMap,
-                        kUnsignedLessThanEqual, if_true, true_distance,
-                        fallthrough_when_true, if_false, false_distance,
-                        fallthrough_when_false);
-#else
-  static_assert(FIRST_STRING_TYPE == FIRST_TYPE);
-  CompareObjectTypeAndBranch(heap_object, LAST_STRING_TYPE,
-                             kUnsignedLessThanEqual, if_true, true_distance,
-                             fallthrough_when_true, if_false, false_distance,
-                             fallthrough_when_false);
-#endif
+  BranchOnObjectTypeInRange(heap_object, FIRST_STRING_TYPE, LAST_STRING_TYPE,
+                            if_true, true_distance, fallthrough_when_true,
+                            if_false, false_distance, fallthrough_when_false);
 }
 
 inline void MaglevAssembler::StringLength(Register result, Register string) {
   if (v8_flags.debug_code) {
     // Check if {string} is a string.
-    ScratchRegisterScope temps(this);
-    Register scratch = temps.GetDefaultScratchRegister();
-    AssertNotSmi(string);
-    LoadMap(scratch, string);
-    CompareInstanceTypeRange(scratch, scratch, FIRST_STRING_TYPE,
-                             LAST_STRING_TYPE);
-    Check(kUnsignedLessThanEqual, AbortReason::kUnexpectedValue);
+    AssertObjectTypeInRange(string, FIRST_STRING_TYPE, LAST_STRING_TYPE,
+                            AbortReason::kUnexpectedValue);
   }
   LoadSignedField(result, FieldMemOperand(string, offsetof(String, length_)),
                   sizeof(int32_t));
@@ -894,6 +919,34 @@ void MaglevAssembler::LoadMapForCompare(Register dst, Register obj) {
 #else
   MacroAssembler::LoadMap(dst, obj);
 #endif
+}
+
+inline void MaglevAssembler::DefineLazyDeoptPoint(LazyDeoptInfo* info) {
+  info->set_deopting_call_return_pc(pc_offset_for_safepoint());
+  code_gen_state()->PushLazyDeopt(info);
+  safepoint_table_builder()->DefineSafepoint(this);
+  MaybeEmitPlaceHolderForDeopt();
+}
+
+inline void MaglevAssembler::DefineExceptionHandlerPoint(NodeBase* node) {
+  ExceptionHandlerInfo* info = node->exception_handler_info();
+  if (!info->HasExceptionHandler()) return;
+  info->pc_offset = pc_offset_for_safepoint();
+  code_gen_state()->PushHandlerInfo(node);
+}
+
+inline void MaglevAssembler::DefineExceptionHandlerAndLazyDeoptPoint(
+    NodeBase* node) {
+  DefineExceptionHandlerPoint(node);
+  DefineLazyDeoptPoint(node->lazy_deopt_info());
+}
+
+inline void SaveRegisterStateForCall::DefineSafepointWithLazyDeopt(
+    LazyDeoptInfo* lazy_deopt_info) {
+  lazy_deopt_info->set_deopting_call_return_pc(masm->pc_offset_for_safepoint());
+  masm->code_gen_state()->PushLazyDeopt(lazy_deopt_info);
+  DefineSafepoint();
+  masm->MaybeEmitPlaceHolderForDeopt();
 }
 
 }  // namespace maglev

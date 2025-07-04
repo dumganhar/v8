@@ -84,7 +84,7 @@ void CallPrinter::Print(const char* str) {
   builder_.AppendCString(str);
 }
 
-void CallPrinter::Print(Handle<String> str) {
+void CallPrinter::Print(DirectHandle<String> str) {
   if (!found_ || done_) return;
   num_prints_++;
   builder_.AppendString(str);
@@ -253,6 +253,10 @@ void CallPrinter::VisitInitializeClassStaticElementsStatement(
     }
   }
 }
+
+void CallPrinter::VisitAutoAccessorGetterBody(AutoAccessorGetterBody* node) {}
+
+void CallPrinter::VisitAutoAccessorSetterBody(AutoAccessorSetterBody* node) {}
 
 void CallPrinter::VisitNativeFunctionLiteral(NativeFunctionLiteral* node) {}
 
@@ -428,14 +432,17 @@ void CallPrinter::VisitProperty(Property* node) {
 void CallPrinter::VisitCall(Call* node) {
   bool was_found = false;
   if (node->position() == position_) {
-    if (error_in_spread_args_ == SpreadErrorInArgsHint::kErrorInArgs) {
-      found_ = true;
-      spread_arg_ = node->arguments()->last()->AsSpread()->expression();
-      Find(spread_arg_, true);
+    if (error_in_spread_args_ == SpreadErrorInArgsHint::kErrorInArgs &&
+        !node->arguments()->is_empty()) {
+      if (const Spread* spread = node->arguments()->last()->AsSpread()) {
+        found_ = true;
+        spread_arg_ = spread->expression();
+        Find(spread_arg_, true);
 
-      done_ = true;
-      found_ = false;
-      return;
+        done_ = true;
+        found_ = false;
+        return;
+      }
     }
 
     is_call_error_ = true;
@@ -464,14 +471,17 @@ void CallPrinter::VisitCall(Call* node) {
 void CallPrinter::VisitCallNew(CallNew* node) {
   bool was_found = false;
   if (node->position() == position_) {
-    if (error_in_spread_args_ == SpreadErrorInArgsHint::kErrorInArgs) {
-      found_ = true;
-      spread_arg_ = node->arguments()->last()->AsSpread()->expression();
-      Find(spread_arg_, true);
+    if (error_in_spread_args_ == SpreadErrorInArgsHint::kErrorInArgs &&
+        !node->arguments()->is_empty()) {
+      if (const Spread* spread = node->arguments()->last()->AsSpread()) {
+        found_ = true;
+        spread_arg_ = spread->expression();
+        Find(spread_arg_, true);
 
-      done_ = true;
-      found_ = false;
-      return;
+        done_ = true;
+        found_ = false;
+        return;
+      }
     }
 
     is_call_error_ = true;
@@ -577,9 +587,14 @@ void CallPrinter::VisitTemplateLiteral(TemplateLiteral* node) {
 }
 
 void CallPrinter::VisitImportCallExpression(ImportCallExpression* node) {
-  Print("ImportCall(");
+  Print("import");
+  if (node->phase() == ModuleImportPhase::kSource) {
+    Print(".source");
+  }
+  Print("(");
   Find(node->specifier(), true);
   if (node->import_options()) {
+    Print(", ");
     Find(node->import_options(), true);
   }
   Print(")");
@@ -612,7 +627,7 @@ void CallPrinter::FindArguments(const ZonePtrList<Expression>* arguments) {
 void CallPrinter::PrintLiteral(Handle<Object> value, bool quote) {
   if (IsString(*value)) {
     if (quote) Print("\"");
-    Print(Handle<String>::cast(value));
+    Print(Cast<String>(value));
     if (quote) Print("\"");
   } else if (IsNull(*value, isolate_)) {
     Print("null");
@@ -626,8 +641,7 @@ void CallPrinter::PrintLiteral(Handle<Object> value, bool quote) {
     Print(isolate_->factory()->NumberToString(value));
   } else if (IsSymbol(*value)) {
     // Symbols can only occur as literals if they were inserted by the parser.
-    PrintLiteral(handle(Handle<Symbol>::cast(value)->description(), isolate_),
-                 false);
+    PrintLiteral(handle(Cast<Symbol>(value)->description(), isolate_), false);
   }
 }
 
@@ -687,6 +701,9 @@ void AstPrinter::PrintLiteral(Literal* literal, bool quote) {
   switch (literal->type()) {
     case Literal::kString:
       PrintLiteral(literal->AsRawString(), quote);
+      break;
+    case Literal::kConsString:
+      PrintLiteral(literal->AsConsString(), quote);
       break;
     case Literal::kSmi:
       Print("%d", Smi::ToInt(literal->AsSmiLiteral()));
@@ -1132,6 +1149,16 @@ void AstPrinter::VisitInitializeClassStaticElementsStatement(
   PrintClassStaticElements(node->elements());
 }
 
+void AstPrinter::VisitAutoAccessorGetterBody(AutoAccessorGetterBody* node) {
+  IndentedScope indent(this, "AUTO ACCESSOR GETTER BODY", node->position());
+  PrintIndentedVisit("AUTO ACCESSOR STORAGE PRIVATE NAME", node->name_proxy());
+}
+
+void AstPrinter::VisitAutoAccessorSetterBody(AutoAccessorSetterBody* node) {
+  IndentedScope indent(this, "AUTO ACCESSOR SETTER BODY", node->position());
+  PrintIndentedVisit("AUTO ACCESSOR STORAGE PRIVATE NAME", node->name_proxy());
+}
+
 void AstPrinter::PrintClassProperty(ClassLiteral::Property* property) {
   const char* prop_kind = nullptr;
   switch (property->kind()) {
@@ -1146,6 +1173,9 @@ void AstPrinter::PrintClassProperty(ClassLiteral::Property* property) {
       break;
     case ClassLiteral::Property::FIELD:
       prop_kind = "FIELD";
+      break;
+    case ClassLiteral::Property::AUTO_ACCESSOR:
+      prop_kind = "AUTO ACCESSOR";
       break;
   }
   base::EmbeddedVector<char, 128> buf;
@@ -1417,8 +1447,7 @@ void AstPrinter::VisitCallNew(CallNew* node) {
 
 void AstPrinter::VisitCallRuntime(CallRuntime* node) {
   base::EmbeddedVector<char, 128> buf;
-  SNPrintF(buf, "CALL RUNTIME %s%s", node->debug_name(),
-           node->is_jsruntime() ? " (JS function)" : "");
+  SNPrintF(buf, "CALL RUNTIME %s", node->function()->name);
   IndentedScope indent(this, buf.begin(), node->position());
   PrintArguments(node->arguments());
 }
@@ -1488,6 +1517,8 @@ void AstPrinter::VisitTemplateLiteral(TemplateLiteral* node) {
 
 void AstPrinter::VisitImportCallExpression(ImportCallExpression* node) {
   IndentedScope indent(this, "IMPORT-CALL", node->position());
+  PrintIndented("PHASE");
+  Print(" %d\n", static_cast<uint32_t>(node->phase()));
   Visit(node->specifier());
   if (node->import_options()) {
     Visit(node->import_options());

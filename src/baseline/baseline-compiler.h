@@ -119,10 +119,6 @@ class BaselineCompiler {
 
   // Misc. helpers.
 
-  void UpdateMaxCallArgs(int max_call_args) {
-    max_call_args_ = std::max(max_call_args_, max_call_args);
-  }
-
   // Select the root boolean constant based on the jump in the given
   // `jump_func` -- the function should jump to the given label if we want to
   // select "true", otherwise it should fall through.
@@ -151,7 +147,7 @@ class BaselineCompiler {
 
   // Single bytecode visitors.
 #define DECLARE_VISITOR(name, ...) void Visit##name();
-  BYTECODE_LIST(DECLARE_VISITOR)
+  BYTECODE_LIST(DECLARE_VISITOR, DECLARE_VISITOR)
 #undef DECLARE_VISITOR
 
   // Intrinsic call visitors.
@@ -167,13 +163,11 @@ class BaselineCompiler {
   Handle<SharedFunctionInfo> shared_function_info_;
   Handle<HeapObject> interpreter_data_;
   Handle<BytecodeArray> bytecode_;
+  Zone zone_;
   MacroAssembler masm_;
   BaselineAssembler basm_;
   interpreter::BytecodeArrayIterator iterator_;
   BytecodeOffsetTableBuilder bytecode_offset_table_builder_;
-  Zone zone_;
-
-  int max_call_args_ = 0;
 
   // Mark location as a jump target reachable via indirect branches, required
   // for CFI.

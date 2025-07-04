@@ -15,8 +15,10 @@
 #ifndef FUZZTEST_FUZZTEST_GOOGLETEST_ADAPTOR_H_
 #define FUZZTEST_FUZZTEST_GOOGLETEST_ADAPTOR_H_
 
-#include <algorithm>
 #include <cstdlib>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "gtest/gtest.h"
 #include "absl/strings/string_view.h"
@@ -37,6 +39,7 @@ class GTest_TestAdaptor : public ::testing::Test {
 
   void TestBody() override {
     auto test = test_.make();
+    configuration_.fuzz_tests_in_current_shard = GetFuzzTestsInCurrentShard();
     if (Runtime::instance().run_mode() == RunMode::kUnitTest) {
       // In "bug reproduction" mode, sometimes we need to reproduce multiple
       // bugs, i.e., run multiple tests that lead to a crash.
@@ -98,6 +101,8 @@ class GTest_TestAdaptor : public ::testing::Test {
   }
 
  private:
+  std::vector<std::string> GetFuzzTestsInCurrentShard() const;
+
   FuzzTest& test_;
   int* argc_;
   char*** argv_;
@@ -110,6 +115,7 @@ class GTest_EventListener : public Base {
   void OnTestPartResult(const TestPartResult& test_part_result) override {
     if (!test_part_result.failed()) return;
     Runtime& runtime = Runtime::instance();
+    runtime.SetCrashTypeIfUnset("GoogleTest assertion failure");
     if (runtime.run_mode() == RunMode::kFuzz) {
       if (runtime.should_terminate_on_non_fatal_failure()) {
         // The SIGABRT will trigger a report.
@@ -130,6 +136,9 @@ void RegisterFuzzTestsAsGoogleTests(int* argc, char*** argv,
 // Set listing mode validator for GoogleTest to check that fuzz test listing was
 // properly handled.
 void SetFuzzTestListingModeValidatorForGoogleTest(bool listing_mode);
+
+// Returns the list of registered tests.
+std::vector<const testing::TestInfo*> GetRegisteredTests();
 
 }  // namespace fuzztest::internal
 

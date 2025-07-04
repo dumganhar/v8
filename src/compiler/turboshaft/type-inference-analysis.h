@@ -6,6 +6,7 @@
 #define V8_COMPILER_TURBOSHAFT_TYPE_INFERENCE_ANALYSIS_H_
 
 #include <limits>
+#include <optional>
 
 #include "src/base/logging.h"
 #include "src/base/vector.h"
@@ -44,7 +45,7 @@ class TypeInferenceAnalysis {
         types_(graph.op_id_count(), Type{}, graph.graph_zone(), &graph),
         table_(phase_zone),
         op_to_key_mapping_(phase_zone, &graph),
-        block_to_snapshot_mapping_(graph.block_count(), base::nullopt,
+        block_to_snapshot_mapping_(graph.block_count(), std::nullopt,
                                    phase_zone),
         predecessors_(phase_zone),
         graph_zone_(graph.graph_zone()) {}
@@ -97,7 +98,7 @@ class TypeInferenceAnalysis {
     {
       predecessors_.clear();
       for (const Block* pred : block.PredecessorsIterable()) {
-        base::Optional<table_t::Snapshot> pred_snapshot =
+        std::optional<table_t::Snapshot> pred_snapshot =
             block_to_snapshot_mapping_[pred->index()];
         if (pred_snapshot.has_value()) {
           predecessors_.push_back(pred_snapshot.value());
@@ -287,6 +288,14 @@ class TypeInferenceAnalysis {
   }
 
   void ProcessConstant(OpIndex index, const ConstantOp& constant) {
+    if (constant.kind == ConstantOp::Kind::kFloat64 &&
+        constant.float64().is_hole_nan()) {
+      // TODO(nicohartmann): figure out how to type Float64 NaN holes. Typing
+      // them simply as NaN is not always correct and can lead to replacing NaN
+      // holes with regular NaNs.
+      SetType(index, Type::Any());
+      return;
+    }
     Type type = Typer::TypeConstant(constant.kind, constant.storage);
     SetType(index, type);
   }
@@ -532,8 +541,8 @@ class TypeInferenceAnalysis {
   using table_t = SnapshotTable<Type>;
   table_t table_;
   const Block* current_block_ = nullptr;
-  GrowingOpIndexSidetable<base::Optional<table_t::Key>> op_to_key_mapping_;
-  GrowingBlockSidetable<base::Optional<table_t::Snapshot>>
+  GrowingOpIndexSidetable<std::optional<table_t::Key>> op_to_key_mapping_;
+  GrowingBlockSidetable<std::optional<table_t::Snapshot>>
       block_to_snapshot_mapping_;
   // {predecessors_} is used during merging, but we use an instance variable for
   // it, in order to save memory and not reallocate it for each merge.

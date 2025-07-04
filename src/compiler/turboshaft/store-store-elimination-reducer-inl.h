@@ -5,12 +5,15 @@
 #ifndef V8_COMPILER_TURBOSHAFT_STORE_STORE_ELIMINATION_REDUCER_INL_H_
 #define V8_COMPILER_TURBOSHAFT_STORE_STORE_ELIMINATION_REDUCER_INL_H_
 
+#include <optional>
+
 #include "src/compiler/turboshaft/assembler.h"
 #include "src/compiler/turboshaft/graph.h"
 #include "src/compiler/turboshaft/operations.h"
 #include "src/compiler/turboshaft/sidetable.h"
 #include "src/compiler/turboshaft/snapshot-table.h"
 #include "src/compiler/turboshaft/uniform-reducer-adapter.h"
+#include "src/heap/heap-layout-inl.h"
 #include "src/objects/heap-object-inl.h"
 
 namespace v8::internal::compiler::turboshaft {
@@ -144,7 +147,7 @@ class MaybeRedundantStoresTable
       auto successors = SuccessorBlocks(block->LastOperation(graph_));
       successor_snapshots_.clear();
       for (const Block* s : successors) {
-        base::Optional<Snapshot> s_snapshot =
+        std::optional<Snapshot> s_snapshot =
             block_to_snapshot_mapping_[s->index()];
         // When we visit the loop for the first time, the loop header hasn't
         // been visited yet, so we ignore it.
@@ -262,7 +265,7 @@ class MaybeRedundantStoresTable
   };
 
   const Graph& graph_;
-  GrowingBlockSidetable<base::Optional<Snapshot>> block_to_snapshot_mapping_;
+  GrowingBlockSidetable<std::optional<Snapshot>> block_to_snapshot_mapping_;
   ZoneAbslFlatHashMap<std::pair<OpIndex, int32_t>, Key> key_mapping_;
   // In `active_keys_`, we track the keys of all stores that arge gc-observable
   // or unobservable. Keys that are mapped to the default value (observable) are
@@ -322,10 +325,11 @@ class RedundantStoreAnalysis {
           // TODO(nicohartmann@): Use the new effect flags to distinguish heap
           // access once available.
           const bool is_on_heap_store = store.kind.tagged_base;
-          const bool is_field_store = !store.index().valid();
+          const bool is_fixed_offset_store = !store.index().valid();
           const uint8_t size = store.stored_rep.SizeInBytes();
-          // For now we consider only stores of fields of objects on the heap.
-          if (is_on_heap_store && is_field_store) {
+          // For now we consider only stores of fixed offsets of objects on the
+          // heap.
+          if (is_on_heap_store && is_fixed_offset_store) {
             bool is_eliminable_store = false;
             switch (table_.GetObservability(store.base(), store.offset, size)) {
               case StoreObservability::kUnobservable:
@@ -359,7 +363,7 @@ class RedundantStoreAnalysis {
                 store.maybe_initializing_or_transitioning &&
                 store.kind == StoreOp::Kind::TaggedBase() &&
                 store.write_barrier == WriteBarrierKind::kNoWriteBarrier &&
-                store.stored_rep.IsTagged()) {
+                store.stored_rep.IsCompressibleTagged()) {
               if (last_field_initialization_store_.valid() &&
                   graph_.NextIndex(index) == last_field_initialization_store_) {
                 const StoreOp& store0 = store;
@@ -385,8 +389,8 @@ class RedundantStoreAnalysis {
                 if (c0 && c1 && c0->kind == ConstantOp::Kind::kHeapObject &&
                     c1->kind == ConstantOp::Kind::kHeapObject &&
                     store1.offset - store0.offset == 4 &&
-                    InReadOnlySpace(*c0->handle()) &&
-                    InReadOnlySpace(*c1->handle())) {
+                    HeapLayout::InReadOnlySpace(*c0->handle()) &&
+                    HeapLayout::InReadOnlySpace(*c1->handle())) {
                   uint32_t high = static_cast<uint32_t>(c1->handle()->ptr());
                   uint32_t low = static_cast<uint32_t>(c0->handle()->ptr());
 #if V8_TARGET_BIG_ENDIAN
@@ -412,11 +416,16 @@ class RedundantStoreAnalysis {
           // TODO(nicohartmann@): Use the new effect flags to distinguish heap
           // access once available.
           const bool is_on_heap_load = load.kind.tagged_base;
-          const bool is_field_load = !load.index().valid();
+          const bool is_fixed_offset_load = !load.index().valid();
           // For now we consider only loads of fields of objects on the heap.
-          if (is_on_heap_load && is_field_load) {
-            table_.MarkPotentiallyAliasingStoresAsObservable(load.base(),
-                                                             load.offset);
+          if (is_on_heap_load) {
+            if (is_fixed_offset_load) {
+              table_.MarkPotentiallyAliasingStoresAsObservable(load.base(),
+                                                               load.offset);
+            } else {
+              // A dynamically indexed load might alias any fixed offset.
+              table_.MarkAllStoresAsObservable();
+            }
           }
           break;
         }

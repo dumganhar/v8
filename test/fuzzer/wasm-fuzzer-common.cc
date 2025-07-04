@@ -33,41 +33,15 @@
 
 namespace v8::internal::wasm::fuzzing {
 
-constexpr CompileTimeImports CompileTimeImportsForFuzzing() {
-  return CompileTimeImports({CompileTimeImport::kJsString,
-                             CompileTimeImport::kTextEncoder,
-                             CompileTimeImport::kTextDecoder});
-}
+namespace {
 
-// Compile a baseline module. We pass a pointer to a max step counter and a
-// nondeterminsm flag that are updated during execution by Liftoff.
-Handle<WasmModuleObject> CompileReferenceModule(
-    Isolate* isolate, base::Vector<const uint8_t> wire_bytes,
-    int32_t* max_steps, int32_t* nondeterminism) {
-  // Create the native module.
-  std::shared_ptr<NativeModule> native_module;
-  constexpr bool kNoVerifyFunctions = false;
-  auto enabled_features = WasmFeatures::FromIsolate(isolate);
-  ModuleResult module_res =
-      DecodeWasmModule(enabled_features, wire_bytes, kNoVerifyFunctions,
-                       ModuleOrigin::kWasmOrigin);
-  CHECK(module_res.ok());
-  std::shared_ptr<WasmModule> module = module_res.value();
-  CHECK_NOT_NULL(module);
-  WasmError imports_error = ValidateAndSetBuiltinImports(
-      module.get(), wire_bytes, CompileTimeImportsForFuzzing());
-  CHECK(!imports_error.has_error());  // The module was compiled before.
-  native_module = GetWasmEngine()->NewNativeModule(
-      isolate, enabled_features, CompileTimeImportsForFuzzing(), module, 0);
-  native_module->SetWireBytes(base::OwnedVector<uint8_t>::Of(wire_bytes));
-  // The module is known to be valid as this point (it was compiled by the
-  // caller before).
-  module->set_all_functions_validated();
-
-  // Compile all functions with Liftoff.
+void CompileAllFunctionsForReferenceExecution(NativeModule* native_module,
+                                              int32_t* max_steps,
+                                              int32_t* nondeterminism) {
+  const WasmModule* module = native_module->module();
   WasmCodeRefScope code_ref_scope;
-  CompilationEnv env = CompilationEnv::ForModule(native_module.get());
-  ModuleWireBytes wire_bytes_accessor{wire_bytes};
+  CompilationEnv env = CompilationEnv::ForModule(native_module);
+  ModuleWireBytes wire_bytes_accessor{native_module->wire_bytes()};
   for (size_t i = module->num_imported_functions; i < module->functions.size();
        ++i) {
     auto& func = module->functions[i];
@@ -90,13 +64,64 @@ Handle<WasmModuleObject> CompileReferenceModule(
     }
     native_module->PublishCode(native_module->AddCompiledCode(result));
   }
+}
+
+}  // namespace
+
+CompileTimeImports CompileTimeImportsForFuzzing() {
+  CompileTimeImports result;
+  result.Add(CompileTimeImport::kJsString);
+  result.Add(CompileTimeImport::kTextDecoder);
+  result.Add(CompileTimeImport::kTextEncoder);
+  return result;
+}
+
+// Compile a baseline module. We pass a pointer to a max step counter and a
+// nondeterminsm flag that are updated during execution by Liftoff.
+Handle<WasmModuleObject> CompileReferenceModule(
+    Isolate* isolate, base::Vector<const uint8_t> wire_bytes,
+    int32_t* max_steps, int32_t* nondeterminism) {
+  // Create the native module.
+  std::shared_ptr<NativeModule> native_module;
+  constexpr bool kNoVerifyFunctions = false;
+  auto enabled_features = WasmEnabledFeatures::FromIsolate(isolate);
+  WasmDetectedFeatures detected_features;
+  ModuleResult module_res =
+      DecodeWasmModule(enabled_features, wire_bytes, kNoVerifyFunctions,
+                       ModuleOrigin::kWasmOrigin, &detected_features);
+  CHECK(module_res.ok());
+  std::shared_ptr<WasmModule> module = std::move(module_res).value();
+  CHECK_NOT_NULL(module);
+  CompileTimeImports compile_imports = CompileTimeImportsForFuzzing();
+  WasmError imports_error = ValidateAndSetBuiltinImports(
+      module.get(), wire_bytes, compile_imports, &detected_features);
+  CHECK(!imports_error.has_error());  // The module was compiled before.
+  native_module = GetWasmEngine()->NewNativeModule(
+      isolate, enabled_features, detected_features,
+      CompileTimeImportsForFuzzing(), module, 0);
+  native_module->SetWireBytes(base::OwnedVector<uint8_t>::Of(wire_bytes));
+  // The module is known to be valid as this point (it was compiled by the
+  // caller before).
+  module->set_all_functions_validated();
+
+  // The value is -3 so that it is different than the compilation ID of actual
+  // compilations, different than the sentinel value of the CompilationState
+  // (-1) and the value used by native module deserialization (-2).
+  const int dummy_fuzzing_compilation_id = -3;
+  native_module->compilation_state()->set_compilation_id(
+      dummy_fuzzing_compilation_id);
+  InitializeCompilationForTesting(native_module.get());
+
+  // Compile all functions with Liftoff.
+  CompileAllFunctionsForReferenceExecution(native_module.get(), max_steps,
+                                           nondeterminism);
 
   // Create the module object.
   constexpr base::Vector<const char> kNoSourceUrl;
-  Handle<Script> script =
+  DirectHandle<Script> script =
       GetWasmEngine()->GetOrCreateScript(isolate, native_module, kNoSourceUrl);
-  isolate->heap()->EnsureWasmCanonicalRttsSize(module->MaxCanonicalTypeIndex() +
-                                               1);
+  TypeCanonicalizer::PrepareForCanonicalTypeId(isolate,
+                                               module->MaxCanonicalTypeIndex());
   return WasmModuleObject::New(isolate, std::move(native_module), script);
 }
 
@@ -156,8 +181,14 @@ void ExecuteAgainstReference(Isolate* isolate,
   isolate->heap()->AddNearHeapLimitCallback(heap_limit_callback,
                                             &oom_callback_data);
 
+  Tagged<WasmExportedFunctionData> func_data =
+      main_function->shared()->wasm_exported_function_data();
+  const FunctionSig* sig = func_data->instance_data()
+                               ->module()
+                               ->functions[func_data->function_index()]
+                               .sig;
   base::OwnedVector<Handle<Object>> compiled_args =
-      testing::MakeDefaultArguments(isolate, main_function->sig());
+      testing::MakeDefaultArguments(isolate, sig);
   std::unique_ptr<const char[]> exception_ref;
   int32_t result_ref = testing::CallWasmFunctionForTesting(
       isolate, instance_ref, "main", compiled_args.as_vector(), &exception_ref);
@@ -239,10 +270,11 @@ void GenerateTestCase(Isolate* isolate, ModuleWireBytes wire_bytes,
   if (did_output_before.exchange(true)) return;
 
   constexpr bool kVerifyFunctions = false;
-  auto enabled_features = WasmFeatures::FromIsolate(isolate);
-  ModuleResult module_res =
-      DecodeWasmModule(enabled_features, wire_bytes.module_bytes(),
-                       kVerifyFunctions, ModuleOrigin::kWasmOrigin);
+  auto enabled_features = WasmEnabledFeatures::FromIsolate(isolate);
+  WasmDetectedFeatures unused_detected_features;
+  ModuleResult module_res = DecodeWasmModule(
+      enabled_features, wire_bytes.module_bytes(), kVerifyFunctions,
+      ModuleOrigin::kWasmOrigin, &unused_detected_features);
   CHECK_WITH_MSG(module_res.ok(), module_res.error().message().c_str());
   WasmModule* module = module_res.value().get();
   CHECK_NOT_NULL(module);
@@ -258,6 +290,7 @@ void GenerateTestCase(Isolate* isolate, ModuleWireBytes wire_bytes,
   const bool offsets = false;  // Not supported by MjsunitModuleDis.
   StdoutStream os;
   out.WriteTo(os, offsets);
+  os.flush();
 }
 
 void EnableExperimentalWasmFeatures(v8::Isolate* isolate) {
@@ -269,12 +302,17 @@ void EnableExperimentalWasmFeatures(v8::Isolate* isolate) {
       FOREACH_WASM_STAGING_FEATURE_FLAG(ENABLE_STAGED_FEATURES)
 #undef ENABLE_STAGED_FEATURES
 
-#if V8_TARGET_ARCH_ARM64 || V8_TARGET_ARCH_X64
-      // Enable non-staged experimental features that we also want to fuzz.
-      v8_flags.wasm_memory64_trap_handling = true;
-#endif  // V8_TARGET_ARCH_ARM64 || V8_TARGET_ARCH_X64
-      // Note: If you add something here, you will also have to add the
-      // respective flag(s) to the mjsunit/wasm/generate-random-module test.
+      // Enable non-staged experimental features or other experimental flags
+      // that we also want to fuzz, e.g., new optimizations.
+      // Note: If you add a Wasm feature here, you will also have to add the
+      // respective flag(s) to the mjsunit/wasm/generate-random-module.js test,
+      // otherwise that fails on an unsupported feature.
+      // You may also want to add the flag(s) to the JS file header in
+      // `PrintModule()` of `mjsunit-module-disassembler-impl.h`, to make bugs
+      // easier to reproduce with generated mjsunit test cases.
+
+      // See https://crbug.com/335082212.
+      v8_flags.wasm_inlining_call_indirect = true;
 
       // Enforce implications from enabling features.
       FlagList::EnforceFlagImplications();
@@ -307,7 +345,7 @@ void WasmExecutionFuzzer::FuzzWasmModule(base::Vector<const uint8_t> data,
   // are saved as recursive groups as part of the type canonicalizer, but types
   // from previous runs just waste memory.
   GetTypeCanonicalizer()->EmptyStorageForTesting();
-  i_isolate->heap()->ClearWasmCanonicalRttsForTesting();
+  TypeCanonicalizer::ClearWasmCanonicalTypesForTesting(i_isolate);
 
   // Clear any exceptions from a prior run.
   if (i_isolate->has_exception()) {
@@ -361,11 +399,10 @@ void WasmExecutionFuzzer::FuzzWasmModule(base::Vector<const uint8_t> data,
 
   ModuleWireBytes wire_bytes(buffer.begin(), buffer.end());
 
-  auto enabled_features = WasmFeatures::FromIsolate(i_isolate);
-  CompileTimeImports compile_imports = CompileTimeImportsForFuzzing();
+  auto enabled_features = WasmEnabledFeatures::FromIsolate(i_isolate);
 
-  bool valid = GetWasmEngine()->SyncValidate(i_isolate, enabled_features,
-                                             compile_imports, wire_bytes);
+  bool valid = GetWasmEngine()->SyncValidate(
+      i_isolate, enabled_features, CompileTimeImportsForFuzzing(), wire_bytes);
 
   if (v8_flags.wasm_fuzzer_gen_test) {
     GenerateTestCase(i_isolate, wire_bytes, valid);
@@ -389,7 +426,8 @@ void WasmExecutionFuzzer::FuzzWasmModule(base::Vector<const uint8_t> data,
 
   ErrorThrower thrower(i_isolate, "WasmFuzzerSyncCompile");
   MaybeHandle<WasmModuleObject> compiled_module = GetWasmEngine()->SyncCompile(
-      i_isolate, enabled_features, compile_imports, &thrower, wire_bytes);
+      i_isolate, enabled_features, CompileTimeImportsForFuzzing(), &thrower,
+      wire_bytes);
   CHECK_EQ(valid, !compiled_module.is_null());
   CHECK_EQ(!valid, thrower.error());
   if (require_valid && !valid) {

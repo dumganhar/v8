@@ -9,6 +9,7 @@
 
 #include "src/objects/bytecode-array.h"
 #include "src/objects/fixed-array.h"
+#include "src/utils/boxed-float.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -32,26 +33,24 @@ class DeoptimizationLiteralArray : public TrustedWeakFixedArray {
   // Setter for literals. This will set the object as strong or weak depending
   // on InstructionStream::IsWeakObjectInOptimizedCode.
   inline void set(int index, Tagged<Object> value);
-
-  DECL_CAST(DeoptimizationLiteralArray)
-
-  OBJECT_CONSTRUCTORS(DeoptimizationLiteralArray, TrustedWeakFixedArray);
 };
+
+using ProtectedDeoptimizationLiteralArray = ProtectedFixedArray;
 
 enum class DeoptimizationLiteralKind {
   kObject,
   kNumber,
   kSignedBigInt64,
   kUnsignedBigInt64,
+  kHoleNaN,
   kInvalid,
 
   // These kinds are used by wasm only (as unoptimized JS doesn't have these
   // types).
-  // TODO(mliedtke): Add support for S128 / SIMD.
   kWasmI31Ref,
   kWasmInt32,
-  kWasmFloat,
-  kWasmDouble = kNumber,
+  kWasmFloat32,
+  kWasmFloat64,
   kWasmInt64 = kSignedBigInt64,
 };
 
@@ -62,12 +61,14 @@ class DeoptimizationLiteral {
  public:
   DeoptimizationLiteral()
       : kind_(DeoptimizationLiteralKind::kInvalid), object_() {}
-  explicit DeoptimizationLiteral(Handle<Object> object)
+  explicit DeoptimizationLiteral(IndirectHandle<Object> object)
       : kind_(DeoptimizationLiteralKind::kObject), object_(object) {
     CHECK(!object_.is_null());
   }
-  explicit DeoptimizationLiteral(float number)
-      : kind_(DeoptimizationLiteralKind::kWasmFloat), float_(number) {}
+  explicit DeoptimizationLiteral(Float32 number)
+      : kind_(DeoptimizationLiteralKind::kWasmFloat32), float32_(number) {}
+  explicit DeoptimizationLiteral(Float64 number)
+      : kind_(DeoptimizationLiteralKind::kWasmFloat64), float64_(number) {}
   explicit DeoptimizationLiteral(double number)
       : kind_(DeoptimizationLiteralKind::kNumber), number_(number) {}
   explicit DeoptimizationLiteral(int64_t signed_bigint64)
@@ -81,7 +82,13 @@ class DeoptimizationLiteral {
   explicit DeoptimizationLiteral(Tagged<Smi> smi)
       : kind_(DeoptimizationLiteralKind::kWasmI31Ref), int64_(smi.value()) {}
 
-  Handle<Object> object() const { return object_; }
+  static DeoptimizationLiteral HoleNaN() {
+    DeoptimizationLiteral literal;
+    literal.kind_ = DeoptimizationLiteralKind::kHoleNaN;
+    return literal;
+  }
+
+  IndirectHandle<Object> object() const { return object_; }
 
   bool operator==(const DeoptimizationLiteral& other) const {
     if (kind_ != other.kind_) {
@@ -99,11 +106,14 @@ class DeoptimizationLiteral {
         return int64_ == other.int64_;
       case DeoptimizationLiteralKind::kUnsignedBigInt64:
         return uint64_ == other.uint64_;
+      case DeoptimizationLiteralKind::kHoleNaN:
+        return other.kind() == DeoptimizationLiteralKind::kHoleNaN;
       case DeoptimizationLiteralKind::kInvalid:
         return true;
-      case DeoptimizationLiteralKind::kWasmFloat:
-        return base::bit_cast<uint32_t>(float_) ==
-               base::bit_cast<uint32_t>(other.float_);
+      case DeoptimizationLiteralKind::kWasmFloat32:
+        return float32_.get_bits() == other.float32_.get_bits();
+      case DeoptimizationLiteralKind::kWasmFloat64:
+        return float64_.get_bits() == other.float64_.get_bits();
     }
     UNREACHABLE();
   }
@@ -111,14 +121,14 @@ class DeoptimizationLiteral {
   Handle<Object> Reify(Isolate* isolate) const;
 
 #if V8_ENABLE_WEBASSEMBLY
-  double GetDouble() const {
-    DCHECK_EQ(kind_, DeoptimizationLiteralKind::kWasmDouble);
-    return number_;
+  Float64 GetFloat64() const {
+    DCHECK_EQ(kind_, DeoptimizationLiteralKind::kWasmFloat64);
+    return float64_;
   }
 
-  float GetFloat() const {
-    DCHECK_EQ(kind_, DeoptimizationLiteralKind::kWasmFloat);
-    return float_;
+  Float32 GetFloat32() const {
+    DCHECK_EQ(kind_, DeoptimizationLiteralKind::kWasmFloat32);
+    return float32_;
   }
 
   int64_t GetInt64() const {
@@ -150,9 +160,10 @@ class DeoptimizationLiteral {
   DeoptimizationLiteralKind kind_;
 
   union {
-    Handle<Object> object_;
+    IndirectHandle<Object> object_;
     double number_;
-    float float_;
+    Float32 float32_;
+    Float64 float64_;
     int64_t int64_;
     uint64_t uint64_;
   };
@@ -165,8 +176,6 @@ class DeoptimizationLiteral {
 enum class TranslationOpcode;
 class DeoptimizationFrameTranslation : public TrustedByteArray {
  public:
-  DECL_CAST(DeoptimizationFrameTranslation)
-
   struct FrameCount {
     int total_frame_count;
     int js_frame_count;
@@ -185,16 +194,12 @@ class DeoptimizationFrameTranslation : public TrustedByteArray {
   static constexpr int kDeoptimizationFrameTranslationElementSize = kInt32Size;
 #endif  // V8_USE_ZLIB
 
-  inline uint32_t get_int(int offset) const;
-  inline void set_int(int offset, uint32_t value);
-
 #ifdef ENABLE_DISASSEMBLER
   void PrintFrameTranslation(
       std::ostream& os, int index,
+      Tagged<ProtectedDeoptimizationLiteralArray> protected_literal_array,
       Tagged<DeoptimizationLiteralArray> literal_array) const;
 #endif
-
-  OBJECT_CONSTRUCTORS(DeoptimizationFrameTranslation, TrustedByteArray);
 };
 
 class DeoptTranslationIterator {
@@ -256,19 +261,23 @@ class DeoptimizationFrameTranslation::Iterator
 // It can be empty.
 class DeoptimizationData : public ProtectedFixedArray {
  public:
+  using SharedFunctionInfoWrapperOrSmi =
+      UnionOf<Smi, SharedFunctionInfoWrapper>;
+
   // Layout description.  Indices in the array.
   static const int kFrameTranslationIndex = 0;
   static const int kInlinedFunctionCountIndex = 1;
-  static const int kLiteralArrayIndex = 2;
-  static const int kOsrBytecodeOffsetIndex = 3;
-  static const int kOsrPcOffsetIndex = 4;
-  static const int kOptimizationIdIndex = 5;
-  static const int kSharedFunctionInfoWrapperIndex = 6;
-  static const int kInliningPositionsIndex = 7;
-  static const int kDeoptExitStartIndex = 8;
-  static const int kEagerDeoptCountIndex = 9;
-  static const int kLazyDeoptCountIndex = 10;
-  static const int kFirstDeoptEntryIndex = 11;
+  static const int kProtectedLiteralArrayIndex = 2;
+  static const int kLiteralArrayIndex = 3;
+  static const int kOsrBytecodeOffsetIndex = 4;
+  static const int kOsrPcOffsetIndex = 5;
+  static const int kOptimizationIdIndex = 6;
+  static const int kWrappedSharedFunctionInfoIndex = 7;
+  static const int kInliningPositionsIndex = 8;
+  static const int kDeoptExitStartIndex = 9;
+  static const int kEagerDeoptCountIndex = 10;
+  static const int kLazyDeoptCountIndex = 11;
+  static const int kFirstDeoptEntryIndex = 12;
 
   // Offsets of deopt entry elements relative to the start of the entry.
   static const int kBytecodeOffsetRawOffset = 0;
@@ -289,11 +298,14 @@ class DeoptimizationData : public ProtectedFixedArray {
   DECL_ELEMENT_ACCESSORS(FrameTranslation,
                          Tagged<DeoptimizationFrameTranslation>)
   DECL_ELEMENT_ACCESSORS(InlinedFunctionCount, Tagged<Smi>)
+  DECL_ELEMENT_ACCESSORS(ProtectedLiteralArray,
+                         Tagged<ProtectedDeoptimizationLiteralArray>)
   DECL_ELEMENT_ACCESSORS(LiteralArray, Tagged<DeoptimizationLiteralArray>)
   DECL_ELEMENT_ACCESSORS(OsrBytecodeOffset, Tagged<Smi>)
   DECL_ELEMENT_ACCESSORS(OsrPcOffset, Tagged<Smi>)
   DECL_ELEMENT_ACCESSORS(OptimizationId, Tagged<Smi>)
-  DECL_ELEMENT_ACCESSORS(SharedFunctionInfoWrapper, Tagged<Object>)
+  DECL_ELEMENT_ACCESSORS(WrappedSharedFunctionInfo,
+                         Tagged<SharedFunctionInfoWrapperOrSmi>)
   DECL_ELEMENT_ACCESSORS(InliningPositions,
                          Tagged<TrustedPodArray<InliningPosition>>)
   DECL_ELEMENT_ACCESSORS(DeoptExitStart, Tagged<Smi>)
@@ -302,7 +314,7 @@ class DeoptimizationData : public ProtectedFixedArray {
 
 #undef DECL_ELEMENT_ACCESSORS
 
-  inline Tagged<Object> SharedFunctionInfo() const;
+  inline Tagged<SharedFunctionInfo> GetSharedFunctionInfo() const;
 
 // Accessors for elements of the ith deoptimization entry.
 #define DECL_ENTRY_ACCESSORS(name, type) \
@@ -333,7 +345,7 @@ class DeoptimizationData : public ProtectedFixedArray {
 
   // Returns the inlined function at the given position in LiteralArray, or the
   // outer function if index == kNotInlinedIndex.
-  Tagged<class SharedFunctionInfo> GetInlinedFunction(int index);
+  Tagged<SharedFunctionInfo> GetInlinedFunction(int index);
 
   // Allocates a DeoptimizationData.
   static Handle<DeoptimizationData> New(Isolate* isolate,
@@ -345,8 +357,6 @@ class DeoptimizationData : public ProtectedFixedArray {
   V8_EXPORT_PRIVATE static Handle<DeoptimizationData> Empty(Isolate* isolate);
   V8_EXPORT_PRIVATE static Handle<DeoptimizationData> Empty(
       LocalIsolate* isolate);
-
-  DECL_CAST(DeoptimizationData)
 
 #ifdef DEBUG
   void Verify(Handle<BytecodeArray> bytecode) const;
@@ -361,8 +371,6 @@ class DeoptimizationData : public ProtectedFixedArray {
   }
 
   static int LengthFor(int entry_count) { return IndexForEntry(entry_count); }
-
-  OBJECT_CONSTRUCTORS(DeoptimizationData, ProtectedFixedArray);
 };
 
 }  // namespace internal

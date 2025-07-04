@@ -4,6 +4,8 @@
 
 #include "src/wasm/streaming-decoder.h"
 
+#include <optional>
+
 #include "src/logging/counters.h"
 #include "src/wasm/decoder.h"
 #include "src/wasm/leb-helper.h"
@@ -18,9 +20,7 @@
     if (v8_flags.trace_wasm_streaming) PrintF(__VA_ARGS__); \
   } while (false)
 
-namespace v8 {
-namespace internal {
-namespace wasm {
+namespace v8::internal::wasm {
 
 class V8_EXPORT_PRIVATE AsyncStreamingDecoder : public StreamingDecoder {
  public:
@@ -75,7 +75,7 @@ class V8_EXPORT_PRIVATE AsyncStreamingDecoder : public StreamingDecoder {
                                offset_in_code_buffer + ref.length());
     }
 
-    base::Optional<ModuleWireBytes> GetModuleBytes() const final { return {}; }
+    std::optional<ModuleWireBytes> GetModuleBytes() const final { return {}; }
 
     uint32_t module_offset() const { return module_offset_; }
     base::Vector<uint8_t> bytes() const { return bytes_.as_vector(); }
@@ -196,7 +196,7 @@ class V8_EXPORT_PRIVATE AsyncStreamingDecoder : public StreamingDecoder {
   }
 
   void Fail() {
-    // {Fail} cannot be called after {Finish}, {Abort}, {Fail}, or
+    // {Fail} cannot be called after {Finish}, {Abort}, or
     // {NotifyCompilationDiscarded}.
     DCHECK_EQ(processor_ == nullptr, failed_processor_ != nullptr);
     if (processor_ != nullptr) failed_processor_ = std::move(processor_);
@@ -283,7 +283,7 @@ size_t AsyncStreamingDecoder::DecodingState::ReadBytes(
 
 void AsyncStreamingDecoder::Finish(bool can_use_compiled_module) {
   TRACE_STREAMING("Finish\n");
-  // {Finish} cannot be called after {Finish}, {Abort}, {Fail}, or
+  // {Finish} cannot be called after {Finish}, {Abort}, or
   // {NotifyCompilationDiscarded}.
   CHECK_EQ(processor_ == nullptr, failed_processor_ != nullptr);
 
@@ -773,8 +773,6 @@ std::unique_ptr<StreamingDecoder> StreamingDecoder::CreateAsyncStreamingDecoder(
   return std::make_unique<AsyncStreamingDecoder>(std::move(processor));
 }
 
-}  // namespace wasm
-}  // namespace internal
-}  // namespace v8
+}  // namespace v8::internal::wasm
 
 #undef TRACE_STREAMING

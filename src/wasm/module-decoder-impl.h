@@ -64,9 +64,13 @@ inline bool validate_utf8(Decoder* decoder, WireBytesRef string) {
 inline WireBytesRef consume_string(Decoder* decoder,
                                    unibrow::Utf8Variant grammar,
                                    const char* name, ITracer* tracer) {
-  if (tracer) tracer->Description(name);
-  uint32_t length = decoder->consume_u32v(" length:", tracer);
   if (tracer) {
+    tracer->Description(name);
+    tracer->Description(" ");
+  }
+  uint32_t length = decoder->consume_u32v("length", tracer);
+  if (tracer) {
+    tracer->Description(": ");
     tracer->Description(length);
     tracer->NextLine();
   }
@@ -221,8 +225,9 @@ class WasmSectionIterator {
     section_start_ = decoder_->pc();
     // Empty line before next section.
     if (tracer_) tracer_->NextLine();
-    uint8_t section_code = decoder_->consume_u8("section kind: ", tracer_);
+    uint8_t section_code = decoder_->consume_u8("section kind", tracer_);
     if (tracer_) {
+      tracer_->Description(": ");
       tracer_->Description(SectionName(static_cast<SectionCode>(section_code)));
       tracer_->NextLine();
     }
@@ -301,11 +306,13 @@ inline void DumpModule(const base::Vector<const uint8_t> module_bytes,
 // The main logic for decoding the bytes of a module.
 class ModuleDecoderImpl : public Decoder {
  public:
-  ModuleDecoderImpl(WasmFeatures enabled_features,
+  ModuleDecoderImpl(WasmEnabledFeatures enabled_features,
                     base::Vector<const uint8_t> wire_bytes, ModuleOrigin origin,
+                    WasmDetectedFeatures* detected_features,
                     ITracer* tracer = ITracer::NoTrace)
       : Decoder(wire_bytes),
         enabled_features_(enabled_features),
+        detected_features_(detected_features),
         module_(std::make_shared<WasmModule>(origin)),
         module_start_(wire_bytes.begin()),
         module_end_(wire_bytes.end()),
@@ -463,10 +470,8 @@ class ModuleDecoderImpl : public Decoder {
         DecodeSourceMappingURLSection();
         break;
       case kDebugInfoSectionCode:
-        // If there is an explicit source map, prefer it over DWARF info.
-        if (module_->debug_symbols.type == WasmDebugSymbols::Type::None) {
-          module_->debug_symbols = {WasmDebugSymbols::Type::EmbeddedDWARF, {}};
-        }
+        module_->debug_symbols[WasmDebugSymbols::Type::EmbeddedDWARF] = {
+            WasmDebugSymbols::Type::EmbeddedDWARF, {}};
         consume_bytes(static_cast<uint32_t>(end_ - start_), ".debug_info");
         break;
       case kExternalDebugInfoSectionCode:
@@ -547,7 +552,8 @@ class ModuleDecoderImpl : public Decoder {
   TypeDefinition consume_base_type_definition() {
     const bool is_final = true;
     bool shared = false;
-    uint8_t kind = consume_u8(" kind: ", tracer_);
+    uint8_t kind = consume_u8(" kind", tracer_);
+    if (tracer_) tracer_->Description(": ");
     if (kind == kSharedFlagCode) {
       if (!v8_flags.experimental_wasm_shared) {
         errorf(pc() - 1,
@@ -582,7 +588,9 @@ class ModuleDecoderImpl : public Decoder {
     }
   }
 
-  TypeDefinition consume_subtype_definition() {
+  // {current_type_index} is the index of the type that's being decoded.
+  // Any supertype must have a lower index.
+  TypeDefinition consume_subtype_definition(size_t current_type_index) {
     uint8_t kind = read_u8<Decoder::FullValidationTag>(pc(), "type kind");
     if (kind == kWasmSubtypeCode || kind == kWasmSubtypeFinalCode) {
       module_->is_wasm_gc = true;
@@ -592,14 +600,12 @@ class ModuleDecoderImpl : public Decoder {
       constexpr uint32_t kMaximumSupertypes = 1;
       uint32_t supertype_count =
           consume_count("supertype count", kMaximumSupertypes);
-      uint32_t supertype = kNoSuperType;
+      uint32_t supertype = kNoSuperType.index;
       if (supertype_count == 1) {
         supertype = consume_u32v("supertype", tracer_);
-        if (supertype >= kV8MaxWasmTypes) {
-          errorf(
-              "supertype %u is greater than the maximum number of type "
-              "definitions %zu supported by V8",
-              supertype, kV8MaxWasmTypes);
+        if (supertype >= current_type_index) {
+          errorf("type %u: invalid supertype %u", current_type_index,
+                 supertype);
           return {};
         }
         if (tracer_) {
@@ -608,7 +614,7 @@ class ModuleDecoderImpl : public Decoder {
         }
       }
       TypeDefinition type = consume_base_type_definition();
-      type.supertype = supertype;
+      type.supertype = ModuleTypeIndex{supertype};
       type.is_final = is_final;
       return type;
     } else {
@@ -644,7 +650,7 @@ class ModuleDecoderImpl : public Decoder {
                                                         group_size);
         for (uint32_t j = 0; j < group_size; j++) {
           if (tracer_) tracer_->TypeOffset(pc_offset());
-          TypeDefinition type = consume_subtype_definition();
+          TypeDefinition type = consume_subtype_definition(initial_size + j);
           module_->types[initial_size + j] = type;
         }
         if (failed()) return;
@@ -663,7 +669,7 @@ class ModuleDecoderImpl : public Decoder {
         // Similarly to above, we need to resize types for a group of size 1.
         module_->types.resize(initial_size + 1);
         module_->isorecursive_canonical_type_ids.resize(initial_size + 1);
-        TypeDefinition type = consume_subtype_definition();
+        TypeDefinition type = consume_subtype_definition(initial_size);
         if (ok()) {
           module_->types[initial_size] = type;
           type_canon->AddRecursiveSingletonGroup(module_.get());
@@ -675,17 +681,10 @@ class ModuleDecoderImpl : public Decoder {
     // depth.
     const WasmModule* module = module_.get();
     for (uint32_t i = 0; ok() && i < module_->types.size(); ++i) {
-      uint32_t explicit_super = module_->supertype(i);
-      if (explicit_super == kNoSuperType) continue;
-      if (explicit_super >= module_->types.size()) {
-        errorf("type %u: supertype %u out of bounds", i, explicit_super);
-        continue;
-      }
-      if (explicit_super >= i) {
-        errorf("type %u: forward-declared supertype %u", i, explicit_super);
-        continue;
-      }
-      uint32_t depth = module->types[explicit_super].subtyping_depth + 1;
+      ModuleTypeIndex explicit_super = module_->supertype(ModuleTypeIndex{i});
+      if (!explicit_super.valid()) continue;
+      DCHECK_LT(explicit_super.index, i);  // Checked during decoding.
+      uint32_t depth = module->type(explicit_super).subtyping_depth + 1;
       module_->types[i].subtyping_depth = depth;
       DCHECK_GE(depth, 0);
       if (depth > kV8MaxRttSubtypingDepth) {
@@ -694,12 +693,14 @@ class ModuleDecoderImpl : public Decoder {
       }
       // This check is technically redundant; we include for the improved error
       // message.
-      if (module->types[explicit_super].is_final) {
-        errorf("type %u extends final type %u", i, explicit_super);
+      if (module->type(explicit_super).is_final) {
+        errorf("type %u extends final type %u", i, explicit_super.index);
         continue;
       }
-      if (!ValidSubtypeDefinition(i, explicit_super, module, module)) {
-        errorf("type %u has invalid explicit supertype %u", i, explicit_super);
+      if (!ValidSubtypeDefinition(ModuleTypeIndex{i}, explicit_super, module,
+                                  module)) {
+        errorf("type %u has invalid explicit supertype %u", i,
+               explicit_super.index);
         continue;
       }
     }
@@ -714,31 +715,29 @@ class ModuleDecoderImpl : public Decoder {
             static_cast<int>(pc_ - start_));
       if (tracer_) tracer_->ImportOffset(pc_offset());
 
-      module_->import_table.push_back({
-          {0, 0},             // module_name
-          {0, 0},             // field_name
-          kExternalFunction,  // kind
-          0                   // index
-      });
-      WasmImport* import = &module_->import_table.back();
       const uint8_t* pos = pc_;
-      import->module_name = consume_utf8_string(this, "module name", tracer_);
-      import->field_name = consume_utf8_string(this, "field name", tracer_);
-      import->kind =
-          static_cast<ImportExportKindCode>(consume_u8("kind: ", tracer_));
-      if (tracer_) tracer_->Description(ExternalKindName(import->kind));
-      switch (import->kind) {
+      WireBytesRef module_name =
+          consume_utf8_string(this, "module name", tracer_);
+      WireBytesRef field_name =
+          consume_utf8_string(this, "field name", tracer_);
+      ImportExportKindCode kind =
+          static_cast<ImportExportKindCode>(consume_u8("kind", tracer_));
+      if (tracer_) {
+        tracer_->Description(": ");
+        tracer_->Description(ExternalKindName(kind));
+      }
+      module_->import_table.push_back(WasmImport{
+          .module_name = module_name, .field_name = field_name, .kind = kind});
+      WasmImport* import = &module_->import_table.back();
+      switch (kind) {
         case kExternalFunction: {
           // ===== Imported function ===========================================
           import->index = static_cast<uint32_t>(module_->functions.size());
           module_->num_imported_functions++;
-          module_->functions.push_back({nullptr,        // sig
-                                        import->index,  // func_index
-                                        0,              // sig_index
-                                        {0, 0},         // code
-                                        true,           // imported
-                                        false,          // exported
-                                        false});        // declared
+          module_->functions.push_back(WasmFunction{
+              .func_index = import->index,
+              .imported = true,
+          });
           WasmFunction* function = &module_->functions.back();
           function->sig_index =
               consume_sig_index(module_.get(), &function->sig);
@@ -747,40 +746,34 @@ class ModuleDecoderImpl : public Decoder {
         case kExternalTable: {
           // ===== Imported table ==============================================
           import->index = static_cast<uint32_t>(module_->tables.size());
-          module_->num_imported_tables++;
-          module_->tables.emplace_back();
-          WasmTable* table = &module_->tables.back();
-          table->imported = true;
           const uint8_t* type_position = pc();
           ValueType type = consume_value_type();
           if (!type.is_object_reference()) {
             errorf(type_position, "Invalid table type %s", type.name().c_str());
             break;
           }
-          table->type = type;
-          auto [has_maximum, shared] = consume_table_flags("element count");
-          table->has_maximum_size = has_maximum;
-          table->shared = shared;
-          if (shared) module_->has_shared_part = true;
+          module_->num_imported_tables++;
+          module_->tables.push_back(WasmTable{
+              .type = type,
+              .imported = true,
+          });
+          WasmTable* table = &module_->tables.back();
+          consume_table_flags(table);
+          if (table->shared) module_->has_shared_part = true;
+          // Note that we should not throw an error if the declared maximum size
+          // is oob. We will instead fail when growing at runtime.
+          // TODO(369904698): Allow true 64-bit maximum values.
           consume_resizable_limits(
-              "element count", "elements", std::numeric_limits<uint32_t>::max(),
+              "table", "elements", v8_flags.wasm_max_table_size,
               &table->initial_size, table->has_maximum_size,
               std::numeric_limits<uint32_t>::max(), &table->maximum_size,
-              k32BitLimits);
+              table->is_table64() ? k64BitLimits : k32BitLimits);
           break;
         }
         case kExternalMemory: {
           // ===== Imported memory =============================================
           static_assert(kV8MaxWasmMemories <= kMaxUInt32);
-          if (!enabled_features_.has_multi_memory()) {
-            if (!module_->memories.empty()) {
-              error(
-                  "At most one imported memory is supported (pass "
-                  "--experimental-wasm-multi-memory to allow more "
-                  "memories)");
-              break;
-            }
-          } else if (module_->memories.size() >= kV8MaxWasmMemories - 1) {
+          if (module_->memories.size() >= kV8MaxWasmMemories - 1) {
             errorf("At most %u imported memories are supported",
                    kV8MaxWasmMemories);
             break;
@@ -792,39 +785,37 @@ class ModuleDecoderImpl : public Decoder {
           external_memory->imported = true;
           external_memory->index = mem_index;
 
-          consume_memory_flags(&external_memory->is_shared,
-                               &external_memory->is_memory64,
-                               &external_memory->has_maximum_pages);
-          uint32_t max_pages = external_memory->is_memory64
+          consume_memory_flags(external_memory);
+          uint32_t max_pages = external_memory->is_memory64()
                                    ? kSpecMaxMemory64Pages
                                    : kSpecMaxMemory32Pages;
           consume_resizable_limits(
               "memory", "pages", max_pages, &external_memory->initial_pages,
               external_memory->has_maximum_pages, max_pages,
               &external_memory->maximum_pages,
-              external_memory->is_memory64 ? k64BitLimits : k32BitLimits);
+              external_memory->is_memory64() ? k64BitLimits : k32BitLimits);
           break;
         }
         case kExternalGlobal: {
           // ===== Imported global =============================================
           import->index = static_cast<uint32_t>(module_->globals.size());
-          module_->num_imported_globals++;
-          module_->globals.push_back(
-              {kWasmVoid, false, {}, {0}, false, true, false});
-          WasmGlobal* global = &module_->globals.back();
-          global->type = consume_value_type();
+          ValueType type = consume_value_type();
           auto [mutability, shared] = consume_global_flags();
           if (V8_UNLIKELY(failed())) break;
-          if (V8_UNLIKELY(shared && !IsShared(global->type, module_.get()))) {
+          if (V8_UNLIKELY(shared && !IsShared(type, module_.get()))) {
             error("shared imported global must have shared type");
             break;
           }
-          global->mutability = mutability;
-          global->shared = shared;
+          module_->globals.push_back(
+              WasmGlobal{.type = type,
+                         .mutability = mutability,
+                         .index = 0,  // set later in CalculateGlobalOffsets
+                         .shared = shared,
+                         .imported = true});
+          module_->num_imported_globals++;
+          DCHECK_EQ(module_->globals.size(), module_->num_imported_globals);
           if (shared) module_->has_shared_part = true;
-          if (global->mutability) {
-            module_->num_imported_mutable_globals++;
-          }
+          if (mutability) module_->num_imported_mutable_globals++;
           if (tracer_) tracer_->NextLine();
           break;
         }
@@ -834,15 +825,17 @@ class ModuleDecoderImpl : public Decoder {
           module_->num_imported_tags++;
           const WasmTagSig* tag_sig = nullptr;
           consume_exception_attribute();  // Attribute ignored for now.
-          uint32_t sig_index = consume_tag_sig_index(module_.get(), &tag_sig);
+          ModuleTypeIndex sig_index =
+              consume_tag_sig_index(module_.get(), &tag_sig);
           module_->tags.emplace_back(tag_sig, sig_index);
           break;
         }
         default:
-          errorf(pos, "unknown import kind 0x%02x", import->kind);
+          errorf(pos, "unknown import kind 0x%02x", kind);
           break;
       }
     }
+    if (module_->memories.size() > 1) detected_features_->add_multi_memory();
     UpdateComputedMemoryInformation();
     module_->type_feedback.well_known_imports.Initialize(
         module_->num_imported_functions);
@@ -880,6 +873,7 @@ class ModuleDecoderImpl : public Decoder {
   }
 
   void DecodeTableSection() {
+    static_assert(kV8MaxWasmTables <= kMaxUInt32);
     uint32_t table_count = consume_count("table count", kV8MaxWasmTables);
 
     for (uint32_t i = 0; ok() && i < table_count; i++) {
@@ -915,19 +909,19 @@ class ModuleDecoderImpl : public Decoder {
       }
       table->type = table_type;
 
-      auto [has_maximum, shared] = consume_table_flags("table elements");
-      table->has_maximum_size = has_maximum;
-      table->shared = shared;
-      if (shared) module_->has_shared_part = true;
-      consume_resizable_limits("table elements", "elements",
-                               std::numeric_limits<uint32_t>::max(),
-                               &table->initial_size, table->has_maximum_size,
-                               std::numeric_limits<uint32_t>::max(),
-                               &table->maximum_size, k32BitLimits);
+      consume_table_flags(table);
+      if (table->shared) module_->has_shared_part = true;
+      // Note that we should not throw an error if the declared maximum size is
+      // oob. We will instead fail when growing at runtime.
+      consume_resizable_limits(
+          "table", "elements", v8_flags.wasm_max_table_size,
+          &table->initial_size, table->has_maximum_size,
+          std::numeric_limits<uint32_t>::max(), &table->maximum_size,
+          table->is_table64() ? k64BitLimits : k32BitLimits);
 
       if (has_initializer) {
         table->initial_value =
-            consume_init_expr(module_.get(), table_type, shared);
+            consume_init_expr(module_.get(), table_type, table->shared);
       }
     }
   }
@@ -940,22 +934,12 @@ class ModuleDecoderImpl : public Decoder {
     // messages.
     uint32_t memory_count = consume_count("memory count", kV8MaxWasmMemories);
     size_t imported_memories = module_->memories.size();
-    if (enabled_features_.has_multi_memory()) {
-      DCHECK_GE(kV8MaxWasmMemories, imported_memories);
-      if (memory_count > kV8MaxWasmMemories - imported_memories) {
-        errorf(mem_count_pc,
-               "Exceeding maximum number of memories (%u; declared %u, "
-               "imported %zu)",
-               kV8MaxWasmMemories, memory_count, imported_memories);
-      }
-    } else {
-      DCHECK_GE(1, imported_memories);
-      if (imported_memories + memory_count > 1) {
-        errorf(mem_count_pc,
-               "At most one memory is supported (declared %u, imported %zu); "
-               "pass --experimental-wasm-multi-memory to allow more memories",
-               memory_count, imported_memories);
-      }
+    DCHECK_GE(kV8MaxWasmMemories, imported_memories);
+    if (memory_count > kV8MaxWasmMemories - imported_memories) {
+      errorf(mem_count_pc,
+             "Exceeding maximum number of memories (%u; declared %u, "
+             "imported %zu)",
+             kV8MaxWasmMemories, memory_count, imported_memories);
     }
     module_->memories.resize(imported_memories + memory_count);
 
@@ -963,15 +947,15 @@ class ModuleDecoderImpl : public Decoder {
       WasmMemory* memory = module_->memories.data() + imported_memories + i;
       memory->index = static_cast<uint32_t>(imported_memories + i);
       if (tracer_) tracer_->MemoryOffset(pc_offset());
-      consume_memory_flags(&memory->is_shared, &memory->is_memory64,
-                           &memory->has_maximum_pages);
+      consume_memory_flags(memory);
       uint32_t max_pages =
-          memory->is_memory64 ? kSpecMaxMemory64Pages : kSpecMaxMemory32Pages;
+          memory->is_memory64() ? kSpecMaxMemory64Pages : kSpecMaxMemory32Pages;
       consume_resizable_limits(
           "memory", "pages", max_pages, &memory->initial_pages,
           memory->has_maximum_pages, max_pages, &memory->maximum_pages,
-          memory->is_memory64 ? k64BitLimits : k32BitLimits);
+          memory->is_memory64() ? k64BitLimits : k32BitLimits);
     }
+    if (module_->memories.size() > 1) detected_features_->add_multi_memory();
     UpdateComputedMemoryInformation();
   }
 
@@ -997,7 +981,11 @@ class ModuleDecoderImpl : public Decoder {
       // {consume_init_expr}.
       ConstantExpression init = consume_init_expr(module_.get(), type, shared);
       module_->globals.push_back(
-          {type, mutability, init, {0}, shared, false, false});
+          WasmGlobal{.type = type,
+                     .mutability = mutability,
+                     .init = init,
+                     .index = 0,  // set later in CalculateGlobalOffsets
+                     .shared = shared});
       if (shared) module_->has_shared_part = true;
     }
   }
@@ -1015,23 +1003,21 @@ class ModuleDecoderImpl : public Decoder {
         tracer_->NextLine();
       }
 
-      module_->export_table.push_back({
-          {0, 0},             // name
-          kExternalFunction,  // kind
-          0                   // index
-      });
+      WireBytesRef name = consume_utf8_string(this, "field name", tracer_);
+
+      const uint8_t* kind_pos = pc();
+      ImportExportKindCode kind =
+          static_cast<ImportExportKindCode>(consume_u8("kind", tracer_));
+
+      module_->export_table.push_back(WasmExport{.name = name, .kind = kind});
       WasmExport* exp = &module_->export_table.back();
 
-      exp->name = consume_utf8_string(this, "field name", tracer_);
-
-      const uint8_t* pos = pc();
-      exp->kind =
-          static_cast<ImportExportKindCode>(consume_u8("kind: ", tracer_));
       if (tracer_) {
+        tracer_->Description(": ");
         tracer_->Description(ExternalKindName(exp->kind));
         tracer_->Description(" ");
       }
-      switch (exp->kind) {
+      switch (kind) {
         case kExternalFunction: {
           WasmFunction* func = nullptr;
           exp->index = consume_func_index(module_.get(), &func);
@@ -1052,10 +1038,12 @@ class ModuleDecoderImpl : public Decoder {
           break;
         }
         case kExternalMemory: {
+          const uint8_t* index_pos = pc();
           exp->index = consume_u32v("memory index", tracer_);
           size_t num_memories = module_->memories.size();
           if (exp->index >= module_->memories.size()) {
-            errorf(pos, "invalid exported memory index %u (having %zu memor%s)",
+            errorf(index_pos,
+                   "invalid exported memory index %u (having %zu memor%s)",
                    exp->index, num_memories, num_memories == 1 ? "y" : "ies");
             break;
           }
@@ -1076,7 +1064,7 @@ class ModuleDecoderImpl : public Decoder {
           break;
         }
         default:
-          errorf(pos, "invalid export kind 0x%02x", exp->kind);
+          errorf(kind_pos, "invalid export kind 0x%02x", exp->kind);
           break;
       }
       if (tracer_) tracer_->NextLine();
@@ -1337,8 +1325,10 @@ class ModuleDecoderImpl : public Decoder {
     WireBytesRef url =
         wasm::consume_utf8_string(&inner, "module name", tracer_);
     if (inner.ok() &&
-        module_->debug_symbols.type != WasmDebugSymbols::Type::SourceMap) {
-      module_->debug_symbols = {WasmDebugSymbols::Type::SourceMap, url};
+        module_->debug_symbols[WasmDebugSymbols::Type::SourceMap].type ==
+            WasmDebugSymbols::None) {
+      module_->debug_symbols[WasmDebugSymbols::Type::SourceMap] = {
+          WasmDebugSymbols::Type::SourceMap, url};
     }
     set_seen_unordered_section(kSourceMappingURLSectionCode);
     consume_bytes(static_cast<uint32_t>(end_ - start_), nullptr);
@@ -1348,10 +1338,9 @@ class ModuleDecoderImpl : public Decoder {
     Decoder inner(start_, pc_, end_, buffer_offset_);
     WireBytesRef url =
         wasm::consume_utf8_string(&inner, "external symbol file", tracer_);
-    // If there is an explicit source map, prefer it over DWARF info.
-    if (inner.ok() &&
-        module_->debug_symbols.type != WasmDebugSymbols::Type::SourceMap) {
-      module_->debug_symbols = {WasmDebugSymbols::Type::ExternalDWARF, url};
+    if (inner.ok()) {
+      module_->debug_symbols[WasmDebugSymbols::Type::ExternalDWARF] = {
+          WasmDebugSymbols::Type::ExternalDWARF, url};
       set_seen_unordered_section(kExternalDebugInfoSectionCode);
     }
     consume_bytes(static_cast<uint32_t>(end_ - start_), nullptr);
@@ -1607,7 +1596,8 @@ class ModuleDecoderImpl : public Decoder {
       if (tracer_) tracer_->TagOffset(pc_offset());
       const WasmTagSig* tag_sig = nullptr;
       consume_exception_attribute();  // Attribute ignored for now.
-      uint32_t sig_index = consume_tag_sig_index(module_.get(), &tag_sig);
+      ModuleTypeIndex sig_index =
+          consume_tag_sig_index(module_.get(), &tag_sig);
       module_->tags.emplace_back(tag_sig, sig_index);
     }
   }
@@ -1707,9 +1697,10 @@ class ModuleDecoderImpl : public Decoder {
 
     ModuleResult result = FinishDecoding();
     if (!result.failed() && validate_functions) {
-      // Pass nullptr for an "empty" filter function.
-      if (WasmError validation_error = ValidateFunctions(
-              module_.get(), enabled_features_, wire_bytes, nullptr)) {
+      std::function<bool(int)> kNoFilter;
+      if (WasmError validation_error =
+              ValidateFunctions(module_.get(), enabled_features_, wire_bytes,
+                                kNoFilter, detected_features_)) {
         result = ModuleResult{validation_error};
       }
     }
@@ -1735,7 +1726,7 @@ class ModuleDecoderImpl : public Decoder {
     constexpr bool kShared = false;
     FunctionBody body{function.sig, off(pc_), pc_, end_, kShared};
 
-    WasmFeatures unused_detected_features;
+    WasmDetectedFeatures unused_detected_features;
     DecodeResult result = ValidateFunctionBody(zone, enabled_features_, module,
                                                &unused_detected_features, body);
 
@@ -1818,15 +1809,16 @@ class ModuleDecoderImpl : public Decoder {
     module->tagged_globals_buffer_size = tagged_offset;
   }
 
-  uint32_t consume_sig_index(WasmModule* module, const FunctionSig** sig) {
+  ModuleTypeIndex consume_sig_index(WasmModule* module,
+                                    const FunctionSig** sig) {
     const uint8_t* pos = pc_;
-    uint32_t sig_index = consume_u32v("signature index");
+    ModuleTypeIndex sig_index{consume_u32v("signature index")};
     if (tracer_) tracer_->Bytes(pos, static_cast<uint32_t>(pc_ - pos));
     if (!module->has_signature(sig_index)) {
       errorf(pos, "no signature at index %u (%d types)", sig_index,
              static_cast<int>(module->types.size()));
       *sig = nullptr;
-      return 0;
+      return {};
     }
     *sig = module->signature(sig_index);
     if (tracer_) {
@@ -1836,13 +1828,14 @@ class ModuleDecoderImpl : public Decoder {
     return sig_index;
   }
 
-  uint32_t consume_tag_sig_index(WasmModule* module, const FunctionSig** sig) {
+  ModuleTypeIndex consume_tag_sig_index(WasmModule* module,
+                                        const FunctionSig** sig) {
     const uint8_t* pos = pc_;
-    uint32_t sig_index = consume_sig_index(module, sig);
+    ModuleTypeIndex sig_index = consume_sig_index(module, sig);
     if (*sig && (*sig)->return_count() != 0) {
       errorf(pos, "tag signature %u has non-void return", sig_index);
       *sig = nullptr;
-      return 0;
+      return {};
     }
     return sig_index;
   }
@@ -1884,8 +1877,11 @@ class ModuleDecoderImpl : public Decoder {
   template <typename T>
   uint32_t consume_index(const char* name, std::vector<T>* vector, T** ptr) {
     const uint8_t* pos = pc_;
-    uint32_t index = consume_u32v("index:", tracer_);
-    if (tracer_) tracer_->Description(index);
+    uint32_t index = consume_u32v("index", tracer_);
+    if (tracer_) {
+      tracer_->Description(": ");
+      tracer_->Description(index);
+    }
     if (index >= vector->size()) {
       errorf(pos, "%s index %u out of bounds (%d entr%s)", name, index,
              static_cast<int>(vector->size()),
@@ -1897,74 +1893,87 @@ class ModuleDecoderImpl : public Decoder {
     return index;
   }
 
-  std::pair<bool, bool> consume_table_flags(const char* name) {
-    if (tracer_) tracer_->Bytes(pc_, 1);
-    uint8_t flags = consume_u8("table limits flags");
-    if (flags & ~0b11) {
-      errorf(pc() - 1, "invalid %s limits flags", name);
-      return {};
-    }
-    bool with_maximum = flags & 1;
-    bool shared = flags & 0b10;
+  // The limits byte structure is used for memories and tables.
+  struct LimitsByte {
+    uint8_t flags;
 
-    if (shared && !v8_flags.experimental_wasm_shared) {
+    // Flags 0..7 are valid (3 bits).
+    bool is_valid() const { return (flags & ~0x7) == 0; }
+    bool has_maximum() const { return flags & 0x1; }
+    bool is_shared() const { return flags & 0x2; }
+    bool is_64bit() const { return flags & 0x4; }
+    AddressType address_type() const {
+      return is_64bit() ? AddressType::kI64 : AddressType::kI32;
+    }
+  };
+
+  enum LimitsByteType { kMemory, kTable };
+
+  template <LimitsByteType limits_type>
+  LimitsByte consume_limits_byte() {
+    if (tracer_) tracer_->Bytes(pc_, 1);
+    LimitsByte limits{consume_u8(
+        limits_type == kMemory ? "memory limits flags" : "table limits flags")};
+    if (!limits.is_valid()) {
+      errorf(pc() - 1, "invalid %s limits flags 0x%x",
+             limits_type == kMemory ? "memory" : "table", limits.flags);
+    }
+
+    if (limits.is_shared()) {
+      if constexpr (limits_type == kMemory) {
+        // V8 does not support shared memory without a maximum.
+        if (!limits.has_maximum()) {
+          error(pc() - 1, "shared memory must have a maximum defined");
+        }
+        if (v8_flags.experimental_wasm_shared) {
+          error(pc() - 1,
+                "shared memories are not supported with "
+                "--experimental-wasm-shared yet.");
+        }
+      } else if (!v8_flags.experimental_wasm_shared) {  // table
+        error(pc() - 1,
+              "invalid table limits flags, enable with "
+              "--experimental-wasm-shared");
+      }
+    }
+
+    if (limits.is_64bit() && !enabled_features_.has_memory64()) {
       errorf(pc() - 1,
-             "invalid %s limits flags, enable with --experimental-wasm-shared",
-             name);
-      return {};
+             "invalid %s limits flags 0x%x (enable with "
+             "--experimental-wasm-memory64)",
+             limits_type == kMemory ? "memory" : "table", limits.flags);
     }
 
     if (tracer_) {
-      tracer_->Description(with_maximum ? " no maximum" : " with maximum");
-      tracer_->Description(shared ? " shared" : "");
+      if (limits.is_shared()) tracer_->Description(" shared");
+      if (limits.is_64bit()) {
+        tracer_->Description(limits_type == kMemory ? " mem64" : " table64");
+      }
+      tracer_->Description(limits.has_maximum() ? " with maximum"
+                                                : " no maximum");
       tracer_->NextLine();
     }
 
-    return {with_maximum, shared};
+    return limits;
   }
 
-  void consume_memory_flags(bool* is_shared_out, bool* is_memory64_out,
-                            bool* has_maximum_out) {
-    if (tracer_) tracer_->Bytes(pc_, 1);
-    uint8_t flags = consume_u8("memory limits flags");
-    // Flags 0..7 are valid (3 bits).
-    if (flags & ~0x7) {
-      errorf(pc() - 1, "invalid memory limits flags 0x%x", flags);
-    }
-    // Decode the three bits.
-    bool has_maximum = flags & 0x1;
-    bool is_shared = flags & 0x2;
-    bool is_memory64 = flags & 0x4;
-    // Store into output parameters.
-    *has_maximum_out = has_maximum;
-    *is_shared_out = is_shared;
-    *is_memory64_out = is_memory64;
+  void consume_table_flags(WasmTable* table) {
+    LimitsByte limits = consume_limits_byte<kTable>();
+    table->has_maximum_size = limits.has_maximum();
+    table->shared = limits.is_shared();
+    table->address_type = limits.address_type();
 
-    // V8 does not support shared memory without a maximum.
-    if (is_shared && !has_maximum) {
-      error(pc() - 1, "shared memory must have a maximum defined");
-    }
+    if (table->is_table64()) detected_features_->add_memory64();
+  }
 
-    if (is_memory64 && !enabled_features_.has_memory64()) {
-      errorf(pc() - 1,
-             "invalid memory limits flags 0x%x (enable via "
-             "--experimental-wasm-memory64)",
-             flags);
-    }
+  void consume_memory_flags(WasmMemory* memory) {
+    LimitsByte limits = consume_limits_byte<kMemory>();
+    memory->has_maximum_pages = limits.has_maximum();
+    memory->is_shared = limits.is_shared();
+    memory->address_type = limits.address_type();
 
-    if (is_shared && v8_flags.experimental_wasm_shared) {
-      error(pc() - 1,
-            "shared memories are not supported with "
-            "--experimental-wasm-shared yet.");
-    }
-
-    // Tracing.
-    if (tracer_) {
-      if (is_shared) tracer_->Description(" shared");
-      if (is_memory64) tracer_->Description(" mem64");
-      tracer_->Description(has_maximum ? " with maximum" : " no maximum");
-      tracer_->NextLine();
-    }
+    if (memory->is_shared) detected_features_->add_shared_memory();
+    if (memory->is_memory64()) detected_features_->add_memory64();
   }
 
   std::pair<bool, bool> consume_global_flags() {
@@ -2140,7 +2149,7 @@ class ModuleDecoderImpl : public Decoder {
 
     auto sig = FixedSizeSignature<ValueType>::Returns(expected);
     FunctionBody body(&sig, this->pc_offset(), pc_, end_, is_shared);
-    WasmFeatures detected;
+    WasmDetectedFeatures detected;
     ConstantExpression result;
     {
       // We need a scope for the decoder because its destructor resets some Zone
@@ -2207,7 +2216,7 @@ class ModuleDecoderImpl : public Decoder {
         value_type_reader::read_value_type<FullValidationTag>(
             this, pc_,
             module_->origin == kWasmOrigin ? enabled_features_
-                                           : WasmFeatures::None());
+                                           : WasmEnabledFeatures::None());
     value_type_reader::ValidateValueType<FullValidationTag>(
         this, pc_, module_.get(), result);
     if (tracer_) {
@@ -2324,7 +2333,7 @@ class ModuleDecoderImpl : public Decoder {
                                   kHasTableIndexOrIsDeclarativeMask |
                                   kExpressionsAsElementsMask | kSharedFlag;
 
-    uint32_t flag = consume_u32v("flag: ", tracer_);
+    uint32_t flag = consume_u32v("flag", tracer_);
     if ((flag & kFullMask) != flag) {
       errorf(pos, "illegal flag value %u", flag);
       return {};
@@ -2346,6 +2355,7 @@ class ModuleDecoderImpl : public Decoder {
                                 : WasmElemSegment::kStatusActive;
     const bool is_active = status == WasmElemSegment::kStatusActive;
     if (tracer_) {
+      tracer_->Description(": ");
       tracer_->Description(status == WasmElemSegment::kStatusActive ? "active"
                            : status == WasmElemSegment::kStatusPassive
                                ? "passive,"
@@ -2365,8 +2375,10 @@ class ModuleDecoderImpl : public Decoder {
       if (tracer_) tracer_->Description(table_index);
     }
     if (V8_UNLIKELY(is_active && table_index >= module_->tables.size())) {
+      // If `has_table_index`, we have an explicit table index. Otherwise, we
+      // always have the implicit table index 0.
       errorf(pos, "out of bounds%s table index %u",
-             has_table_index ? " implicit" : "", table_index);
+             has_table_index ? "" : " implicit", table_index);
       return {};
     }
 
@@ -2379,7 +2391,10 @@ class ModuleDecoderImpl : public Decoder {
         tracer_->Description(", offset:");
         tracer_->NextLine();
       }
-      offset = consume_init_expr(module_.get(), kWasmI32, is_shared);
+      offset = consume_init_expr(
+          module_.get(),
+          module_->tables[table_index].is_table64() ? kWasmI64 : kWasmI32,
+          is_shared);
       // Failed to parse offset initializer, return early.
       if (failed()) return {};
     }
@@ -2400,7 +2415,8 @@ class ModuleDecoderImpl : public Decoder {
       if (!backwards_compatible_mode) {
         // We have to check that there is an element kind of type Function. All
         // other element kinds are not valid yet.
-        uint8_t val = consume_u8(" element type: function", tracer_);
+        if (tracer_) tracer_->Description(" ");
+        uint8_t val = consume_u8("element type: function", tracer_);
         if (V8_UNLIKELY(static_cast<ImportExportKindCode>(val) !=
                         kExternalFunction)) {
           errorf(pos, "illegal element kind 0x%x. Must be 0x%x", val,
@@ -2442,7 +2458,7 @@ class ModuleDecoderImpl : public Decoder {
 
   DataSegmentHeader consume_data_segment_header() {
     const uint8_t* pos = pc();
-    uint32_t flag = consume_u32v("flag: ", tracer_);
+    uint32_t flag = consume_u32v("flag", tracer_);
 
     if (flag & ~0b1011) {
       errorf(pos, "illegal flag value %u", flag);
@@ -2452,6 +2468,7 @@ class ModuleDecoderImpl : public Decoder {
     uint32_t status_flag = flag & 0b11;
 
     if (tracer_) {
+      tracer_->Description(": ");
       tracer_->Description(
           status_flag == SegmentFlags::kActiveNoIndex     ? "active no index"
           : status_flag == SegmentFlags::kPassive         ? "passive"
@@ -2498,7 +2515,7 @@ class ModuleDecoderImpl : public Decoder {
         return {};
       }
       ValueType expected_type =
-          module_->memories[mem_index].is_memory64 ? kWasmI64 : kWasmI32;
+          module_->memories[mem_index].is_memory64() ? kWasmI64 : kWasmI32;
       offset = consume_init_expr(module_.get(), expected_type, is_shared);
     }
 
@@ -2527,7 +2544,8 @@ class ModuleDecoderImpl : public Decoder {
     return index;
   }
 
-  const WasmFeatures enabled_features_;
+  const WasmEnabledFeatures enabled_features_;
+  WasmDetectedFeatures* const detected_features_;
   const std::shared_ptr<WasmModule> module_;
   const uint8_t* module_start_ = nullptr;
   const uint8_t* module_end_ = nullptr;

@@ -22,11 +22,12 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "absl/base/nullability.h"
-#include "./centipede/defs.h"
 #include "./centipede/mutation_input.h"
+#include "./common/defs.h"
 
 // Typedefs for the libFuzzer API, https://llvm.org/docs/LibFuzzer.html
 using FuzzerTestOneInputCallback = int (*)(const uint8_t *data, size_t size);
@@ -112,6 +113,12 @@ extern "C" size_t CentipedeGetExecutionResult(uint8_t *data, size_t capacity);
 // CentipedeFinalizeProcessing().
 extern "C" size_t CentipedeGetCoverageData(uint8_t *data, size_t capacity);
 
+// Set the current execution result to the opaque memory `data` with `size`.
+// Such data is retrieved using `CentipedeGetExecutionResult`, possibly from
+// another process. When `data` is `nullptr`, will set the execution result to
+// "empty" with no features or metadata.
+extern "C" void CentipedeSetExecutionResult(const uint8_t *data, size_t size);
+
 namespace centipede {
 
 // Callbacks interface implemented by the fuzzer and called by the runner.
@@ -137,6 +144,11 @@ class RunnerCallbacks {
   virtual bool Mutate(const std::vector<MutationInputRef> &inputs,
                       size_t num_mutants,
                       std::function<void(ByteSpan)> new_mutant_callback) = 0;
+  // Registers a function to be called when a failure happens. If the
+  // implementation supports this functionality, it will call the function with
+  // a description of the failure. Otherwise, it will do nothing.
+  virtual void OnFailure(
+      std::function<void(std::string_view)> failure_description_callback);
   virtual ~RunnerCallbacks() = default;
 };
 

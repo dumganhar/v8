@@ -1350,6 +1350,11 @@ int DisassemblerX64::AVXInstruction(uint8_t* data) {
         current += PrintRightOperand(current);
         AppendToBuffer(",%s", NameOfCPURegister(vvvv));
         break;
+      case 0x50:
+        AppendToBuffer("vpdpbssd %s,%s,", NameOfAVXRegister(regop),
+                       NameOfAVXRegister(vvvv));
+        current += PrintRightAVXOperand(current);
+        break;
       default:
         UnimplementedInstruction();
     }
@@ -2022,7 +2027,7 @@ int DisassemblerX64::TwoByteOpcodeInstruction(uint8_t* data) {
     // Instructions with prefix 0xF3.
     if (opcode == 0x10) {
       // MOVSS: Move scalar double-precision fp to/from/between XMM registers.
-      current += PrintOperands("movss", XMMREG_OPER_OP_ORDER, current);
+      current += PrintOperands("movss", XMMREG_XMMOPER_OP_ORDER, current);
     } else if (opcode == 0x11) {
       current += PrintOperands("movss", OPER_XMMREG_OP_ORDER, current);
     } else if (opcode == 0x16) {

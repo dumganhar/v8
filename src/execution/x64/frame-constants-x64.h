@@ -48,9 +48,9 @@ class EntryFrameConstants : public AllStatic {
   // On other OS, the callee-saved registers are (in push order):
   // r12, r13, r14, r15, rbx
 
+  static constexpr int kXMMRegisterSize = 16;
 #ifdef V8_TARGET_OS_WIN
   static constexpr int kCalleeSaveXMMRegisters = 10;
-  static constexpr int kXMMRegisterSize = 16;
   static constexpr int kXMMRegistersBlockSize =
       kXMMRegisterSize * kCalleeSaveXMMRegisters;
 
@@ -98,7 +98,7 @@ class WasmLiftoffSetupFrameConstants : public TypedFrameConstants {
       TYPED_FRAME_PUSHED_VALUE_OFFSET(6)};
 
   // SP-relative.
-  static constexpr int kWasmInstanceOffset = 2 * kSystemPointerSize;
+  static constexpr int kWasmInstanceDataOffset = 2 * kSystemPointerSize;
   static constexpr int kDeclaredFunctionIndexOffset = 1 * kSystemPointerSize;
   static constexpr int kNativeModuleOffset = 0;
 };

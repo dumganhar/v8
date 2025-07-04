@@ -4,6 +4,8 @@
 
 #include "src/compiler/load-elimination.h"
 
+#include <optional>
+
 #include "src/compiler/access-builder.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/js-graph.h"
@@ -671,7 +673,7 @@ LoadElimination::FieldInfo const* LoadElimination::AbstractState::LookupField(
     ConstFieldInfo const_field_info) const {
   // Check if all the indices in {index_range} contain identical information.
   // If not, a partially overlapping access has invalidated part of the value.
-  base::Optional<LoadElimination::FieldInfo const*> result;
+  std::optional<LoadElimination::FieldInfo const*> result;
   for (int index : index_range) {
     LoadElimination::FieldInfo const* info = nullptr;
     if (const_field_info.IsConst()) {
@@ -1091,6 +1093,7 @@ Reduction LoadElimination::ReduceLoadElement(Node* node) {
     case MachineRepresentation::kWord16:
     case MachineRepresentation::kWord32:
     case MachineRepresentation::kWord64:
+    case MachineRepresentation::kFloat16:
     case MachineRepresentation::kFloat32:
     case MachineRepresentation::kCompressedPointer:
     case MachineRepresentation::kCompressed:
@@ -1151,6 +1154,7 @@ Reduction LoadElimination::ReduceStoreElement(Node* node) {
     case MachineRepresentation::kWord16:
     case MachineRepresentation::kWord32:
     case MachineRepresentation::kWord64:
+    case MachineRepresentation::kFloat16:
     case MachineRepresentation::kFloat32:
     case MachineRepresentation::kCompressedPointer:
     case MachineRepresentation::kCompressed:
@@ -1451,6 +1455,7 @@ LoadElimination::IndexRange LoadElimination::FieldIndexOf(
       UNREACHABLE();
     case MachineRepresentation::kWord8:
     case MachineRepresentation::kWord16:
+    case MachineRepresentation::kFloat16:
     case MachineRepresentation::kFloat32:
       // Currently untracked.
       return IndexRange::Invalid();

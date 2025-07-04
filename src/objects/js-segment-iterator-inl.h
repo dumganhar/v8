@@ -23,9 +23,6 @@ TQ_OBJECT_CONSTRUCTORS_IMPL(JSSegmentIterator)
 TQ_OBJECT_CONSTRUCTORS_IMPL(JSSegmentDataObject)
 TQ_OBJECT_CONSTRUCTORS_IMPL(JSSegmentDataObjectWithIsWordLike)
 
-CAST_ACCESSOR(JSSegmentDataObject)
-CAST_ACCESSOR(JSSegmentDataObjectWithIsWordLike)
-
 // Base segment iterator accessors.
 ACCESSORS(JSSegmentIterator, icu_break_iterator,
           Tagged<Managed<icu::BreakIterator>>, kIcuBreakIteratorOffset)
@@ -35,7 +32,7 @@ ACCESSORS(JSSegmentIterator, unicode_string,
 
 inline void JSSegmentIterator::set_granularity(
     JSSegmenter::Granularity granularity) {
-  DCHECK_GE(GranularityBits::kMax, granularity);
+  DCHECK(GranularityBits::is_valid(granularity));
   int hints = flags();
   hints = GranularityBits::update(hints, granularity);
   set_flags(hints);

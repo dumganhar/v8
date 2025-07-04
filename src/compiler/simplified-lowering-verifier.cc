@@ -84,7 +84,8 @@ void SimplifiedLoweringVerifier::ReportInvalidTypeCombination(
 }
 
 bool IsModuloTruncation(const Truncation& truncation) {
-  return truncation.IsUsedAsWord32() || truncation.IsUsedAsWord64() ||
+  return truncation.IsUsedAsWord32() ||
+         (Is64() && truncation.IsUsedAsWord64()) ||
          Truncation::Any().IsLessGeneralThan(truncation);
 }
 
@@ -476,6 +477,7 @@ void SimplifiedLoweringVerifier::VisitNode(Node* node,
       CASE(NumberConstant)
       CASE(PointerConstant)
       CASE(CompressedHeapConstant)
+      CASE(TrustedHeapConstant)
       CASE(RelocatableInt32Constant)
       CASE(RelocatableInt64Constant)
       // Inner operators
@@ -651,6 +653,7 @@ void SimplifiedLoweringVerifier::VisitNode(Node* node,
       CASE(ChangeInt64ToFloat64)
       CASE(ChangeUint32ToFloat64)
       CASE(TruncateFloat64ToFloat32)
+      CASE(TruncateFloat64ToFloat16)
       CASE(TruncateInt64ToInt32)
       CASE(RoundFloat64ToInt32)
       CASE(RoundInt32ToFloat32)

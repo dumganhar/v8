@@ -6,6 +6,7 @@
 
 #include "src/api/api-inl.h"
 #include "src/builtins/builtins-descriptors.h"
+#include "src/builtins/builtins-inl.h"
 #include "src/builtins/data-view-ops.h"
 #include "src/codegen/assembler-inl.h"
 #include "src/codegen/callable.h"
@@ -26,7 +27,7 @@ namespace v8 {
 namespace internal {
 
 // Forward declarations for C++ builtins.
-#define FORWARD_DECLARE(Name) \
+#define FORWARD_DECLARE(Name, Argc) \
   Address Builtin_##Name(int argc, Address* args, Isolate* isolate);
 BUILTIN_LIST_C(FORWARD_DECLARE)
 #undef FORWARD_DECLARE
@@ -68,19 +69,23 @@ struct BuiltinMetadata {
   } data;
 };
 
-#define DECL_CPP(Name, ...) \
+#define DECL_CPP(Name, Argc) \
   {#Name, Builtins::CPP, {FUNCTION_ADDR(Builtin_##Name)}},
+#define DECL_TSJ(Name, Count, ...) {#Name, Builtins::TSJ, {Count, 0}},
 #define DECL_TFJ(Name, Count, ...) {#Name, Builtins::TFJ, {Count, 0}},
+#define DECL_TSC(Name, ...) {#Name, Builtins::TSC, {}},
 #define DECL_TFC(Name, ...) {#Name, Builtins::TFC, {}},
 #define DECL_TFS(Name, ...) {#Name, Builtins::TFS, {}},
 #define DECL_TFH(Name, ...) {#Name, Builtins::TFH, {}},
 #define DECL_BCH(Name, OperandScale, Bytecode) \
   {#Name, Builtins::BCH, {Bytecode, OperandScale}},
 #define DECL_ASM(Name, ...) {#Name, Builtins::ASM, {}},
-const BuiltinMetadata builtin_metadata[] = {BUILTIN_LIST(
-    DECL_CPP, DECL_TFJ, DECL_TFC, DECL_TFS, DECL_TFH, DECL_BCH, DECL_ASM)};
+const BuiltinMetadata builtin_metadata[] = {
+    BUILTIN_LIST(DECL_CPP, DECL_TSJ, DECL_TFJ, DECL_TSC, DECL_TFC, DECL_TFS,
+                 DECL_TFH, DECL_BCH, DECL_ASM)};
 #undef DECL_CPP
 #undef DECL_TFJ
+#undef DECL_TSC
 #undef DECL_TFC
 #undef DECL_TFS
 #undef DECL_TFH
@@ -143,7 +148,7 @@ void Builtins::set_code(Builtin builtin, Tagged<Code> code) {
 
 Tagged<Code> Builtins::code(Builtin builtin) {
   Address ptr = isolate_->builtin_table()[Builtins::ToInt(builtin)];
-  return Code::cast(Tagged<Object>(ptr));
+  return Cast<Code>(Tagged<Object>(ptr));
 }
 
 Handle<Code> Builtins::code_handle(Builtin builtin) {
@@ -153,8 +158,57 @@ Handle<Code> Builtins::code_handle(Builtin builtin) {
 
 // static
 int Builtins::GetStackParameterCount(Builtin builtin) {
-  DCHECK(Builtins::KindOf(builtin) == TFJ);
+  DCHECK(Builtins::KindOf(builtin) == TSJ || Builtins::KindOf(builtin) == TFJ);
   return builtin_metadata[ToInt(builtin)].data.parameter_count;
+}
+
+namespace {
+
+void ParameterCountToString(char* buffer, size_t buffer_size,
+                            int parameter_count) {
+  if (parameter_count == kDontAdaptArgumentsSentinel) {
+    snprintf(buffer, buffer_size, "kDontAdaptArgumentsSentinel");
+  } else {
+    snprintf(buffer, buffer_size, "JSParameterCount(%d)", parameter_count - 1);
+  }
+}
+
+}  // namespace
+
+// static
+bool Builtins::CheckFormalParameterCount(
+    Builtin builtin, int function_length,
+    int formal_parameter_count_with_receiver) {
+  DCHECK_LE(0, function_length);
+  if (!Builtins::IsBuiltinId(builtin)) {
+    return true;
+  }
+
+  Kind kind = KindOf(builtin);
+  // TODO(ishell): enable the check for TFJ/TSJ.
+  if (kind == CPP) {
+    int parameter_count = Builtins::GetFormalParameterCount(builtin);
+    if (parameter_count != formal_parameter_count_with_receiver) {
+      if ((false)) {
+        // Enable this block to print a command line that should fix the
+        // mismatch.
+        const size_t kBufSize = 32;
+        char actual_count[kBufSize];
+        char expected_count[kBufSize];
+        ParameterCountToString(actual_count, kBufSize, parameter_count);
+        ParameterCountToString(expected_count, kBufSize,
+                               formal_parameter_count_with_receiver);
+        PrintF(
+            "\n##### "
+            "sed -i -z -r 's/%s\\(%s,[\\\\\\n[:space:]]+%s\\)/%s(%s, %s)/g' "
+            "src/builtins/builtins-definitions.h\n",
+            KindNameOf(builtin), name(builtin), actual_count,
+            KindNameOf(builtin), name(builtin), expected_count);
+      }
+      return false;
+    }
+  }
+  return true;
 }
 
 // static
@@ -168,13 +222,13 @@ CallInterfaceDescriptor Builtins::CallInterfaceDescriptorFor(Builtin builtin) {
     key = Builtin_##Name##_InterfaceDescriptor::key(); \
     break;                                             \
   }
-    BUILTIN_LIST(IGNORE_BUILTIN, IGNORE_BUILTIN, CASE_OTHER, CASE_OTHER,
-                 CASE_OTHER, IGNORE_BUILTIN, CASE_OTHER)
+    BUILTIN_LIST(IGNORE_BUILTIN, IGNORE_BUILTIN, IGNORE_BUILTIN, CASE_OTHER,
+                 CASE_OTHER, CASE_OTHER, CASE_OTHER, IGNORE_BUILTIN, CASE_OTHER)
 #undef CASE_OTHER
     default:
       Builtins::Kind kind = Builtins::KindOf(builtin);
       DCHECK_NE(BCH, kind);
-      if (kind == TFJ || kind == CPP) {
+      if (kind == TSJ || kind == TFJ || kind == CPP) {
         return JSTrampolineDescriptor{};
       }
       UNREACHABLE();
@@ -378,7 +432,7 @@ void Builtins::EmitCodeCreateEvents(Isolate* isolate) {
   HandleScope scope(isolate);
   for (; i < ToInt(Builtin::kFirstBytecodeHandler); i++) {
     Handle<Code> builtin_code(&builtins[i]);
-    Handle<AbstractCode> code = Handle<AbstractCode>::cast(builtin_code);
+    Handle<AbstractCode> code = Cast<AbstractCode>(builtin_code);
     PROFILE(isolate, CodeCreateEvent(LogEventListener::CodeTag::kBuiltin, code,
                                      Builtins::name(FromInt(i))));
   }
@@ -386,7 +440,7 @@ void Builtins::EmitCodeCreateEvents(Isolate* isolate) {
   static_assert(kLastBytecodeHandlerPlusOne == kBuiltinCount);
   for (; i < kBuiltinCount; i++) {
     Handle<Code> builtin_code(&builtins[i]);
-    Handle<AbstractCode> code = Handle<AbstractCode>::cast(builtin_code);
+    Handle<AbstractCode> code = Cast<AbstractCode>(builtin_code);
     interpreter::Bytecode bytecode =
         builtin_metadata[i].data.bytecode_and_scale.bytecode;
     interpreter::OperandScale scale =
@@ -430,6 +484,7 @@ Handle<Code> Builtins::CreateInterpreterEntryTrampolineForProfiling(
   desc.handler_table_offset = instruction_size;
   desc.constant_pool_offset = instruction_size;
   desc.code_comments_offset = instruction_size;
+  desc.builtin_jump_table_info_offset = instruction_size;
 
   CodeDesc::Verify(&desc);
 
@@ -450,7 +505,9 @@ const char* Builtins::KindNameOf(Builtin builtin) {
   // clang-format off
   switch (kind) {
     case CPP: return "CPP";
+    case TSJ: return "TSJ";
     case TFJ: return "TFJ";
+    case TSC: return "TSC";
     case TFC: return "TFC";
     case TFS: return "TFS";
     case TFH: return "TFH";
@@ -473,14 +530,24 @@ CodeEntrypointTag Builtins::EntrypointTagFor(Builtin builtin) {
     return kDefaultCodeEntrypointTag;
   }
 
+#if V8_ENABLE_DRUMBRAKE
+  if (builtin == Builtin::kGenericJSToWasmInterpreterWrapper) {
+    return kJSEntrypointTag;
+  } else if (builtin == Builtin::kGenericWasmToJSInterpreterWrapper) {
+    return kWasmEntrypointTag;
+  }
+#endif  // V8_ENABLE_DRUMBRAKE
+
   Kind kind = Builtins::KindOf(builtin);
   switch (kind) {
     case CPP:
+    case TSJ:
     case TFJ:
       return kJSEntrypointTag;
     case BCH:
       return kBytecodeHandlerEntrypointTag;
     case TFC:
+    case TSC:
     case TFS:
     case TFH:
     case ASM:
@@ -490,7 +557,8 @@ CodeEntrypointTag Builtins::EntrypointTagFor(Builtin builtin) {
 }
 
 // static
-bool Builtins::AllowDynamicFunction(Isolate* isolate, Handle<JSFunction> target,
+bool Builtins::AllowDynamicFunction(Isolate* isolate,
+                                    DirectHandle<JSFunction> target,
                                     Handle<JSObject> target_global_proxy) {
   if (v8_flags.allow_unsafe_function_constructor) return true;
   HandleScopeImplementer* impl = isolate->handle_scope_implementer();

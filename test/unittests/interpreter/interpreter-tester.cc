@@ -52,13 +52,14 @@ Local<Message> InterpreterTester::CheckThrowsReturnMessage() {
   return try_catch.Message();
 }
 
-Handle<Object> InterpreterTester::NewObject(const char* script) {
-  return v8::Utils::OpenHandle(*CompileRun(script));
+Handle<JSAny> InterpreterTester::NewObject(const char* script) {
+  return Cast<JSAny>(v8::Utils::OpenHandle(*CompileRun(script)));
 }
 
 DirectHandle<String> InterpreterTester::GetName(Isolate* isolate,
                                                 const char* name) {
-  Handle<String> result = isolate->factory()->NewStringFromAsciiChecked(name);
+  DirectHandle<String> result =
+      isolate->factory()->NewStringFromAsciiChecked(name);
   return isolate->string_table()->LookupString(isolate, result);
 }
 

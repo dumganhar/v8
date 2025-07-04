@@ -48,7 +48,8 @@
   V(ExternalConstant)                \
   V(NumberConstant)                  \
   V(PointerConstant)                 \
-  V(HeapConstant)
+  V(HeapConstant)                    \
+  V(TrustedHeapConstant)
 
 // Opcodes for constant operators.
 #define CONSTANT_OP_LIST(V)    \
@@ -173,6 +174,7 @@
   V(JSCreateLiteralObject)       \
   V(JSCreateLiteralRegExp)       \
   V(JSCreateObject)              \
+  V(JSCreateStringWrapper)       \
   V(JSCreatePromise)             \
   V(JSCreateStringIterator)      \
   V(JSCreateTypedArray)          \
@@ -199,6 +201,7 @@
 #define JS_CONTEXT_OP_LIST(V) \
   V(JSHasContextExtension)    \
   V(JSLoadContext)            \
+  V(JSLoadScriptContext)      \
   V(JSStoreContext)           \
   V(JSStoreScriptContext)     \
   V(JSCreateFunctionContext)  \
@@ -429,6 +432,14 @@
 
 #define SIMPLIFIED_SPECULATIVE_NUMBER_UNOP_LIST(V) V(SpeculativeToNumber)
 
+#ifdef V8_ENABLE_CONTINUATION_PRESERVED_EMBEDDER_DATA
+#define SIMPLIFIED_CPED_OP_LIST(V)        \
+  V(GetContinuationPreservedEmbedderData) \
+  V(SetContinuationPreservedEmbedderData)
+#else
+#define SIMPLIFIED_CPED_OP_LIST(V)
+#endif  // V8_ENABLE_CONTINUATION_PRESERVED_EMBEDDER_DATA
+
 #define SIMPLIFIED_OTHER_OP_LIST(V)     \
   V(Allocate)                           \
   V(AllocateRaw)                        \
@@ -523,6 +534,7 @@
   V(StringFromSingleCodePoint)          \
   V(StringIndexOf)                      \
   V(StringLength)                       \
+  V(StringWrapperLength)                \
   V(StringSubstring)                    \
   V(StringToLowerCaseIntl)              \
   V(StringToNumber)                     \
@@ -534,7 +546,8 @@
   V(TransitionElementsKind)             \
   V(TypeOf)                             \
   V(Unsigned32Divide)                   \
-  V(VerifyType)
+  V(VerifyType)                         \
+  SIMPLIFIED_CPED_OP_LIST(V)
 
 #define SIMPLIFIED_SPECULATIVE_BIGINT_BINOP_LIST(V) \
   V(SpeculativeBigIntAdd)                           \
@@ -805,6 +818,7 @@
   V(ChangeUint32ToFloat64)               \
   V(ChangeUint32ToUint64)                \
   V(TruncateFloat64ToFloat32)            \
+  V(TruncateFloat64ToFloat16)            \
   V(TruncateInt64ToInt32)                \
   V(RoundFloat64ToInt32)                 \
   V(RoundInt32ToFloat32)                 \
@@ -909,6 +923,39 @@
   IF_WASM(V, F32x4Trunc)                  \
   IF_WASM(V, F32x4NearestInt)             \
   IF_WASM(V, F32x4DemoteF64x2Zero)        \
+  IF_WASM(V, F16x8Splat)                  \
+  IF_WASM(V, F16x8ExtractLane)            \
+  IF_WASM(V, F16x8ReplaceLane)            \
+  IF_WASM(V, F16x8Abs)                    \
+  IF_WASM(V, F16x8Neg)                    \
+  IF_WASM(V, F16x8Sqrt)                   \
+  IF_WASM(V, F16x8Ceil)                   \
+  IF_WASM(V, F16x8Floor)                  \
+  IF_WASM(V, F16x8Trunc)                  \
+  IF_WASM(V, F16x8NearestInt)             \
+  IF_WASM(V, F16x8Add)                    \
+  IF_WASM(V, F16x8Sub)                    \
+  IF_WASM(V, F16x8Mul)                    \
+  IF_WASM(V, F16x8Div)                    \
+  IF_WASM(V, F16x8Min)                    \
+  IF_WASM(V, F16x8Max)                    \
+  IF_WASM(V, F16x8Pmin)                   \
+  IF_WASM(V, F16x8Pmax)                   \
+  IF_WASM(V, F16x8Eq)                     \
+  IF_WASM(V, F16x8Ne)                     \
+  IF_WASM(V, F16x8Lt)                     \
+  IF_WASM(V, F16x8Le)                     \
+  IF_WASM(V, F16x8Gt)                     \
+  IF_WASM(V, F16x8Ge)                     \
+  IF_WASM(V, I16x8SConvertF16x8)          \
+  IF_WASM(V, I16x8UConvertF16x8)          \
+  IF_WASM(V, F16x8SConvertI16x8)          \
+  IF_WASM(V, F16x8UConvertI16x8)          \
+  IF_WASM(V, F16x8DemoteF32x4Zero)        \
+  IF_WASM(V, F16x8DemoteF64x2Zero)        \
+  IF_WASM(V, F32x4PromoteLowF16x8)        \
+  IF_WASM(V, F16x8Qfma)                   \
+  IF_WASM(V, F16x8Qfms)                   \
   IF_WASM(V, I64x2Splat)                  \
   IF_WASM(V, I64x2SplatI32Pair)           \
   IF_WASM(V, I64x2ExtractLane)            \
@@ -1079,6 +1126,12 @@
   IF_WASM(V, I16x8RelaxedQ15MulRS)        \
   IF_WASM(V, I16x8DotI8x16I7x16S)         \
   IF_WASM(V, I32x4DotI8x16I7x16AddS)      \
+  IF_WASM(V, I8x16AddReduce)              \
+  IF_WASM(V, I16x8AddReduce)              \
+  IF_WASM(V, I32x4AddReduce)              \
+  IF_WASM(V, I64x2AddReduce)              \
+  IF_WASM(V, F32x4AddReduce)              \
+  IF_WASM(V, F64x2AddReduce)              \
   IF_WASM(V, I8x16Shuffle)                \
   IF_WASM(V, V128AnyTrue)                 \
   IF_WASM(V, I64x2AllTrue)                \
@@ -1094,6 +1147,8 @@
   V(F64x4Min)                      \
   V(F64x4Max)                      \
   V(F64x4Add)                      \
+  V(F64x4Abs)                      \
+  V(F64x4Neg)                      \
   V(F64x4Sqrt)                     \
   V(F32x8Add)                      \
   V(I64x4Add)                      \
@@ -1240,7 +1295,13 @@
   V(I16x16RelaxedLaneSelect)       \
   V(I8x32RelaxedLaneSelect)        \
   V(I32x8DotI8x32I7x32AddS)        \
-  V(I16x16DotI8x32I7x32S)
+  V(I16x16DotI8x32I7x32S)          \
+  V(F32x8RelaxedMin)               \
+  V(F32x8RelaxedMax)               \
+  V(F64x4RelaxedMin)               \
+  V(F64x4RelaxedMax)               \
+  V(I32x8RelaxedTruncF32x8S)       \
+  V(I32x8RelaxedTruncF32x8U)
 
 #define VALUE_OP_LIST(V)              \
   COMMON_OP_LIST(V)                   \
