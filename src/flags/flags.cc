@@ -526,6 +526,7 @@ uint32_t ComputeFlagListHash() {
 #endif
 
   std::string args(modified_args_as_string.str());
+  PrintF("-->cjh flags: %s\n", args.c_str());
   // Generate a hash that is not 0.
   uint32_t hash = static_cast<uint32_t>(base::hash_range(
                       args.c_str(), args.c_str() + args.length())) |

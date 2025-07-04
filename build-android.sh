@@ -23,6 +23,9 @@ echo "Valid architecture: ${ARCH}"
 echo "NDK_ROOT=${NDK_ROOT}"
 
 ARGS="target_os=\"android\"
+v8_enable_lite_mode=true
+v8_enable_pointer_compression=false
+v8_enable_snapshot_compression=true
 target_cpu=\"${ARCH}\"
 v8_target_cpu=\"${ARCH}\"
 use_thin_lto=false
@@ -38,7 +41,7 @@ is_official_build=true
 v8_enable_i18n_support=false
 treat_warnings_as_errors=false
 symbol_level=0
-v8_enable_webassembly=true
+v8_enable_webassembly=false
 use_cxx17=true
 v8_enable_sandbox=false
 android_ndk_root=\"${NDK_ROOT}\"

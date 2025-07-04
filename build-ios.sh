@@ -8,7 +8,9 @@ ARCH=$1
 TARGET_ENV=$2
 
 ARGS="target_os=\"ios\"
+v8_enable_lite_mode=true
 v8_enable_pointer_compression=false
+v8_enable_snapshot_compression=true
 target_cpu=\"${ARCH}\"
 v8_target_cpu=\"${ARCH}\"
 enable_dsyms=false
