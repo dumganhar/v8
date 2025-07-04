@@ -70,6 +70,25 @@ jobs:
           mkdir -p ${CURRENT_DIR}/third_party/ninja
           ln -s ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/ninja
 
+      - name: Fix clang version
+        run: |
+          XCODE_DEVELOPER_PATH=$(xcode-select -p)
+          echo "XCODE_DEVELOPER_PATH: ${XCODE_DEVELOPER_PATH}"
+          cd $XCODE_DEVELOPER_PATH/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang
+          ls -l
+          ln -s 17 20
+
+      - name: Install llvm
+        run: |
+          brew install llvm
+          echo "Install llvm succeed!"
+          export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+          LLVM_AR_PATH=$(which llvm-ar)
+          echo "LLVM_AR_PATH: ${LLVM_AR_PATH}"
+          XCODE_DEV_PATH=$(xcode-select -p)
+          echo "XCODE_DEV_PATH: ${XCODE_DEV_PATH}"
+          sudo ln -s ${LLVM_AR_PATH} ${XCODE_DEV_PATH}/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-ar
+
       - name: Build ${{ matrix.arch }}
         run: |
           export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
@@ -191,6 +210,14 @@ jobs:
           CURRENT_DIR=$(pwd)
           mkdir -p ${CURRENT_DIR}/third_party/ninja
           ln -s ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/ninja
+      
+      - name: Fix clang version
+        run: |
+          XCODE_DEVELOPER_PATH=$(xcode-select -p)
+          echo "XCODE_DEVELOPER_PATH: ${XCODE_DEVELOPER_PATH}"
+          cd $XCODE_DEVELOPER_PATH/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang
+          ls -l
+          ln -s 17 20
 
       - name: Install llvm
         run: |
