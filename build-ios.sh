@@ -27,7 +27,6 @@ v8_enable_i18n_support=false
 treat_warnings_as_errors=false
 symbol_level=0
 v8_enable_webassembly=false
-use_cxx17=true
 v8_enable_sandbox=false
 ios_deployment_target=\"11.0\"
 ios_enable_code_signing=false"
