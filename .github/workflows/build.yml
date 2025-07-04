@@ -34,7 +34,7 @@ jobs:
       - name: Select XCode Version
         uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd
         with:
-          xcode-version: latest
+          xcode-version: latest-stable
 
       - name: Clone DepotTools
         run: |
@@ -76,7 +76,7 @@ jobs:
           echo "XCODE_DEVELOPER_PATH: ${XCODE_DEVELOPER_PATH}"
           cd $XCODE_DEVELOPER_PATH/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang
           ls -l
-          ln -s 17 20
+          ln -s 16 20
 
       - name: Install llvm
         run: |
@@ -175,7 +175,7 @@ jobs:
       - name: Select XCode Version
         uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd
         with:
-          xcode-version: latest
+          xcode-version: latest-stable
 
       - name: Clone DepotTools
         run: |
@@ -217,7 +217,7 @@ jobs:
           echo "XCODE_DEVELOPER_PATH: ${XCODE_DEVELOPER_PATH}"
           cd $XCODE_DEVELOPER_PATH/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang
           ls -l
-          ln -s 17 20
+          ln -s 16 20
 
       - name: Install llvm
         run: |
