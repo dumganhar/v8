@@ -11,7 +11,7 @@ import("//build/config/mips.gni")
 import("//build/config/riscv.gni")
 import("//build/config/sanitizers/sanitizers.gni")
 import("//build_overrides/build.gni")
-import("//third_party/icu/config.gni")
+#import("//third_party/icu/config.gni")
 
 import("gni/snapshot_toolchain.gni")
 import("gni/v8.gni")
@@ -453,7 +453,7 @@ declare_args() {
   # this breaks locally building V8 with ICU support when the file
   # isn't present, which some embedders rely on. This option controls
   # the explicit dependency and allows the build to complete.
-  v8_depend_on_icu_data_file = icu_use_data_file
+  v8_depend_on_icu_data_file = false #icu_use_data_file
 
   # Some fuzzers depend on fuzzing functionality linked into the v8 library.
   # For binary size reasons this functionality is not always available.
