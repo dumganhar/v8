@@ -34,7 +34,7 @@ jobs:
       - name: Select XCode Version
         uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd
         with:
-          xcode-version: latest-stable
+          xcode-version: latest
 
       - name: Clone DepotTools
         run: |
@@ -76,7 +76,7 @@ jobs:
           echo "XCODE_DEVELOPER_PATH: ${XCODE_DEVELOPER_PATH}"
           cd $XCODE_DEVELOPER_PATH/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang
           ls -l
-          ln -s 16 20
+          ln -s 17 20
 
       - name: Install llvm
         run: |
@@ -175,7 +175,7 @@ jobs:
       - name: Select XCode Version
         uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd
         with:
-          xcode-version: latest-stable
+          xcode-version: latest
 
       - name: Clone DepotTools
         run: |
@@ -217,7 +217,7 @@ jobs:
           echo "XCODE_DEVELOPER_PATH: ${XCODE_DEVELOPER_PATH}"
           cd $XCODE_DEVELOPER_PATH/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang
           ls -l
-          ln -s 16 20
+          ln -s 17 20
 
       - name: Install llvm
         run: |
@@ -414,19 +414,19 @@ jobs:
 
           python3 build/linux/sysroot_scripts/install-sysroot.py --arch=${INSTALL_SYSROOT_ARCH}
 
-      - name: Patch
-        run: |
-          sed -i "s@\"-gsimple-template-names\"@@g" build/config/compiler/BUILD.gn
-          sed -i "s@\"-ffile-compilation-dir=.\"@@g" build/config/compiler/BUILD.gn
-          sed -i "s@if (is_ubsan && (v8_current_cpu@if ((v8_current_cpu@g" BUILD.gn
-          if [[ "${{ matrix.arch }}" == "arm" || "${{ matrix.arch }}" == "x86" ]];then
-            sed -i "s@#error@//#error@g" src/base/ubsan.cc
-          fi
+      # - name: Patch
+      #   run: |
+      #     sed -i "s@\"-gsimple-template-names\"@@g" build/config/compiler/BUILD.gn
+      #     sed -i "s@\"-ffile-compilation-dir=.\"@@g" build/config/compiler/BUILD.gn
+      #     sed -i "s@if (is_ubsan && (v8_current_cpu@if ((v8_current_cpu@g" BUILD.gn
+      #     if [[ "${{ matrix.arch }}" == "arm" || "${{ matrix.arch }}" == "x86" ]];then
+      #       sed -i "s@#error@//#error@g" src/base/ubsan.cc
+      #     fi
 
-          rm $NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/12.0.9/lib/linux/x86_64/libatomic.a
-          rm $NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/12.0.9/lib/linux/i386/libatomic.a
-        env:
-            NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+      #     rm $NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/12.0.9/lib/linux/x86_64/libatomic.a
+      #     rm $NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/12.0.9/lib/linux/i386/libatomic.a
+      #   env:
+      #       NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
 
       - name: Build ${{ matrix.arch }}
         run: |
