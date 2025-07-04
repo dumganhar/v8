@@ -23,6 +23,7 @@ echo "Valid architecture: ${ARCH}"
 XCODE_DEVELOPER_PATH=$(xcode-select -p)
 
 ARGS="target_cpu=\"${ARCH}\"
+clang_version=\"16\"
 v8_target_cpu=\"${ARCH}\"
 mac_deployment_target=\"10.13\"
 mac_min_system_version=\"10.13\"

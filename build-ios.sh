@@ -8,6 +8,7 @@ ARCH=$1
 TARGET_ENV=$2
 
 ARGS="target_os=\"ios\"
+clang_version=\"16\"
 v8_enable_pointer_compression=false
 target_cpu=\"${ARCH}\"
 v8_target_cpu=\"${ARCH}\"

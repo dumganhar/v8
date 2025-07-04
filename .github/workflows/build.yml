@@ -70,13 +70,13 @@ jobs:
           mkdir -p ${CURRENT_DIR}/third_party/ninja
           ln -s ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/ninja
 
-      - name: Fix clang version
-        run: |
-          XCODE_DEVELOPER_PATH=$(xcode-select -p)
-          echo "XCODE_DEVELOPER_PATH: ${XCODE_DEVELOPER_PATH}"
-          cd $XCODE_DEVELOPER_PATH/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang
-          ls -l
-          ln -s 16 20
+      # - name: Fix clang version
+      #   run: |
+      #     XCODE_DEVELOPER_PATH=$(xcode-select -p)
+      #     echo "XCODE_DEVELOPER_PATH: ${XCODE_DEVELOPER_PATH}"
+      #     cd $XCODE_DEVELOPER_PATH/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang
+      #     ls -l
+      #     ln -s 16 20
 
       - name: Install llvm
         run: |
@@ -211,13 +211,13 @@ jobs:
           mkdir -p ${CURRENT_DIR}/third_party/ninja
           ln -s ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/ninja
       
-      - name: Fix clang version
-        run: |
-          XCODE_DEVELOPER_PATH=$(xcode-select -p)
-          echo "XCODE_DEVELOPER_PATH: ${XCODE_DEVELOPER_PATH}"
-          cd $XCODE_DEVELOPER_PATH/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang
-          ls -l
-          ln -s 16 20
+      # - name: Fix clang version
+      #   run: |
+      #     XCODE_DEVELOPER_PATH=$(xcode-select -p)
+      #     echo "XCODE_DEVELOPER_PATH: ${XCODE_DEVELOPER_PATH}"
+      #     cd $XCODE_DEVELOPER_PATH/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang
+      #     ls -l
+      #     ln -s 16 20
 
       - name: Install llvm
         run: |

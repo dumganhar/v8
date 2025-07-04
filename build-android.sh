@@ -23,6 +23,7 @@ echo "Valid architecture: ${ARCH}"
 echo "NDK_ROOT=${NDK_ROOT}"
 
 ARGS="target_os=\"android\"
+clang_version=\"18\"
 target_cpu=\"${ARCH}\"
 v8_target_cpu=\"${ARCH}\"
 use_thin_lto=false
