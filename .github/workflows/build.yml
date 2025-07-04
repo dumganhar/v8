@@ -340,7 +340,7 @@ jobs:
           echo "Show clang"
           ls -l ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++
           echo "Show ndk in hostedtoolcache"
-          ls -l /opt/hostedtoolcache/ndk/r23c/x64/toolchains/llvm/prebuilt/linux-x86_64/bin/
+          ls -l /opt/hostedtoolcache/ndk/r27c/x64/toolchains/llvm/prebuilt/linux-x86_64/bin/
 
       - name: Clone DepotTools
         run: |
