@@ -1,7 +1,7 @@
 #!/bin/bash
 
 set -e
-
+# test
 # Check if the number of arguments is 1
 if [ $# -ne 1 ]; then
     echo "Usage: $0 <architecture>"
