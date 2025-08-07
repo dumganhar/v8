@@ -396,8 +396,8 @@ jobs:
             sed -i "s@#error@//#error@g" src/base/ubsan.cc
           fi
 
-          rm $NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/12.0.9/lib/linux/x86_64/libatomic.a
-          rm $NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/12.0.9/lib/linux/i386/libatomic.a
+          rm $NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/19/lib/linux/x86_64/libatomic.a
+          rm $NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/19/lib/linux/i386/libatomic.a
         env:
             NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
 
