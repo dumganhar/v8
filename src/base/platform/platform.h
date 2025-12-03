@@ -185,6 +185,25 @@ class V8_BASE_EXPORT OS {
   // Log file open mode is platform-dependent due to line ends issues.
   static const char* const LogFileOpenMode;
 
+  // Output stream types for print callback.
+  enum class PrintOutputType {
+    kStdout,  // Standard output (VPrint, Print)
+    kStderr,  // Standard error (VPrintError, PrintError)
+    kFile     // File output (VFPrint, FPrint)
+  };
+
+  // Unified callback type for all print operations.
+  // - type: indicates the output stream type
+  // - file: the target FILE* (nullptr for stdout/stderr, use type to determine)
+  // - format: printf-style format string
+  // - args: variable arguments
+  using PrintCallback = void (*)(PrintOutputType type, FILE* file,
+                                 const char* format, va_list args);
+
+  // Set a unified callback to handle all print operations.
+  // If set, VPrint/VFPrint/VPrintError will call this callback.
+  static void SetPrintCallback(PrintCallback callback);
+
   // Print output to console. This is mostly used for debugging output.
   // On platforms that has standard terminal output, the output
   // should go to stdout.

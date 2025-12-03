@@ -267,6 +267,19 @@ class V8_EXPORT V8 {
   static void SetFatalMemoryErrorCallback(OOMErrorCallback callback);
 
   /**
+   * Allows the host application to provide a unified callback that will be
+   * called when V8 needs to print any output (stdout, stderr, or file).
+   * If set, this callback replaces the default printing behavior.
+   *
+   * The callback receives:
+   * - type: PrintOutputType indicating stdout/stderr/file
+   * - file: FILE* for file output, nullptr for stdout/stderr
+   * - format: printf-style format string
+   * - args: variable argument list
+   */
+  static void SetPrintCallback(PrintCallback callback);
+
+  /**
    * Get statistics about the shared memory usage.
    */
   static void GetSharedMemoryStatistics(SharedMemoryStatistics* statistics);

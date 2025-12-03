@@ -6484,6 +6484,11 @@ void v8::V8::SetFatalMemoryErrorCallback(
   g_oom_error_callback = oom_error_callback;
 }
 
+void v8::V8::SetPrintCallback(v8::PrintCallback print_callback) {
+  base::OS::SetPrintCallback(
+      reinterpret_cast<base::OS::PrintCallback>(print_callback));
+}
+
 void v8::V8::SetEntropySource(EntropySource entropy_source) {
   base::RandomNumberGenerator::SetEntropySource(entropy_source);
 }

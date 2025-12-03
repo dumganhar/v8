@@ -102,6 +102,9 @@ const pthread_t kNoThread = static_cast<pthread_t>(0);
 
 const char* g_gc_fake_mmap = nullptr;
 
+// Global callback for unified print operations.
+OS::PrintCallback g_print_callback = nullptr;
+
 DEFINE_LAZY_LEAKY_OBJECT_GETTER(RandomNumberGenerator,
                                 GetPlatformRandomNumberGenerator)
 static LazyMutex rng_mutex = LAZY_MUTEX_INITIALIZER;
@@ -935,6 +938,10 @@ void OS::Print(const char* format, ...) {
 
 
 void OS::VPrint(const char* format, va_list args) {
+  if (g_print_callback) {
+    g_print_callback(PrintOutputType::kStdout, nullptr, format, args);
+    return;
+  }
 #if defined(ANDROID) && !defined(V8_ANDROID_LOG_STDOUT)
   __android_log_vprint(ANDROID_LOG_INFO, LOG_TAG, format, args);
 #else
@@ -952,6 +959,17 @@ void OS::FPrint(FILE* out, const char* format, ...) {
 
 
 void OS::VFPrint(FILE* out, const char* format, va_list args) {
+  if (g_print_callback) {
+    // Determine output type based on file pointer.
+    PrintOutputType type = PrintOutputType::kFile;
+    if (out == stdout) {
+      type = PrintOutputType::kStdout;
+    } else if (out == stderr) {
+      type = PrintOutputType::kStderr;
+    }
+    g_print_callback(type, out, format, args);
+    return;
+  }
 #if defined(ANDROID) && !defined(V8_ANDROID_LOG_STDOUT)
   if (out == stdout) {
     __android_log_vprint(ANDROID_LOG_INFO, LOG_TAG, format, args);
@@ -972,11 +990,19 @@ void OS::PrintError(const char* format, ...) {
 
 
 void OS::VPrintError(const char* format, va_list args) {
+  if (g_print_callback) {
+    g_print_callback(PrintOutputType::kStderr, nullptr, format, args);
+    return;
+  }
 #if defined(ANDROID) && !defined(V8_ANDROID_LOG_STDOUT)
   __android_log_vprint(ANDROID_LOG_ERROR, LOG_TAG, format, args);
 #else
   vfprintf(stderr, format, args);
 #endif
+}
+
+void OS::SetPrintCallback(PrintCallback callback) {
+  g_print_callback = callback;
 }
 
 

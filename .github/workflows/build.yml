@@ -75,7 +75,7 @@ jobs:
           export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
           which gn
           CURRENT_DIR=$(pwd)
-          
+
           ./build-mac.sh ${{ matrix.arch }}
 
       - name: Copy to dist folder
@@ -208,7 +208,7 @@ jobs:
           export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
           which gn
           CURRENT_DIR=$(pwd)
-          
+
           if [[ "${{ matrix.arch }}" == "simulator-arm64" ]];then
             ./build-ios.sh arm64 simulator
           else
@@ -406,7 +406,7 @@ jobs:
           export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
           which gn
           CURRENT_DIR=$(pwd)
-          
+
           ./build-android.sh ${{ matrix.arch }}
         env:
           NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
@@ -528,6 +528,8 @@ jobs:
             # which python3
             cd /c
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+            cd depot_tools
+            ./ensure_bootstrap
             ls -l /c/depot_tools
             echo "C:\depot_tools" >> $GITHUB_PATH
             echo "C:\depot_tools\python-bin" >> $GITHUB_PATH
@@ -674,7 +676,7 @@ jobs:
           else
             echo "/usr/lib/x86_64-linux-gnu doesn't not exist."
           fi
-          
+
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         id: setup-jdk
@@ -704,7 +706,7 @@ jobs:
         run: |
           echo "{}" > package.json
           echo "{\"name\": \"tests\",\"lockfileVersion\": 3,\"requires\": true,\"packages\": {}}" > package-lock.json
-      
+
       - uses: actions/setup-node@v3
         with:
           node-version: 14
@@ -951,7 +953,7 @@ jobs:
           export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
           which gn
           CURRENT_DIR=$(pwd)
-          
+
           ./build-linux.sh ${{ matrix.arch }}
 
       - name: Copy to dist folder
