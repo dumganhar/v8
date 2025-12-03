@@ -260,6 +260,13 @@ class V8_EXPORT V8 {
   static void SetFatalMemoryErrorCallback(OOMErrorCallback callback);
 
   /**
+   * Allows the host application to provide a callback that will be called when
+   * V8 needs to print error messages. If set, this callback replaces the
+   * default behavior of printing to stderr.
+   */
+  static void SetVPrintErrorCallback(VPrintErrorCallback callback);
+
+  /**
    * Get statistics about the shared memory usage.
    */
   static void GetSharedMemoryStatistics(SharedMemoryStatistics* statistics);

@@ -204,6 +204,13 @@ class V8_BASE_EXPORT OS {
   static PRINTF_FORMAT(1, 2) void PrintError(const char* format, ...);
   static PRINTF_FORMAT(1, 0) void VPrintError(const char* format, va_list args);
 
+  // Callback type for custom error printing.
+  using VPrintErrorCallback = void (*)(const char* format, va_list args);
+
+  // Set a callback to handle error output. If set, VPrintError will call
+  // this callback instead of writing to stderr.
+  static void SetVPrintErrorCallback(VPrintErrorCallback callback);
+
   // Memory permissions. These should be kept in sync with the ones in
   // v8::PageAllocator and v8::PagePermissions.
   enum class MemoryPermission {

@@ -102,6 +102,9 @@ const pthread_t kNoThread = static_cast<pthread_t>(0);
 
 const char* g_gc_fake_mmap = nullptr;
 
+// Global callback for custom error printing.
+OS::VPrintErrorCallback g_vprint_error_callback = nullptr;
+
 DEFINE_LAZY_LEAKY_OBJECT_GETTER(RandomNumberGenerator,
                                 GetPlatformRandomNumberGenerator)
 static LazyMutex rng_mutex = LAZY_MUTEX_INITIALIZER;
@@ -971,11 +974,19 @@ void OS::PrintError(const char* format, ...) {
 
 
 void OS::VPrintError(const char* format, va_list args) {
+  if (g_vprint_error_callback) {
+    g_vprint_error_callback(format, args);
+    return;
+  }
 #if defined(ANDROID) && !defined(V8_ANDROID_LOG_STDOUT)
   __android_log_vprint(ANDROID_LOG_ERROR, LOG_TAG, format, args);
 #else
   vfprintf(stderr, format, args);
 #endif
+}
+
+void OS::SetVPrintErrorCallback(VPrintErrorCallback callback) {
+  g_vprint_error_callback = callback;
 }
 
 

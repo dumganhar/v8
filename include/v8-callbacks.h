@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 
+#include <cstdarg>
 #include <functional>
 #include <string>
 
@@ -231,6 +232,13 @@ using OOMErrorCallback = void (*)(const char* location,
                                   const OOMDetails& details);
 
 using MessageCallback = void (*)(Local<Message> message, Local<Value> data);
+
+/**
+ * Callback for custom error printing. This callback is invoked when V8
+ * needs to print error messages via OS::VPrintError. If set, the callback
+ * replaces the default stderr output.
+ */
+using VPrintErrorCallback = void (*)(const char* format, va_list args);
 
 // --- Tracing ---
 
