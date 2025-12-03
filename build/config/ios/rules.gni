@@ -270,7 +270,7 @@ template("create_signed_bundle") {
       deps = []
     }
 
-    code_signing_script = "//build/config/ios/codesign.py"
+    # code_signing_script = "//build/config/ios/codesign.py"
     code_signing_sources = [ _bundle_binary_path ]
     if (_enable_entitlements) {
       if (defined(invoker.entitlements_target)) {
