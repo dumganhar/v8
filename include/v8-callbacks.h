@@ -8,6 +8,7 @@
 #include <stddef.h>
 
 #include <cstdarg>
+#include <cstdio>
 #include <functional>
 #include <string>
 
@@ -233,12 +234,34 @@ using OOMErrorCallback = void (*)(const char* location,
 
 using MessageCallback = void (*)(Local<Message> message, Local<Value> data);
 
+// --- Print Callback ---
+
 /**
- * Callback for custom error printing. This callback is invoked when V8
- * needs to print error messages via OS::VPrintError. If set, the callback
- * replaces the default stderr output.
+ * Output stream types for the unified print callback.
  */
-using VPrintErrorCallback = void (*)(const char* format, va_list args);
+enum class PrintOutputType {
+  kStdout,  // Standard output (Print, VPrint)
+  kStderr,  // Standard error (PrintError, VPrintError)
+  kFile     // File output (FPrint, VFPrint)
+};
+
+/**
+ * Unified callback for all print operations in V8.
+ *
+ * This callback is invoked when V8 needs to print any output, including:
+ * - Standard output (type = kStdout)
+ * - Standard error (type = kStderr)
+ * - File output (type = kFile)
+ *
+ * \param type The output stream type
+ * \param file The target FILE* for kFile type, nullptr for kStdout/kStderr
+ * \param format Printf-style format string
+ * \param args Variable argument list
+ *
+ * If set, this callback replaces the default output behavior.
+ */
+using PrintCallback = void (*)(PrintOutputType type, FILE* file,
+                               const char* format, va_list args);
 
 // --- Tracing ---
 

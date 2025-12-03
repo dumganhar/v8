@@ -187,6 +187,25 @@ class V8_BASE_EXPORT OS {
   // Log file open mode is platform-dependent due to line ends issues.
   static const char* const LogFileOpenMode;
 
+  // Output stream types for print callback.
+  enum class PrintOutputType {
+    kStdout,  // Standard output (VPrint, Print)
+    kStderr,  // Standard error (VPrintError, PrintError)
+    kFile     // File output (VFPrint, FPrint)
+  };
+
+  // Unified callback type for all print operations.
+  // - type: indicates the output stream type
+  // - file: the target FILE* (nullptr for stdout/stderr, use type to determine)
+  // - format: printf-style format string
+  // - args: variable arguments
+  using PrintCallback = void (*)(PrintOutputType type, FILE* file,
+                                 const char* format, va_list args);
+
+  // Set a unified callback to handle all print operations.
+  // If set, VPrint/VFPrint/VPrintError will call this callback.
+  static void SetPrintCallback(PrintCallback callback);
+
   // Print output to console. This is mostly used for debugging output.
   // On platforms that has standard terminal output, the output
   // should go to stdout.
@@ -203,13 +222,6 @@ class V8_BASE_EXPORT OS {
   // should go to stderr.
   static PRINTF_FORMAT(1, 2) void PrintError(const char* format, ...);
   static PRINTF_FORMAT(1, 0) void VPrintError(const char* format, va_list args);
-
-  // Callback type for custom error printing.
-  using VPrintErrorCallback = void (*)(const char* format, va_list args);
-
-  // Set a callback to handle error output. If set, VPrintError will call
-  // this callback instead of writing to stderr.
-  static void SetVPrintErrorCallback(VPrintErrorCallback callback);
 
   // Memory permissions. These should be kept in sync with the ones in
   // v8::PageAllocator and v8::PagePermissions.
