@@ -41,6 +41,8 @@ jobs:
             cd ..
             DEPOT_TOOLS_PATH=$(pwd)/depot_tools
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+            cd depot_tools
+            ./ensure_bootstrap
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
 
@@ -73,7 +75,7 @@ jobs:
           export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
           which gn
           CURRENT_DIR=$(pwd)
-          
+
           ./build-mac.sh ${{ matrix.arch }}
 
       - name: Copy to dist folder
@@ -161,6 +163,8 @@ jobs:
             cd ..
             DEPOT_TOOLS_PATH=$(pwd)/depot_tools
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+            cd depot_tools
+            ./ensure_bootstrap
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
 
@@ -204,7 +208,7 @@ jobs:
           export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
           which gn
           CURRENT_DIR=$(pwd)
-          
+
           if [[ "${{ matrix.arch }}" == "simulator-arm64" ]];then
             ./build-ios.sh arm64 simulator
           else
@@ -343,6 +347,8 @@ jobs:
             cd ..
             DEPOT_TOOLS_PATH=$(pwd)/depot_tools
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+            cd depot_tools
+            ./ensure_bootstrap
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
 
@@ -400,7 +406,7 @@ jobs:
           export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
           which gn
           CURRENT_DIR=$(pwd)
-          
+
           ./build-android.sh ${{ matrix.arch }}
         env:
           NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
@@ -524,6 +530,8 @@ jobs:
         run: |
             cd /c
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+            cd depot_tools
+            ./ensure_bootstrap
             ls -l /c/depot_tools
 
       - name: Install gn
@@ -549,7 +557,7 @@ jobs:
         run: |
           choco upgrade chocolatey -y
           choco install vswhere
-      
+
       - name: Install Visual Studio 2022 Community 17.9.7.0
         run: |
           # https://github.com/actions/runner-images/issues/9154
@@ -559,8 +567,8 @@ jobs:
           # https://community.chocolatey.org/packages/visualstudio2022buildtools/117.9.7.0
           # choco install visualstudio2022buildtools --version=117.9.7.0 --package-parameters "--installPath C:\Program Files\Microsoft Visual Studio\2022\BuildTools"
           choco install visualstudio2022-workload-nativedesktop
-      
-      - name: Disable the default VS2022 Enterprise 
+
+      - name: Disable the default VS2022 Enterprise
         run: |
           move "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" "C:\Program Files\Microsoft Visual Studio\2022\Enterprise.default"
         shell: cmd
@@ -574,7 +582,7 @@ jobs:
       - name: GN gen ${{ matrix.arch }}
         shell: cmd
         run: |
-          dir C:\depot_tools          
+          dir C:\depot_tools
           set DEPOT_TOOLS_WIN_TOOLCHAIN=0
           set PATH=C:\depot_tools;%PATH%
           set ARGS="is_clang=false is_debug=${{ env.IS_DEBUG }} target_cpu=""${{ matrix.arch }}"" v8_target_cpu=""${{ matrix.arch }}"" use_thin_lto=false use_lld=false clang_use_chrome_plugins=false chrome_pgo_phase=0 is_component_build=true use_custom_libcxx=false v8_use_external_startup_data=false is_official_build=false v8_enable_i18n_support=false treat_warnings_as_errors=false symbol_level=0 v8_enable_webassembly=true v8_enable_sandbox=false"
@@ -686,7 +694,7 @@ jobs:
           else
             echo "/usr/lib/x86_64-linux-gnu doesn't not exist."
           fi
-          
+
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         id: setup-jdk
@@ -716,7 +724,7 @@ jobs:
         run: |
           echo "{}" > package.json
           echo "{\"name\": \"tests\",\"lockfileVersion\": 3,\"requires\": true,\"packages\": {}}" > package-lock.json
-      
+
       - uses: actions/setup-node@v3
         with:
           node-version: 14
@@ -758,6 +766,8 @@ jobs:
             cd ..
             DEPOT_TOOLS_PATH=$(pwd)/depot_tools
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+            cd depot_tools
+            ./ensure_bootstrap
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
 
@@ -912,6 +922,8 @@ jobs:
             cd ..
             DEPOT_TOOLS_PATH=$(pwd)/depot_tools
             git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+            cd depot_tools
+            ./ensure_bootstrap
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
             echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
 
@@ -959,7 +971,7 @@ jobs:
           export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
           which gn
           CURRENT_DIR=$(pwd)
-          
+
           ./build-linux.sh ${{ matrix.arch }}
 
       - name: Copy to dist folder
