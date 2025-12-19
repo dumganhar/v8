@@ -488,158 +488,158 @@ jobs:
           asset_name: v8-android.zip
           tag: ${{ github.ref }}
 
-  build_windows:
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x64]
-        build_type: [debug, release]
+  # build_windows:
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       arch: [x64]
+  #       build_type: [debug, release]
 
-    name: "Windows"
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  #   name: "Windows"
+  #   runs-on: windows-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
 
-      # - uses: actions/setup-python@v5
-      #   with:
-      #     python-version: '3.11'
+  #     # - uses: actions/setup-python@v5
+  #     #   with:
+  #     #     python-version: '3.11'
 
-      - name: Check is_debug
-        shell: bash
-        run: |
-          if [[ "${{matrix.build_type}}" == "debug" ]];then
-            echo "IS_DEBUG=true" >> $GITHUB_ENV
-          else
-            echo "IS_DEBUG=false" >> $GITHUB_ENV
-          fi
+  #     - name: Check is_debug
+  #       shell: bash
+  #       run: |
+  #         if [[ "${{matrix.build_type}}" == "debug" ]];then
+  #           echo "IS_DEBUG=true" >> $GITHUB_ENV
+  #         else
+  #           echo "IS_DEBUG=false" >> $GITHUB_ENV
+  #         fi
 
-      - name: Print env
-        run: |
-          echo "env.IS_DEBUG=${{ env.IS_DEBUG }}"
-          # echo "----- python version -----"
-          # python --version
+  #     - name: Print env
+  #       run: |
+  #         echo "env.IS_DEBUG=${{ env.IS_DEBUG }}"
+  #         # echo "----- python version -----"
+  #         # python --version
           
-      - name: Clone DepotTools
-        shell: bash
-        run: |
-            # ls -l /c/hostedtoolcache/windows/Python/3.11.9/x64/
-            # python3 --version
-            # which python3
-            cd /c
-            git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-            cd depot_tools
-            ./ensure_bootstrap
-            ls -l /c/depot_tools
-            echo "C:\depot_tools" >> $GITHUB_PATH
-            echo "C:\depot_tools\python-bin" >> $GITHUB_PATH
+  #     - name: Clone DepotTools
+  #       shell: bash
+  #       run: |
+  #           # ls -l /c/hostedtoolcache/windows/Python/3.11.9/x64/
+  #           # python3 --version
+  #           # which python3
+  #           cd /c
+  #           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+  #           cd depot_tools
+  #           ./ensure_bootstrap
+  #           ls -l /c/depot_tools
+  #           echo "C:\depot_tools" >> $GITHUB_PATH
+  #           echo "C:\depot_tools\python-bin" >> $GITHUB_PATH
 
-      - name: Install gn
-        run: |
-          Invoke-WebRequest -OutFile gn.zip https://chrome-infra-packages.appspot.com/dl/gn/gn/windows-amd64/+/latest
-          Expand-Archive gn.zip -DestinationPath buildtools\win\
+  #     - name: Install gn
+  #       run: |
+  #         Invoke-WebRequest -OutFile gn.zip https://chrome-infra-packages.appspot.com/dl/gn/gn/windows-amd64/+/latest
+  #         Expand-Archive gn.zip -DestinationPath buildtools\win\
 
-      - name: Setup Ninja
-        uses: ashutoshvarma/setup-ninja@66ad2db9ed7d211c065daeeb849e9c8c895773c9
-        with:
-          version: 1.10.0
+  #     - name: Setup Ninja
+  #       uses: ashutoshvarma/setup-ninja@66ad2db9ed7d211c065daeeb849e9c8c895773c9
+  #       with:
+  #         version: 1.10.0
 
-      - name: Install ninja
-        shell: bash
-        run: |
-          which ninja
-          NINJA_PATH=$(which ninja)
-          CURRENT_DIR=$(pwd)
-          mkdir -p ${CURRENT_DIR}/third_party/ninja
-          cp ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/
+  #     - name: Install ninja
+  #       shell: bash
+  #       run: |
+  #         which ninja
+  #         NINJA_PATH=$(which ninja)
+  #         CURRENT_DIR=$(pwd)
+  #         mkdir -p ${CURRENT_DIR}/third_party/ninja
+  #         cp ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/
 
-      - name: Install windows deps
-        run: |
-          choco upgrade chocolatey -y
-          choco install vswhere
+  #     - name: Install windows deps
+  #       run: |
+  #         choco upgrade chocolatey -y
+  #         choco install vswhere
       
-      - name: update_depot_tools 
-        shell: cmd
-        run: |
-          cd C:\depot_tools
-          update_depot_tools.bat
+  #     - name: update_depot_tools 
+  #       shell: cmd
+  #       run: |
+  #         cd C:\depot_tools
+  #         update_depot_tools.bat
 
-      - name: GN gen ${{ matrix.arch }}
-        shell: cmd
-        run: |
-          dir C:\depot_tools
-          set DEPOT_TOOLS_WIN_TOOLCHAIN=0
-          set PATH=C:\depot_tools;%PATH%
-          set ARGS="is_clang=false is_debug=${{ env.IS_DEBUG }} target_cpu=""${{ matrix.arch }}"" v8_target_cpu=""${{ matrix.arch }}"" use_thin_lto=false use_lld=false clang_use_chrome_plugins=false chrome_pgo_phase=0 is_component_build=true use_custom_libcxx=false v8_use_external_startup_data=false is_official_build=false v8_enable_i18n_support=false treat_warnings_as_errors=false symbol_level=0 v8_enable_webassembly=true v8_enable_sandbox=false"
-          gn gen out/windows --args=%ARGS%
+  #     - name: GN gen ${{ matrix.arch }}
+  #       shell: cmd
+  #       run: |
+  #         dir C:\depot_tools
+  #         set DEPOT_TOOLS_WIN_TOOLCHAIN=0
+  #         set PATH=C:\depot_tools;%PATH%
+  #         set ARGS="is_clang=false is_debug=${{ env.IS_DEBUG }} target_cpu=""${{ matrix.arch }}"" v8_target_cpu=""${{ matrix.arch }}"" use_thin_lto=false use_lld=false clang_use_chrome_plugins=false chrome_pgo_phase=0 is_component_build=true use_custom_libcxx=false v8_use_external_startup_data=false is_official_build=false v8_enable_i18n_support=false treat_warnings_as_errors=false symbol_level=0 v8_enable_webassembly=true v8_enable_sandbox=false"
+  #         gn gen out/windows --args=%ARGS%
 
-      - name: Build ${{ matrix.arch }}-${{ matrix.build_type }}
-        run:
-          ninja -C out/windows v8_hello_world
+  #     - name: Build ${{ matrix.arch }}-${{ matrix.build_type }}
+  #       run:
+  #         ninja -C out/windows v8_hello_world
 
-      - name: Copy to dist folder
-        shell: bash
-        run: |
-          ls -l ./out/windows
-          echo "---------------------"
-          ls -l ./out/windows/obj
-          mkdir dist
-          cp ./out/windows/*.exe ./dist/
-          cp ./out/windows/*.lib ./dist/
-          cp ./out/windows/*.dll ./dist/
-          cp -r ./include ./dist/
+  #     - name: Copy to dist folder
+  #       shell: bash
+  #       run: |
+  #         ls -l ./out/windows
+  #         echo "---------------------"
+  #         ls -l ./out/windows/obj
+  #         mkdir dist
+  #         cp ./out/windows/*.exe ./dist/
+  #         cp ./out/windows/*.lib ./dist/
+  #         cp ./out/windows/*.dll ./dist/
+  #         cp -r ./include ./dist/
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: v8-windows-${{ matrix.arch }}-${{ matrix.build_type }}
-          path: ./dist
+  #     - name: Upload artifact
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: v8-windows-${{ matrix.arch }}-${{ matrix.build_type }}
+  #         path: ./dist
 
-  build_windows_fat:
-    permissions:
-      contents: write
-    if: github.event_name == 'release'
-    name: "windows (fat)"
-    runs-on: ubuntu-latest
-    needs: build_windows
-    steps:
-      - name: Download x64(debug) artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: v8-windows-x64-debug
-          path: v8-windows-x64-debug
+  # build_windows_fat:
+  #   permissions:
+  #     contents: write
+  #   if: github.event_name == 'release'
+  #   name: "windows (fat)"
+  #   runs-on: ubuntu-latest
+  #   needs: build_windows
+  #   steps:
+  #     - name: Download x64(debug) artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: v8-windows-x64-debug
+  #         path: v8-windows-x64-debug
 
-      - name: Download x64(release) artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: v8-windows-x64-release
-          path: v8-windows-x64-release
+  #     - name: Download x64(release) artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: v8-windows-x64-release
+  #         path: v8-windows-x64-release
 
-      - name: Build a fat library
-        shell: bash
-        run: |
-          mkdir v8-windows-fat
-          cp -r ./v8-windows-x64-debug ./v8-windows-fat/Debug
-          cp -r ./v8-windows-x64-release ./v8-windows-fat/Release
-          cp -r ./v8-windows-x64-debug/include ./v8-windows-fat/
-          rm -rf ./v8-windows-fat/Debug/include
-          rm -rf ./v8-windows-fat/Release/include
+  #     - name: Build a fat library
+  #       shell: bash
+  #       run: |
+  #         mkdir v8-windows-fat
+  #         cp -r ./v8-windows-x64-debug ./v8-windows-fat/Debug
+  #         cp -r ./v8-windows-x64-release ./v8-windows-fat/Release
+  #         cp -r ./v8-windows-x64-debug/include ./v8-windows-fat/
+  #         rm -rf ./v8-windows-fat/Debug/include
+  #         rm -rf ./v8-windows-fat/Release/include
 
-      - name: Pack dist files
-        uses: thedoctor0/zip-release@a24011d8d445e4da5935a7e73c1f98e22a439464
-        with:
-          type: 'zip'
-          directory: 'v8-windows-fat'
-          path: '.'
-          filename: 'v8-windows.zip'
+  #     - name: Pack dist files
+  #       uses: thedoctor0/zip-release@a24011d8d445e4da5935a7e73c1f98e22a439464
+  #       with:
+  #         type: 'zip'
+  #         directory: 'v8-windows-fat'
+  #         path: '.'
+  #         filename: 'v8-windows.zip'
 
-      - name: Upload to Release
-        uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: v8-windows-fat/v8-windows.zip
-          asset_name: v8-windows.zip
-          tag: ${{ github.ref }}
+  #     - name: Upload to Release
+  #       uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
+  #       with:
+  #         repo_token: ${{ secrets.GITHUB_TOKEN }}
+  #         file: v8-windows-fat/v8-windows.zip
+  #         asset_name: v8-windows.zip
+  #         tag: ${{ github.ref }}
 
   build_openharmony:
     strategy:
