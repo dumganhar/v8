@@ -52,7 +52,13 @@ use_ml_inliner=false
 llvm_android_mainline=true
 "
 
+echo "gn path: $(which gn)"
+echo "gn version: $(gn --version)"
 
+echo "before gn gen"
 gn gen out/android --args="${ARGS}"
+echo "after gn gen"
 
+echo "before ninja"
 ninja -C out/android v8_monolith d8 -v
+echo "after ninja"
