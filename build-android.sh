@@ -56,7 +56,7 @@ echo "gn path: $(which gn)"
 echo "gn version: $(gn --version)"
 
 echo "before gn gen"
-gn gen out/android --args="${ARGS}"
+gn gen out/android --args="${ARGS}" -v
 echo "after gn gen"
 
 echo "before ninja"
