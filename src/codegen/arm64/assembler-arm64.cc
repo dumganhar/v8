@@ -114,12 +114,22 @@ void CpuFeatures::ProbeImpl(bool cross_compile) {
   unsigned runtime = 0;
   if (cpu.has_jscvt()) {
     runtime |= 1u << JSCVT;
+    v8::base::PrintF("[v8] JSCVT supported\n");
+  } else {
+    v8::base::PrintF("[v8] JSCVT not supported\n");
   }
+
   if (cpu.has_dot_prod()) {
     runtime |= 1u << DOTPROD;
+    v8::base::PrintF("[v8] DOTPROD supported\n");
+  } else {
+    v8::base::PrintF("[v8] DOTPROD not supported\n");
   }
   if (cpu.has_lse()) {
     runtime |= 1u << LSE;
+    v8::base::PrintF("[v8] LSE supported\n");
+  } else {
+    v8::base::PrintF("[v8] LSE not supported\n");
   }
 
   // Use the best of the features found by CPU detection and those inferred from
