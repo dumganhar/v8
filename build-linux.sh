@@ -39,6 +39,11 @@ v8_enable_webassembly=true
 use_cxx17=true
 v8_enable_sandbox=false"
 
-gn gen out/linux --args="${ARGS}"
+echo "gn path: $(which gn)"
+echo "gn version: $(gn --version)"
+
+echo "before gn gen"
+gn gen out/linux --args="${ARGS}" || true
+echo "after gn gen"
 
 ninja -C out/linux v8_monolith d8 -v

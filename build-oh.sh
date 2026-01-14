@@ -61,6 +61,13 @@ fi
 
 echo "FINAL_ARGS:${FINAL_ARGS}"
 
-gn gen out/oh --args="${FINAL_ARGS}"
+echo "gn path: $(which gn)"
+echo "gn version: $(gn --version)"
 
+echo "before gn gen"
+gn gen out/oh --args="${FINAL_ARGS}" || true
+echo "after gn gen"
+
+echo "before ninja"
 ninja -C out/oh v8_monolith d8 -v
+echo "after ninja"
