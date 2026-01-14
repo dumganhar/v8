@@ -112,20 +112,20 @@ void CpuFeatures::ProbeImpl(bool cross_compile) {
   // Probe for additional features at runtime.
   base::CPU cpu;
   unsigned runtime = 0;
-  if (cpu.has_jscvt()) {
+  if (1) {//cpu.has_jscvt()) {
     runtime |= 1u << JSCVT;
     PrintF("[v8] JSCVT supported\n");
   } else {
     PrintF("[v8] JSCVT not supported\n");
   }
 
-  if (cpu.has_dot_prod()) {
+  if (1) {//cpu.has_dot_prod()) {
     runtime |= 1u << DOTPROD;
     PrintF("[v8] DOTPROD supported\n");
   } else {
     PrintF("[v8] DOTPROD not supported\n");
   }
-  if (cpu.has_lse()) {
+  if (1) {//cpu.has_lse()) {
     runtime |= 1u << LSE;
     PrintF("[v8] LSE supported\n");
   } else {
