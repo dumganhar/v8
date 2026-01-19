@@ -22,6 +22,12 @@ echo "Valid architecture: ${ARCH}"
 
 echo "NDK_ROOT=${NDK_ROOT}"
 
+SYMBOL_LEVEL=0
+
+if [ "${ARCH}" == "arm64" ]; then
+    SYMBOL_LEVEL=2
+fi
+
 ARGS="target_os=\"android\"
 target_cpu=\"${ARCH}\"
 v8_target_cpu=\"${ARCH}\"
@@ -37,7 +43,7 @@ v8_use_external_startup_data=false
 is_official_build=true
 v8_enable_i18n_support=false
 treat_warnings_as_errors=false
-symbol_level=0
+symbol_level=${SYMBOL_LEVEL}
 v8_enable_webassembly=true
 use_cxx17=true
 v8_enable_sandbox=false
