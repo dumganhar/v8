@@ -4158,7 +4158,7 @@ void GenerateExceptionHandlingLandingPad(MacroAssembler* masm,
   __ Ldr(
       thread_in_wasm_flag_addr,
       MemOperand(kRootRegister, Isolate::thread_in_wasm_flag_address_offset()));
-  __ Str(xzr, MemOperand(thread_in_wasm_flag_addr, 0));
+  __ Str(wzr, MemOperand(thread_in_wasm_flag_addr, 0));
 
   // The exception becomes the parameter of the RejectPromise builtin, and the
   // promise is the return value of this wrapper.
@@ -4337,7 +4337,7 @@ void JSToWasmWrapperHelper(MacroAssembler* masm, bool stack_switch) {
                       Isolate::thread_in_wasm_flag_address_offset()));
     DEFINE_SCOPED(scratch);
     __ Mov(scratch, 1);
-    __ Str(scratch, MemOperand(thread_in_wasm_flag_addr, 0));
+    __ Str(scratch.W(), MemOperand(thread_in_wasm_flag_addr, 0));
   }
   {
     DEFINE_SCOPED(call_target);
@@ -4355,7 +4355,7 @@ void JSToWasmWrapperHelper(MacroAssembler* masm, bool stack_switch) {
     __ Ldr(thread_in_wasm_flag_addr,
            MemOperand(kRootRegister,
                       Isolate::thread_in_wasm_flag_address_offset()));
-    __ Str(xzr, MemOperand(thread_in_wasm_flag_addr, 0));
+    __ Str(wzr, MemOperand(thread_in_wasm_flag_addr, 0));
   }
 
   __ Ldr(wrapper_buffer,
