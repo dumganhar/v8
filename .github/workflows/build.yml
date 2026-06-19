@@ -641,249 +641,249 @@ jobs:
   #         asset_name: v8-windows.zip
   #         tag: ${{ github.ref }}
 
-  build_openharmony:
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [arm64, arm]
-    name: "Openharmony"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Show ubuntu libraries
-        run: |
-          if [[ -d "/usr/lib/i386-linux-gnu" ]]; then
-            echo "/usr/lib/i386-linux-gnu exists."
-            ls -la /usr/lib/i386-linux-gnu/libatomic.so.1*
-          else
-            echo "/usr/lib/i386-linux-gnu doesn't not exist."
-          fi
+  # build_openharmony:
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       arch: [arm64, arm]
+  #   name: "Openharmony"
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Show ubuntu libraries
+  #       run: |
+  #         if [[ -d "/usr/lib/i386-linux-gnu" ]]; then
+  #           echo "/usr/lib/i386-linux-gnu exists."
+  #           ls -la /usr/lib/i386-linux-gnu/libatomic.so.1*
+  #         else
+  #           echo "/usr/lib/i386-linux-gnu doesn't not exist."
+  #         fi
 
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y libc6:i386 libstdc++6:i386 libatomic1:i386
+  #         sudo dpkg --add-architecture i386
+  #         sudo apt-get update
+  #         sudo apt-get install -y libc6:i386 libstdc++6:i386 libatomic1:i386
 
-          if [[ -d "/usr/lib/i386-linux-gnu" ]]; then
-            echo "/usr/lib/i386-linux-gnu exists."
-            ls -la /usr/lib/i386-linux-gnu/
-            ls -la /usr/lib/i386-linux-gnu/libatomic.so.1*
-          else
-            echo "/usr/lib/i386-linux-gnu doesn't not exist."
-          fi
+  #         if [[ -d "/usr/lib/i386-linux-gnu" ]]; then
+  #           echo "/usr/lib/i386-linux-gnu exists."
+  #           ls -la /usr/lib/i386-linux-gnu/
+  #           ls -la /usr/lib/i386-linux-gnu/libatomic.so.1*
+  #         else
+  #           echo "/usr/lib/i386-linux-gnu doesn't not exist."
+  #         fi
 
-          if [[ -d "/usr/lib/x86_64-linux-gnu" ]]; then
-            echo "/usr/lib/x86_64-linux-gnu exists."
-            ls -la /usr/lib/x86_64-linux-gnu/libatomic.so.1*
-          else
-            echo "/usr/lib/x86_64-linux-gnu doesn't not exist."
-          fi
+  #         if [[ -d "/usr/lib/x86_64-linux-gnu" ]]; then
+  #           echo "/usr/lib/x86_64-linux-gnu exists."
+  #           ls -la /usr/lib/x86_64-linux-gnu/libatomic.so.1*
+  #         else
+  #           echo "/usr/lib/x86_64-linux-gnu doesn't not exist."
+  #         fi
 
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        id: setup-jdk
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-      - name: Get oh sdk cache directory path
-        id: oh-sdk-cache-dir-path
-        run: |
-          echo "cache dir: "
-          echo "dir=$HOME/openharmony" >> $GITHUB_OUTPUT
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-java@v4
+  #       id: setup-jdk
+  #       with:
+  #         distribution: 'zulu'
+  #         java-version: '17'
+  #     - name: Get oh sdk cache directory path
+  #       id: oh-sdk-cache-dir-path
+  #       run: |
+  #         echo "cache dir: "
+  #         echo "dir=$HOME/openharmony" >> $GITHUB_OUTPUT
 
-      - name: Output cache dir
-        run: |
-          echo "Output cache dir: ${{ steps.oh-sdk-cache-dir-path.outputs.dir }}"
+  #     - name: Output cache dir
+  #       run: |
+  #         echo "Output cache dir: ${{ steps.oh-sdk-cache-dir-path.outputs.dir }}"
 
-      - name: Cache OH SDK
-        id: cache-oh-sdk
-        uses: actions/cache@v3
-        env:
-          cache-name: cache-oh-sdk-9
-        with:
-          path: ${{ steps.oh-sdk-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-build-${{ env.cache-name }}
+  #     - name: Cache OH SDK
+  #       id: cache-oh-sdk
+  #       uses: actions/cache@v3
+  #       env:
+  #         cache-name: cache-oh-sdk-9
+  #       with:
+  #         path: ${{ steps.oh-sdk-cache-dir-path.outputs.dir }}
+  #         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-      - name: Add package.json
-        run: |
-          echo "{}" > package.json
-          echo "{\"name\": \"tests\",\"lockfileVersion\": 3,\"requires\": true,\"packages\": {}}" > package-lock.json
+  #     - name: Add package.json
+  #       run: |
+  #         echo "{}" > package.json
+  #         echo "{\"name\": \"tests\",\"lockfileVersion\": 3,\"requires\": true,\"packages\": {}}" > package-lock.json
 
-      - uses: actions/setup-node@v3
-        with:
-          node-version: 14
-          cache: 'npm'
+  #     - uses: actions/setup-node@v3
+  #       with:
+  #         node-version: 14
+  #         cache: 'npm'
 
-      - if: ${{ steps.cache-oh-sdk.outputs.cache-hit != 'true' }}
-        name: No Cache found, install oh sdk
-        continue-on-error: false
-        run: |
-          if [ ! -d "$HOME/openharmony" ]; then
-            mkdir -p $HOME/openharmony
-            echo "Download commandline-tools-linux.zip ..."
-            curl -o commandline-tools-linux.zip "https://contentcenter-vali-drcn.dbankcdn.cn/pvt_2/DeveloperAlliance_package_901_9/b1/v3/E6zhv5UFQ2-inIwNJhTN6Q/commandline-tools-linux-2.0.0.2.zip?HW-CC-KV=V1&HW-CC-Date=20230621T074401Z&HW-CC-Expire=315360000&HW-CC-Sign=621224257B02079B1E76C0A56FDF21483400B1E3556213F88DC79BC9BE7D595D"
-            echo "Unzip commandline-tools-linux.zip ..."
-            unzip commandline-tools-linux.zip -d $HOME/openharmony > /dev/null
-            cd $HOME/openharmony
-            ls -l
-            cd command-line-tools
-            echo "=============== PATCHING sdkmanager/bin/sdkmgr file ==============="
-            sed -i "s@-Dfile.encoding=UTF-8@-Dfile.encoding=UTF-8 -Duser.country=CN@g" ./sdkmanager/bin/sdkmgr
-            cd bin
-            ./sdkmgr list
-            echo "=============== INSTALL HOS toolchains:9 ==============="
-            ./sdkmgr install toolchains:9 --accept-license > /dev/null
-            echo "=============== INSTALL OH SDK ets:9 ==============="
-            ./sdkmgr install OpenHarmony/ets:9 --accept-license > /dev/null
-            echo "=============== INSTALL OH SDK js:9 ==============="
-            ./sdkmgr install OpenHarmony/js:9 --accept-license > /dev/null
-            echo "=============== INSTALL OH SDK native:9 ==============="
-            ./sdkmgr install OpenHarmony/native:9 --accept-license > /dev/null
-            echo "=============== INSTALL OH SDK toolchains:9 ==============="
-            ./sdkmgr install OpenHarmony/toolchains:9 --accept-license > /dev/null
-            echo "=============== INSTALL OH SDK DONE ==============="
-            ./sdkmgr list
-          fi
+  #     - if: ${{ steps.cache-oh-sdk.outputs.cache-hit != 'true' }}
+  #       name: No Cache found, install oh sdk
+  #       continue-on-error: false
+  #       run: |
+  #         if [ ! -d "$HOME/openharmony" ]; then
+  #           mkdir -p $HOME/openharmony
+  #           echo "Download commandline-tools-linux.zip ..."
+  #           curl -o commandline-tools-linux.zip "https://contentcenter-vali-drcn.dbankcdn.cn/pvt_2/DeveloperAlliance_package_901_9/b1/v3/E6zhv5UFQ2-inIwNJhTN6Q/commandline-tools-linux-2.0.0.2.zip?HW-CC-KV=V1&HW-CC-Date=20230621T074401Z&HW-CC-Expire=315360000&HW-CC-Sign=621224257B02079B1E76C0A56FDF21483400B1E3556213F88DC79BC9BE7D595D"
+  #           echo "Unzip commandline-tools-linux.zip ..."
+  #           unzip commandline-tools-linux.zip -d $HOME/openharmony > /dev/null
+  #           cd $HOME/openharmony
+  #           ls -l
+  #           cd command-line-tools
+  #           echo "=============== PATCHING sdkmanager/bin/sdkmgr file ==============="
+  #           sed -i "s@-Dfile.encoding=UTF-8@-Dfile.encoding=UTF-8 -Duser.country=CN@g" ./sdkmanager/bin/sdkmgr
+  #           cd bin
+  #           ./sdkmgr list
+  #           echo "=============== INSTALL HOS toolchains:9 ==============="
+  #           ./sdkmgr install toolchains:9 --accept-license > /dev/null
+  #           echo "=============== INSTALL OH SDK ets:9 ==============="
+  #           ./sdkmgr install OpenHarmony/ets:9 --accept-license > /dev/null
+  #           echo "=============== INSTALL OH SDK js:9 ==============="
+  #           ./sdkmgr install OpenHarmony/js:9 --accept-license > /dev/null
+  #           echo "=============== INSTALL OH SDK native:9 ==============="
+  #           ./sdkmgr install OpenHarmony/native:9 --accept-license > /dev/null
+  #           echo "=============== INSTALL OH SDK toolchains:9 ==============="
+  #           ./sdkmgr install OpenHarmony/toolchains:9 --accept-license > /dev/null
+  #           echo "=============== INSTALL OH SDK DONE ==============="
+  #           ./sdkmgr list
+  #         fi
 
-      - name: Clone DepotTools
-        run: |
-            cd ..
-            DEPOT_TOOLS_PATH=$(pwd)/depot_tools
-            git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-            cd depot_tools
-            ./ensure_bootstrap
-            echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
-            echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
+  #     - name: Clone DepotTools
+  #       run: |
+  #           cd ..
+  #           DEPOT_TOOLS_PATH=$(pwd)/depot_tools
+  #           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+  #           cd depot_tools
+  #           ./ensure_bootstrap
+  #           echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
+  #           echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
 
-      - name: Print env
-        run: |
-          echo "${{ env.DEPOT_TOOLS_PATH }}"
-          ls -l ${{ env.DEPOT_TOOLS_PATH }}
+  #     - name: Print env
+  #       run: |
+  #         echo "${{ env.DEPOT_TOOLS_PATH }}"
+  #         ls -l ${{ env.DEPOT_TOOLS_PATH }}
 
-      - name: Install gn
-        run: |
-          wget https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/latest -O ./gn.zip
-          unzip gn.zip -d buildtools/linux64/
+  #     - name: Install gn
+  #       run: |
+  #         wget https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/latest -O ./gn.zip
+  #         unzip gn.zip -d buildtools/linux64/
 
-      - name: Install ninja
-        run: |
-          if ! command -v ninja &> /dev/null; then
-              echo "Ninja not found, installing..."
-              # sudo apt update
-              sudo apt install ninja-build
-          else
-              echo "Ninja is already installed."
-          fi
-          which ninja
-          NINJA_PATH=$(which ninja)
-          CURRENT_DIR=$(pwd)
-          mkdir -p ${CURRENT_DIR}/third_party/ninja
-          ln -s ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/ninja
+  #     - name: Install ninja
+  #       run: |
+  #         if ! command -v ninja &> /dev/null; then
+  #             echo "Ninja not found, installing..."
+  #             # sudo apt update
+  #             sudo apt install ninja-build
+  #         else
+  #             echo "Ninja is already installed."
+  #         fi
+  #         which ninja
+  #         NINJA_PATH=$(which ninja)
+  #         CURRENT_DIR=$(pwd)
+  #         mkdir -p ${CURRENT_DIR}/third_party/ninja
+  #         ln -s ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/ninja
 
-      - name: Install linux sysroot
-        run: |
-          if [[ "${{ matrix.arch }}" == "arm64" || "${{ matrix.arch }}" == "x64" ]];then
-            INSTALL_SYSROOT_ARCH="amd64"
-          else
-            INSTALL_SYSROOT_ARCH="i386"
-          fi
+  #     - name: Install linux sysroot
+  #       run: |
+  #         if [[ "${{ matrix.arch }}" == "arm64" || "${{ matrix.arch }}" == "x64" ]];then
+  #           INSTALL_SYSROOT_ARCH="amd64"
+  #         else
+  #           INSTALL_SYSROOT_ARCH="i386"
+  #         fi
 
-          python3 build/linux/sysroot_scripts/install-sysroot.py --arch=${INSTALL_SYSROOT_ARCH}
+  #         python3 build/linux/sysroot_scripts/install-sysroot.py --arch=${INSTALL_SYSROOT_ARCH}
 
-      - name: Show execution files
-        run: |
-          which node
-          which npm
-          which java
-          node -v
-          npm -v
-          java --version
-          echo "=============== list files in oh sdk ($HOME/openharmony) ==============="
-          pushd $HOME/openharmony
-          ls -l
-          popd
+  #     - name: Show execution files
+  #       run: |
+  #         which node
+  #         which npm
+  #         which java
+  #         node -v
+  #         npm -v
+  #         java --version
+  #         echo "=============== list files in oh sdk ($HOME/openharmony) ==============="
+  #         pushd $HOME/openharmony
+  #         ls -l
+  #         popd
 
-      - name: Patch args
-        run: |
-          touch ${HOME}/openharmony/hwsdk/openharmony/9/native/llvm/lib/arm-linux-ohos/c++/libatomic.a
-          touch ${HOME}/openharmony/hwsdk/openharmony/9/native/llvm/lib/aarch64-linux-ohos/c++/libatomic.a
-          sed -i "s@arm-linux-gnueabihf@arm-linux-ohos@g" build/config/compiler/BUILD.gn
-          sed -i "s@aarch64-linux-gnu@aarch64-linux-ohos@g" build/config/compiler/BUILD.gn
-          sed -i "s@\"-gsimple-template-names\"@@g" build/config/compiler/BUILD.gn
-          sed -i "s@strip_absolute_paths_from_debug_symbols = true@strip_absolute_paths_from_debug_symbols = false@g" build/config/compiler/compiler.gni
-          sed -i "s@__builtin_assume_aligned((ptr), (alignment))@(ptr)@g" include/v8config.h
-          sed -i "s@if (is_ubsan && (v8_current_cpu@if ((v8_current_cpu@g" BUILD.gn
-          if [[ "${{ matrix.arch }}" == "arm" || "${{ matrix.arch }}" == "x86" ]];then
-            sed -i "s@#error@//#error@g" src/base/ubsan.cc
-          fi
+  #     - name: Patch args
+  #       run: |
+  #         touch ${HOME}/openharmony/hwsdk/openharmony/9/native/llvm/lib/arm-linux-ohos/c++/libatomic.a
+  #         touch ${HOME}/openharmony/hwsdk/openharmony/9/native/llvm/lib/aarch64-linux-ohos/c++/libatomic.a
+  #         sed -i "s@arm-linux-gnueabihf@arm-linux-ohos@g" build/config/compiler/BUILD.gn
+  #         sed -i "s@aarch64-linux-gnu@aarch64-linux-ohos@g" build/config/compiler/BUILD.gn
+  #         sed -i "s@\"-gsimple-template-names\"@@g" build/config/compiler/BUILD.gn
+  #         sed -i "s@strip_absolute_paths_from_debug_symbols = true@strip_absolute_paths_from_debug_symbols = false@g" build/config/compiler/compiler.gni
+  #         sed -i "s@__builtin_assume_aligned((ptr), (alignment))@(ptr)@g" include/v8config.h
+  #         sed -i "s@if (is_ubsan && (v8_current_cpu@if ((v8_current_cpu@g" BUILD.gn
+  #         if [[ "${{ matrix.arch }}" == "arm" || "${{ matrix.arch }}" == "x86" ]];then
+  #           sed -i "s@#error@//#error@g" src/base/ubsan.cc
+  #         fi
 
-          echo "---------- Show patch -----------"
-          git diff
+  #         echo "---------- Show patch -----------"
+  #         git diff
 
-      - name: Build ${{ matrix.arch }}
-        run: |
-          export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
-          which gn
-          ./build-oh.sh ${{ matrix.arch }}
+  #     - name: Build ${{ matrix.arch }}
+  #       run: |
+  #         export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
+  #         which gn
+  #         ./build-oh.sh ${{ matrix.arch }}
 
-      - name: Copy to dist folder
-        run: |
-          ls -l ./out/oh
-          echo "---------------------"
-          ls -l ./out/oh/obj
-          mkdir dist
-          cp ./out/oh/d8 ./dist/
-          cp ./out/oh/obj/libv8_monolith.a ./dist/
-          cp -r ./include ./dist/
+  #     - name: Copy to dist folder
+  #       run: |
+  #         ls -l ./out/oh
+  #         echo "---------------------"
+  #         ls -l ./out/oh/obj
+  #         mkdir dist
+  #         cp ./out/oh/d8 ./dist/
+  #         cp ./out/oh/obj/libv8_monolith.a ./dist/
+  #         cp -r ./include ./dist/
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: v8-oh-${{ matrix.arch }}
-          path: ./dist
+  #     - name: Upload artifact
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: v8-oh-${{ matrix.arch }}
+  #         path: ./dist
 
-  build_openharmony_fat:
-    permissions:
-      contents: write
-    if: github.event_name == 'release'
-    name: "openharmony (fat)"
-    runs-on: ubuntu-latest
-    needs: build_openharmony
-    steps:
-      - name: Download arm64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: v8-oh-arm64
-          path: v8-oh-arm64
+  # build_openharmony_fat:
+  #   permissions:
+  #     contents: write
+  #   if: github.event_name == 'release'
+  #   name: "openharmony (fat)"
+  #   runs-on: ubuntu-latest
+  #   needs: build_openharmony
+  #   steps:
+  #     - name: Download arm64 artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: v8-oh-arm64
+  #         path: v8-oh-arm64
 
-      - name: Download arm artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: v8-oh-arm
-          path: v8-oh-arm
+  #     - name: Download arm artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: v8-oh-arm
+  #         path: v8-oh-arm
 
-      - name: Build a fat library
-        run: |
-          mkdir v8-oh-fat
-          cp -r ./v8-oh-arm64 ./v8-oh-fat/arm64-v8a
-          cp -r ./v8-oh-arm ./v8-oh-fat/armeabi-v7a
-          cp -r ./v8-oh-arm64/include ./v8-oh-fat/
-          rm -rf ./v8-oh-fat/arm64-v8a/include
-          rm -rf ./v8-oh-fat/armeabi-v7a/include
+  #     - name: Build a fat library
+  #       run: |
+  #         mkdir v8-oh-fat
+  #         cp -r ./v8-oh-arm64 ./v8-oh-fat/arm64-v8a
+  #         cp -r ./v8-oh-arm ./v8-oh-fat/armeabi-v7a
+  #         cp -r ./v8-oh-arm64/include ./v8-oh-fat/
+  #         rm -rf ./v8-oh-fat/arm64-v8a/include
+  #         rm -rf ./v8-oh-fat/armeabi-v7a/include
 
-      - name: Pack dist files
-        uses: thedoctor0/zip-release@a24011d8d445e4da5935a7e73c1f98e22a439464
-        with:
-          type: 'zip'
-          directory: 'v8-oh-fat'
-          path: '.'
-          filename: 'v8-oh.zip'
+  #     - name: Pack dist files
+  #       uses: thedoctor0/zip-release@a24011d8d445e4da5935a7e73c1f98e22a439464
+  #       with:
+  #         type: 'zip'
+  #         directory: 'v8-oh-fat'
+  #         path: '.'
+  #         filename: 'v8-oh.zip'
 
-      - name: Upload to Release
-        uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: v8-oh-fat/v8-oh.zip
-          asset_name: v8-oh.zip
-          tag: ${{ github.ref }}
+  #     - name: Upload to Release
+  #       uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
+  #       with:
+  #         repo_token: ${{ secrets.GITHUB_TOKEN }}
+  #         file: v8-oh-fat/v8-oh.zip
+  #         asset_name: v8-oh.zip
+  #         tag: ${{ github.ref }}
 
   build_linux:
     permissions:
