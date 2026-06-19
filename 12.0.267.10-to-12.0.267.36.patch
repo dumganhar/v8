@@ -1,0 +1,1506 @@
+diff --git a/include/v8-version.h b/include/v8-version.h
+index ac3c7a90055..fb389bb06db 100644
+--- a/include/v8-version.h
++++ b/include/v8-version.h
+@@ -11,7 +11,7 @@
+ #define V8_MAJOR_VERSION 12
+ #define V8_MINOR_VERSION 0
+ #define V8_BUILD_NUMBER 267
+-#define V8_PATCH_LEVEL 10
++#define V8_PATCH_LEVEL 36
+ 
+ // Use 1 for candidates and 0 otherwise.
+ // (Boolean macro values are not supported by all preprocessors.)
+diff --git a/infra/testing/builders.pyl b/infra/testing/builders.pyl
+index 97bae735ee3..007e94d3a72 100644
+--- a/infra/testing/builders.pyl
++++ b/infra/testing/builders.pyl
+@@ -956,7 +956,7 @@
+   'v8_mac64_asan_rel': {
+     'swarming_dimensions' : {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'tests': [
+       {'name': 'v8testing', 'shards': 8},
+@@ -965,7 +965,7 @@
+   'v8_mac64_dbg': {
+     'swarming_dimensions' : {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'tests': [
+       {'name': 'mozilla'},
+@@ -978,7 +978,7 @@
+   'v8_mac64_gc_stress_dbg': {
+     'swarming_dimensions' : {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'tests': [
+       {'name': 'd8testing', 'test_args': ['--gc-stress'], 'shards': 6},
+@@ -987,7 +987,7 @@
+   'v8_mac64_noopt_dbg': {
+     'swarming_dimensions' : {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'tests': [
+       {'name': 'v8testing', 'shards': 6},
+@@ -996,7 +996,7 @@
+   'v8_mac64_rel': {
+     'swarming_dimensions' : {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'tests': [
+       {'name': 'mozilla'},
+@@ -1009,7 +1009,7 @@
+   'v8_mac_arm64_rel': {
+     'swarming_dimensions' : {
+       'cpu': 'arm64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+       'pool': 'chromium.tests',
+     },
+     'tests': [
+@@ -1025,7 +1025,7 @@
+   'v8_mac_arm64_dbg': {
+     'swarming_dimensions' : {
+       'cpu': 'arm64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+       'pool': 'chromium.tests',
+     },
+     'tests': [
+@@ -1041,7 +1041,7 @@
+   'v8_mac_arm64_full_dbg': {
+     'swarming_dimensions' : {
+       'cpu': 'arm64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+       'pool': 'chromium.tests',
+     },
+     'tests': [
+@@ -1057,7 +1057,7 @@
+   'v8_mac_arm64_no_pointer_compression_dbg': {
+     'swarming_dimensions' : {
+       'cpu': 'arm64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+       'pool': 'chromium.tests',
+     },
+     'tests': [
+@@ -1067,7 +1067,7 @@
+   'v8_mac_arm64_sim_rel': {
+     'swarming_dimensions' : {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'tests': [
+       {'name': 'v8testing', 'variant': 'default', 'shards': 2},
+@@ -1077,7 +1077,7 @@
+   'v8_mac_arm64_sim_dbg': {
+     'swarming_dimensions' : {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'tests': [
+       {'name': 'v8testing', 'variant': 'default', 'shards': 2},
+@@ -1087,7 +1087,7 @@
+   'v8_mac_arm64_sim_nodcheck_rel': {
+     'swarming_dimensions' : {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'tests': [
+       {'name': 'v8testing', 'variant': 'default', 'shards': 2},
+@@ -1870,7 +1870,7 @@
+   'V8 Mac64': {
+     'swarming_dimensions': {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'tests': [
+       {'name': 'mozilla'},
+@@ -1883,7 +1883,7 @@
+   'V8 Mac64 - debug': {
+     'swarming_dimensions': {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'tests': [
+       {'name': 'mozilla'},
+@@ -1896,7 +1896,7 @@
+   'V8 Mac64 ASAN': {
+     'swarming_dimensions': {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'tests': [
+       {'name': 'v8testing', 'shards': 10},
+@@ -1905,7 +1905,7 @@
+   'V8 Mac64 GC Stress': {
+     'swarming_dimensions': {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'tests': [
+       {'name': 'd8testing', 'test_args': ['--gc-stress'], 'shards': 6},
+@@ -1913,7 +1913,7 @@
+   },
+   'V8 Mac - arm64 - release': {
+     'swarming_dimensions' : {
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+       'cpu': 'arm64',
+       'pool': 'chromium.tests',
+     },
+@@ -1935,7 +1935,7 @@
+   },
+   'V8 Mac - arm64 - debug': {
+     'swarming_dimensions' : {
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+       'cpu': 'arm64',
+       'pool': 'chromium.tests',
+     },
+@@ -1958,7 +1958,7 @@
+   'V8 Mac - arm64 - no pointer compression debug': {
+     'swarming_dimensions' : {
+       'cpu': 'arm64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+       'pool': 'chromium.tests',
+     },
+     'tests': [
+@@ -1968,7 +1968,7 @@
+   'V8 Mac - arm64 - sim - debug': {
+     'swarming_dimensions' : {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'swarming_task_attrs': {
+       'expiration': 14400,
+@@ -1983,7 +1983,7 @@
+   'V8 Mac - arm64 - sim - release': {
+     'swarming_dimensions' : {
+       'cpu': 'x86-64',
+-      'os': 'Mac-13',
++      'os': 'Mac-14',
+     },
+     'swarming_task_attrs': {
+       'expiration': 14400,
+diff --git a/src/ast/scopes.cc b/src/ast/scopes.cc
+index 672440a2b4b..b2d6160f91d 100644
+--- a/src/ast/scopes.cc
++++ b/src/ast/scopes.cc
+@@ -2411,7 +2411,7 @@ bool Scope::MustAllocate(Variable* var) {
+     var->set_is_used();
+     if (inner_scope_calls_eval_ && !var->is_this()) var->SetMaybeAssigned();
+   }
+-  DCHECK(!var->has_forced_context_allocation() || var->is_used());
++  CHECK(!var->has_forced_context_allocation() || var->is_used());
+   // Global variables do not need to be allocated.
+   return !var->IsGlobalObjectProperty() && var->is_used();
+ }
+diff --git a/src/builtins/builtins-array.cc b/src/builtins/builtins-array.cc
+index 32c2d1cc8c0..458de064e51 100644
+--- a/src/builtins/builtins-array.cc
++++ b/src/builtins/builtins-array.cc
+@@ -51,7 +51,7 @@ inline bool HasOnlySimpleElements(Isolate* isolate,
+   DisallowGarbageCollection no_gc;
+   PrototypeIterator iter(isolate, receiver, kStartAtReceiver);
+   for (; !iter.IsAtEnd(); iter.Advance()) {
+-    if (IsJSProxy(iter.GetCurrent())) return false;
++    if (!IsJSObject(iter.GetCurrent())) return false;
+     Tagged<JSObject> current = iter.GetCurrent<JSObject>();
+     if (!HasSimpleElements(current)) return false;
+   }
+diff --git a/src/codegen/compiler.cc b/src/codegen/compiler.cc
+index 03860399e8b..ff7360c1014 100644
+--- a/src/codegen/compiler.cc
++++ b/src/codegen/compiler.cc
+@@ -724,12 +724,12 @@ void InstallUnoptimizedCode(UnoptimizedCompilationInfo* compilation_info,
+     }
+ #endif  // V8_ENABLE_WEBASSEMBLY
+ 
+-    shared_info->set_bytecode_array(*compilation_info->bytecode_array());
+-    shared_info->set_age(0);
+-
+     Handle<FeedbackMetadata> feedback_metadata = FeedbackMetadata::New(
+         isolate, compilation_info->feedback_vector_spec());
+     shared_info->set_feedback_metadata(*feedback_metadata, kReleaseStore);
++
++    shared_info->set_age(0);
++    shared_info->set_bytecode_array(*compilation_info->bytecode_array());
+   } else {
+ #if V8_ENABLE_WEBASSEMBLY
+     DCHECK(compilation_info->has_asm_wasm_data());
+diff --git a/src/compiler/access-info.cc b/src/compiler/access-info.cc
+index 5cbc657438d..1e0ba125dcc 100644
+--- a/src/compiler/access-info.cc
++++ b/src/compiler/access-info.cc
+@@ -526,6 +526,14 @@ PropertyAccessInfo AccessorAccessInfoHelper(
+         Cell::cast(module_namespace->module()->exports()->Lookup(
+             isolate, name.object(),
+             Smi::ToInt(Object::GetHash(*name.object())))));
++    if (IsAnyStore(access_mode)) {
++      // ES#sec-module-namespace-exotic-objects-set-p-v-receiver
++      // ES#sec-module-namespace-exotic-objects-defineownproperty-p-desc
++      //
++      // Storing to a module namespace object is always an error or a no-op in
++      // JS.
++      return PropertyAccessInfo::Invalid(zone);
++    }
+     if (IsTheHole(cell->value(kRelaxedLoad), isolate)) {
+       // This module has not been fully initialized yet.
+       return PropertyAccessInfo::Invalid(zone);
+diff --git a/src/compiler/backend/instruction-selector.cc b/src/compiler/backend/instruction-selector.cc
+index 064f0755546..79a79035e1f 100644
+--- a/src/compiler/backend/instruction-selector.cc
++++ b/src/compiler/backend/instruction-selector.cc
+@@ -5231,6 +5231,14 @@ bool InstructionSelectorT<Adapter>::ZeroExtendsWord32ToWord64(
+   const int kMaxRecursionDepth = 100;
+ 
+   if (this->IsPhi(node)) {
++    // Intermediate results from previous calls are not necessarily correct.
++    if (recursion_depth == 0) {
++      static_assert(sizeof(Upper32BitsState) == 1);
++      memset(phi_states_.data(),
++             static_cast<int>(Upper32BitsState::kNotYetChecked),
++             phi_states_.size());
++    }
++
+     Upper32BitsState current = phi_states_[this->id(node)];
+     if (current != Upper32BitsState::kNotYetChecked) {
+       return current == Upper32BitsState::kUpperBitsGuaranteedZero;
+diff --git a/src/compiler/graph-assembler.cc b/src/compiler/graph-assembler.cc
+index 00ac05e4041..988cce0e635 100644
+--- a/src/compiler/graph-assembler.cc
++++ b/src/compiler/graph-assembler.cc
+@@ -652,8 +652,17 @@ class ArrayBufferViewAccessBuilder {
+           AccessBuilder::ForJSArrayBufferViewByteOffset(), view,
+           UseInfo::Word());
+ 
+-      return a.UintPtrDiv(a.UintPtrSub(byte_length, byte_offset),
+-                          a.ChangeUint32ToUintPtr(element_size));
++      return a
++          .MachineSelectIf<UintPtrT>(
++              a.UintPtrLessThanOrEqual(byte_offset, byte_length))
++          .Then([&]() {
++            // length = floor((byte_length - byte_offset) / element_size)
++            return a.UintPtrDiv(a.UintPtrSub(byte_length, byte_offset),
++                                a.ChangeUint32ToUintPtr(element_size));
++          })
++          .Else([&]() { return a.UintPtrConstant(0); })
++          .ExpectTrue()
++          .Value();
+     };
+ 
+     return a.MachineSelectIf<UintPtrT>(length_tracking_bit)
+@@ -773,7 +782,17 @@ class ArrayBufferViewAccessBuilder {
+       TNode<UintPtrT> byte_offset = MachineLoadField<UintPtrT>(
+           AccessBuilder::ForJSArrayBufferViewByteOffset(), view,
+           UseInfo::Word());
+-      return RoundDownToElementSize(a.UintPtrSub(byte_length, byte_offset));
++
++      return a
++          .MachineSelectIf<UintPtrT>(
++              a.UintPtrLessThanOrEqual(byte_offset, byte_length))
++          .Then([&]() {
++            return RoundDownToElementSize(
++                a.UintPtrSub(byte_length, byte_offset));
++          })
++          .Else([&]() { return a.UintPtrConstant(0); })
++          .ExpectTrue()
++          .Value();
+     };
+ 
+     return a.MachineSelectIf<UintPtrT>(length_tracking_bit)
+diff --git a/src/compiler/turboshaft/machine-optimization-reducer.h b/src/compiler/turboshaft/machine-optimization-reducer.h
+index 444bf37d8a5..5bb4ce9f2fe 100644
+--- a/src/compiler/turboshaft/machine-optimization-reducer.h
++++ b/src/compiler/turboshaft/machine-optimization-reducer.h
+@@ -1747,8 +1747,7 @@ class MachineOptimizationReducer : public Next {
+           AllowHandleDereference allow_handle_dereference;
+ 
+           OptionalMapRef map = TryMakeRef(broker, base.handle()->map());
+-          if (map.has_value() && map->is_stable() && !map->is_deprecated()) {
+-            broker->dependencies()->DependOnStableMap(*map);
++          if (MapLoadCanBeConstantFolded(map)) {
+             return __ HeapConstant(map->object());
+           }
+         }
+@@ -2202,6 +2201,27 @@ class MachineOptimizationReducer : public Next {
+     return base::nullopt;
+   }
+ 
++  // Returns true if loading the map of an object with map {map} can be constant
++  // folded and done at compile time or not. For instance, doing this for
++  // strings is not safe, since the map of a string could change during a GC,
++  // but doing this for a HeapNumber is always safe.
++  bool MapLoadCanBeConstantFolded(OptionalMapRef map) {
++    if (!map.has_value()) return false;
++
++    if (map->IsJSObjectMap() && map->is_stable()) {
++      broker->dependencies()->DependOnStableMap(*map);
++      // For JS objects, this is only safe is the map is stable.
++      return true;
++    }
++
++    if (map->instance_type() ==
++        any_of(BIG_INT_BASE_TYPE, HEAP_NUMBER_TYPE, ODDBALL_TYPE)) {
++      return true;
++    }
++
++    return false;
++  }
++
+   uint16_t CountLeadingSignBits(int64_t c, WordRepresentation rep) {
+     return base::bits::CountLeadingSignBits(c) - (64 - rep.bit_width());
+   }
+diff --git a/src/compiler/turboshaft/optimization-phase.h b/src/compiler/turboshaft/optimization-phase.h
+index de92c5ad35d..2265cf2f2dc 100644
+--- a/src/compiler/turboshaft/optimization-phase.h
++++ b/src/compiler/turboshaft/optimization-phase.h
+@@ -172,6 +172,7 @@ class GraphVisitor {
+     for (OpIndex index : input_graph().OperationIndices(*input_block)) {
+       if (const PhiOp* phi =
+               input_graph().Get(index).template TryCast<PhiOp>()) {
++        if (ShouldSkipOperation(*phi)) continue;
+         // This Phi has been cloned/inlined, and has thus now a single
+         // predecessor, and shouldn't be a Phi anymore.
+         OpIndex newval = MapToNewGraph(phi->input(added_block_phi_input));
+@@ -182,7 +183,9 @@ class GraphVisitor {
+     // mappings.
+     int phi_num = 0;
+     for (OpIndex index : input_graph().OperationIndices(*input_block)) {
+-      if (input_graph().Get(index).template Is<PhiOp>()) {
++      const Operation& op = input_graph().Get(index);
++      if (op.template Is<PhiOp>()) {
++        if (ShouldSkipOperation(op)) continue;
+         CreateOldToNewMapping(index, new_phi_values[phi_num++]);
+       } else {
+         if (!VisitOpAndUpdateMapping<false>(index, input_block)) break;
+@@ -436,7 +439,7 @@ class GraphVisitor {
+     USE(first_output_index);
+     const Operation& op = input_graph().Get(index);
+     if constexpr (trace_reduction) TraceReductionStart(index);
+-    if (!ShouldSkipOptimizationStep() && ShouldSkipOperation(op)) {
++    if (ShouldSkipOperation(op)) {
+       if constexpr (trace_reduction) TraceOperationSkipped();
+       return OpIndex::Invalid();
+     }
+diff --git a/src/compiler/turboshaft/structural-optimization-reducer.h b/src/compiler/turboshaft/structural-optimization-reducer.h
+index f3cb4a6454b..36d435a17f2 100644
+--- a/src/compiler/turboshaft/structural-optimization-reducer.h
++++ b/src/compiler/turboshaft/structural-optimization-reducer.h
+@@ -80,7 +80,7 @@ namespace v8::internal::compiler::turboshaft {
+ template <class Next>
+ class StructuralOptimizationReducer : public Next {
+  public:
+-  using Next::Asm;
++  TURBOSHAFT_REDUCER_BOILERPLATE()
+ 
+   OpIndex ReduceInputGraphBranch(OpIndex input_index, const BranchOp& branch) {
+     LABEL_BLOCK(no_change) {
+@@ -100,6 +100,13 @@ class StructuralOptimizationReducer : public Next {
+ 
+     OpIndex switch_var = OpIndex::Invalid();
+     while (true) {
++      // The "false" destination will be inlined before the switch is emitted,
++      // so it should only contain pure operations.
++      if (!ContainsOnlyPureOps(current_branch->if_false, Asm().input_graph())) {
++        TRACE("\t [break] End of only-pure-ops cascade reached.\n");
++        break;
++      }
++
+       // If we encounter a condition that is not equality, we can't turn it
+       // into a switch case.
+       const EqualOp* equal = Asm()
+@@ -116,17 +123,11 @@ class StructuralOptimizationReducer : public Next {
+       // MachineOptimizationReducer should normalize equality to put constants
+       // right.
+       const Operation& right_op = Asm().input_graph().Get(equal->right());
+-      if (!right_op.Is<ConstantOp>()) {
+-        TRACE("\t [bailout] No constant on the right side of Equal.\n");
++      if (!right_op.Is<Opmask::kWord32Constant>()) {
++        TRACE("\t [bailout] No Word32 constant on the right side of Equal.\n");
+         break;
+       }
+-
+-      // We can only turn Word32 constant equals to switch cases.
+       const ConstantOp& const_op = right_op.Cast<ConstantOp>();
+-      if (const_op.kind != ConstantOp::Kind::kWord32) {
+-        TRACE("\t [bailout] Constant is not of type Word32.\n");
+-        break;
+-      }
+ 
+       // If we encounter equal to a different value, we can't introduce
+       // a switch.
+@@ -198,13 +199,6 @@ class StructuralOptimizationReducer : public Next {
+ 
+       // Iterate to the next if_false block in the cascade.
+       current_branch = &maybe_branch.template Cast<BranchOp>();
+-
+-      // As long as the else blocks contain only pure ops, we can keep
+-      // traversing the if-else cascade.
+-      if (!ContainsOnlyPureOps(current_branch->if_false, Asm().input_graph())) {
+-        TRACE("\t [break] End of only-pure-ops cascade reached.\n");
+-        break;
+-      }
+     }
+ 
+     // Probably better to keep short if-else cascades as they are.
+@@ -220,7 +214,7 @@ class StructuralOptimizationReducer : public Next {
+       InlineAllOperationsWithoutLast(block);
+     }
+ 
+-    TRACE("[reduce] Successfully emit a Switch with %z cases.", cases.size());
++    TRACE("[reduce] Successfully emit a Switch with %zu cases.", cases.size());
+ 
+     // The last current_if_true block that ends the cascade becomes the default
+     // case.
+diff --git a/src/compiler/wasm-compiler.cc b/src/compiler/wasm-compiler.cc
+index 474d38273b3..994d146c714 100644
+--- a/src/compiler/wasm-compiler.cc
++++ b/src/compiler/wasm-compiler.cc
+@@ -3342,7 +3342,7 @@ Node* WasmGraphBuilder::MemStart(uint32_t mem_index) {
+   DCHECK_NOT_NULL(instance_cache_);
+   V8_ASSUME(cached_memory_index_ == kNoCachedMemoryIndex ||
+             cached_memory_index_ >= 0);
+-  if (mem_index == static_cast<uint8_t>(cached_memory_index_)) {
++  if (mem_index == static_cast<uint32_t>(cached_memory_index_)) {
+     return instance_cache_->mem_start;
+   }
+   return LoadMemStart(mem_index);
+@@ -3352,7 +3352,7 @@ Node* WasmGraphBuilder::MemSize(uint32_t mem_index) {
+   DCHECK_NOT_NULL(instance_cache_);
+   V8_ASSUME(cached_memory_index_ == kNoCachedMemoryIndex ||
+             cached_memory_index_ >= 0);
+-  if (mem_index == static_cast<uint8_t>(cached_memory_index_)) {
++  if (mem_index == static_cast<uint32_t>(cached_memory_index_)) {
+     return instance_cache_->mem_size;
+   }
+ 
+diff --git a/src/compiler/wasm-load-elimination.cc b/src/compiler/wasm-load-elimination.cc
+index 1a7ccf33d6b..6b88f9caa52 100644
+--- a/src/compiler/wasm-load-elimination.cc
++++ b/src/compiler/wasm-load-elimination.cc
+@@ -176,12 +176,12 @@ Reduction WasmLoadElimination::ReduceWasmStructGet(Node* node) {
+   const WasmFieldInfo& field_info = OpParameter<WasmFieldInfo>(node->op());
+   bool is_mutable = field_info.type->mutability(field_info.field_index);
+ 
+-  if (!NodeProperties::IsTyped(input_struct)) {
++  if (!NodeProperties::IsTyped(input_struct) ||
++      !NodeProperties::GetType(input_struct).IsWasm()) {
+     // The input should always be typed.  https://crbug.com/1507106 reported
+     // that we can end up with Type None here instead of a wasm type.
+     // In the worst case this only means that we miss a potential optimization,
+     // still the assumption is that all inputs into StructGet should be typed.
+-    DCHECK_WITH_MSG(false, "Untyped input node for struct.get");
+     return NoChange();
+   }
+   // Skip reduction if the input type is nullref. in this case, the struct get
+@@ -257,6 +257,19 @@ Reduction WasmLoadElimination::ReduceWasmStructSet(Node* node) {
+   AbstractState const* state = node_states_.Get(effect);
+   if (state == nullptr) return NoChange();
+ 
++  if (!NodeProperties::IsTyped(input_struct) ||
++      !NodeProperties::GetType(input_struct).IsWasm()) {
++    // Also see the same pattern in ReduceWasmStructGet. Note that this is
++    // reached for cases where the StructSet has a value input that is
++    // DeadValue(). Above we check for `object->opcode() == IrOpcode::kDead.
++    // As an alternative that check could be extended to also check for
++    // ... || object->opcode() == IrOpcode::kDeadValue.
++    // It seems that the DeadValue may be caused by
++    // DeadCodeElimination::ReducePureNode. If that finds any input that is a
++    // Dead() node, it will replace that input with a DeadValue().
++    return NoChange();
++  }
++
+   // Skip reduction if the input type is nullref. in this case, the struct get
+   // will always trap.
+   wasm::ValueType struct_type =
+diff --git a/src/ic/ic.cc b/src/ic/ic.cc
+index 74c154d8940..5c0eeb2d2b9 100644
+--- a/src/ic/ic.cc
++++ b/src/ic/ic.cc
+@@ -2271,15 +2271,16 @@ Handle<Object> KeyedStoreIC::StoreElementHandler(
+           receiver_map->MayHaveReadOnlyElementsInPrototypeChain(isolate()),
+       IsStoreInArrayLiteralIC());
+ 
+-  if (IsJSProxyMap(*receiver_map)) {
++  if (!IsJSObjectMap(*receiver_map)) {
+     // DefineKeyedOwnIC, which is used to define computed fields in instances,
+-    // should be handled by the slow stub.
+-    if (IsDefineKeyedOwnIC()) {
+-      TRACE_HANDLER_STATS(isolate(), KeyedStoreIC_SlowStub);
+-      return StoreHandler::StoreSlow(isolate(), store_mode);
++    // should handled by the slow stub below instead of the proxy stub.
++    if (IsJSProxyMap(*receiver_map) && !IsDefineKeyedOwnIC()) {
++      return StoreHandler::StoreProxy(isolate());
+     }
+ 
+-    return StoreHandler::StoreProxy(isolate());
++    // Wasm objects or other kind of special objects go through the slow stub.
++    TRACE_HANDLER_STATS(isolate(), KeyedStoreIC_SlowStub);
++    return StoreHandler::StoreSlow(isolate(), store_mode);
+   }
+ 
+   // TODO(ishell): move to StoreHandler::StoreElement().
+diff --git a/src/inspector/v8-console-message.cc b/src/inspector/v8-console-message.cc
+index c63e523aab9..50869785e61 100644
+--- a/src/inspector/v8-console-message.cc
++++ b/src/inspector/v8-console-message.cc
+@@ -312,6 +312,8 @@ void V8ConsoleMessage::reportToFrontend(protocol::Runtime::Frontend* frontend,
+                                         bool generatePreview) const {
+   int contextGroupId = session->contextGroupId();
+   V8InspectorImpl* inspector = session->inspector();
++  // Protect against reentrant debugger calls via interrupts.
++  v8::debug::PostponeInterruptsScope no_interrupts(inspector->isolate());
+ 
+   if (m_origin == V8MessageOrigin::kException) {
+     std::unique_ptr<protocol::Runtime::RemoteObject> exception =
+diff --git a/src/maglev/maglev-graph-builder.cc b/src/maglev/maglev-graph-builder.cc
+index 2b660f5a868..084f78599b3 100644
+--- a/src/maglev/maglev-graph-builder.cc
++++ b/src/maglev/maglev-graph-builder.cc
+@@ -3735,19 +3735,28 @@ ReduceResult MaglevGraphBuilder::TryBuildPropertyStore(
+         access_info.holder().value());
+   }
+ 
+-  if (access_info.IsFastAccessorConstant()) {
+-    return TryBuildPropertySetterCall(access_info, receiver,
+-                                      GetAccumulatorTagged());
+-  } else {
+-    DCHECK(access_info.IsDataField() || access_info.IsFastDataConstant());
+-    ReduceResult res = TryBuildStoreField(access_info, receiver, access_mode);
+-    if (res.IsDone()) {
+-      RecordKnownProperty(receiver, name,
+-                          current_interpreter_frame_.accumulator(),
+-                          AccessInfoGuaranteedConst(access_info), access_mode);
+-      return res;
++  switch (access_info.kind()) {
++    case compiler::PropertyAccessInfo::kFastAccessorConstant:
++      return TryBuildPropertySetterCall(access_info, receiver,
++                                        GetAccumulatorTagged());
++    case compiler::PropertyAccessInfo::kDataField:
++    case compiler::PropertyAccessInfo::kFastDataConstant: {
++      ReduceResult res = TryBuildStoreField(access_info, receiver, access_mode);
++      if (res.IsDone()) {
++        RecordKnownProperty(
++            receiver, name, current_interpreter_frame_.accumulator(),
++            AccessInfoGuaranteedConst(access_info), access_mode);
++        return res;
++      }
++      return ReduceResult::Fail();
+     }
+-    return ReduceResult::Fail();
++    case compiler::PropertyAccessInfo::kInvalid:
++    case compiler::PropertyAccessInfo::kNotFound:
++    case compiler::PropertyAccessInfo::kDictionaryProtoDataConstant:
++    case compiler::PropertyAccessInfo::kDictionaryProtoAccessorConstant:
++    case compiler::PropertyAccessInfo::kModuleExport:
++    case compiler::PropertyAccessInfo::kStringLength:
++      UNREACHABLE();
+   }
+ }
+ 
+@@ -5210,6 +5219,7 @@ bool MaglevGraphBuilder::TryBuildFindNonDefaultConstructorOrConstruct(
+           object = BuildAllocateFastObject(
+               FastObject(new_target_function->AsJSFunction(), zone(), broker()),
+               AllocationType::kYoung);
++          ClearCurrentRawAllocation();
+         } else {
+           object = BuildCallBuiltin<Builtin::kFastNewObject>(
+               {GetConstant(current_function), new_target});
+diff --git a/src/maglev/maglev-ir.cc b/src/maglev/maglev-ir.cc
+index 78e65a958e6..64bf147bc77 100644
+--- a/src/maglev/maglev-ir.cc
++++ b/src/maglev/maglev-ir.cc
+@@ -3319,6 +3319,7 @@ void CreateRegExpLiteral::GenerateCode(MaglevAssembler* masm,
+       pattern().object(),                           // pattern
+       Smi::FromInt(flags())                         // flags
+   );
++  masm->DefineLazyDeoptPoint(lazy_deopt_info());
+ }
+ 
+ int GetTemplateObject::MaxCallStackArgs() const {
+diff --git a/src/maglev/maglev-ir.h b/src/maglev/maglev-ir.h
+index 0578b89ee94..549c9a7e11a 100644
+--- a/src/maglev/maglev-ir.h
++++ b/src/maglev/maglev-ir.h
+@@ -4686,7 +4686,8 @@ class CreateRegExpLiteral
+   int flags() const { return flags_; }
+ 
+   // The implementation currently calls runtime.
+-  static constexpr OpProperties kProperties = OpProperties::Call();
++  static constexpr OpProperties kProperties =
++      OpProperties::Call() | OpProperties::CanThrow();
+ 
+   int MaxCallStackArgs() const;
+   void SetValueLocationConstraints();
+diff --git a/src/objects/js-objects.cc b/src/objects/js-objects.cc
+index 22bdb5f91e7..3cb60a339ad 100644
+--- a/src/objects/js-objects.cc
++++ b/src/objects/js-objects.cc
+@@ -429,9 +429,7 @@ Maybe<bool> JSReceiver::SetOrCopyDataProperties(
+       Nothing<bool>());
+ 
+   if (!from->HasFastProperties() && target->HasFastProperties() &&
+-      !IsJSGlobalProxy(*target)) {
+-    // JSProxy is always in slow-mode.
+-    DCHECK(!IsJSProxy(*target));
++      IsJSObject(*target) && !IsJSGlobalProxy(*target)) {
+     // Convert to slow properties if we're guaranteed to overflow the number of
+     // descriptors.
+     int source_length;
+diff --git a/src/objects/map-updater.cc b/src/objects/map-updater.cc
+index 7d04b064177..b7b83ad235a 100644
+--- a/src/objects/map-updater.cc
++++ b/src/objects/map-updater.cc
+@@ -1036,14 +1036,21 @@ MapUpdater::State MapUpdater::ConstructNewMap() {
+   Handle<Map> new_map =
+       Map::AddMissingTransitions(isolate_, split_map, new_descriptors);
+ 
++  bool had_any_enum_cache =
++      split_map->instance_descriptors(isolate_)
++              ->enum_cache()
++              ->keys()
++              ->length() > 0 ||
++      old_descriptors_->enum_cache()->keys()->length() > 0;
++
+   // Deprecated part of the transition tree is no longer reachable, so replace
+   // current instance descriptors in the "survived" part of the tree with
+   // the new descriptors to maintain descriptors sharing invariant.
+   split_map->ReplaceDescriptors(isolate_, *new_descriptors);
+ 
+-  // If the old descriptors had an enum cache, make sure the new ones do too.
+-  if (old_descriptors_->enum_cache()->keys()->length() > 0 &&
+-      new_map->NumberOfEnumerableProperties() > 0) {
++  // If the old descriptors had an enum cache (or if {split_map}'s descriptors
++  // had one), make sure the new ones do too.
++  if (had_any_enum_cache && new_map->NumberOfEnumerableProperties() > 0) {
+     FastKeyAccumulator::InitializeFastPropertyEnumCache(
+         isolate_, new_map, new_map->NumberOfEnumerableProperties());
+   }
+diff --git a/src/parsing/parser-base.h b/src/parsing/parser-base.h
+index af7add9aa82..36d40a8d104 100644
+--- a/src/parsing/parser-base.h
++++ b/src/parsing/parser-base.h
+@@ -2619,6 +2619,7 @@ typename ParserBase<Impl>::BlockT ParserBase<Impl>::ParseClassStaticBlock(
+   }
+ 
+   FunctionState initializer_state(&function_state_, &scope_, initializer_scope);
++  FunctionParsingScope body_parsing_scope(impl());
+   AcceptINScope accept_in(this, true);
+ 
+   // Each static block has its own var and lexical scope, so make a new var
+diff --git a/src/runtime/runtime-object.cc b/src/runtime/runtime-object.cc
+index 94af9625f37..87b20def865 100644
+--- a/src/runtime/runtime-object.cc
++++ b/src/runtime/runtime-object.cc
+@@ -71,186 +71,10 @@ MaybeHandle<Object> Runtime::HasProperty(Isolate* isolate,
+   return ReadOnlyRoots(isolate).boolean_value_handle(maybe.FromJust());
+ }
+ 
+-namespace {
+-
+-// This function sets the sentinel value in a deleted field. Thes sentinel has
+-// to look like a proper standalone object because the slack tracking may
+-// complete at any time. For this reason we use the filler map word.
+-// If V8_MAP_PACKING is enabled, then the filler map word is a packed filler
+-// map. Otherwise, the filler map word is the same as the filler map.
+-inline void ClearField(Isolate* isolate, Tagged<JSObject> object,
+-                       FieldIndex index) {
+-  if (index.is_inobject()) {
+-    MapWord filler_map_word =
+-        ReadOnlyRoots(isolate).one_pointer_filler_map_word();
+-#ifndef V8_MAP_PACKING
+-    DCHECK_EQ(filler_map_word.ToMap(),
+-              ReadOnlyRoots(isolate).one_pointer_filler_map());
+-#endif
+-    int offset = index.offset();
+-    TaggedField<MapWord>::Release_Store(object, offset, filler_map_word);
+-  } else {
+-    object->property_array()->set(
+-        index.outobject_array_index(),
+-        ReadOnlyRoots(isolate).one_pointer_filler_map());
+-  }
+-}
+-
+-void GeneralizeAllTransitionsToFieldAsMutable(Isolate* isolate, Handle<Map> map,
+-                                              Handle<Name> name) {
+-  InternalIndex descriptor(map->NumberOfOwnDescriptors());
+-
+-  Handle<Map> target_maps[kPropertyAttributesCombinationsCount];
+-  int target_maps_count = 0;
+-
+-  // Collect all outgoing field transitions.
+-  {
+-    DisallowGarbageCollection no_gc;
+-    TransitionsAccessor transitions(isolate, *map);
+-    transitions.ForEachTransitionTo(
+-        *name,
+-        [&](Tagged<Map> target) {
+-          DCHECK_EQ(descriptor, target->LastAdded());
+-          DCHECK_EQ(*name, target->GetLastDescriptorName(isolate));
+-          PropertyDetails details = target->GetLastDescriptorDetails(isolate);
+-          // Currently, we track constness only for fields.
+-          if (details.kind() == PropertyKind::kData &&
+-              details.constness() == PropertyConstness::kConst) {
+-            target_maps[target_maps_count++] = handle(target, isolate);
+-          }
+-          DCHECK_IMPLIES(details.kind() == PropertyKind::kAccessor,
+-                         details.constness() == PropertyConstness::kConst);
+-        },
+-        &no_gc);
+-    CHECK_LE(target_maps_count, kPropertyAttributesCombinationsCount);
+-  }
+-
+-  for (int i = 0; i < target_maps_count; i++) {
+-    Handle<Map> target = target_maps[i];
+-    PropertyDetails details =
+-        target->instance_descriptors(isolate)->GetDetails(descriptor);
+-    Handle<FieldType> field_type(
+-        target->instance_descriptors(isolate)->GetFieldType(descriptor),
+-        isolate);
+-    MapUpdater::GeneralizeField(isolate, target, descriptor,
+-                                PropertyConstness::kMutable,
+-                                details.representation(), field_type);
+-    DCHECK_EQ(PropertyConstness::kMutable, target->instance_descriptors(isolate)
+-                                               ->GetDetails(descriptor)
+-                                               .constness());
+-  }
+-}
+-
+-bool DeleteObjectPropertyFast(Isolate* isolate, Handle<JSReceiver> receiver,
+-                              Handle<Object> raw_key) {
+-  // This implements a special case for fast property deletion: when the
+-  // last property in an object is deleted, then instead of normalizing
+-  // the properties, we can undo the last map transition, with a few
+-  // prerequisites:
+-  // (1) The receiver must be a regular object and the key a unique name.
+-  Handle<Map> receiver_map(receiver->map(), isolate);
+-  if (IsSpecialReceiverMap(*receiver_map)) return false;
+-  DCHECK(IsJSObjectMap(*receiver_map));
+-
+-  if (!IsUniqueName(*raw_key)) return false;
+-  Handle<Name> key = Handle<Name>::cast(raw_key);
+-  // (2) The property to be deleted must be the last property.
+-  int nof = receiver_map->NumberOfOwnDescriptors();
+-  if (nof == 0) return false;
+-  InternalIndex descriptor(nof - 1);
+-  Handle<DescriptorArray> descriptors(
+-      receiver_map->instance_descriptors(isolate), isolate);
+-  if (descriptors->GetKey(descriptor) != *key) return false;
+-  // (3) The property to be deleted must be deletable.
+-  PropertyDetails details = descriptors->GetDetails(descriptor);
+-  if (!details.IsConfigurable()) return false;
+-  // (4) The map must have a back pointer.
+-  Handle<Object> backpointer(receiver_map->GetBackPointer(), isolate);
+-  if (!IsMap(*backpointer)) return false;
+-  Handle<Map> parent_map = Handle<Map>::cast(backpointer);
+-  // (5) The last transition must have been caused by adding a property
+-  // (and not any kind of special transition).
+-  if (parent_map->NumberOfOwnDescriptors() != nof - 1) return false;
+-
+-  // Preconditions successful. No more bailouts after this point.
+-
+-  // Zap the property to avoid keeping objects alive. Zapping is not necessary
+-  // for properties stored in the descriptor array.
+-  if (details.location() == PropertyLocation::kField) {
+-    DisallowGarbageCollection no_gc;
+-
+-    // Invalidate slots manually later in case we delete an in-object tagged
+-    // property. In this case we might later store an untagged value in the
+-    // recorded slot.
+-    isolate->heap()->NotifyObjectLayoutChange(
+-        *receiver, no_gc, InvalidateRecordedSlots::kNo,
+-        InvalidateExternalPointerSlots::kNo);
+-    FieldIndex index =
+-        FieldIndex::ForPropertyIndex(*receiver_map, details.field_index());
+-    // Special case deleting the last out-of object property.
+-    if (!index.is_inobject() && index.outobject_array_index() == 0) {
+-      DCHECK(!parent_map->HasOutOfObjectProperties());
+-      // Clear out the properties backing store.
+-      receiver->SetProperties(ReadOnlyRoots(isolate).empty_fixed_array());
+-    } else {
+-      ClearField(isolate, JSObject::cast(*receiver), index);
+-      if (index.is_inobject()) {
+-        // We need to clear the recorded slot in this case because in-object
+-        // slack tracking might not be finished. This ensures that we don't
+-        // have recorded slots in free space.
+-        isolate->heap()->ClearRecordedSlot(*receiver,
+-                                           receiver->RawField(index.offset()));
+-      }
+-    }
+-  }
+-  // If the {receiver_map} was marked stable before, then there could be
+-  // optimized code that depends on the assumption that no object that
+-  // reached this {receiver_map} transitions away from it without triggering
+-  // the "deoptimize dependent code" mechanism.
+-  receiver_map->NotifyLeafMapLayoutChange(isolate);
+-  // Finally, perform the map rollback.
+-  receiver->set_map(*parent_map, kReleaseStore);
+-#if VERIFY_HEAP
+-  if (v8_flags.verify_heap) {
+-    receiver->HeapObjectVerify(isolate);
+-    receiver->property_array()->PropertyArrayVerify(isolate);
+-  }
+-#endif
+-
+-  // If the {descriptor} was "const" so far, we need to update the
+-  // {receiver_map} here, otherwise we could get the constants wrong, i.e.
+-  //
+-  //   o.x = 1;
+-  //   [change o.x's attributes or reconfigure property kind]
+-  //   delete o.x;
+-  //   o.x = 2;
+-  //
+-  // could trick V8 into thinking that `o.x` is still 1 even after the second
+-  // assignment.
+-
+-  // Step 1: Migrate object to an up-to-date shape.
+-  if (parent_map->is_deprecated()) {
+-    JSObject::MigrateInstance(isolate, Handle<JSObject>::cast(receiver));
+-    parent_map = handle(receiver->map(), isolate);
+-  }
+-
+-  // Step 2: Mark outgoing transitions from the up-to-date version of the
+-  // parent_map to same property name of any kind or attributes as mutable.
+-  // Also migrate object to the up-to-date map to make the object shapes
+-  // converge sooner.
+-  GeneralizeAllTransitionsToFieldAsMutable(isolate, parent_map, key);
+-
+-  return true;
+-}
+-
+-}  // namespace
+-
+ Maybe<bool> Runtime::DeleteObjectProperty(Isolate* isolate,
+                                           Handle<JSReceiver> receiver,
+                                           Handle<Object> key,
+                                           LanguageMode language_mode) {
+-  if (DeleteObjectPropertyFast(isolate, receiver, key)) return Just(true);
+-
+   bool success = false;
+   PropertyKey lookup_key(isolate, key, &success);
+   if (!success) return Nothing<bool>();
+diff --git a/src/wasm/baseline/liftoff-assembler.cc b/src/wasm/baseline/liftoff-assembler.cc
+index 5ec894a196f..1fc0465ce4d 100644
+--- a/src/wasm/baseline/liftoff-assembler.cc
++++ b/src/wasm/baseline/liftoff-assembler.cc
+@@ -436,29 +436,10 @@ void LiftoffAssembler::DropExceptionValueAtOffset(int offset) {
+   cache_state_.stack_state.pop_back();
+ }
+ 
+-void LiftoffAssembler::PrepareLoopArgs(int num) {
+-  for (int i = 0; i < num; ++i) {
+-    VarState& slot = cache_state_.stack_state.end()[-1 - i];
+-    if (slot.is_stack()) continue;
+-    RegClass rc = reg_class_for(slot.kind());
+-    if (slot.is_reg()) {
+-      if (cache_state_.get_use_count(slot.reg()) > 1) {
+-        // If the register is used more than once, we cannot use it for the
+-        // merge. Move it to an unused register instead.
+-        LiftoffRegList pinned;
+-        pinned.set(slot.reg());
+-        LiftoffRegister dst_reg = GetUnusedRegister(rc, pinned);
+-        Move(dst_reg, slot.reg(), slot.kind());
+-        cache_state_.dec_used(slot.reg());
+-        cache_state_.inc_used(dst_reg);
+-        slot.MakeRegister(dst_reg);
+-      }
+-      continue;
+-    }
+-    LiftoffRegister reg = GetUnusedRegister(rc, {});
+-    LoadConstant(reg, slot.constant());
+-    slot.MakeRegister(reg);
+-    cache_state_.inc_used(reg);
++void LiftoffAssembler::SpillLoopArgs(int num) {
++  for (VarState& slot :
++       base::VectorOf(cache_state_.stack_state.end() - num, num)) {
++    Spill(&slot);
+   }
+ }
+ 
+@@ -679,14 +660,14 @@ void LiftoffAssembler::Spill(VarState* slot) {
+ }
+ 
+ void LiftoffAssembler::SpillLocals() {
+-  for (uint32_t i = 0; i < num_locals_; ++i) {
+-    Spill(&cache_state_.stack_state[i]);
++  for (VarState& local_slot :
++       base::VectorOf(cache_state_.stack_state.data(), num_locals_)) {
++    Spill(&local_slot);
+   }
+ }
+ 
+ void LiftoffAssembler::SpillAllRegisters() {
+-  for (uint32_t i = 0, e = cache_state_.stack_height(); i < e; ++i) {
+-    auto& slot = cache_state_.stack_state[i];
++  for (VarState& slot : cache_state_.stack_state) {
+     if (!slot.is_reg()) continue;
+     Spill(slot.offset(), slot.reg(), slot.kind());
+     slot.MakeStack();
+diff --git a/src/wasm/baseline/liftoff-assembler.h b/src/wasm/baseline/liftoff-assembler.h
+index 421b2183ea2..31d9a04500f 100644
+--- a/src/wasm/baseline/liftoff-assembler.h
++++ b/src/wasm/baseline/liftoff-assembler.h
+@@ -538,9 +538,9 @@ class LiftoffAssembler : public MacroAssembler {
+   // the bottom of the stack.
+   void DropExceptionValueAtOffset(int offset);
+ 
+-  // Ensure that the loop inputs are either in a register or spilled to the
+-  // stack, so that we can merge different values on the back-edge.
+-  void PrepareLoopArgs(int num);
++  // Spill all loop inputs to the stack to free registers and to ensure that we
++  // can merge different values on the back-edge.
++  void SpillLoopArgs(int num);
+ 
+   V8_INLINE static int NextSpillOffset(ValueKind kind, int top_spill_offset);
+   V8_INLINE int NextSpillOffset(ValueKind kind);
+diff --git a/src/wasm/baseline/liftoff-compiler.cc b/src/wasm/baseline/liftoff-compiler.cc
+index d63d642fe9a..c28748262fe 100644
+--- a/src/wasm/baseline/liftoff-compiler.cc
++++ b/src/wasm/baseline/liftoff-compiler.cc
+@@ -1228,7 +1228,7 @@ class LiftoffCompiler {
+     // pre-analysis of the function.
+     __ SpillLocals();
+ 
+-    __ PrepareLoopArgs(loop->start_merge.arity);
++    __ SpillLoopArgs(loop->start_merge.arity);
+ 
+     // Loop labels bind at the beginning of the block.
+     __ bind(loop->label.get());
+diff --git a/src/wasm/canonical-types.cc b/src/wasm/canonical-types.cc
+index 62fcb07f2c3..302fad9e175 100644
+--- a/src/wasm/canonical-types.cc
++++ b/src/wasm/canonical-types.cc
+@@ -20,6 +20,19 @@ TypeCanonicalizer::TypeCanonicalizer() {
+   AddPredefinedArrayType(kPredefinedArrayI16Index, kWasmI16);
+ }
+ 
++// We currently store canonical indices in {ValueType} instances, so they
++// must fit into the range of valid module-relative (non-canonical) type
++// indices.
++// TODO(jkummerow): Raise this limit, to make long-lived WasmEngines scale
++// better. Plan: stop constructing ValueTypes from canonical type indices.
++static constexpr size_t kMaxCanonicalTypes = kV8MaxWasmTypes;
++
++void TypeCanonicalizer::CheckMaxCanonicalIndex() const {
++  if (canonical_supertypes_.size() > kMaxCanonicalTypes) {
++    V8::FatalProcessOutOfMemory(nullptr, "too many canonicalized types");
++  }
++}
++
+ void TypeCanonicalizer::AddRecursiveGroup(WasmModule* module, uint32_t size) {
+   AddRecursiveGroup(module, size,
+                     static_cast<uint32_t>(module->types.size() - size));
+@@ -59,6 +72,7 @@ void TypeCanonicalizer::AddRecursiveGroup(WasmModule* module, uint32_t size,
+   uint32_t first_canonical_index =
+       static_cast<uint32_t>(canonical_supertypes_.size());
+   canonical_supertypes_.resize(first_canonical_index + size);
++  CheckMaxCanonicalIndex();
+   for (uint32_t i = 0; i < size; i++) {
+     CanonicalType& canonical_type = group.types[i];
+     // Compute the canonical index of the supertype: If it is relative, we
+@@ -98,6 +112,7 @@ void TypeCanonicalizer::AddRecursiveSingletonGroup(WasmModule* module,
+   uint32_t first_canonical_index =
+       static_cast<uint32_t>(canonical_supertypes_.size());
+   canonical_supertypes_.resize(first_canonical_index + 1);
++  CheckMaxCanonicalIndex();
+   CanonicalType& canonical_type = group.type;
+   // Compute the canonical index of the supertype: If it is relative, we
+   // need to add {first_canonical_index}.
+@@ -135,6 +150,7 @@ uint32_t TypeCanonicalizer::AddRecursiveGroup(const FunctionSig* sig) {
+   group.type.is_relative_supertype = false;
+   canonical_singleton_groups_.emplace(group, canonical_index);
+   canonical_supertypes_.emplace_back(kNoSuperType);
++  CheckMaxCanonicalIndex();
+   return canonical_index;
+ }
+ 
+@@ -150,6 +166,7 @@ void TypeCanonicalizer::AddPredefinedArrayType(uint32_t index,
+   group.type.is_relative_supertype = false;
+   canonical_singleton_groups_.emplace(group, index);
+   canonical_supertypes_.emplace_back(kNoSuperType);
++  DCHECK_LE(canonical_supertypes_.size(), kMaxCanonicalTypes);
+ }
+ 
+ ValueType TypeCanonicalizer::CanonicalizeValueType(
+diff --git a/src/wasm/canonical-types.h b/src/wasm/canonical-types.h
+index dd0150efd41..df98237a241 100644
+--- a/src/wasm/canonical-types.h
++++ b/src/wasm/canonical-types.h
+@@ -169,6 +169,8 @@ class TypeCanonicalizer {
+   ValueType CanonicalizeValueType(const WasmModule* module, ValueType type,
+                                   uint32_t recursive_group_start) const;
+ 
++  void CheckMaxCanonicalIndex() const;
++
+   std::vector<uint32_t> canonical_supertypes_;
+   // Maps groups of size >=2 to the canonical id of the first type.
+   std::unordered_map<CanonicalGroup, uint32_t, CanonicalGroup::hash>
+diff --git a/src/wasm/graph-builder-interface.cc b/src/wasm/graph-builder-interface.cc
+index f3848d5db81..977921c0d62 100644
+--- a/src/wasm/graph-builder-interface.cc
++++ b/src/wasm/graph-builder-interface.cc
+@@ -265,17 +265,18 @@ class WasmGraphBuildingInterface {
+     }
+   }
+ 
+-  // Load the instance cache entries into the Ssa Environment.
++  // Load the instance cache entries into the SSA Environment.
+   void LoadInstanceCacheIntoSsa(SsaEnv* ssa_env) {
+     builder_->InitInstanceCache(&ssa_env->instance_cache);
+   }
+ 
+-  // Reload the instance cache entries into the Ssa Environment, if memory can
++  // Reload the instance cache entries into the SSA Environment, if memory can
+   // actually grow.
+   void ReloadInstanceCacheIntoSsa(SsaEnv* ssa_env, const WasmModule* module) {
+-    if (module->memories.empty()) return;
+-    const WasmMemory* memory0 = &module->memories[0];
+-    if (memory0->initial_pages == memory0->maximum_pages) return;
++    if (!builder_->has_cached_memory()) return;
++    const WasmMemory* cached_memory =
++        &module->memories[builder_->cached_memory_index()];
++    if (cached_memory->initial_pages == cached_memory->maximum_pages) return;
+     LoadInstanceCacheIntoSsa(ssa_env);
+   }
+ 
+diff --git a/src/wasm/module-decoder-impl.h b/src/wasm/module-decoder-impl.h
+index 5629ea1f131..2738fc6c2a6 100644
+--- a/src/wasm/module-decoder-impl.h
++++ b/src/wasm/module-decoder-impl.h
+@@ -689,6 +689,11 @@ class ModuleDecoderImpl : public Decoder {
+         }
+       } else {
+         if (tracer_) tracer_->TypeOffset(pc_offset());
++        if (initial_size + 1 > kV8MaxWasmTypes) {
++          errorf(pc(), "Type definition count exceeds maximum %zu",
++                 kV8MaxWasmTypes);
++          return;
++        }
+         // Similarly to above, we need to resize types for a group of size 1.
+         module_->types.resize(initial_size + 1);
+         module_->isorecursive_canonical_type_ids.resize(initial_size + 1);
+diff --git a/src/wasm/module-instantiate.cc b/src/wasm/module-instantiate.cc
+index 436aa63f78e..0dbe14596b9 100644
+--- a/src/wasm/module-instantiate.cc
++++ b/src/wasm/module-instantiate.cc
+@@ -2589,7 +2589,7 @@ void InstanceBuilder::ProcessExports(Handle<WasmInstanceObject> instance) {
+           uint32_t canonical_sig_index =
+               module_->isorecursive_canonical_type_ids[tag.sig_index];
+           wrapper = WasmTagObject::New(isolate_, tag.sig, canonical_sig_index,
+-                                       tag_object);
++                                       tag_object, instance);
+           tags_wrappers_[exp.index] = wrapper;
+         }
+         desc.set_value(wrapper);
+diff --git a/src/wasm/wasm-js.cc b/src/wasm/wasm-js.cc
+index 1099e1cc996..bd9eead8238 100644
+--- a/src/wasm/wasm-js.cc
++++ b/src/wasm/wasm-js.cc
+@@ -1734,7 +1734,8 @@ void WebAssemblyTagImpl(const v8::FunctionCallbackInfo<v8::Value>& info) {
+       i::wasm::GetWasmEngine()->type_canonicalizer()->AddRecursiveGroup(&sig);
+ 
+   i::Handle<i::JSObject> tag_object =
+-      i::WasmTagObject::New(i_isolate, &sig, canonical_type_index, tag);
++      i::WasmTagObject::New(i_isolate, &sig, canonical_type_index, tag,
++                            i_isolate->factory()->undefined_value());
+   info.GetReturnValue().Set(Utils::ToLocal(tag_object));
+ }
+ 
+@@ -1780,6 +1781,7 @@ uint32_t GetEncodedSize(i::Handle<i::WasmTagObject> tag_object) {
+ 
+ void EncodeExceptionValues(v8::Isolate* isolate,
+                            i::Handle<i::PodArray<i::wasm::ValueType>> signature,
++                           i::DirectHandle<i::WasmTagObject> tag_object,
+                            const Local<Value>& arg,
+                            ScheduledErrorThrower* thrower,
+                            i::Handle<i::FixedArray> values_out) {
+@@ -1838,6 +1840,19 @@ void EncodeExceptionValues(v8::Isolate* isolate,
+       case i::wasm::kRefNull: {
+         const char* error_message;
+         i::Handle<i::Object> value_handle = Utils::OpenHandle(*value);
++
++        if (type.has_index()) {
++          // Canonicalize the type using the tag's original module.
++          i::Tagged<i::HeapObject> maybe_instance = tag_object->instance();
++          CHECK(!i::IsUndefined(maybe_instance));
++          auto instance = i::WasmInstanceObject::cast(maybe_instance);
++          const i::wasm::WasmModule* module = instance->module();
++          uint32_t canonical_index =
++              module->isorecursive_canonical_type_ids[type.ref_index()];
++          type = i::wasm::ValueType::RefMaybeNull(canonical_index,
++                                                  type.nullability());
++        }
++
+         if (!internal::wasm::JSToWasmObject(i_isolate, value_handle, type,
+                                             &error_message)
+                  .ToHandle(&value_handle)) {
+@@ -1893,7 +1908,8 @@ void WebAssemblyExceptionImpl(const v8::FunctionCallbackInfo<v8::Value>& info) {
+                                                   runtime_exception));
+   i::Handle<i::PodArray<i::wasm::ValueType>> signature(
+       tag_object->serialized_signature(), i_isolate);
+-  EncodeExceptionValues(isolate, signature, info[1], &thrower, values);
++  EncodeExceptionValues(isolate, signature, tag_object, info[1], &thrower,
++                        values);
+   if (thrower.error()) return;
+ 
+   // Third argument: optional ExceptionOption ({traceStack: <bool>}).
+@@ -3130,9 +3146,9 @@ void WasmJs::PrepareForSnapshot(Isolate* isolate) {
+     // Note the canonical_type_index is reset in WasmJs::Install s.t.
+     // type_canonicalizer bookkeeping remains valid.
+     static constexpr uint32_t kInitialCanonicalTypeIndex = 0;
+-    Handle<JSObject> js_tag_object =
+-        WasmTagObject::New(isolate, &kWasmExceptionTagSignature,
+-                           kInitialCanonicalTypeIndex, js_tag);
++    Handle<JSObject> js_tag_object = WasmTagObject::New(
++        isolate, &kWasmExceptionTagSignature, kInitialCanonicalTypeIndex,
++        js_tag, isolate->factory()->undefined_value());
+     native_context->set_wasm_js_tag(*js_tag_object);
+     JSObject::AddProperty(isolate, webassembly, "JSTag", js_tag_object,
+                           ro_attributes);
+diff --git a/src/wasm/wasm-objects.cc b/src/wasm/wasm-objects.cc
+index 86c6eddb1b9..de8c509a490 100644
+--- a/src/wasm/wasm-objects.cc
++++ b/src/wasm/wasm-objects.cc
+@@ -1821,7 +1821,8 @@ void WasmArray::SetTaggedElement(uint32_t index, Handle<Object> value,
+ Handle<WasmTagObject> WasmTagObject::New(Isolate* isolate,
+                                          const wasm::FunctionSig* sig,
+                                          uint32_t canonical_type_index,
+-                                         Handle<HeapObject> tag) {
++                                         Handle<HeapObject> tag,
++                                         Handle<HeapObject> instance) {
+   Handle<JSFunction> tag_cons(isolate->native_context()->wasm_tag_constructor(),
+                               isolate);
+ 
+@@ -1842,6 +1843,7 @@ Handle<WasmTagObject> WasmTagObject::New(Isolate* isolate,
+   tag_wrapper->set_serialized_signature(*serialized_sig);
+   tag_wrapper->set_canonical_type_index(canonical_type_index);
+   tag_wrapper->set_tag(*tag);
++  tag_wrapper->set_instance(*instance);
+ 
+   return tag_wrapper;
+ }
+diff --git a/src/wasm/wasm-objects.h b/src/wasm/wasm-objects.h
+index 1e9ea92958f..6be863cb588 100644
+--- a/src/wasm/wasm-objects.h
++++ b/src/wasm/wasm-objects.h
+@@ -589,7 +589,8 @@ class WasmTagObject
+   static Handle<WasmTagObject> New(Isolate* isolate,
+                                    const wasm::FunctionSig* sig,
+                                    uint32_t canonical_type_index,
+-                                   Handle<HeapObject> tag);
++                                   Handle<HeapObject> tag,
++                                   Handle<HeapObject> instance);
+ 
+   TQ_OBJECT_CONSTRUCTORS(WasmTagObject)
+ };
+diff --git a/src/wasm/wasm-objects.tq b/src/wasm/wasm-objects.tq
+index 806cbb11bb4..3e9f0dd6075 100644
+--- a/src/wasm/wasm-objects.tq
++++ b/src/wasm/wasm-objects.tq
+@@ -178,6 +178,7 @@ extern class WasmGlobalObject extends JSObject {
+ extern class WasmTagObject extends JSObject {
+   serialized_signature: PodArrayOfWasmValueType;
+   tag: HeapObject;
++  instance: WasmInstanceObject|Undefined;
+   canonical_type_index: Smi;
+ }
+ 
+diff --git a/test/cctest/test-field-type-tracking.cc b/test/cctest/test-field-type-tracking.cc
+index 41500ea14a5..65193aa2308 100644
+--- a/test/cctest/test-field-type-tracking.cc
++++ b/test/cctest/test-field-type-tracking.cc
+@@ -3030,122 +3030,6 @@ TEST(RepresentationPredicatesAreInSync) {
+   }
+ }
+ 
+-TEST(DeletePropertyGeneralizesConstness) {
+-  CcTest::InitializeVM();
+-  v8::HandleScope scope(CcTest::isolate());
+-  Isolate* isolate = CcTest::i_isolate();
+-  Handle<FieldType> any_type = FieldType::Any(isolate);
+-
+-  // Create a map with some properties.
+-  Handle<Map> initial_map = Map::Create(isolate, kPropCount + 3);
+-  Handle<Map> map = initial_map;
+-  for (int i = 0; i < kPropCount; i++) {
+-    Handle<String> name = CcTest::MakeName("prop", i);
+-    map = Map::CopyWithField(isolate, map, name, any_type, NONE,
+-                             PropertyConstness::kConst, Representation::Smi(),
+-                             INSERT_TRANSITION)
+-              .ToHandleChecked();
+-  }
+-  Handle<Map> parent_map = map;
+-  CHECK(!map->is_deprecated());
+-
+-  Handle<String> name_x = CcTest::MakeString("x");
+-  Handle<String> name_y = CcTest::MakeString("y");
+-
+-  map = Map::CopyWithField(isolate, parent_map, name_x, any_type, NONE,
+-                           PropertyConstness::kConst, Representation::Smi(),
+-                           INSERT_TRANSITION)
+-            .ToHandleChecked();
+-
+-  // Create an object, initialize its properties and add a couple of clones.
+-  Handle<JSObject> object1 = isolate->factory()->NewJSObjectFromMap(map);
+-  for (int i = 0; i < kPropCount; i++) {
+-    FieldIndex index = FieldIndex::ForDescriptor(*map, InternalIndex(i));
+-    object1->FastPropertyAtPut(index, Smi::FromInt(i));
+-  }
+-  Handle<JSObject> object2 = isolate->factory()->CopyJSObject(object1);
+-
+-  CHECK(!map->is_deprecated());
+-  CHECK(!parent_map->is_deprecated());
+-
+-  // Transition to Double must deprecate m1.
+-  CHECK(!Representation::Smi().CanBeInPlaceChangedTo(Representation::Double()));
+-
+-  // Reconfigure one of the first properties to make the whole transition tree
+-  // deprecated (including |parent_map| and |map|).
+-  Handle<Map> new_map =
+-      ReconfigureProperty(isolate, map, InternalIndex(0), PropertyKind::kData,
+-                          NONE, Representation::Double(), any_type);
+-  CHECK(map->is_deprecated());
+-  CHECK(parent_map->is_deprecated());
+-  CHECK(!new_map->is_deprecated());
+-  // The "x" property is still kConst.
+-  CHECK_EQ(new_map->GetLastDescriptorDetails(isolate).constness(),
+-           PropertyConstness::kConst);
+-
+-  Handle<Map> new_parent_map = Map::Update(isolate, parent_map);
+-  CHECK(!new_parent_map->is_deprecated());
+-
+-  // |new_parent_map| must have exactly one outgoing transition to |new_map|.
+-  {
+-    TransitionsAccessor ta(isolate, *new_parent_map);
+-    CHECK_EQ(ta.NumberOfTransitions(), 1);
+-    CHECK_EQ(ta.GetTarget(0), *new_map);
+-  }
+-
+-  // Deletion of the property from |object1| must migrate it to |new_parent_map|
+-  // which is an up-to-date version of the |parent_map|. The |new_map|'s "x"
+-  // property should be marked as mutable.
+-  CHECK_EQ(object1->map(isolate), *map);
+-  CHECK(Runtime::DeleteObjectProperty(isolate, object1, name_x,
+-                                      LanguageMode::kSloppy)
+-            .ToChecked());
+-  CHECK_EQ(object1->map(isolate), *new_parent_map);
+-  CHECK_EQ(new_map->GetLastDescriptorDetails(isolate).constness(),
+-           PropertyConstness::kMutable);
+-
+-  // Now add transitions to "x" and "y" properties from |new_parent_map|.
+-  std::vector<Handle<Map>> transitions;
+-  Handle<Object> value = handle(Smi::FromInt(0), isolate);
+-  for (int i = 0; i < kPropertyAttributesCombinationsCount; i++) {
+-    auto attributes = PropertyAttributesFromInt(i);
+-
+-    Handle<Map> tmp;
+-    // Add some transitions to "x" and "y".
+-    tmp = Map::TransitionToDataProperty(isolate, new_parent_map, name_x, value,
+-                                        attributes, PropertyConstness::kConst,
+-                                        StoreOrigin::kNamed);
+-    CHECK(!tmp->map(isolate)->is_dictionary_map());
+-    transitions.push_back(tmp);
+-
+-    tmp = Map::TransitionToDataProperty(isolate, new_parent_map, name_y, value,
+-                                        attributes, PropertyConstness::kConst,
+-                                        StoreOrigin::kNamed);
+-    CHECK(!tmp->map(isolate)->is_dictionary_map());
+-    transitions.push_back(tmp);
+-  }
+-
+-  // Deletion of the property from |object2| must migrate it to |new_parent_map|
+-  // which is an up-to-date version of the |parent_map|.
+-  // All outgoing transitions from |new_map| that add "x" must be marked as
+-  // mutable, transitions to other properties must remain const.
+-  CHECK_EQ(object2->map(isolate), *map);
+-  CHECK(Runtime::DeleteObjectProperty(isolate, object2, name_x,
+-                                      LanguageMode::kSloppy)
+-            .ToChecked());
+-  CHECK_EQ(object2->map(isolate), *new_parent_map);
+-  for (Handle<Map> m : transitions) {
+-    if (m->GetLastDescriptorName(isolate) == *name_x) {
+-      CHECK_EQ(m->GetLastDescriptorDetails(isolate).constness(),
+-               PropertyConstness::kMutable);
+-
+-    } else {
+-      CHECK_EQ(m->GetLastDescriptorDetails(isolate).constness(),
+-               PropertyConstness::kConst);
+-    }
+-  }
+-}
+-
+ #define CHECK_SAME(object, rep, expected)                    \
+   CHECK_EQ(Object::FitsRepresentation(*object, rep, true),   \
+            Object::FitsRepresentation(*object, rep, false)); \
+diff --git a/test/mjsunit/compiler/regress-crbug-1509576.js b/test/mjsunit/compiler/regress-crbug-1509576.js
+new file mode 100644
+index 00000000000..f538296edc4
+--- /dev/null
++++ b/test/mjsunit/compiler/regress-crbug-1509576.js
+@@ -0,0 +1,39 @@
++// Copyright 2023 the V8 project authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Flags: --allow-natives-syntax
++
++function escape(s) { }
++
++function f(i) {
++  let str = "";
++  escape(str);
++
++  // This "if (i == 3)" should not be merged into the subsequent switch, because
++  // there is a side-effect in between.
++  if (i == 3) {
++    // This will trigger a deopt
++    str += "("
++  }
++
++  str += "function";
++
++  switch (i) {
++    case -10:
++      escape(str);
++    case 1:
++    case 3:
++  }
++
++  // This `eval` creates some kind of closure of the function inside the
++  // function, not sure how that works exactly, but it's needed to repro :D
++  eval();
++
++  return str;
++}
++
++%PrepareFunctionForOptimization(f);
++assertEquals(f(0), "function");
++%OptimizeFunctionOnNextCall(f);
++assertEquals(f(3), "(function");
+diff --git a/test/mjsunit/compiler/regress-crbug-1518396.js b/test/mjsunit/compiler/regress-crbug-1518396.js
+new file mode 100644
+index 00000000000..ceb912f3105
+--- /dev/null
++++ b/test/mjsunit/compiler/regress-crbug-1518396.js
+@@ -0,0 +1,23 @@
++// Copyright 2024 the V8 project authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Flags: --allow-natives-syntax
++
++function get_thin_string(a, b) {
++  var str = a + b;
++  var o = {};
++  o[str];
++  return str;
++}
++
++var str = get_thin_string("bar");
++
++function CheckCS() {
++  return str.charCodeAt();
++}
++
++%PrepareFunctionForOptimization(CheckCS);
++assertEquals(CheckCS(), 98);
++%OptimizeFunctionOnNextCall(CheckCS);
++assertEquals(CheckCS(), 98);
+diff --git a/test/unittests/inspector/inspector-unittest.cc b/test/unittests/inspector/inspector-unittest.cc
+index 38e8f561bab..4156dc8ed3a 100644
+--- a/test/unittests/inspector/inspector-unittest.cc
++++ b/test/unittests/inspector/inspector-unittest.cc
+@@ -9,6 +9,8 @@
+ #include "include/v8-primitive.h"
+ #include "src/inspector/string-util.h"
+ #include "src/inspector/v8-inspector-impl.h"
++#include "src/inspector/v8-inspector-session-impl.h"
++#include "src/inspector/v8-runtime-agent-impl.h"
+ #include "test/unittests/test-utils.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ 
+@@ -311,5 +313,47 @@ TEST_F(InspectorTest, ApiCreatedTasksAreCleanedUp) {
+   CHECK_EQ(console->AllConsoleTasksForTest().size(), 0);
+ }
+ 
++// Regression test for crbug.com/323813642.
++TEST_F(InspectorTest, NoInterruptWhileBuildingConsoleMessages) {
++  v8::Isolate* isolate = v8_isolate();
++  v8::HandleScope handle_scope(isolate);
++
++  v8_inspector::V8InspectorClient default_client;
++  std::unique_ptr<v8_inspector::V8InspectorImpl> inspector(
++      new v8_inspector::V8InspectorImpl(isolate, &default_client));
++  V8ContextInfo context_info(v8_context(), 1, toStringView(""));
++  inspector->contextCreated(context_info);
++
++  TestChannel channel;
++  std::unique_ptr<V8InspectorSession> session = inspector->connect(
++      1, &channel, toStringView("{}"), v8_inspector::V8Inspector::kFullyTrusted,
++      v8_inspector::V8Inspector::kNotWaitingForDebugger);
++  reinterpret_cast<v8_inspector::V8InspectorSessionImpl*>(session.get())
++      ->runtimeAgent()
++      ->enable();
++
++  struct InterruptRecorder {
++    static void handler(v8::Isolate* isolate, void* data) {
++      reinterpret_cast<InterruptRecorder*>(data)->WasInvoked = true;
++    }
++
++    bool WasInvoked = false;
++  } recorder;
++
++  isolate->RequestInterrupt(&InterruptRecorder::handler, &recorder);
++
++  v8::Local<v8::Value> error = v8::Exception::Error(NewString("custom error"));
++  inspector->exceptionThrown(v8_context(), toStringView("message"), error,
++                             toStringView("detailed message"),
++                             toStringView("https://example.com/script.js"), 42,
++                             21, std::unique_ptr<v8_inspector::V8StackTrace>(),
++                             0);
++
++  CHECK(!recorder.WasInvoked);
++
++  TryRunJS("0");
++  CHECK(recorder.WasInvoked);
++}
++
+ }  // namespace internal
+ }  // namespace v8
+diff --git a/tools/v8_presubmit.py b/tools/v8_presubmit.py
+index c01b663fd62..aa6d63cee98 100755
+--- a/tools/v8_presubmit.py
++++ b/tools/v8_presubmit.py
+@@ -309,7 +309,8 @@ class CacheableSourceFileProcessor(SourceFileProcessor):
+       print('Could not find the formatter for % files' % self.file_type)
+       sys.exit(1)
+ 
+-    command = [sys.executable, format_processor]
++    vpython_spec = join(TOOLS_PATH, '.vpython3')
++    command = ['vpython3', f'-vpython-spec={vpython_spec}', format_processor]
+     command.extend(options)
+ 
+     return command
