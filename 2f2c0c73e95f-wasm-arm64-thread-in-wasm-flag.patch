@@ -1,0 +1,48 @@
+commit 2f2c0c73e95f30760563ca2986f334533893d7f1
+Author: Darius Mercadier <dmercadier@chromium.org>
+Date:   Mon Jul 15 14:24:44 2024 +0200
+
+    [wasm][arm64] Only store 32 bits in thread_in_wasm_flag instead of 64
+    
+    Since thread_in_wasm_flag is only 32 bits, storing 64 bits to it can
+    corrupt the 32 lower bits of the next thread local variable.
+    
+    Change-Id: Ic32a5fa62f5018e72f9937c9c70449a5b13821f4
+    Reviewed-on: https://chromium-review.googlesource.com/c/v8/v8/+/5703780
+    Commit-Queue: Clemens Backes <clemensb@chromium.org>
+    Commit-Queue: Darius Mercadier <dmercadier@chromium.org>
+    Auto-Submit: Darius Mercadier <dmercadier@chromium.org>
+    Reviewed-by: Clemens Backes <clemensb@chromium.org>
+    Cr-Commit-Position: refs/heads/main@{#95027}
+
+diff --git a/src/builtins/arm64/builtins-arm64.cc b/src/builtins/arm64/builtins-arm64.cc
+index 518dbf2d8b5..401506c7931 100644
+--- a/src/builtins/arm64/builtins-arm64.cc
++++ b/src/builtins/arm64/builtins-arm64.cc
+@@ -4144,7 +4144,7 @@ void GenerateExceptionHandlingLandingPad(MacroAssembler* masm,
+   __ Ldr(
+       thread_in_wasm_flag_addr,
+       MemOperand(kRootRegister, Isolate::thread_in_wasm_flag_address_offset()));
+-  __ Str(xzr, MemOperand(thread_in_wasm_flag_addr, 0));
++  __ Str(wzr, MemOperand(thread_in_wasm_flag_addr, 0));
+ 
+   // The exception becomes the parameter of the RejectPromise builtin, and the
+   // promise is the return value of this wrapper.
+@@ -4325,7 +4325,7 @@ void JSToWasmWrapperHelper(MacroAssembler* masm, bool stack_switch) {
+                       Isolate::thread_in_wasm_flag_address_offset()));
+     DEFINE_SCOPED(scratch);
+     __ Mov(scratch, 1);
+-    __ Str(scratch, MemOperand(thread_in_wasm_flag_addr, 0));
++    __ Str(scratch.W(), MemOperand(thread_in_wasm_flag_addr, 0));
+   }
+   __ Str(xzr,
+          MemOperand(fp, StackSwitchFrameConstants::kGCScanSlotCountOffset));
+@@ -4345,7 +4345,7 @@ void JSToWasmWrapperHelper(MacroAssembler* masm, bool stack_switch) {
+     __ Ldr(thread_in_wasm_flag_addr,
+            MemOperand(kRootRegister,
+                       Isolate::thread_in_wasm_flag_address_offset()));
+-    __ Str(xzr, MemOperand(thread_in_wasm_flag_addr, 0));
++    __ Str(wzr, MemOperand(thread_in_wasm_flag_addr, 0));
+   }
+ 
+   __ Ldr(wrapper_buffer,
