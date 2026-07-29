@@ -129,6 +129,14 @@ jobs:
           esac
           python3 build/linux/sysroot_scripts/install-sysroot.py \
             --arch="${sysroot_arch}"
+      - name: Cache Chromium Clang
+        uses: actions/cache@v4
+        with:
+          path: third_party/llvm-build
+          key: chromium-clang-${{ runner.os }}-${{ hashFiles('tools/clang/scripts/update.py') }}
+      - name: Install Chromium Clang
+        shell: bash
+        run: python3 tools/clang/scripts/update.py
       - name: Build
         env:
           GN: buildtools/linux64/gn

@@ -366,7 +366,7 @@ diff --git a/.gitattributes b/.gitattributes
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
-@@ -145,3 +145,14 @@ bazel-out
+@@ -145,3 +145,15 @@ bazel-out
  bazel-testlogs
  bazel-v8
  launch.json
@@ -380,6 +380,7 @@ diff --git a/.gitignore b/.gitignore
 +!/tools/clang/**
 +!/third_party/
 +!/third_party/**
++/third_party/llvm-build/
 +.DS_Store
 diff --git a/build/.gitignore b/build/.gitignore
 --- a/build/.gitignore

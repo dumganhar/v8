@@ -27,13 +27,19 @@ if [ "$(uname -s)" != "Linux" ]; then
 fi
 GN_BIN="${GN:-buildtools/linux64/gn}"
 NINJA_BIN="${NINJA:-ninja}"
-CLANG_BASE_PATH="${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64"
-CLANG_VERSION=$(basename "$("${CLANG_BASE_PATH}/bin/clang" -print-resource-dir)")
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CLANG_BASE_PATH="${CLANG_BASE_PATH:-${ROOT_DIR}/third_party/llvm-build/Release+Asserts}"
 
 if [ ! -x "${GN_BIN}" ]; then
     echo "GN executable not found: ${GN_BIN}. Set GN=/path/to/gn." >&2
     exit 1
 fi
+if [ ! -x "${CLANG_BASE_PATH}/bin/clang" ]; then
+    echo "Chromium Clang not found: ${CLANG_BASE_PATH}/bin/clang." >&2
+    echo "Run: python3 tools/clang/scripts/update.py" >&2
+    exit 1
+fi
+CLANG_VERSION=$(basename "$("${CLANG_BASE_PATH}/bin/clang" -print-resource-dir)")
 
 ARGS="target_os=\"android\"
 target_cpu=\"${ARCH}\"
@@ -70,7 +76,6 @@ android32_ndk_api_level=21
 android64_ndk_api_level=21
 use_custom_libunwind=false
 use_ml_inliner=false
-llvm_android_mainline=true
 "
 
 

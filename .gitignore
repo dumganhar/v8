@@ -155,4 +155,5 @@ launch.json
 !/tools/clang/**
 !/third_party/
 !/third_party/**
+/third_party/llvm-build/
 .DS_Store
