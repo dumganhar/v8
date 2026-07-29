@@ -282,12 +282,61 @@ def ensure_candidate_not_ignored(stage: Path) -> None:
         remove_path(stage / ".git")
 
 
+def git_blob_oid(path: Path, object_format: str) -> str:
+    if path.is_symlink():
+        data = os.fsencode(os.readlink(path))
+        digest = hashlib.new(object_format)
+        digest.update(f"blob {len(data)}\0".encode("ascii"))
+        digest.update(data)
+        return digest.hexdigest()
+
+    digest = hashlib.new(object_format)
+    digest.update(f"blob {path.stat().st_size}\0".encode("ascii"))
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def ensure_candidate_not_transformed(stage: Path) -> None:
+    run(["git", "init", "-q"], cwd=stage)
+    try:
+        run(["git", "add", "-A"], cwd=stage)
+        object_format = run(
+            ["git", "rev-parse", "--show-object-format"], cwd=stage
+        ).stdout.decode("ascii").strip()
+        index = run(["git", "ls-files", "--stage", "-z"], cwd=stage).stdout
+        transformed = []
+        for record in index.split(b"\0"):
+            if not record:
+                continue
+            metadata, relative_bytes = record.split(b"\t", 1)
+            _, index_oid, _ = metadata.split(b" ")
+            relative = relative_bytes.decode("utf-8")
+            if git_blob_oid(stage / relative, object_format) != index_oid.decode("ascii"):
+                transformed.append(relative)
+        if transformed:
+            preview = "\n".join(transformed[:20])
+            remainder = len(transformed) - 20
+            suffix = f"\n... and {remainder} more" if remainder > 0 else ""
+            raise SyncError(
+                "Candidate files would be modified by Git attributes or clean filters; "
+                "adjust .gitattributes so upstream bytes are preserved:\n"
+                f"{preview}{suffix}"
+            )
+    finally:
+        remove_path(stage / ".git")
+
+
 def file_state(path: Path) -> tuple[str, int, str]:
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode):
         return ("symlink", 0, os.readlink(path))
     if stat.S_ISREG(info.st_mode):
-        return ("file", stat.S_IMODE(info.st_mode), sha256_file(path))
+        # Git records only whether a regular file is executable, not its full
+        # Unix permission bits (for example, 0644 versus 0664).
+        executable = int(bool(info.st_mode & 0o111))
+        return ("file", executable, sha256_file(path))
     raise SyncError(f"Unsupported filesystem entry: {path}")
 
 
@@ -473,6 +522,7 @@ def create_stage(source_root: Path, target: Path, local_root: Path, manifest_pat
     write_lock(stage, manifest_path, repositories, patch_records)
     ensure_no_nested_git(stage)
     ensure_candidate_not_ignored(stage)
+    ensure_candidate_not_transformed(stage)
     report = compare_candidate(stage, target)
     report["candidate"] = str(stage)
     report["v8_version"] = v8_version(stage)

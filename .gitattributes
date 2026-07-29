@@ -5,3 +5,7 @@
 *.png binary
 # Don't include minified JS in git grep/diff output
 test/mjsunit/asm/sqlite3/*.js -diff
+
+# Preserve upstream CRLF bytes from flattened dependency repositories.
+third_party/highway/src/docs/make.bat -text
+third_party/zlib/contrib/minizip/ChangeLogUnzip -text

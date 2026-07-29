@@ -118,6 +118,17 @@ jobs:
           unzip -q gn.zip -d buildtools/linux64
           sudo apt-get update
           sudo apt-get install -y ninja-build
+      - name: Install Linux sysroot
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.arch }}" in
+            arm64|x64) sysroot_arch=amd64 ;;
+            arm|x86) sysroot_arch=i386 ;;
+            *) echo "Unsupported architecture: ${{ matrix.arch }}" >&2; exit 1 ;;
+          esac
+          python3 build/linux/sysroot_scripts/install-sysroot.py \
+            --arch="${sysroot_arch}"
       - name: Build
         env:
           GN: buildtools/linux64/gn

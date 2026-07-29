@@ -155,3 +155,4 @@ launch.json
 !/tools/clang/**
 !/third_party/
 !/third_party/**
+.DS_Store

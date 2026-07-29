@@ -136,6 +136,18 @@ class StandaloneSyncTest(unittest.TestCase):
         )
         self.assertFalse((self.target / "obsolete.txt").exists())
 
+    def test_check_ignores_permissions_git_does_not_track(self) -> None:
+        stage, _ = self.create_stage("apply-permissions")
+        sync.apply_candidate(stage, self.target)
+        (self.target / "src/keep.cc").chmod(0o600)
+
+        _, report = self.create_stage("check-permissions")
+
+        self.assertEqual(
+            {"added": 0, "modified": 0, "deleted": 0},
+            report["summary"],
+        )
+
     def test_snapshot_rejects_candidate_files_ignored_by_git(self) -> None:
         (self.local / ".gitignore").write_text("/dep\n", encoding="utf-8")
         manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
@@ -149,6 +161,27 @@ class StandaloneSyncTest(unittest.TestCase):
             self.create_stage("ignored")
 
         self.assertFalse((self.root / "ignored/.git").exists())
+
+    def test_snapshot_rejects_candidate_files_transformed_by_git(self) -> None:
+        public_header = self.source / "dep/include/public.h"
+        public_header.write_bytes(b"public\r\n")
+        run("git", "add", "include/public.h", cwd=self.source / "dep")
+        run("git", "commit", "-qm", "use crlf fixture", cwd=self.source / "dep")
+
+        (self.local / ".gitattributes").write_text(
+            "dep/include/public.h text eol=lf\n", encoding="utf-8"
+        )
+        manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
+        manifest["local_paths"].append(".gitattributes")
+        self.manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            sync.SyncError,
+            r"(?s)Candidate files would be modified.*dep/include/public\.h",
+        ):
+            self.create_stage("transformed")
+
+        self.assertFalse((self.root / "transformed/.git").exists())
 
 
 if __name__ == "__main__":

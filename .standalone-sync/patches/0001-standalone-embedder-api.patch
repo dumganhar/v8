@@ -352,10 +352,21 @@ index f53b1d8..2b06b2c 100644
  
  #ifdef DEBUG
    void PrintStats();
+diff --git a/.gitattributes b/.gitattributes
+--- a/.gitattributes
++++ b/.gitattributes
+@@ -5,3 +5,7 @@
+ *.png binary
+ # Don't include minified JS in git grep/diff output
+ test/mjsunit/asm/sqlite3/*.js -diff
++
++# Preserve upstream CRLF bytes from flattened dependency repositories.
++third_party/highway/src/docs/make.bat -text
++third_party/zlib/contrib/minizip/ChangeLogUnzip -text
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
-@@ -145,3 +145,13 @@ bazel-out
+@@ -145,3 +145,14 @@ bazel-out
  bazel-testlogs
  bazel-v8
  launch.json
@@ -369,6 +380,7 @@ diff --git a/.gitignore b/.gitignore
 +!/tools/clang/**
 +!/third_party/
 +!/third_party/**
++.DS_Store
 diff --git a/build/.gitignore b/build/.gitignore
 --- a/build/.gitignore
 +++ b/build/.gitignore
