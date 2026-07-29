@@ -89,7 +89,7 @@ constexpr int kRegularPageSize = 1 << kPageSizeBits;
     (defined(V8_OS_ANDROID) &&                                       \
      (defined(V8_HOST_ARCH_ARM64) || defined(V8_HOST_ARCH_X64))) ||  \
     defined(V8_HOST_ARCH_LOONG64) || defined(V8_HOST_ARCH_MIPS64) || \
-    defined(V8_OS_IOS)
+    (defined(V8_OS_IOS) && defined(V8_HOST_ARCH_ARM64))
 // Android 64 bit has experimental support for 16kB pages.
 // MacOS & iOS on arm64 uses 16kB pages.
 // LOONG64 and MIPS64 also use 16kB pages.

@@ -1,0 +1,7 @@
+diff --git a/src/base/build_config.h b/src/base/build_config.h
+--- a/src/base/build_config.h
++++ b/src/base/build_config.h
+@@ -92,2 +92,2 @@
+-    defined(V8_OS_IOS)
++    (defined(V8_OS_IOS) && defined(V8_HOST_ARCH_ARM64))
+ // Android 64 bit has experimental support for 16kB pages.
