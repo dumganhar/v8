@@ -878,7 +878,18 @@ template("gcc_toolchain") {
 # actually just be doing a native compile.
 template("clang_toolchain") {
   gcc_toolchain(target_name) {
-    _path = "$clang_base_path/bin"
+    _invoker_toolchain_args = invoker.toolchain_args
+    _use_standalone_host_clang =
+        standalone_host_clang_base_path != "" &&
+        defined(_invoker_toolchain_args.current_os) &&
+        _invoker_toolchain_args.current_os == host_os &&
+        _invoker_toolchain_args.current_os != target_os
+    if (_use_standalone_host_clang) {
+      assert(standalone_host_clang_version != "")
+      _path = "$standalone_host_clang_base_path/bin"
+    } else {
+      _path = "$clang_base_path/bin"
+    }
     _is_path_absolute = get_path_info(_path, "abspath") == _path
 
     # Preserve absolute paths for tools like distcc.
@@ -900,6 +911,10 @@ template("clang_toolchain") {
     toolchain_args = {
       if (defined(invoker.toolchain_args)) {
         forward_variables_from(invoker.toolchain_args, "*")
+      }
+      if (_use_standalone_host_clang) {
+        clang_base_path = standalone_host_clang_base_path
+        clang_version = standalone_host_clang_version
       }
       is_clang = true
     }

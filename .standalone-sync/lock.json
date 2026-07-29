@@ -3,7 +3,7 @@
   "patches": [
     {
       "path": ".standalone-sync/patches/0001-standalone-embedder-api.patch",
-      "sha256": "2e83398bf0be1d4c7326f25028b51684ae7ea2be8c5dabb6aae3bc1a6dc24801"
+      "sha256": "75c159f0b3050238cd2efe5eda52795cb4e9821ec428fbd1f75af7ce7cd436b0"
     }
   ],
   "repositories": [

@@ -72,6 +72,11 @@ declare_args() {
   # buffers functionality of the plugin
   clang_use_unsafe_buffers_plugin = false
 
+  # A standalone Android build uses the NDK Clang for target objects while
+  # retaining Chromium Clang for Linux host tools and snapshot generators.
+  standalone_host_clang_base_path = ""
+  standalone_host_clang_version = ""
+
   clang_base_path = default_clang_base_path
 
   # Specifies whether or not bitcode should be embedded during compilation.
