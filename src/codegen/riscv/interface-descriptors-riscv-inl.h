@@ -158,6 +158,24 @@ constexpr Register BaselineLeaveFrameDescriptor::WeightRegister() { return a3; }
 // static
 constexpr Register TypeConversionDescriptor::ArgumentRegister() { return a0; }
 
+#ifdef V8_ENABLE_MAGLEV
+// static
+constexpr Register
+MaglevOptimizeCodeOrTailCallOptimizedCodeSlotDescriptor::FlagsRegister() {
+  return t4;
+}
+// static
+constexpr Register MaglevOptimizeCodeOrTailCallOptimizedCodeSlotDescriptor::
+    FeedbackVectorRegister() {
+  return a6;
+}
+// static
+constexpr Register
+MaglevOptimizeCodeOrTailCallOptimizedCodeSlotDescriptor::TemporaryRegister() {
+  return a5;
+}
+#endif  // V8_ENABLE_MAGLEV
+
 // static
 constexpr auto TypeofDescriptor::registers() { return RegisterArray(a0); }
 
@@ -293,6 +311,14 @@ constexpr auto Compare_BaselineDescriptor::registers() {
 }
 
 // static
+constexpr auto Compare_WithEmbeddedFeedbackOffsetDescriptor::registers() {
+  // a1: left operand
+  // a0: right operand
+  // a2: feedback offset
+  return RegisterArray(a1, a0, a2);
+}
+
+// static
 constexpr auto BinaryOpDescriptor::registers() {
   // a1: left operand
   // a0: right operand
@@ -331,12 +357,9 @@ CallApiCallbackOptimizedDescriptor::ActualArgumentsCountRegister() {
   return a2;
 }
 // static
-constexpr Register CallApiCallbackOptimizedDescriptor::CallDataRegister() {
+constexpr Register
+CallApiCallbackOptimizedDescriptor::FunctionTemplateInfoRegister() {
   return a3;
-}
-// static
-constexpr Register CallApiCallbackOptimizedDescriptor::HolderRegister() {
-  return a0;
 }
 
 // static
@@ -348,10 +371,6 @@ CallApiCallbackGenericDescriptor::ActualArgumentsCountRegister() {
 constexpr Register
 CallApiCallbackGenericDescriptor::FunctionTemplateInfoRegister() {
   return a3;
-}
-// static
-constexpr Register CallApiCallbackGenericDescriptor::HolderRegister() {
-  return a0;
 }
 
 // static
@@ -396,8 +415,7 @@ constexpr auto RunMicrotasksEntryDescriptor::registers() {
 }
 
 constexpr auto WasmJSToWasmWrapperDescriptor::registers() {
-  // Arbitrarily picked register.
-  return RegisterArray(t0);
+  return RegisterArray(s2);
 }
 
 }  // namespace internal

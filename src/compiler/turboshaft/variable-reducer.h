@@ -6,8 +6,10 @@
 #define V8_COMPILER_TURBOSHAFT_VARIABLE_REDUCER_H_
 
 #include <algorithm>
+#include <optional>
 
 #include "src/base/logging.h"
+#include "src/base/macros.h"
 #include "src/codegen/machine-type.h"
 #include "src/compiler/turboshaft/assembler.h"
 #include "src/compiler/turboshaft/graph.h"
@@ -90,14 +92,24 @@ class VariableReducer : public RequiredOptimizationReducer<AfterNext> {
  public:
   TURBOSHAFT_REDUCER_BOILERPLATE(VariableReducer)
 
+  ~VariableReducer() {
+    if (too_many_variables_bailouts_count_ != 0 &&
+        V8_UNLIKELY(v8_flags.trace_turbo_bailouts)) {
+      std::cout << "Bailing out from block cloning "
+                << too_many_variables_bailouts_count_ << " time"
+                << (too_many_variables_bailouts_count_ > 1 ? "s" : "") << "\n";
+    }
+  }
+
   void Bind(Block* new_block) {
     Next::Bind(new_block);
 
     SealAndSaveVariableSnapshot();
 
     predecessors_.clear();
+    predecessors_.reserve(new_block->PredecessorCount());
     for (const Block* pred : new_block->PredecessorsIterable()) {
-      base::Optional<Snapshot> pred_snapshot =
+      std::optional<Snapshot> pred_snapshot =
           block_to_snapshot_mapping_[pred->index()];
       DCHECK(pred_snapshot.has_value());
       predecessors_.push_back(pred_snapshot.value());
@@ -125,16 +137,23 @@ class VariableReducer : public RequiredOptimizationReducer<AfterNext> {
     table_.StartNewSnapshot(base::VectorOf(predecessors_), merge_variables);
     current_block_ = new_block;
     if (new_block->IsLoop()) {
-      for (Variable var : table_.active_loop_variables) {
-        MaybeRegisterRepresentation rep = var.data().rep;
-        DCHECK_NE(rep, MaybeRegisterRepresentation::None());
-        table_.Set(var, __ PendingLoopPhi(table_.Get(var),
-                                          RegisterRepresentation(rep)));
+      // When starting a loop, we need to create a PendingLoopPhi for each
+      // currently active variable (except those that are marked as
+      // loop-invariant).
+      auto active_loop_variables_begin = table_.active_loop_variables.begin();
+      auto active_loop_variables_end = table_.active_loop_variables.end();
+      if (active_loop_variables_begin != active_loop_variables_end) {
+        ZoneVector<std::pair<Variable, OpIndex>> pending_phis(__ phase_zone());
+        for (Variable var : table_.active_loop_variables) {
+          MaybeRegisterRepresentation rep = var.data().rep;
+          DCHECK_NE(rep, MaybeRegisterRepresentation::None());
+          V<Any> pending_loop_phi =
+              __ PendingLoopPhi(table_.Get(var), RegisterRepresentation(rep));
+          SetVariable(var, pending_loop_phi);
+          pending_phis.push_back({var, pending_loop_phi});
+        }
+        loop_pending_phis_[new_block->index()].emplace(pending_phis);
       }
-      Snapshot loop_header_snapshot = table_.Seal();
-      block_to_snapshot_mapping_[new_block->LastPredecessor()->index()] =
-          loop_header_snapshot;
-      table_.StartNewSnapshot(loop_header_snapshot);
     }
   }
 
@@ -155,37 +174,23 @@ class VariableReducer : public RequiredOptimizationReducer<AfterNext> {
     if (!destination->IsBound()) {
       return result;
     }
-    DCHECK(destination->IsLoop());
-    DCHECK(destination->PredecessorCount() == 2);
-    Snapshot loop_header_snapshot =
-        *block_to_snapshot_mapping_
-            [destination->LastPredecessor()->NeighboringPredecessor()->index()];
-    Snapshot backedge_snapshot = table_.Seal();
-    block_to_snapshot_mapping_[current_block_->index()] = backedge_snapshot;
-    auto fix_loop_phis =
-        [&](Variable var, base::Vector<const OpIndex> predecessors) -> OpIndex {
-      if (var.data().loop_invariant) {
-        return predecessors[0];
-      }
-      const OpIndex backedge_value = predecessors[1];
-      if (!backedge_value.valid()) {
-        return OpIndex::Invalid();
-      }
-      const PendingLoopPhiOp& pending_phi =
-          __ Get(predecessors[0]).template Cast<PendingLoopPhiOp>();
-      __ output_graph().template Replace<PhiOp>(
-          predecessors[0],
-          base::VectorOf({pending_phi.first(), backedge_value}),
-          pending_phi.rep);
-      return predecessors[0];
-    };
 
-    table_.StartNewSnapshot(
-        base::VectorOf({loop_header_snapshot, backedge_snapshot}),
-        fix_loop_phis);
-    // We throw away this snapshot.
-    table_.Seal();
-    current_block_ = nullptr;
+    // For loops, we have to "fix" the PendingLoopPhis (= replace them with
+    // regular loop phis).
+    DCHECK(destination->IsLoop());
+    DCHECK_EQ(destination->PredecessorCount(), 2);
+
+    if (auto it = loop_pending_phis_.find(destination->index());
+        it != loop_pending_phis_.end()) {
+      for (auto [var, pending_phi_idx] : it->second.value()) {
+        const PendingLoopPhiOp& pending_phi =
+            __ Get(pending_phi_idx).template Cast<PendingLoopPhiOp>();
+        __ output_graph().template Replace<PhiOp>(
+            pending_phi_idx,
+            base::VectorOf({pending_phi.first(), GetVariable(var)}),
+            pending_phi.rep);
+      }
+    }
 
     return result;
   }
@@ -194,6 +199,26 @@ class VariableReducer : public RequiredOptimizationReducer<AfterNext> {
 
   OpIndex GetPredecessorValue(Variable var, int predecessor_index) {
     return table_.GetPredecessorValue(var, predecessor_index);
+  }
+
+  bool CanCreateNVariables(size_t n) {
+    // Merges with many predecessors combined with many variables can quickly
+    // blow up memory since the SnapshotTable needs to create a state whose
+    // size can be up to number_of_predecessor*variable_count (note: in
+    // practice, it's often not quite variable_count but less since only
+    // variables that are live in at least one predecessor are counted). To
+    // avoid OOM or otherwise huge memory consumption, we thus stop creating
+    // variables (and bail out on optimizations that need variables) when this
+    // number becomes too large. I somewhat arbitrarily selected 100K here,
+    // which sounds high, but in terms of memory, it's just 100K*8=800KB, which
+    // is less than 1MB, which isn't going to amount for much in a function
+    // that is probably very large if it managed to reach this limit.
+    constexpr uint32_t kMaxAllowedMergeStateSize = 100'000;
+    bool can_create =
+        __ input_graph().max_merge_pred_count() * (variable_count_ + n) <
+        kMaxAllowedMergeStateSize;
+    if (!can_create) too_many_variables_bailouts_count_++;
+    return can_create;
   }
 
   void SetVariable(Variable var, OpIndex new_index) {
@@ -205,16 +230,19 @@ class VariableReducer : public RequiredOptimizationReducer<AfterNext> {
   void Set(Variable var, V<Rep> value) {
     DCHECK(!is_temporary_);
     if (V8_UNLIKELY(__ generating_unreachable_operations())) return;
-    DCHECK(Rep::allows_representation(RegisterRepresentation(var.data().rep)));
+    DCHECK(
+        V<Rep>::allows_representation(RegisterRepresentation(var.data().rep)));
     table_.Set(var, value);
   }
 
   Variable NewLoopInvariantVariable(MaybeRegisterRepresentation rep) {
     DCHECK(!is_temporary_);
+    variable_count_++;
     return table_.NewKey(VariableData{rep, true}, OpIndex::Invalid());
   }
   Variable NewVariable(MaybeRegisterRepresentation rep) {
     DCHECK(!is_temporary_);
+    variable_count_++;
     return table_.NewKey(VariableData{rep, false}, OpIndex::Invalid());
   }
 
@@ -249,6 +277,7 @@ class VariableReducer : public RequiredOptimizationReducer<AfterNext> {
 
   OpIndex MergeFrameState(base::Vector<const OpIndex> frame_states_indices) {
     base::SmallVector<const FrameStateOp*, 32> frame_states;
+    frame_states.reserve(frame_states_indices.size());
     for (OpIndex idx : frame_states_indices) {
       frame_states.push_back(
           &__ output_graph().Get(idx).template Cast<FrameStateOp>());
@@ -261,7 +290,7 @@ class VariableReducer : public RequiredOptimizationReducer<AfterNext> {
     for (auto frame_state : frame_states) {
       DCHECK_EQ(first_frame->input_count, frame_state->input_count);
       DCHECK_EQ(first_frame->inlined, frame_state->inlined);
-      DCHECK_EQ(first_frame->data, frame_state->data);
+      DCHECK_EQ(*first_frame->data, *frame_state->data);
     }
 #endif
 
@@ -315,13 +344,23 @@ class VariableReducer : public RequiredOptimizationReducer<AfterNext> {
 
   VariableTable table_{__ phase_zone()};
   const Block* current_block_ = nullptr;
-  GrowingBlockSidetable<base::Optional<Snapshot>> block_to_snapshot_mapping_{
-      __ input_graph().block_count(), base::nullopt, __ phase_zone()};
+  GrowingBlockSidetable<std::optional<Snapshot>> block_to_snapshot_mapping_{
+      __ input_graph().block_count(), std::nullopt, __ phase_zone()};
   bool is_temporary_ = false;
+
+  // Tracks the number of variables that have been created.
+  uint32_t variable_count_ = 0;
+  uint32_t too_many_variables_bailouts_count_ = 0;
 
   // {predecessors_} is used during merging, but we use an instance variable for
   // it, in order to save memory and not reallocate it for each merge.
   ZoneVector<Snapshot> predecessors_{__ phase_zone()};
+
+  // Map from loop headers to the pending loop phis in these headers which have
+  // to be patched on backedges.
+  ZoneAbslFlatHashMap<BlockIndex,
+                      std::optional<ZoneVector<std::pair<Variable, OpIndex>>>>
+      loop_pending_phis_{__ phase_zone()};
 };
 
 #include "src/compiler/turboshaft/undef-assembler-macros.inc"

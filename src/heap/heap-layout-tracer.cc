@@ -39,7 +39,7 @@ void HeapLayoutTracer::GCProloguePrintHeapLayout(v8::Isolate* isolate,
                                                  void* data) {
   Heap* heap = reinterpret_cast<i::Isolate*>(isolate)->heap();
   // gc_count_ will increase after this callback, manually add 1.
-  PrintF("Before GC:%d,", heap->gc_count() + 1);
+  PrintF("Before GC:%d,", heap->gc_count().value() + 1);
   PrintF("collector_name:%s\n", TypeToCollectorName(gc_type));
   PrintHeapLayout(std::cout, heap);
 }
@@ -50,15 +50,15 @@ void HeapLayoutTracer::GCEpiloguePrintHeapLayout(v8::Isolate* isolate,
                                                  v8::GCCallbackFlags flags,
                                                  void* data) {
   Heap* heap = reinterpret_cast<i::Isolate*>(isolate)->heap();
-  PrintF("After GC:%d,", heap->gc_count());
+  PrintF("After GC:%d,", heap->gc_count().value());
   PrintF("collector_name:%s\n", TypeToCollectorName(gc_type));
   PrintHeapLayout(std::cout, heap);
 }
 
 // static
-void HeapLayoutTracer::PrintBasicMemoryChunk(std::ostream& os,
-                                             const MemoryChunkMetadata& chunk,
-                                             const char* owner_name) {
+void HeapLayoutTracer::PrintMemoryChunk(std::ostream& os,
+                                        const MemoryChunkMetadata& chunk,
+                                        const char* owner_name) {
   os << "{owner:" << owner_name << ","
      << "address:" << &chunk << ","
      << "size:" << chunk.size() << ","
@@ -70,28 +70,28 @@ void HeapLayoutTracer::PrintBasicMemoryChunk(std::ostream& os,
 void HeapLayoutTracer::PrintHeapLayout(std::ostream& os, Heap* heap) {
   if (v8_flags.minor_ms) {
     for (const PageMetadata* page : *heap->paged_new_space()) {
-      PrintBasicMemoryChunk(os, *page, "new_space");
+      PrintMemoryChunk(os, *page, "new_space");
     }
   } else {
     const SemiSpaceNewSpace* semi_space_new_space =
         SemiSpaceNewSpace::From(heap->new_space());
     for (const PageMetadata* page : semi_space_new_space->to_space()) {
-      PrintBasicMemoryChunk(os, *page, "to_space");
+      PrintMemoryChunk(os, *page, "to_space");
     }
 
     for (const PageMetadata* page : semi_space_new_space->from_space()) {
-      PrintBasicMemoryChunk(os, *page, "from_space");
+      PrintMemoryChunk(os, *page, "from_space");
     }
   }
 
   OldGenerationMemoryChunkIterator it(heap);
   MutablePageMetadata* chunk;
   while ((chunk = it.next()) != nullptr) {
-    PrintBasicMemoryChunk(os, *chunk, ToString(chunk->owner()->identity()));
+    PrintMemoryChunk(os, *chunk, ToString(chunk->owner()->identity()));
   }
 
   for (ReadOnlyPageMetadata* page : heap->read_only_space()->pages()) {
-    PrintBasicMemoryChunk(os, *page, "ro_space");
+    PrintMemoryChunk(os, *page, "ro_space");
   }
 }
 }  // namespace internal

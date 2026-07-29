@@ -1,992 +1,134 @@
-name: Build V8
+name: Build V8 standalone
 
 on:
   push:
-    branches:
-      - '**'
-    tags-ignore:
-      - '**'
+    branches: ['**']
+    tags-ignore: ['**']
+  pull_request:
   release:
     types: [published]
 
-# github.head_ref is only defined on pull_request events
+permissions:
+  contents: read
+
 concurrency:
-  group: ${{ github.workflow }}-${{ github.actor }}-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build_mac:
+  macos:
+    name: macOS (${{ matrix.arch }})
+    runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
         arch: [arm64, x64]
-
-    name: "macOS"
-    runs-on: macos-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Select XCode Version
-        uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd
-        with:
-          xcode-version: latest-stable
-
-      - name: Clone DepotTools
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        shell: bash
         run: |
-            cd ..
-            DEPOT_TOOLS_PATH=$(pwd)/depot_tools
-            git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-            cd depot_tools
-            ./ensure_bootstrap
-            echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
-            echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
-
-      - name: Print env
-        run: |
-          echo "${{ env.DEPOT_TOOLS_PATH }}"
-          ls -l ${{ env.DEPOT_TOOLS_PATH }}
-          xcrun clang++ -v
-
-      - name: Install gn
-        run: |
-          wget https://chrome-infra-packages.appspot.com/dl/gn/gn/mac-amd64/+/latest -O ./gn.zip
-          unzip gn.zip -d buildtools/mac/
-
-      - name: Install dsymutil
-        run: |
-          export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
-          python3 ${{ env.DEPOT_TOOLS_PATH }}/download_from_google_storage.py --no_resume --no_auth --bucket chromium-browser-clang -s tools/clang/dsymutil/bin/dsymutil.x64.sha1 -o tools/clang/dsymutil/bin/dsymutil
-
-      - name: Install ninja
-        run: |
+          set -euo pipefail
+          case "${RUNNER_ARCH}" in
+            ARM64) gn_arch=arm64 ;;
+            X64) gn_arch=amd64 ;;
+            *) echo "Unsupported runner architecture: ${RUNNER_ARCH}" >&2; exit 1 ;;
+          esac
+          curl -fsSL "https://chrome-infra-packages.appspot.com/dl/gn/gn/mac-${gn_arch}/+/latest" -o gn.zip
+          mkdir -p buildtools/mac
+          unzip -q gn.zip -d buildtools/mac
           brew install ninja
-          NINJA_PATH=$(which ninja)
-          CURRENT_DIR=$(pwd)
-          mkdir -p ${CURRENT_DIR}/third_party/ninja
-          ln -s ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/ninja
-
-      - name: Build ${{ matrix.arch }}
+      - name: Build
+        env:
+          GN: buildtools/mac/gn
+        run: ./build-mac.sh "${{ matrix.arch }}"
+      - name: Collect artifacts
         run: |
-          export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
-          which gn
-          CURRENT_DIR=$(pwd)
-
-          ./build-mac.sh ${{ matrix.arch }}
-
-      - name: Copy to dist folder
-        run: |
-          ls -l ./out/mac
-          echo "---------------------"
-          ls -l ./out/mac/obj
-          mkdir dist
-          cp ./out/mac/d8 ./dist/
-          cp ./out/mac/obj/libv8_monolith.a ./dist/
-          cp -r ./include ./dist/
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+          mkdir -p dist/include
+          cp out/mac/d8 out/mac/obj/libv8_monolith.a dist/
+          cp -R include/. dist/include/
+      - uses: actions/upload-artifact@v4
         with:
-          name: v8-mac-${{ matrix.arch }}
-          path: ./dist
+          name: v8-macos-${{ matrix.arch }}
+          path: dist
 
-  build_mac_fat:
-    permissions:
-      contents: write
-    if: github.event_name == 'release'
-    name: "macOS (fat)"
+  ios:
+    name: iOS (${{ matrix.arch }})
     runs-on: macos-latest
-    needs: build_mac
-    steps:
-      - name: Download arm64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: v8-mac-arm64
-          path: v8-mac-arm64
-
-      - name: Download x64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: v8-mac-x64
-          path: v8-mac-x64
-
-      - name: Build a fat library
-        run: |
-          mkdir v8-mac-fat
-          lipo -create ./v8-mac-arm64/libv8_monolith.a ./v8-mac-x64/libv8_monolith.a -output ./v8-mac-fat/libv8_monolith.a
-          lipo -create ./v8-mac-arm64/d8 ./v8-mac-x64/d8 -output ./v8-mac-fat/d8
-          cp -r ./v8-mac-arm64/include ./v8-mac-fat/
-
-      - name: Pack dist files
-        uses: thedoctor0/zip-release@a24011d8d445e4da5935a7e73c1f98e22a439464
-        with:
-          type: 'zip'
-          directory: 'v8-mac-fat'
-          path: '.'
-          filename: 'v8-mac.zip'
-
-      - name: Upload to Release
-        uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: v8-mac-fat/v8-mac.zip
-          asset_name: v8-mac.zip
-          tag: ${{ github.ref }}
-
-  build_ios:
     strategy:
       fail-fast: false
       matrix:
         arch: [arm64, x64, simulator-arm64]
-
-    name: "iOS"
-    runs-on: macos-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Select XCode Version
-        uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd
-        with:
-          xcode-version: latest-stable
-
-      - name: Clone DepotTools
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        shell: bash
         run: |
-            cd ..
-            DEPOT_TOOLS_PATH=$(pwd)/depot_tools
-            git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-            cd depot_tools
-            ./ensure_bootstrap
-            echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
-            echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
-
-      - name: Print env
-        run: |
-          echo "${{ env.DEPOT_TOOLS_PATH }}"
-          ls -l ${{ env.DEPOT_TOOLS_PATH }}
-          xcrun clang++ -v
-
-      - name: Install gn
-        run: |
-          wget https://chrome-infra-packages.appspot.com/dl/gn/gn/mac-amd64/+/latest -O ./gn.zip
-          unzip gn.zip -d buildtools/mac/
-
-      - name: Install dsymutil
-        run: |
-          export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
-          python3 ${{ env.DEPOT_TOOLS_PATH }}/download_from_google_storage.py --no_resume --no_auth --bucket chromium-browser-clang -s tools/clang/dsymutil/bin/dsymutil.x64.sha1 -o tools/clang/dsymutil/bin/dsymutil
-
-      - name: Install ninja
-        run: |
+          set -euo pipefail
+          case "${RUNNER_ARCH}" in
+            ARM64) gn_arch=arm64 ;;
+            X64) gn_arch=amd64 ;;
+            *) echo "Unsupported runner architecture: ${RUNNER_ARCH}" >&2; exit 1 ;;
+          esac
+          curl -fsSL "https://chrome-infra-packages.appspot.com/dl/gn/gn/mac-${gn_arch}/+/latest" -o gn.zip
+          mkdir -p buildtools/mac
+          unzip -q gn.zip -d buildtools/mac
           brew install ninja
-          NINJA_PATH=$(which ninja)
-          CURRENT_DIR=$(pwd)
-          mkdir -p ${CURRENT_DIR}/third_party/ninja
-          ln -s ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/ninja
-
-      - name: Install llvm
+      - name: Build
+        env:
+          GN: buildtools/mac/gn
+        shell: bash
         run: |
-          brew install llvm
-          echo "Install llvm succeed!"
-          export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
-          LLVM_AR_PATH=$(which llvm-ar)
-          echo "LLVM_AR_PATH: ${LLVM_AR_PATH}"
-          XCODE_DEV_PATH=$(xcode-select -p)
-          echo "XCODE_DEV_PATH: ${XCODE_DEV_PATH}"
-          sudo ln -s ${LLVM_AR_PATH} ${XCODE_DEV_PATH}/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-ar
-
-      - name: Build ${{ matrix.arch }}
-        run: |
-          export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
-          which gn
-          CURRENT_DIR=$(pwd)
-
-          if [[ "${{ matrix.arch }}" == "simulator-arm64" ]];then
+          if [[ "${{ matrix.arch }}" == simulator-arm64 ]]; then
             ./build-ios.sh arm64 simulator
           else
-            ./build-ios.sh ${{ matrix.arch }}
+            ./build-ios.sh "${{ matrix.arch }}"
           fi
-
-      - name: Copy to dist folder
+      - name: Collect artifacts
         run: |
-          ls -l ./out/ios
-          echo "---------------------"
-          ls -l ./out/ios/obj
-          mkdir dist
-          cp ./out/ios/obj/d8 ./dist/
-          cp ./out/ios/obj/libv8_monolith.a ./dist/
-          cp -r ./include ./dist/
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+          mkdir -p dist/include
+          cp out/ios/obj/d8 out/ios/obj/libv8_monolith.a dist/
+          cp -R include/. dist/include/
+      - uses: actions/upload-artifact@v4
         with:
           name: v8-ios-${{ matrix.arch }}
-          path: ./dist
+          path: dist
 
-
-  build_ios_fat:
-    permissions:
-      contents: write
-    if: github.event_name == 'release'
-    name: "iOS (fat)"
-    runs-on: macos-latest
-    needs: build_ios
-    steps:
-      - name: Download arm64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: v8-ios-arm64
-          path: v8-ios-arm64
-
-      - name: Download x64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: v8-ios-x64
-          path: v8-ios-x64
-
-      - name: Download simulator-arm64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: v8-ios-simulator-arm64
-          path: v8-ios-simulator-arm64
-
-      - name: Build a fat library
-        run: |
-          mkdir v8-ios-fat
-          lipo -create ./v8-ios-arm64/libv8_monolith.a ./v8-ios-x64/libv8_monolith.a -output ./v8-ios-fat/libv8_monolith.a
-          lipo -create ./v8-ios-arm64/d8 ./v8-ios-x64/d8 -output ./v8-ios-fat/d8
-          cp -r ./v8-ios-arm64/include ./v8-ios-fat/
-          cp -r ./v8-ios-simulator-arm64 ./v8-ios-fat/
-          rm -rf ./v8-ios-fat/v8-ios-simulator-arm64/include
-
-      - name: Pack dist files
-        uses: thedoctor0/zip-release@a24011d8d445e4da5935a7e73c1f98e22a439464
-        with:
-          type: 'zip'
-          directory: 'v8-ios-fat'
-          path: '.'
-          filename: 'v8-ios.zip'
-
-      - name: Upload to Release
-        uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: v8-ios-fat/v8-ios.zip
-          asset_name: v8-ios.zip
-          tag: ${{ github.ref }}
-
-  build_android:
+  android:
+    name: Android (${{ matrix.arch }})
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         arch: [arm64, arm, x64, x86]
-
-    name: "android"
-    runs-on: ubuntu-latest
     steps:
-      - name: Show ubuntu libraries
-        run: |
-          if [[ -d "/usr/lib/i386-linux-gnu" ]]; then
-            echo "/usr/lib/i386-linux-gnu exists."
-            ls -la /usr/lib/i386-linux-gnu/libatomic.so.1*
-          else
-            echo "/usr/lib/i386-linux-gnu doesn't not exist."
-          fi
-
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y libc6:i386 libstdc++6:i386 libatomic1:i386
-
-          if [[ -d "/usr/lib/i386-linux-gnu" ]]; then
-            echo "/usr/lib/i386-linux-gnu exists."
-            ls -la /usr/lib/i386-linux-gnu/
-            ls -la /usr/lib/i386-linux-gnu/libatomic.so.1*
-          else
-            echo "/usr/lib/i386-linux-gnu doesn't not exist."
-          fi
-
-          if [[ -d "/usr/lib/x86_64-linux-gnu" ]]; then
-            echo "/usr/lib/x86_64-linux-gnu exists."
-            ls -la /usr/lib/x86_64-linux-gnu/libatomic.so.1*
-          else
-            echo "/usr/lib/x86_64-linux-gnu doesn't not exist."
-          fi
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install NDK r28c
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
+      - uses: actions/checkout@v4
+      - uses: nttld/setup-ndk@v1
+        id: ndk
         with:
           ndk-version: r28c
           add-to-path: false
           local-cache: false
-
-      - name: Show Android NDK
+      - name: Install build tools
+        shell: bash
         run: |
-          echo "Show home"
-          ls -l $HOME
-          echo "Show ndk-path"
-          ls -l ${{ steps.setup-ndk.outputs.ndk-path }}
-          echo "Show clang"
-          ls -l ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++
-          echo "Show ndk in hostedtoolcache"
-          ls -l /opt/hostedtoolcache/ndk/r28c/x64/toolchains/llvm/prebuilt/linux-x86_64/bin/
-
-      - name: Clone DepotTools
-        run: |
-            cd ..
-            DEPOT_TOOLS_PATH=$(pwd)/depot_tools
-            git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-            cd depot_tools
-            ./ensure_bootstrap
-            echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
-            echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
-
-      - name: Print env
-        run: |
-          echo "${{ env.DEPOT_TOOLS_PATH }}"
-          ls -l ${{ env.DEPOT_TOOLS_PATH }}
-
-      - name: Install gn
-        run: |
-          wget https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/latest -O ./gn.zip
-          unzip gn.zip -d buildtools/linux64/
-
-      - name: Install ninja
-        run: |
-          if ! command -v ninja &> /dev/null; then
-              echo "Ninja not found, installing..."
-              # sudo apt update
-              sudo apt install ninja-build
-          else
-              echo "Ninja is already installed."
-          fi
-          which ninja
-          NINJA_PATH=$(which ninja)
-          CURRENT_DIR=$(pwd)
-          mkdir -p ${CURRENT_DIR}/third_party/ninja
-          ln -s ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/ninja
-
-      - name: Install linux sysroot
-        run: |
-          if [[ "${{ matrix.arch }}" == "arm64" || "${{ matrix.arch }}" == "x64" ]];then
-            INSTALL_SYSROOT_ARCH="amd64"
-          else
-            INSTALL_SYSROOT_ARCH="i386"
-          fi
-
-          python3 build/linux/sysroot_scripts/install-sysroot.py --arch=${INSTALL_SYSROOT_ARCH}
-
-      - name: Patch
-        run: |
-          sed -i "s@\"-gsimple-template-names\"@@g" build/config/compiler/BUILD.gn
-          sed -i "s@\"-ffile-compilation-dir=.\"@@g" build/config/compiler/BUILD.gn
-          sed -i "s@if (is_ubsan && (v8_current_cpu@if ((v8_current_cpu@g" BUILD.gn
-          if [[ "${{ matrix.arch }}" == "arm" || "${{ matrix.arch }}" == "x86" ]];then
-            sed -i "s@#error@//#error@g" src/base/ubsan.cc
-          fi
-
-          rm $NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/19/lib/linux/x86_64/libatomic.a
-          rm $NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/19/lib/linux/i386/libatomic.a
+          set -euo pipefail
+          curl -fsSL "https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/latest" -o gn.zip
+          mkdir -p buildtools/linux64
+          unzip -q gn.zip -d buildtools/linux64
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+      - name: Build
         env:
-            NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
-
-      - name: Build ${{ matrix.arch }}
+          GN: buildtools/linux64/gn
+          NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+        run: ./build-android.sh "${{ matrix.arch }}"
+      - name: Collect artifacts
         run: |
-          export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
-          which gn
-          CURRENT_DIR=$(pwd)
-
-          ./build-android.sh ${{ matrix.arch }}
-        env:
-          NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
-
-      - name: Copy to dist folder
-        run: |
-          ls -l ./out/android
-          echo "---------------------"
-          ls -l ./out/android/obj
-          mkdir dist
-          cp ./out/android/d8 ./dist/
-          cp ./out/android/obj/libv8_monolith.a ./dist/
-          cp -r ./include ./dist/
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+          mkdir -p dist/include
+          cp out/android/d8 out/android/obj/libv8_monolith.a dist/
+          cp -R include/. dist/include/
+      - uses: actions/upload-artifact@v4
         with:
           name: v8-android-${{ matrix.arch }}
-          path: ./dist
-
-  build_android_fat:
-    permissions:
-      contents: write
-    if: github.event_name == 'release'
-    name: "android (fat)"
-    runs-on: ubuntu-latest
-    needs: build_android
-    steps:
-      - name: Download arm64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: v8-android-arm64
-          path: v8-android-arm64
-
-      - name: Download arm artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: v8-android-arm
-          path: v8-android-arm
-
-      - name: Download x64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: v8-android-x64
-          path: v8-android-x64
-
-      - name: Download x86 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: v8-android-x86
-          path: v8-android-x86
-
-      - name: Build a fat library
-        run: |
-          mkdir v8-android-fat
-          cp -r ./v8-android-arm64 ./v8-android-fat/arm64-v8a
-          cp -r ./v8-android-arm ./v8-android-fat/armeabi-v7a
-          cp -r ./v8-android-x64 ./v8-android-fat/x86_64
-          cp -r ./v8-android-x86 ./v8-android-fat/x86
-          cp -r ./v8-android-arm64/include ./v8-android-fat/
-          rm -rf ./v8-android-fat/arm64-v8a/include
-          rm -rf ./v8-android-fat/armeabi-v7a/include
-          rm -rf ./v8-android-fat/x86_64/include
-          rm -rf ./v8-android-fat/x86/include
-
-      - name: Pack dist files
-        uses: thedoctor0/zip-release@a24011d8d445e4da5935a7e73c1f98e22a439464
-        with:
-          type: 'zip'
-          directory: 'v8-android-fat'
-          path: '.'
-          filename: 'v8-android.zip'
-
-      - name: Upload to Release
-        uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: v8-android-fat/v8-android.zip
-          asset_name: v8-android.zip
-          tag: ${{ github.ref }}
-
-  # build_windows:
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       arch: [x64]
-  #       build_type: [debug, release]
-
-  #   name: "Windows"
-  #   runs-on: windows-latest
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-
-  #     # - uses: actions/setup-python@v5
-  #     #   with:
-  #     #     python-version: '3.11'
-
-  #     - name: Check is_debug
-  #       shell: bash
-  #       run: |
-  #         if [[ "${{matrix.build_type}}" == "debug" ]];then
-  #           echo "IS_DEBUG=true" >> $GITHUB_ENV
-  #         else
-  #           echo "IS_DEBUG=false" >> $GITHUB_ENV
-  #         fi
-
-  #     - name: Print env
-  #       run: |
-  #         echo "env.IS_DEBUG=${{ env.IS_DEBUG }}"
-  #         # echo "----- python version -----"
-  #         # python --version
-          
-  #     - name: Clone DepotTools
-  #       shell: bash
-  #       run: |
-  #           # ls -l /c/hostedtoolcache/windows/Python/3.11.9/x64/
-  #           # python3 --version
-  #           # which python3
-  #           cd /c
-  #           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-  #           cd depot_tools
-  #           ./ensure_bootstrap
-  #           ls -l /c/depot_tools
-  #           echo "C:\depot_tools" >> $GITHUB_PATH
-  #           echo "C:\depot_tools\python-bin" >> $GITHUB_PATH
-
-  #     - name: Install gn
-  #       run: |
-  #         Invoke-WebRequest -OutFile gn.zip https://chrome-infra-packages.appspot.com/dl/gn/gn/windows-amd64/+/latest
-  #         Expand-Archive gn.zip -DestinationPath buildtools\win\
-
-  #     - name: Setup Ninja
-  #       uses: ashutoshvarma/setup-ninja@66ad2db9ed7d211c065daeeb849e9c8c895773c9
-  #       with:
-  #         version: 1.10.0
-
-  #     - name: Install ninja
-  #       shell: bash
-  #       run: |
-  #         which ninja
-  #         NINJA_PATH=$(which ninja)
-  #         CURRENT_DIR=$(pwd)
-  #         mkdir -p ${CURRENT_DIR}/third_party/ninja
-  #         cp ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/
-
-  #     - name: Install windows deps
-  #       run: |
-  #         choco upgrade chocolatey -y
-  #         choco install vswhere
-      
-  #     - name: update_depot_tools 
-  #       shell: cmd
-  #       run: |
-  #         cd C:\depot_tools
-  #         update_depot_tools.bat
-
-  #     - name: GN gen ${{ matrix.arch }}
-  #       shell: cmd
-  #       run: |
-  #         dir C:\depot_tools
-  #         set DEPOT_TOOLS_WIN_TOOLCHAIN=0
-  #         set PATH=C:\depot_tools;%PATH%
-  #         set ARGS="is_clang=false is_debug=${{ env.IS_DEBUG }} target_cpu=""${{ matrix.arch }}"" v8_target_cpu=""${{ matrix.arch }}"" use_thin_lto=false use_lld=false clang_use_chrome_plugins=false chrome_pgo_phase=0 is_component_build=true use_custom_libcxx=false v8_use_external_startup_data=false is_official_build=false v8_enable_i18n_support=false treat_warnings_as_errors=false symbol_level=0 v8_enable_webassembly=true v8_enable_sandbox=false"
-  #         gn gen out/windows --args=%ARGS%
-
-  #     - name: Build ${{ matrix.arch }}-${{ matrix.build_type }}
-  #       run:
-  #         ninja -C out/windows v8_hello_world
-
-  #     - name: Copy to dist folder
-  #       shell: bash
-  #       run: |
-  #         ls -l ./out/windows
-  #         echo "---------------------"
-  #         ls -l ./out/windows/obj
-  #         mkdir dist
-  #         cp ./out/windows/*.exe ./dist/
-  #         cp ./out/windows/*.lib ./dist/
-  #         cp ./out/windows/*.dll ./dist/
-  #         cp -r ./include ./dist/
-
-  #     - name: Upload artifact
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: v8-windows-${{ matrix.arch }}-${{ matrix.build_type }}
-  #         path: ./dist
-
-  # build_windows_fat:
-  #   permissions:
-  #     contents: write
-  #   if: github.event_name == 'release'
-  #   name: "windows (fat)"
-  #   runs-on: ubuntu-latest
-  #   needs: build_windows
-  #   steps:
-  #     - name: Download x64(debug) artifact
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: v8-windows-x64-debug
-  #         path: v8-windows-x64-debug
-
-  #     - name: Download x64(release) artifact
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: v8-windows-x64-release
-  #         path: v8-windows-x64-release
-
-  #     - name: Build a fat library
-  #       shell: bash
-  #       run: |
-  #         mkdir v8-windows-fat
-  #         cp -r ./v8-windows-x64-debug ./v8-windows-fat/Debug
-  #         cp -r ./v8-windows-x64-release ./v8-windows-fat/Release
-  #         cp -r ./v8-windows-x64-debug/include ./v8-windows-fat/
-  #         rm -rf ./v8-windows-fat/Debug/include
-  #         rm -rf ./v8-windows-fat/Release/include
-
-  #     - name: Pack dist files
-  #       uses: thedoctor0/zip-release@a24011d8d445e4da5935a7e73c1f98e22a439464
-  #       with:
-  #         type: 'zip'
-  #         directory: 'v8-windows-fat'
-  #         path: '.'
-  #         filename: 'v8-windows.zip'
-
-  #     - name: Upload to Release
-  #       uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
-  #       with:
-  #         repo_token: ${{ secrets.GITHUB_TOKEN }}
-  #         file: v8-windows-fat/v8-windows.zip
-  #         asset_name: v8-windows.zip
-  #         tag: ${{ github.ref }}
-
-  # build_openharmony:
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       arch: [arm64, arm]
-  #   name: "Openharmony"
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Show ubuntu libraries
-  #       run: |
-  #         if [[ -d "/usr/lib/i386-linux-gnu" ]]; then
-  #           echo "/usr/lib/i386-linux-gnu exists."
-  #           ls -la /usr/lib/i386-linux-gnu/libatomic.so.1*
-  #         else
-  #           echo "/usr/lib/i386-linux-gnu doesn't not exist."
-  #         fi
-
-  #         sudo dpkg --add-architecture i386
-  #         sudo apt-get update
-  #         sudo apt-get install -y libc6:i386 libstdc++6:i386 libatomic1:i386
-
-  #         if [[ -d "/usr/lib/i386-linux-gnu" ]]; then
-  #           echo "/usr/lib/i386-linux-gnu exists."
-  #           ls -la /usr/lib/i386-linux-gnu/
-  #           ls -la /usr/lib/i386-linux-gnu/libatomic.so.1*
-  #         else
-  #           echo "/usr/lib/i386-linux-gnu doesn't not exist."
-  #         fi
-
-  #         if [[ -d "/usr/lib/x86_64-linux-gnu" ]]; then
-  #           echo "/usr/lib/x86_64-linux-gnu exists."
-  #           ls -la /usr/lib/x86_64-linux-gnu/libatomic.so.1*
-  #         else
-  #           echo "/usr/lib/x86_64-linux-gnu doesn't not exist."
-  #         fi
-
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-java@v4
-  #       id: setup-jdk
-  #       with:
-  #         distribution: 'zulu'
-  #         java-version: '17'
-  #     - name: Get oh sdk cache directory path
-  #       id: oh-sdk-cache-dir-path
-  #       run: |
-  #         echo "cache dir: "
-  #         echo "dir=$HOME/openharmony" >> $GITHUB_OUTPUT
-
-  #     - name: Output cache dir
-  #       run: |
-  #         echo "Output cache dir: ${{ steps.oh-sdk-cache-dir-path.outputs.dir }}"
-
-  #     - name: Cache OH SDK
-  #       id: cache-oh-sdk
-  #       uses: actions/cache@v3
-  #       env:
-  #         cache-name: cache-oh-sdk-9
-  #       with:
-  #         path: ${{ steps.oh-sdk-cache-dir-path.outputs.dir }}
-  #         key: ${{ runner.os }}-build-${{ env.cache-name }}
-
-  #     - name: Add package.json
-  #       run: |
-  #         echo "{}" > package.json
-  #         echo "{\"name\": \"tests\",\"lockfileVersion\": 3,\"requires\": true,\"packages\": {}}" > package-lock.json
-
-  #     - uses: actions/setup-node@v3
-  #       with:
-  #         node-version: 14
-  #         cache: 'npm'
-
-  #     - if: ${{ steps.cache-oh-sdk.outputs.cache-hit != 'true' }}
-  #       name: No Cache found, install oh sdk
-  #       continue-on-error: false
-  #       run: |
-  #         if [ ! -d "$HOME/openharmony" ]; then
-  #           mkdir -p $HOME/openharmony
-  #           echo "Download commandline-tools-linux.zip ..."
-  #           curl -o commandline-tools-linux.zip "https://contentcenter-vali-drcn.dbankcdn.cn/pvt_2/DeveloperAlliance_package_901_9/b1/v3/E6zhv5UFQ2-inIwNJhTN6Q/commandline-tools-linux-2.0.0.2.zip?HW-CC-KV=V1&HW-CC-Date=20230621T074401Z&HW-CC-Expire=315360000&HW-CC-Sign=621224257B02079B1E76C0A56FDF21483400B1E3556213F88DC79BC9BE7D595D"
-  #           echo "Unzip commandline-tools-linux.zip ..."
-  #           unzip commandline-tools-linux.zip -d $HOME/openharmony > /dev/null
-  #           cd $HOME/openharmony
-  #           ls -l
-  #           cd command-line-tools
-  #           echo "=============== PATCHING sdkmanager/bin/sdkmgr file ==============="
-  #           sed -i "s@-Dfile.encoding=UTF-8@-Dfile.encoding=UTF-8 -Duser.country=CN@g" ./sdkmanager/bin/sdkmgr
-  #           cd bin
-  #           ./sdkmgr list
-  #           echo "=============== INSTALL HOS toolchains:9 ==============="
-  #           ./sdkmgr install toolchains:9 --accept-license > /dev/null
-  #           echo "=============== INSTALL OH SDK ets:9 ==============="
-  #           ./sdkmgr install OpenHarmony/ets:9 --accept-license > /dev/null
-  #           echo "=============== INSTALL OH SDK js:9 ==============="
-  #           ./sdkmgr install OpenHarmony/js:9 --accept-license > /dev/null
-  #           echo "=============== INSTALL OH SDK native:9 ==============="
-  #           ./sdkmgr install OpenHarmony/native:9 --accept-license > /dev/null
-  #           echo "=============== INSTALL OH SDK toolchains:9 ==============="
-  #           ./sdkmgr install OpenHarmony/toolchains:9 --accept-license > /dev/null
-  #           echo "=============== INSTALL OH SDK DONE ==============="
-  #           ./sdkmgr list
-  #         fi
-
-  #     - name: Clone DepotTools
-  #       run: |
-  #           cd ..
-  #           DEPOT_TOOLS_PATH=$(pwd)/depot_tools
-  #           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-  #           cd depot_tools
-  #           ./ensure_bootstrap
-  #           echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
-  #           echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
-
-  #     - name: Print env
-  #       run: |
-  #         echo "${{ env.DEPOT_TOOLS_PATH }}"
-  #         ls -l ${{ env.DEPOT_TOOLS_PATH }}
-
-  #     - name: Install gn
-  #       run: |
-  #         wget https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/latest -O ./gn.zip
-  #         unzip gn.zip -d buildtools/linux64/
-
-  #     - name: Install ninja
-  #       run: |
-  #         if ! command -v ninja &> /dev/null; then
-  #             echo "Ninja not found, installing..."
-  #             # sudo apt update
-  #             sudo apt install ninja-build
-  #         else
-  #             echo "Ninja is already installed."
-  #         fi
-  #         which ninja
-  #         NINJA_PATH=$(which ninja)
-  #         CURRENT_DIR=$(pwd)
-  #         mkdir -p ${CURRENT_DIR}/third_party/ninja
-  #         ln -s ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/ninja
-
-  #     - name: Install linux sysroot
-  #       run: |
-  #         if [[ "${{ matrix.arch }}" == "arm64" || "${{ matrix.arch }}" == "x64" ]];then
-  #           INSTALL_SYSROOT_ARCH="amd64"
-  #         else
-  #           INSTALL_SYSROOT_ARCH="i386"
-  #         fi
-
-  #         python3 build/linux/sysroot_scripts/install-sysroot.py --arch=${INSTALL_SYSROOT_ARCH}
-
-  #     - name: Show execution files
-  #       run: |
-  #         which node
-  #         which npm
-  #         which java
-  #         node -v
-  #         npm -v
-  #         java --version
-  #         echo "=============== list files in oh sdk ($HOME/openharmony) ==============="
-  #         pushd $HOME/openharmony
-  #         ls -l
-  #         popd
-
-  #     - name: Patch args
-  #       run: |
-  #         touch ${HOME}/openharmony/hwsdk/openharmony/9/native/llvm/lib/arm-linux-ohos/c++/libatomic.a
-  #         touch ${HOME}/openharmony/hwsdk/openharmony/9/native/llvm/lib/aarch64-linux-ohos/c++/libatomic.a
-  #         sed -i "s@arm-linux-gnueabihf@arm-linux-ohos@g" build/config/compiler/BUILD.gn
-  #         sed -i "s@aarch64-linux-gnu@aarch64-linux-ohos@g" build/config/compiler/BUILD.gn
-  #         sed -i "s@\"-gsimple-template-names\"@@g" build/config/compiler/BUILD.gn
-  #         sed -i "s@strip_absolute_paths_from_debug_symbols = true@strip_absolute_paths_from_debug_symbols = false@g" build/config/compiler/compiler.gni
-  #         sed -i "s@__builtin_assume_aligned((ptr), (alignment))@(ptr)@g" include/v8config.h
-  #         sed -i "s@if (is_ubsan && (v8_current_cpu@if ((v8_current_cpu@g" BUILD.gn
-  #         if [[ "${{ matrix.arch }}" == "arm" || "${{ matrix.arch }}" == "x86" ]];then
-  #           sed -i "s@#error@//#error@g" src/base/ubsan.cc
-  #         fi
-
-  #         echo "---------- Show patch -----------"
-  #         git diff
-
-  #     - name: Build ${{ matrix.arch }}
-  #       run: |
-  #         export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
-  #         which gn
-  #         ./build-oh.sh ${{ matrix.arch }}
-
-  #     - name: Copy to dist folder
-  #       run: |
-  #         ls -l ./out/oh
-  #         echo "---------------------"
-  #         ls -l ./out/oh/obj
-  #         mkdir dist
-  #         cp ./out/oh/d8 ./dist/
-  #         cp ./out/oh/obj/libv8_monolith.a ./dist/
-  #         cp -r ./include ./dist/
-
-  #     - name: Upload artifact
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: v8-oh-${{ matrix.arch }}
-  #         path: ./dist
-
-  # build_openharmony_fat:
-  #   permissions:
-  #     contents: write
-  #   if: github.event_name == 'release'
-  #   name: "openharmony (fat)"
-  #   runs-on: ubuntu-latest
-  #   needs: build_openharmony
-  #   steps:
-  #     - name: Download arm64 artifact
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: v8-oh-arm64
-  #         path: v8-oh-arm64
-
-  #     - name: Download arm artifact
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: v8-oh-arm
-  #         path: v8-oh-arm
-
-  #     - name: Build a fat library
-  #       run: |
-  #         mkdir v8-oh-fat
-  #         cp -r ./v8-oh-arm64 ./v8-oh-fat/arm64-v8a
-  #         cp -r ./v8-oh-arm ./v8-oh-fat/armeabi-v7a
-  #         cp -r ./v8-oh-arm64/include ./v8-oh-fat/
-  #         rm -rf ./v8-oh-fat/arm64-v8a/include
-  #         rm -rf ./v8-oh-fat/armeabi-v7a/include
-
-  #     - name: Pack dist files
-  #       uses: thedoctor0/zip-release@a24011d8d445e4da5935a7e73c1f98e22a439464
-  #       with:
-  #         type: 'zip'
-  #         directory: 'v8-oh-fat'
-  #         path: '.'
-  #         filename: 'v8-oh.zip'
-
-  #     - name: Upload to Release
-  #       uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
-  #       with:
-  #         repo_token: ${{ secrets.GITHUB_TOKEN }}
-  #         file: v8-oh-fat/v8-oh.zip
-  #         asset_name: v8-oh.zip
-  #         tag: ${{ github.ref }}
-
-  build_linux:
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x64]
-
-    name: "linux"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Clone DepotTools
-        run: |
-            cd ..
-            DEPOT_TOOLS_PATH=$(pwd)/depot_tools
-            git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-            cd depot_tools
-            ./ensure_bootstrap
-            echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH" >> $GITHUB_ENV
-            echo "DEPOT_TOOLS_PATH=$DEPOT_TOOLS_PATH"
-
-      - name: Print env
-        run: |
-          echo "${{ env.DEPOT_TOOLS_PATH }}"
-          ls -l ${{ env.DEPOT_TOOLS_PATH }}
-
-      - name: Install gn
-        run: |
-          wget https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/latest -O ./gn.zip
-          unzip gn.zip -d buildtools/linux64/
-
-      - name: Install ninja
-        run: |
-          if ! command -v ninja &> /dev/null; then
-              echo "Ninja not found, installing..."
-              # sudo apt update
-              sudo apt install ninja-build
-          else
-              echo "Ninja is already installed."
-          fi
-          which ninja
-          NINJA_PATH=$(which ninja)
-          CURRENT_DIR=$(pwd)
-          mkdir -p ${CURRENT_DIR}/third_party/ninja
-          ln -s ${NINJA_PATH} ${CURRENT_DIR}/third_party/ninja/ninja
-
-      - name: Install linux sysroot
-        run: |
-          if [[ "${{ matrix.arch }}" == "arm64" || "${{ matrix.arch }}" == "x64" ]];then
-            INSTALL_SYSROOT_ARCH="amd64"
-          else
-            INSTALL_SYSROOT_ARCH="i386"
-          fi
-
-          python3 build/linux/sysroot_scripts/install-sysroot.py --arch=${INSTALL_SYSROOT_ARCH}
-
-      - name: Install builtin clang
-        run: |
-          ./tools/clang/scripts/update.py
-
-      - name: Build ${{ matrix.arch }}
-        run: |
-          export PATH=${{ env.DEPOT_TOOLS_PATH }}:$PATH
-          which gn
-          CURRENT_DIR=$(pwd)
-
-          ./build-linux.sh ${{ matrix.arch }}
-
-      - name: Copy to dist folder
-        run: |
-          ls -l ./out/linux
-          echo "---------------------"
-          ls -l ./out/linux/obj
-          mkdir dist
-          cp ./out/linux/d8 ./dist/
-          cp ./out/linux/obj/libv8_monolith.a ./dist/
-          cp -r ./include ./dist/
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: v8-linux-${{ matrix.arch }}
-          path: ./dist
-
-      - name: Pack dist files
-        if: github.event_name == 'release'
-        uses: thedoctor0/zip-release@a24011d8d445e4da5935a7e73c1f98e22a439464
-        with:
-          type: 'zip'
-          directory: 'dist'
-          path: '.'
-          filename: 'v8-linux.zip'
-
-      - name: Upload to Release
-        if: github.event_name == 'release'
-        uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: dist/v8-linux.zip
-          asset_name: v8-linux.zip
-          tag: ${{ github.ref }}
-
+          path: dist

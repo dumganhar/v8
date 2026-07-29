@@ -5,17 +5,17 @@
 #ifndef V8_HEAP_SPACES_INL_H_
 #define V8_HEAP_SPACES_INL_H_
 
+#include "src/heap/spaces.h"
+// Include the non-inl header before the rest of the headers.
+
 #include "src/base/atomic-utils.h"
 #include "src/common/globals.h"
-#include "src/heap/heap-inl.h"
-#include "src/heap/incremental-marking.h"
-#include "src/heap/large-page.h"
+#include "src/heap/heap.h"
 #include "src/heap/large-spaces.h"
 #include "src/heap/main-allocator-inl.h"
-#include "src/heap/mutable-page-inl.h"
+#include "src/heap/mutable-page-metadata-inl.h"
 #include "src/heap/new-spaces.h"
 #include "src/heap/paged-spaces.h"
-#include "src/heap/spaces.h"
 
 namespace v8 {
 namespace internal {
@@ -31,31 +31,6 @@ PageIteratorImpl<PageType> PageIteratorImpl<PageType>::operator++(int) {
   PageIteratorImpl<PageType> tmp(*this);
   operator++();
   return tmp;
-}
-
-void Space::IncrementExternalBackingStoreBytes(ExternalBackingStoreType type,
-                                               size_t amount) {
-  base::CheckedIncrement(&external_backing_store_bytes_[static_cast<int>(type)],
-                         amount);
-  heap()->IncrementExternalBackingStoreBytes(type, amount);
-}
-
-void Space::DecrementExternalBackingStoreBytes(ExternalBackingStoreType type,
-                                               size_t amount) {
-  base::CheckedDecrement(&external_backing_store_bytes_[static_cast<int>(type)],
-                         amount);
-  heap()->DecrementExternalBackingStoreBytes(type, amount);
-}
-
-void Space::MoveExternalBackingStoreBytes(ExternalBackingStoreType type,
-                                          Space* from, Space* to,
-                                          size_t amount) {
-  if (from == to) return;
-
-  base::CheckedDecrement(
-      &(from->external_backing_store_bytes_[static_cast<int>(type)]), amount);
-  base::CheckedIncrement(
-      &(to->external_backing_store_bytes_[static_cast<int>(type)]), amount);
 }
 
 PageRange::PageRange(PageMetadata* page) : PageRange(page, page->next_page()) {}

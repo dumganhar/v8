@@ -84,13 +84,23 @@ class BaselineCompiler {
   // Immediate value operands.
   uint32_t Uint(int operand_index);
   int32_t Int(int operand_index);
-  uint32_t Index(int operand_index);
+  uint32_t ConstantPoolIndex(int operand_index);
+  uint32_t FeedbackSlot(int operand_index);
+  uint32_t ContextSlot(int operand_index);
+  uint32_t CoverageSlot(int operand_index);
   uint32_t Flag8(int operand_index);
   uint32_t Flag16(int operand_index);
   uint32_t RegisterCount(int operand_index);
-  Tagged<TaggedIndex> IndexAsTagged(int operand_index);
+  Tagged<TaggedIndex> ConstantPoolIndexAsTagged(int operand_index);
+  Tagged<TaggedIndex> FeedbackSlotAsTagged(int operand_index);
+  Tagged<TaggedIndex> ContextSlotAsTagged(int operand_index);
+  Tagged<TaggedIndex> CoverageSlotAsTagged(int operand_index);
   Tagged<TaggedIndex> UintAsTagged(int operand_index);
-  Tagged<Smi> IndexAsSmi(int operand_index);
+  Tagged<Smi> ConstantPoolIndexAsSmi(int operand_index);
+  Tagged<Smi> FeedbackSlotAsSmi(int operand_index);
+  Tagged<Smi> ContextSlotAsSmi(int operand_index);
+  Tagged<Smi> CoverageSlotAsSmi(int operand_index);
+  Tagged<Smi> AbortReasonAsSmi(int operand_index);
   Tagged<Smi> IntAsSmi(int operand_index);
   Tagged<Smi> UintAsSmi(int operand_index);
   Tagged<Smi> Flag8AsSmi(int operand_index);
@@ -118,10 +128,6 @@ class BaselineCompiler {
   void AddPosition();
 
   // Misc. helpers.
-
-  void UpdateMaxCallArgs(int max_call_args) {
-    max_call_args_ = std::max(max_call_args_, max_call_args);
-  }
 
   // Select the root boolean constant based on the jump in the given
   // `jump_func` -- the function should jump to the given label if we want to
@@ -151,7 +157,7 @@ class BaselineCompiler {
 
   // Single bytecode visitors.
 #define DECLARE_VISITOR(name, ...) void Visit##name();
-  BYTECODE_LIST(DECLARE_VISITOR)
+  BYTECODE_LIST(DECLARE_VISITOR, DECLARE_VISITOR)
 #undef DECLARE_VISITOR
 
   // Intrinsic call visitors.
@@ -167,13 +173,11 @@ class BaselineCompiler {
   Handle<SharedFunctionInfo> shared_function_info_;
   Handle<HeapObject> interpreter_data_;
   Handle<BytecodeArray> bytecode_;
+  Zone zone_;
   MacroAssembler masm_;
   BaselineAssembler basm_;
   interpreter::BytecodeArrayIterator iterator_;
   BytecodeOffsetTableBuilder bytecode_offset_table_builder_;
-  Zone zone_;
-
-  int max_call_args_ = 0;
 
   // Mark location as a jump target reachable via indirect branches, required
   // for CFI.

@@ -7,6 +7,7 @@
 
 #include "src/base/bits.h"
 #include "src/base/macros.h"
+#include "src/codegen/register.h"
 #include "src/execution/frame-constants.h"
 #include "src/wasm/baseline/liftoff-assembler-defs.h"
 
@@ -36,15 +37,22 @@ class WasmLiftoffSetupFrameConstants : public TypedFrameConstants {
   static constexpr int kNumberOfSavedFpParamRegs = 8;
   static constexpr int kNumberOfSavedAllParamRegs =
       kNumberOfSavedGpParamRegs + kNumberOfSavedFpParamRegs;
+
+  // The instance is pushed separately from the other saved parameters. It is
+  // the saved register closest to fp at index 0.
   static constexpr int kInstanceSpillOffset =
       TYPED_FRAME_PUSHED_VALUE_OFFSET(0);
+
+  // The parameters are pushed onto the stack using MacroAssembler::MultiPush;
+  // see src/codegen/riscv/macro-assembler-riscv.cc. That means that the last
+  // parameter is pushed first, so it ends second closest to fp at index 1.
   static constexpr int kParameterSpillsOffset[] = {
-      TYPED_FRAME_PUSHED_VALUE_OFFSET(1), TYPED_FRAME_PUSHED_VALUE_OFFSET(2),
-      TYPED_FRAME_PUSHED_VALUE_OFFSET(3), TYPED_FRAME_PUSHED_VALUE_OFFSET(4),
-      TYPED_FRAME_PUSHED_VALUE_OFFSET(5), TYPED_FRAME_PUSHED_VALUE_OFFSET(6)};
+      TYPED_FRAME_PUSHED_VALUE_OFFSET(6), TYPED_FRAME_PUSHED_VALUE_OFFSET(5),
+      TYPED_FRAME_PUSHED_VALUE_OFFSET(4), TYPED_FRAME_PUSHED_VALUE_OFFSET(3),
+      TYPED_FRAME_PUSHED_VALUE_OFFSET(2), TYPED_FRAME_PUSHED_VALUE_OFFSET(1)};
 
   // SP-relative.
-  static constexpr int kWasmInstanceOffset = 2 * kSystemPointerSize;
+  static constexpr int kWasmInstanceDataOffset = 2 * kSystemPointerSize;
   static constexpr int kDeclaredFunctionIndexOffset = 1 * kSystemPointerSize;
   static constexpr int kNativeModuleOffset = 0;
 };

@@ -8,6 +8,7 @@
 #include "src/base/memory.h"
 #include "src/base/platform/memory.h"
 #include "src/codegen/register.h"
+#include "src/common/simd128.h"
 #include "src/execution/frame-constants.h"
 #include "src/utils/boxed-float.h"
 
@@ -31,10 +32,13 @@ class RegisterValues {
   }
 
   Float32 GetFloatRegister(unsigned n) const;
+  Float64 GetDoubleRegister(unsigned n) const;
 
-  Float64 GetDoubleRegister(unsigned n) const {
-    V8_ASSUME(n < arraysize(double_registers_));
-    return double_registers_[n];
+  void SetDoubleRegister(unsigned n, Float64 value);
+
+  Simd128 GetSimd128Register(unsigned n) const {
+    V8_ASSUME(n < arraysize(simd128_registers_));
+    return simd128_registers_[n];
   }
 
   void SetRegister(unsigned n, intptr_t value) {
@@ -42,16 +46,22 @@ class RegisterValues {
     registers_[n] = value;
   }
 
-  void SetDoubleRegister(unsigned n, Float64 value) {
-    V8_ASSUME(n < arraysize(double_registers_));
-    double_registers_[n] = value;
+  void SetSimd128Register(unsigned n, Simd128 value) {
+    V8_ASSUME(n < arraysize(simd128_registers_));
+    simd128_registers_[n] = value;
   }
 
   intptr_t registers_[Register::kNumRegisters];
   // Generated code writes directly into the following array, make sure the
   // element size matches what the machine instructions expect.
-  static_assert(sizeof(Float64) == kDoubleSize, "size mismatch");
+  static_assert(sizeof(Simd128) == kSimd128Size, "size mismatch");
+
+#if defined(V8_TARGET_ARCH_RISCV64) || defined(V8_TARGET_ARCH_RISCV32)
   Float64 double_registers_[DoubleRegister::kNumRegisters];
+  Simd128 simd128_registers_[Simd128Register::kNumRegisters];
+#else
+  Simd128 simd128_registers_[Simd128Register::kNumRegisters];
+#endif
 };
 
 class FrameDescription {
@@ -107,9 +117,17 @@ class FrameDescription {
 
   // Same as SetFrameSlot but also supports the offset to be unaligned (4 Byte
   // aligned) as liftoff doesn't align frame slots if they aren't references.
-  void SetLiftoffFrameSlot64(unsigned offset, intptr_t value) {
+  void SetLiftoffFrameSlot64(unsigned offset, int64_t value) {
     base::WriteUnalignedValue(
         reinterpret_cast<char*>(GetFrameSlotPointer(offset)), value);
+  }
+
+  void SetLiftoffFrameSlotPointer(unsigned offset, intptr_t value) {
+    if constexpr (Is64()) {
+      SetLiftoffFrameSlot64(offset, value);
+    } else {
+      SetLiftoffFrameSlot32(offset, value);
+    }
   }
 
   void SetCallerPc(unsigned offset, intptr_t value);
@@ -126,12 +144,20 @@ class FrameDescription {
     return register_values_.GetDoubleRegister(n);
   }
 
+  Float32 GetFloatRegister(unsigned n) const {
+    return register_values_.GetFloatRegister(n);
+  }
+
   void SetRegister(unsigned n, intptr_t value) {
     register_values_.SetRegister(n, value);
   }
 
   void SetDoubleRegister(unsigned n, Float64 value) {
     register_values_.SetDoubleRegister(n, value);
+  }
+
+  void SetSimd128Register(unsigned n, Simd128 value) {
+    register_values_.SetSimd128Register(n, value);
   }
 
   intptr_t GetTop() const { return top_; }
@@ -141,14 +167,18 @@ class FrameDescription {
   void SetPc(intptr_t pc);
 
   intptr_t GetFp() const { return fp_; }
-  void SetFp(intptr_t fp) { fp_ = fp; }
+  void SetFp(intptr_t frame_pointer) { fp_ = frame_pointer; }
 
   intptr_t GetConstantPool() const { return constant_pool_; }
   void SetConstantPool(intptr_t constant_pool) {
     constant_pool_ = constant_pool;
   }
 
+  bool HasCallerPc() const { return caller_pc_ != 0; }
+  intptr_t GetCallerPc() const { return caller_pc_; }
+
   void SetContinuation(intptr_t pc) { continuation_ = pc; }
+  intptr_t GetContinuation() const { return continuation_; }
 
   // Argument count, including receiver.
   int parameter_count() { return parameter_count_; }
@@ -157,8 +187,14 @@ class FrameDescription {
     return offsetof(FrameDescription, register_values_.registers_);
   }
 
+#if defined(V8_TARGET_ARCH_RISCV64) || defined(V8_TARGET_ARCH_RISCV32)
   static constexpr int double_registers_offset() {
     return offsetof(FrameDescription, register_values_.double_registers_);
+  }
+#endif
+
+  static constexpr int simd128_registers_offset() {
+    return offsetof(FrameDescription, register_values_.simd128_registers_);
   }
 
   static int frame_size_offset() {
@@ -226,6 +262,7 @@ class FrameDescription {
   intptr_t pc_;
   intptr_t fp_;
   intptr_t constant_pool_;
+  intptr_t caller_pc_ = 0;
 
   Isolate* isolate_;
 

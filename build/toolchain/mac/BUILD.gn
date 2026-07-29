@@ -23,7 +23,7 @@ template("mac_toolchain") {
       current_os = "mac"
 
       if (target_os == "ios") {
-        # Use LLD for the host part of a chrome/ios build.
+        # Standalone builds use Xcode's libtool instead of Chromium's llvm-ar.
         use_lld = false
 
         # Override `is_component_build` for the host toolchain.
@@ -52,12 +52,6 @@ template("mac_toolchain") {
   }
 }
 
-mac_toolchain("clang_arm") {
-  toolchain_args = {
-    current_cpu = "arm"
-  }
-}
-
 mac_toolchain("clang_arm64") {
   toolchain_args = {
     current_cpu = "arm64"
@@ -67,26 +61,6 @@ mac_toolchain("clang_arm64") {
 mac_toolchain("clang_x64") {
   toolchain_args = {
     current_cpu = "x64"
-  }
-}
-
-mac_toolchain("clang_x86") {
-  toolchain_args = {
-    current_cpu = "x86"
-  }
-}
-
-mac_toolchain("clang_x86_v8_arm") {
-  toolchain_args = {
-    current_cpu = "x86"
-    v8_current_cpu = "arm"
-  }
-}
-
-mac_toolchain("clang_x86_v8_mipsel") {
-  toolchain_args = {
-    current_cpu = "x86"
-    v8_current_cpu = "mipsel"
   }
 }
 

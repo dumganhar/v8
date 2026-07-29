@@ -57,6 +57,7 @@
 #include "src/codegen/constants-arch.h"
 #include "src/codegen/macro-assembler.h"
 #include "src/diagnostics/disasm.h"
+#include "src/heap/base/stack.h"
 #include "src/heap/combined-heap.h"
 #include "src/runtime/runtime-utils.h"
 #include "src/utils/ostreams.h"
@@ -723,7 +724,7 @@ struct type_sew_t<128> {
   CHECK(rvv_vsew() >= E8 && rvv_vsew() <= E64);                 \
   for (reg_t i = rvv_vstart(); i < rvv_vl(); ++i) {             \
     RVV_VI_LOOP_MASK_SKIP();                                    \
-    uint64_t mmask = uint64_t(1) << mpos;                       \
+    uint64_t mmask = static_cast<uint64_t>(1) << mpos;          \
     uint64_t& vdi = Rvvelt<uint64_t>(rvv_vd_reg(), midx, true); \
     uint64_t res = 0;
 
@@ -1113,7 +1114,7 @@ struct type_sew_t<128> {
 #define RVV_VI_VFP_LOOP_CMP_BASE                                \
   for (reg_t i = rvv_vstart(); i < rvv_vl(); ++i) {             \
     RVV_VI_LOOP_MASK_SKIP();                                    \
-    uint64_t mmask = uint64_t(1) << mpos;                       \
+    uint64_t mmask = static_cast<uint64_t>(1) << mpos;          \
     uint64_t& vdi = Rvvelt<uint64_t>(rvv_vd_reg(), midx, true); \
     uint64_t res = 0;
 
@@ -1278,16 +1279,15 @@ struct type_sew_t<128> {
   const reg_t nf = rvv_nf() + 1;                                               \
   const reg_t vl = is_mask_ldst ? ((rvv_vl() + 7) / 8) : rvv_vl();             \
   const int64_t baseAddr = rs1();                                              \
+  if (!ProbeMemory(baseAddr, vl * sizeof(elt_width##_t))) {                    \
+    return true;                                                               \
+  }                                                                            \
   for (reg_t i = 0; i < vl; ++i) {                                             \
     VI_ELEMENT_SKIP(i);                                                        \
     VI_STRIP(i);                                                               \
     set_rvv_vstart(i);                                                         \
     for (reg_t fn = 0; fn < nf; ++fn) {                                        \
       auto addr = baseAddr + (stride) + (offset) * sizeof(elt_width##_t);      \
-      if (!ProbeMemory(addr, sizeof(elt_width##_t))) {                         \
-        set_rvv_vstart(0);                                                     \
-        return true;                                                           \
-      }                                                                        \
       auto val = ReadMem<elt_width##_t>(addr, instr_.instr());                 \
       type_sew_t<sizeof(elt_width##_t) * 8>::type& vd =                        \
           Rvvelt<type_sew_t<sizeof(elt_width##_t) * 8>::type>(rvv_vd_reg(),    \
@@ -1297,29 +1297,26 @@ struct type_sew_t<128> {
   }                                                                            \
   set_rvv_vstart(0);                                                           \
   if (v8_flags.trace_sim) {                                                    \
-    __int128_t value = Vregister_[rvv_vd_reg()];                               \
-    SNPrintF(trace_buf_,                                                       \
-             "%016" PRIx64 "%016" PRIx64 "    (%" PRId64 ")    vlen:%" PRId64  \
-             " <-- [addr: %" REGIx_FORMAT "]",                                 \
-             *(reinterpret_cast<int64_t*>(&value) + 1),                        \
-             *reinterpret_cast<int64_t*>(&value), icount_, rvv_vlen(),         \
-             (sreg_t)(get_register(rs1_reg())));                               \
+    int trace_offset = snprintf_vreg(rvv_vd_reg());                            \
+    SNPrintF(trace_buf_.SubVector(trace_offset, trace_buf_.length()),          \
+             "    (%" PRId64 ")    vlen:%" PRId64 " <-- [addr: %" REGIx_FORMAT \
+             "]",                                                              \
+             icount_, rvv_vlen(), (sreg_t)(get_register(rs1_reg())));          \
   }
 
 #define RVV_VI_ST(stride, offset, elt_width, is_mask_ldst)                     \
   const reg_t nf = rvv_nf() + 1;                                               \
   const reg_t vl = is_mask_ldst ? ((rvv_vl() + 7) / 8) : rvv_vl();             \
   const int64_t baseAddr = rs1();                                              \
+  if (!ProbeMemory(baseAddr, vl * sizeof(elt_width##_t))) {                    \
+    return true;                                                               \
+  }                                                                            \
   for (reg_t i = 0; i < vl; ++i) {                                             \
     VI_STRIP(i)                                                                \
     VI_ELEMENT_SKIP(i);                                                        \
     set_rvv_vstart(i);                                                         \
     for (reg_t fn = 0; fn < nf; ++fn) {                                        \
       auto addr = baseAddr + (stride) + (offset) * sizeof(elt_width##_t);      \
-      if (!ProbeMemory(addr, sizeof(elt_width##_t))) {                         \
-        set_rvv_vstart(0);                                                     \
-        return true;                                                           \
-      }                                                                        \
       elt_width##_t vs1 = Rvvelt<type_sew_t<sizeof(elt_width##_t) * 8>::type>( \
           rvv_vs3_reg(), vreg_inx);                                            \
       WriteMem(addr, vs1, instr_.instr());                                     \
@@ -1327,13 +1324,11 @@ struct type_sew_t<128> {
   }                                                                            \
   set_rvv_vstart(0);                                                           \
   if (v8_flags.trace_sim) {                                                    \
-    __int128_t value = Vregister_[rvv_vd_reg()];                               \
-    SNPrintF(trace_buf_,                                                       \
-             "%016" PRIx64 "%016" PRIx64 "    (%" PRId64 ")    vlen:%" PRId64  \
-             " --> [addr: %" REGIx_FORMAT "]",                                 \
-             *(reinterpret_cast<int64_t*>(&value) + 1),                        \
-             *reinterpret_cast<int64_t*>(&value), icount_, rvv_vlen(),         \
-             (sreg_t)(get_register(rs1_reg())));                               \
+    int trace_offset = snprintf_vreg(rvv_vd_reg());                            \
+    SNPrintF(trace_buf_.SubVector(trace_offset, trace_buf_.length()),          \
+             "    (%" PRId64 ")    vlen:%" PRId64 " --> [addr: %" REGIx_FORMAT \
+             "]",                                                              \
+             icount_, rvv_vlen(), (sreg_t)(get_register(rs1_reg())));          \
   }
 
 #define VI_VFP_LOOP_SCALE_BASE                      \
@@ -1621,7 +1616,7 @@ class RiscvDebugger {
   float GetFPURegisterValueFloat(int regnum);
   double GetFPURegisterValueDouble(int regnum);
 #ifdef CAN_USE_RVV_INSTRUCTIONS
-  __int128_t GetVRegisterValue(int regnum);
+  VRegisterValue GetVRegisterValue(int regnum);
 #endif
   bool GetValue(const char* desc, sreg_t* value);
 };
@@ -1669,12 +1664,8 @@ double RiscvDebugger::GetFPURegisterValueDouble(int regnum) {
 }
 
 #ifdef CAN_USE_RVV_INSTRUCTIONS
-__int128_t RiscvDebugger::GetVRegisterValue(int regnum) {
-  if (regnum == kNumVRegisters) {
-    return sim_->get_pc();
-  } else {
-    return sim_->get_vregister(regnum);
-  }
+VRegisterValue RiscvDebugger::GetVRegisterValue(int regnum) {
+  return sim_->get_vregister(regnum);
 }
 #endif
 
@@ -1863,10 +1854,15 @@ void RiscvDebugger::Debug() {
                      FPURegisters::Name(fpuregnum), fvalue, dvalue);
 #ifdef CAN_USE_RVV_INSTRUCTIONS
             } else if (vregnum != kInvalidVRegister) {
-              __int128_t v = GetVRegisterValue(vregnum);
-              PrintF("\t%s:0x%016" PRIx64 "%016" PRIx64 "\n",
-                     VRegisters::Name(vregnum), (uint64_t)(v >> 64),
-                     (uint64_t)v);
+              VRegisterValue value = GetVRegisterValue(vregnum);
+              PrintF("\t%s:0x", VRegisters::Name(vregnum));
+              for (int i = VRegisterValue::kChunks - 1; i >= 0; i--) {
+                const char* format = i != VRegisterValue::kChunks - 1
+                                         ? "_%016" PRIx64
+                                         : "%016" PRIx64;
+                PrintF(format, value.chunks[i]);
+              }
+              PrintF("\n");
 #endif
             } else {
               PrintF("%s unrecognized\n", arg1);
@@ -1949,18 +1945,16 @@ void RiscvDebugger::Debug() {
           PrintF("  0x%012" PRIxPTR " :  0x%016" REGIx_FORMAT
                  "  %14" REGId_FORMAT " ",
                  reinterpret_cast<intptr_t>(cur), *cur, *cur);
-          Tagged<Object> obj(*cur);
-          Heap* current_heap = sim_->isolate_->heap();
-          if (IsSmi(obj) ||
-              IsValidHeapObject(current_heap, HeapObject::cast(obj))) {
-            PrintF(" (");
-            if (IsSmi(obj)) {
-              PrintF("smi %d", Smi::ToInt(obj));
-            } else {
-              ShortPrint(obj);
-            }
-            PrintF(")");
-          }
+          // Tagged<Object> obj(*cur);
+          // Heap* current_heap = sim_->isolate_->heap();
+          // if (IsSmi(obj) ||
+          //     IsValidHeapObject(current_heap, Cast<HeapObject>(obj))) {
+          //   PrintF(" (");
+          //   if (IsSmi(obj)) {
+          //     PrintF("smi %d", Smi::ToInt(obj));
+          //   }
+          //   PrintF(")");
+          // }
           PrintF("\n");
           cur++;
         }
@@ -2386,7 +2380,12 @@ void Simulator::CheckICache(base::CustomMatcherHashMap* i_cache,
 Simulator::Simulator(Isolate* isolate) : isolate_(isolate), builtins_(isolate) {
   // Set up simulator support first. Some of this information is needed to
   // setup the architecture state.
-  stack_ = reinterpret_cast<uint8_t*>(base::Malloc(AllocatedStackSize()));
+  // Allocate and setup the simulator stack.
+  size_t stack_size = AllocatedStackSize();
+
+  stack_ = reinterpret_cast<uintptr_t>(new uint8_t[stack_size]());
+  stack_limit_ = stack_ + kStackProtectionSize;
+
   pc_modified_ = false;
   icount_ = 0;
   break_count_ = 0;
@@ -2410,7 +2409,7 @@ Simulator::Simulator(Isolate* isolate) : isolate_(isolate), builtins_(isolate) {
   // The sp is initialized to point to the bottom (high address) of the
   // allocated stack area. To be safe in potential stack underflows we leave
   // some buffer below.
-  registers_[sp] = reinterpret_cast<intptr_t>(stack_) + UsableStackSize();
+  registers_[sp] = StackBase();
   // The ra and pc are initialized to a known bad value that will cause an
   // access violation if the simulator ever tries to execute it.
   registers_[pc] = bad_ra;
@@ -2418,6 +2417,9 @@ Simulator::Simulator(Isolate* isolate) : isolate_(isolate), builtins_(isolate) {
 
   last_debugger_input_ = nullptr;
 #ifdef CAN_USE_RVV_INSTRUCTIONS
+  for (int i = 0; i < kNumVRegisters; ++i) {
+    Vregister_[i] = {0};
+  }
   vxrm_ = 0;
   vstart_ = 0;
   vxsat_ = 0;
@@ -2427,11 +2429,16 @@ Simulator::Simulator(Isolate* isolate) : isolate_(isolate), builtins_(isolate) {
   vl_ = 0;
   vlenb_ = 0;
 #endif
+
+  global_monitor_ = GlobalMonitor::Get();
+  global_monitor_->PrependLinkedAddress(&global_monitor_thread_);
+  // Enabling deadlock detection while simulating is too slow.
+  SetMutexDeadlockDetectionMode(absl::OnDeadlockCycle::kIgnore);
 }
 
 Simulator::~Simulator() {
-  GlobalMonitor::Get()->RemoveLinkedAddress(&global_monitor_thread_);
-  free(stack_);
+  global_monitor_->RemoveLinkedAddress(&global_monitor_thread_);
+  delete[] reinterpret_cast<uint8_t*>(stack_);
 }
 
 // Get the active Simulator for the current thread.
@@ -2567,7 +2574,6 @@ Float32 Simulator::get_fpu_register_Float32(int fpureg,
                                             bool check_nanbox) const {
   DCHECK((fpureg >= 0) && (fpureg < kNumFPURegisters));
   if (check_nanbox && !is_boxed_float(FPUregisters_[fpureg])) {
-    std::cout << std::hex << FPUregisters_[fpureg] << std::endl;
     return Float32::FromBits(0x7fc00000);
   }
   return Float32::FromBits(FPUregisters_[fpureg] & 0xFFFF'FFFF);
@@ -2584,7 +2590,7 @@ Float64 Simulator::get_fpu_register_Float64(int fpureg) const {
 }
 
 #ifdef CAN_USE_RVV_INSTRUCTIONS
-__int128_t Simulator::get_vregister(int vreg) const {
+VRegisterValue Simulator::get_vregister(int vreg) const {
   DCHECK((vreg >= 0) && (vreg < kNumVRegisters));
   return Vregister_[vreg];
 }
@@ -2822,7 +2828,7 @@ void Simulator::TraceRegWr(T value, TraceType t) {
 template <typename T>
 void Simulator::TraceMemRd(sreg_t addr, T value, sreg_t reg_value) {
   if (v8_flags.trace_sim) {
-    if (std::is_integral<T>::value) {
+    if (std::is_integral_v<T>) {
       switch (sizeof(T)) {
         case 1:
           SNPrintF(trace_buf_,
@@ -2855,12 +2861,12 @@ void Simulator::TraceMemRd(sreg_t addr, T value, sreg_t reg_value) {
         default:
           UNREACHABLE();
       }
-    } else if (std::is_same<float, T>::value) {
+    } else if (std::is_same_v<float, T>) {
       SNPrintF(trace_buf_,
                "%016" REGIx_FORMAT "    (%" PRId64
                ")    flt:%e <-- [addr: %" REGIx_FORMAT "]",
                reg_value, icount_, static_cast<float>(value), addr);
-    } else if (std::is_same<double, T>::value) {
+    } else if (std::is_same_v<double, T>) {
       SNPrintF(trace_buf_,
                "%016" REGIx_FORMAT "    (%" PRId64
                ")    dbl:%e <-- [addr: %" REGIx_FORMAT "]",
@@ -2918,7 +2924,7 @@ void Simulator::TraceMemWr(sreg_t addr, T value) {
                  static_cast<uint16_t>(value), addr);
         break;
       case 4:
-        if (std::is_integral<T>::value) {
+        if (std::is_integral_v<T>) {
           SNPrintF(trace_buf_,
                    "                    (%" PRIu64 ")    int32:%" PRId32
                    " uint32:%" PRIu32 " --> [addr: %" REGIx_FORMAT "]",
@@ -2933,7 +2939,7 @@ void Simulator::TraceMemWr(sreg_t addr, T value) {
         }
         break;
       case 8:
-        if (std::is_integral<T>::value) {
+        if (std::is_integral_v<T>) {
           SNPrintF(trace_buf_,
                    "                    (%" PRIu64 ")    int64:%" PRId64
                    " uint64:%" PRIu64 " --> [addr: %" REGIx_FORMAT "]",
@@ -3021,7 +3027,7 @@ void Simulator::WriteMem(sreg_t addr, T value, Instruction* instr) {
   }
 #endif
   T* ptr = reinterpret_cast<T*>(addr);
-  if (!std::is_same<double, T>::value) {
+  if (!std::is_same_v<double, T>) {
     TraceMemWr(addr, value);
   } else {
     TraceMemWrDouble(addr, value);
@@ -3083,14 +3089,36 @@ uintptr_t Simulator::StackLimit(uintptr_t c_limit) const {
 
   // Otherwise the limit is the JS stack. Leave a safety margin to prevent
   // overrunning the stack when pushing values.
-  return reinterpret_cast<uintptr_t>(stack_) + kStackProtectionSize;
+  return stack_limit_ + kAdditionalStackMargin;
 }
 
-base::Vector<uint8_t> Simulator::GetCurrentStackView() const {
+uintptr_t Simulator::StackBase() const { return stack_ + UsableStackSize(); }
+
+base::Vector<uint8_t> Simulator::GetCentralStackView() const {
   // We do not add an additional safety margin as above in
-  // Simulator::StackLimit, as this is currently only used in wasm::StackMemory,
-  // which adds its own margin.
-  return base::VectorOf(stack_, UsableStackSize());
+  // Simulator::StackLimit, as users of this method are expected to add their
+  // own margin.
+  return base::VectorOf(
+      reinterpret_cast<uint8_t*>(stack_ + kStackProtectionSize),
+      UsableStackSize());
+}
+
+// We touch the stack, which may or may not have been initialized properly. Msan
+// reports here are not interesting.
+DISABLE_MSAN void Simulator::IterateRegistersAndStack(
+    ::heap::base::StackVisitor* visitor) {
+  for (int i = 0; i < kNumSimuRegisters; ++i) {
+    visitor->VisitPointer(reinterpret_cast<const void*>(get_register(i)));
+  }
+  for (const void* const* current =
+           reinterpret_cast<const void* const*>(get_sp());
+       current < reinterpret_cast<const void* const*>(StackBase()); ++current) {
+    const void* address = *current;
+    if (address == nullptr) {
+      continue;
+    }
+    visitor->VisitPointer(address);
+  }
 }
 
 // Unsupported instructions use Format to print an error and stop execution.
@@ -3121,6 +3149,7 @@ using SimulatorRuntimeCompareCall = int64_t (*)(double darg0, double darg1);
 using SimulatorRuntimeFPFPCall = double (*)(double darg0, double darg1);
 using SimulatorRuntimeFPCall = double (*)(double darg0);
 using SimulatorRuntimeFPIntCall = double (*)(double darg0, int32_t arg0);
+using SimulatorRuntimeIntFPCall = int32_t (*)(double darg0);
 
 // This signature supports direct call in to API function native callback
 // (refer to InvocationCallback in v8.h).
@@ -3134,6 +3163,124 @@ using SimulatorRuntimeDirectGetterCall = void (*)(sreg_t arg0, sreg_t arg1);
 using SimulatorRuntimeFPTaggedCall = double (*)(int64_t arg0, int64_t arg1,
                                                 int64_t arg2, int64_t arg3);
 
+#ifdef V8_TARGET_ARCH_RISCV64
+using MixedRuntimeCall_0 = AnyCType (*)();
+#define BRACKETS(ident, N) ident[N]
+#define REP_0(expr, FMT)
+#define REP_1(expr, FMT) FMT(expr, 0)
+#define REP_2(expr, FMT) REP_1(expr, FMT), FMT(expr, 1)
+#define REP_3(expr, FMT) REP_2(expr, FMT), FMT(expr, 2)
+#define REP_4(expr, FMT) REP_3(expr, FMT), FMT(expr, 3)
+#define REP_5(expr, FMT) REP_4(expr, FMT), FMT(expr, 4)
+#define REP_6(expr, FMT) REP_5(expr, FMT), FMT(expr, 5)
+#define REP_7(expr, FMT) REP_6(expr, FMT), FMT(expr, 6)
+#define REP_8(expr, FMT) REP_7(expr, FMT), FMT(expr, 7)
+#define REP_9(expr, FMT) REP_8(expr, FMT), FMT(expr, 8)
+#define REP_10(expr, FMT) REP_9(expr, FMT), FMT(expr, 9)
+#define REP_11(expr, FMT) REP_10(expr, FMT), FMT(expr, 10)
+#define REP_12(expr, FMT) REP_11(expr, FMT), FMT(expr, 11)
+#define REP_13(expr, FMT) REP_12(expr, FMT), FMT(expr, 12)
+#define REP_14(expr, FMT) REP_13(expr, FMT), FMT(expr, 13)
+#define REP_15(expr, FMT) REP_14(expr, FMT), FMT(expr, 14)
+#define REP_16(expr, FMT) REP_15(expr, FMT), FMT(expr, 15)
+#define REP_17(expr, FMT) REP_16(expr, FMT), FMT(expr, 16)
+#define REP_18(expr, FMT) REP_17(expr, FMT), FMT(expr, 17)
+#define REP_19(expr, FMT) REP_18(expr, FMT), FMT(expr, 18)
+#define REP_20(expr, FMT) REP_19(expr, FMT), FMT(expr, 19)
+#define GEN_MAX_PARAM_COUNT(V) \
+  V(0)                         \
+  V(1)                         \
+  V(2)                         \
+  V(3)                         \
+  V(4)                         \
+  V(5)                         \
+  V(6)                         \
+  V(7)                         \
+  V(8)                         \
+  V(9)                         \
+  V(10)                        \
+  V(11)                        \
+  V(12)                        \
+  V(13)                        \
+  V(14)                        \
+  V(15)                        \
+  V(16)                        \
+  V(17)                        \
+  V(18)                        \
+  V(19)                        \
+  V(20)
+#define MIXED_RUNTIME_CALL(N) \
+  using MixedRuntimeCall_##N = AnyCType (*)(REP_##N(AnyCType arg, CONCAT));
+GEN_MAX_PARAM_COUNT(MIXED_RUNTIME_CALL)
+#undef MIXED_RUNTIME_CALL
+#define CALL_ARGS(N) REP_##N(args, BRACKETS)
+#define CALL_TARGET_VARARG(N)                                   \
+  if (signature.ParameterCount() == N) { /* NOLINT */           \
+    MixedRuntimeCall_##N target =                               \
+        reinterpret_cast<MixedRuntimeCall_##N>(target_address); \
+    result = target(CALL_ARGS(N));                              \
+  } else /* NOLINT */
+#define PARAM_REGISTERS a0, a1, a2, a3, a4, a5, a6, a7
+#define RETURN_REGISTER a0
+#define FP_PARAM_REGISTERS fa0, fa1, fa2, fa3, fa4, fa5, fa6, fa7
+#define FP_RETURN_REGISTER fa0
+void Simulator::CallAnyCTypeFunction(Address target_address,
+                                     const EncodedCSignature& signature) {
+  const int64_t* stack_pointer = reinterpret_cast<int64_t*>(get_register(sp));
+  const double* double_stack_pointer =
+      reinterpret_cast<double*>(get_register(sp));
+  const Register kParamRegisters[] = {PARAM_REGISTERS};
+  const FPURegister kFPParamRegisters[] = {FP_PARAM_REGISTERS};
+  CHECK_LE(signature.ParameterCount(), kMaxCParameters);
+  static_assert(sizeof(AnyCType) == 8, "AnyCType is assumed to be 64-bit.");
+  AnyCType args[kMaxCParameters];
+  int num_gp_params = 0, num_fp_params = 0, num_stack_params = 0;
+  for (int i = 0; i < signature.ParameterCount(); ++i) {
+    if (signature.IsFloat(i)) {
+      if (num_fp_params < 8) {
+        args[i].double_value =
+            get_fpu_register_double(kFPParamRegisters[num_fp_params++]);
+      } else {
+        args[i].double_value = double_stack_pointer[num_stack_params++];
+      }
+    } else {
+      if (num_gp_params < 8) {
+        args[i].int64_value = get_register(kParamRegisters[num_gp_params++]);
+      } else {
+        args[i].int64_value = stack_pointer[num_stack_params++];
+      }
+    }
+  }
+  AnyCType result;
+  GEN_MAX_PARAM_COUNT(CALL_TARGET_VARARG)
+  /* else */ {
+    UNREACHABLE();
+  }
+  static_assert(20 == kMaxCParameters,
+                "If you've changed kMaxCParameters, please change the "
+                "GEN_MAX_PARAM_COUNT macro.");
+  if (v8_flags.trace_sim) {
+    printf("CallAnyCTypeFunction end result \n");
+  }
+#undef CALL_TARGET_VARARG
+#undef CALL_ARGS
+#undef GEN_MAX_PARAM_COUNT
+  if (signature.IsReturnFloat()) {
+    if (signature.IsReturnFloat64()) {
+      set_fpu_register_double(FP_RETURN_REGISTER, result.double_value);
+    } else {
+      set_fpu_register_float(FP_RETURN_REGISTER, result.float_value);
+    }
+  } else {
+    set_register(RETURN_REGISTER, result.int64_value);
+  }
+}
+#undef PARAM_REGISTERS
+#undef RETURN_REGISTER
+#undef FP_PARAM_REGISTERS
+#undef FP_RETURN_REGISTER
+#endif  // V8_TARGET_ARCH_RISCV64
+
 // Software interrupt instructions are used by the simulator to call into the
 // C-based V8 runtime. They are also used for debugging with simulator.
 void Simulator::SoftwareInterrupt() {
@@ -3144,6 +3291,26 @@ void Simulator::SoftwareInterrupt() {
   // We first check if we met a call_rt_redirected.
   if (instr_.InstructionBits() == rtCallRedirInstr) {  // ECALL
     Redirection* redirection = Redirection::FromInstruction(instr_.instr());
+
+    // This is dodgy but it works because the C entry stubs are never moved.
+    int64_t saved_ra = get_register(ra);
+    intptr_t external =
+        reinterpret_cast<intptr_t>(redirection->external_function());
+#ifdef V8_TARGET_ARCH_RISCV64
+    Address func_addr =
+        reinterpret_cast<Address>(redirection->external_function());
+    SimulatorData* simulator_data = isolate_->simulator_data();
+    DCHECK_NOT_NULL(simulator_data);
+    const EncodedCSignature& signature =
+        simulator_data->GetSignatureForTarget(func_addr);
+    if (signature.IsValid()) {
+      CHECK_EQ(redirection->type(), ExternalReference::FAST_C_CALL);
+      CallAnyCTypeFunction(external, signature);
+      set_register(ra, saved_ra);
+      set_pc(get_register(ra));
+      return;
+    }
+#endif
 
     sreg_t* stack_pointer = reinterpret_cast<sreg_t*>(get_register(sp));
 
@@ -3173,16 +3340,10 @@ void Simulator::SoftwareInterrupt() {
         (redirection->type() == ExternalReference::BUILTIN_FP_FP_CALL) ||
         (redirection->type() == ExternalReference::BUILTIN_COMPARE_CALL) ||
         (redirection->type() == ExternalReference::BUILTIN_FP_CALL) ||
-        (redirection->type() == ExternalReference::BUILTIN_FP_INT_CALL);
-
-    // This is dodgy but it works because the C entry stubs are never moved.
-    // See comment in codegen-arm.cc and bug 1242173.
-    sreg_t saved_ra = get_register(ra);
+        (redirection->type() == ExternalReference::BUILTIN_FP_INT_CALL) ||
+        (redirection->type() == ExternalReference::BUILTIN_INT_FP_CALL);
 
     sreg_t pc = get_pc();
-
-    intptr_t external =
-        reinterpret_cast<intptr_t>(redirection->external_function());
 
     if (fp_call) {
       double dval0, dval1;  // one or two double parameters
@@ -3197,21 +3358,31 @@ void Simulator::SoftwareInterrupt() {
           case ExternalReference::BUILTIN_FP_FP_CALL:
           case ExternalReference::BUILTIN_COMPARE_CALL:
             PrintF("Call to host function %s at %p with args %f, %f",
-                   ExternalReferenceTable::NameOfIsolateIndependentAddress(pc),
+                   ExternalReferenceTable::NameOfIsolateIndependentAddress(
+                       pc, IsolateGroup::current()->external_ref_table()),
                    reinterpret_cast<void*>(FUNCTION_ADDR(generic_target)),
                    dval0, dval1);
             break;
           case ExternalReference::BUILTIN_FP_CALL:
             PrintF("Call to host function %s at %p with arg %f",
-                   ExternalReferenceTable::NameOfIsolateIndependentAddress(pc),
+                   ExternalReferenceTable::NameOfIsolateIndependentAddress(
+                       pc, IsolateGroup::current()->external_ref_table()),
                    reinterpret_cast<void*>(FUNCTION_ADDR(generic_target)),
                    dval0);
             break;
           case ExternalReference::BUILTIN_FP_INT_CALL:
             PrintF("Call to host function %s at %p with args %f, %d",
-                   ExternalReferenceTable::NameOfIsolateIndependentAddress(pc),
+                   ExternalReferenceTable::NameOfIsolateIndependentAddress(
+                       pc, IsolateGroup::current()->external_ref_table()),
                    reinterpret_cast<void*>(FUNCTION_ADDR(generic_target)),
                    dval0, ival);
+            break;
+          case ExternalReference::BUILTIN_INT_FP_CALL:
+            PrintF("Call to host function  %s at %p with args %f",
+                   ExternalReferenceTable::NameOfIsolateIndependentAddress(
+                       pc, IsolateGroup::current()->external_ref_table()),
+                   reinterpret_cast<void*>(FUNCTION_ADDR(generic_target)),
+                   dval0);
             break;
           default:
             UNREACHABLE();
@@ -3247,12 +3418,20 @@ void Simulator::SoftwareInterrupt() {
           SetFpResult(dresult);
           break;
         }
+        case ExternalReference::BUILTIN_INT_FP_CALL: {
+          SimulatorRuntimeIntFPCall target =
+              reinterpret_cast<SimulatorRuntimeIntFPCall>(external);
+          iresult = target(dval0);
+          set_register(a0, static_cast<int64_t>(iresult));
+          break;
+        }
         default:
           UNREACHABLE();
       }
       if (v8_flags.trace_sim) {
         switch (redirection->type()) {
           case ExternalReference::BUILTIN_COMPARE_CALL:
+          case ExternalReference::BUILTIN_INT_FP_CALL:
             PrintF("Returned %08x\n", static_cast<int32_t>(iresult));
             break;
           case ExternalReference::BUILTIN_FP_FP_CALL:
@@ -3283,7 +3462,8 @@ void Simulator::SoftwareInterrupt() {
       // void f(v8::FunctionCallbackInfo&)
       if (v8_flags.trace_sim) {
         PrintF("Call to host function %s at %p args %08" REGIx_FORMAT " \n",
-               ExternalReferenceTable::NameOfIsolateIndependentAddress(pc),
+               ExternalReferenceTable::NameOfIsolateIndependentAddress(
+                   pc, IsolateGroup::current()->external_ref_table()),
                reinterpret_cast<void*>(external), arg0);
       }
       SimulatorRuntimeDirectApiCall target =
@@ -3302,20 +3482,24 @@ void Simulator::SoftwareInterrupt() {
           reinterpret_cast<SimulatorRuntimeDirectGetterCall>(external);
       target(arg0, arg1);
     } else {
-      DCHECK(
-          redirection->type() == ExternalReference::BUILTIN_CALL ||
-          redirection->type() == ExternalReference::BUILTIN_CALL_PAIR ||
-          // FAST_C_CALL is temporarily handled here as well, because we lack
-          // proper support for direct C calls with FP params in the simulator.
-          // The generic BUILTIN_CALL path assumes all parameters are passed in
-          // the GP registers, thus supporting calling the slow callback without
-          // crashing. The reason for that is that in the mjsunit tests we check
-          // the `fast_c_api.supports_fp_params` (which is false on
-          // non-simulator builds for arm/arm64), thus we expect that the slow
-          // path will be called. And since the slow path passes the arguments
-          // as a `const FunctionCallbackInfo<Value>&` (which is a GP argument),
-          // the call is made correctly.
-          redirection->type() == ExternalReference::FAST_C_CALL);
+#ifdef V8_TARGET_ARCH_RISCV64
+      DCHECK(redirection->type() == ExternalReference::BUILTIN_CALL ||
+             redirection->type() == ExternalReference::BUILTIN_CALL_PAIR);
+#else   // V8_TARGET_ARCH_RISCV32
+        //  FAST_C_CALL is temporarily handled here as well, because we lack
+        //  proper support for direct C calls with FP params in the simulator.
+        //  The generic BUILTIN_CALL path assumes all parameters are passed in
+        //  the GP registers, thus supporting calling the slow callback without
+        //  crashing. The reason for that is that in the mjsunit tests we check
+        //  the `fast_c_api.supports_fp_params` (which is false on non-simulator
+        //  builds for arm/arm64), thus we expect that the slow path will be
+        //  called. And since the slow path passes the arguments as a `const
+        //  FunctionCallbackInfo<Value>&` (which is a GP argument), the call is
+        //  made correctly.
+      DCHECK(redirection->type() == ExternalReference::BUILTIN_CALL ||
+             redirection->type() == ExternalReference::BUILTIN_CALL_PAIR ||
+             redirection->type() == ExternalReference::FAST_C_CALL);
+#endif  // V8_TARGET_ARCH_RISCV64
       SimulatorRuntimeCall target =
           reinterpret_cast<SimulatorRuntimeCall>(external);
       if (v8_flags.trace_sim) {
@@ -3328,7 +3512,8 @@ void Simulator::SoftwareInterrupt() {
             " , %016" REGIx_FORMAT " , %016" REGIx_FORMAT " , %016" REGIx_FORMAT
             " , %016" REGIx_FORMAT " , %016" REGIx_FORMAT " , %016" REGIx_FORMAT
             " , %016" REGIx_FORMAT " , %016" REGIx_FORMAT " \n",
-            ExternalReferenceTable::NameOfIsolateIndependentAddress(pc),
+            ExternalReferenceTable::NameOfIsolateIndependentAddress(
+                pc, IsolateGroup::current()->external_ref_table()),
             reinterpret_cast<void*>(FUNCTION_ADDR(target)), arg0, arg1, arg2,
             arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
             arg13, arg14, arg15, arg16, arg17, arg18, arg19);
@@ -3366,8 +3551,12 @@ void Simulator::SoftwareInterrupt() {
           PrintF("Add --debug-sim when tracepoint instruction is used.\n");
           abort();
         }
+        Builtin builtin = LookUp((Address)get_pc());
         printf("%d %d %d %d\n", code, code & LOG_TRACE, code & LOG_REGS,
                code & kDebuggerTracingDirectivesMask);
+        if (builtin != Builtin::kNoBuiltinId) {
+          printf("Builitin: %s\n", builtins_.name(builtin));
+        }
         switch (code & kDebuggerTracingDirectivesMask) {
           case TRACE_ENABLE:
             if (code & LOG_TRACE) {
@@ -3390,6 +3579,11 @@ void Simulator::SoftwareInterrupt() {
         IncreaseStopCounter(code);
         HandleStop(code);
       }
+    } else if (IsSwitchStackLimit(code)) {
+      if (v8_flags.trace_sim) {
+        PrintF("Switching stack limit\n");
+      }
+      DoSwitchStackLimit(instr_.instr());
     } else {
       // All remaining break_ codes, and all traps are handled here.
       RiscvDebugger dbg(this);
@@ -3407,6 +3601,10 @@ bool Simulator::IsWatchpoint(reg_t code) {
 
 bool Simulator::IsTracepoint(reg_t code) {
   return (code <= kMaxTracepointCode && code > kMaxWatchpointCode);
+}
+
+bool Simulator::IsSwitchStackLimit(reg_t code) {
+  return code == kExceptionIsSwitchStackLimit;
 }
 
 void Simulator::PrintWatchpoint(reg_t code) {
@@ -3513,11 +3711,11 @@ void Simulator::DecodeRVRType() {
       break;
     }
     case RO_SLT: {
-      set_rd(sreg_t(rs1()) < sreg_t(rs2()));
+      set_rd(rs1() < rs2());
       break;
     }
     case RO_SLTU: {
-      set_rd(reg_t(rs1()) < reg_t(rs2()));
+      set_rd(static_cast<reg_t>(rs1()) < static_cast<reg_t>(rs2()));
       break;
     }
     case RO_XOR: {
@@ -3547,7 +3745,7 @@ void Simulator::DecodeRVRType() {
       set_rd(rs1() | (~rs2()));
       break;
     case RO_XNOR:
-      set_rd((~rs1()) ^ (~rs2()));
+      set_rd(~(rs1() ^ rs2()));
       break;
 #ifdef V8_TARGET_ARCH_RISCV64
     case RO_ADDW: {
@@ -3566,11 +3764,11 @@ void Simulator::DecodeRVRType() {
       break;
     }
     case RO_SRLW: {
-      set_rd(sext32(uint32_t(rs1()) >> (rs2() & 0x1F)));
+      set_rd(sext32(static_cast<uint32_t>(rs1()) >> (rs2() & 0x1F)));
       break;
     }
     case RO_SRAW: {
-      set_rd(sext32(int32_t(rs1()) >> (rs2() & 0x1F)));
+      set_rd(sext32(static_cast<int32_t>(rs1()) >> (rs2() & 0x1F)));
       break;
     }
     case RO_SH1ADDUW: {
@@ -3583,6 +3781,18 @@ void Simulator::DecodeRVRType() {
     }
     case RO_SH3ADDUW: {
       set_rd(rs2() + (zext32(rs1()) << 3));
+      break;
+    }
+    case RO_ROLW: {
+      reg_t extz_rs1 = zext32(rs1());
+      sreg_t shamt = rs2() & 31;
+      set_rd(sext32((extz_rs1 << shamt) | (extz_rs1 >> (32 - shamt))));
+      break;
+    }
+    case RO_RORW: {
+      reg_t extz_rs1 = zext32(rs1());
+      sreg_t shamt = rs2() & 31;
+      set_rd(sext32((extz_rs1 >> shamt) | (extz_rs1 << (32 - shamt))));
       break;
     }
 #endif /* V8_TARGET_ARCH_RISCV64 */
@@ -3710,17 +3920,31 @@ void Simulator::DecodeRVRType() {
       set_rd(rs1() < rs2() ? rs2() : rs1());
       break;
     case RO_MAXU:
-      set_rd(reg_t(rs1()) < reg_t(rs2()) ? rs2() : rs1());
+      set_rd(static_cast<reg_t>(rs1()) < static_cast<reg_t>(rs2()) ? rs2()
+                                                                   : rs1());
       break;
     case RO_MIN:
       set_rd(rs1() < rs2() ? rs1() : rs2());
       break;
     case RO_MINU:
-      set_rd(reg_t(rs1()) < reg_t(rs2()) ? rs1() : rs2());
+      set_rd(static_cast<reg_t>(rs1()) < static_cast<reg_t>(rs2()) ? rs1()
+                                                                   : rs2());
       break;
     case RO_ZEXTH:
-      set_rd(zext_xlen(uint16_t(rs1())));
+      set_rd(zext_xlen(static_cast<uint16_t>(rs1())));
       break;
+    case RO_ROL: {
+      sreg_t shamt = rs2() & (xlen - 1);
+      set_rd((static_cast<reg_t>(rs1()) << shamt) |
+             (static_cast<reg_t>(rs1()) >> (xlen - shamt)));
+      break;
+    }
+    case RO_ROR: {
+      sreg_t shamt = rs2() & (xlen - 1);
+      set_rd((static_cast<reg_t>(rs1()) >> shamt) |
+             (static_cast<reg_t>(rs1()) << (xlen - shamt)));
+      break;
+    }
     case RO_BCLR: {
       sreg_t index = rs2() & (xlen - 1);
       set_rd(rs1() & ~(1l << index));
@@ -3741,7 +3965,16 @@ void Simulator::DecodeRVRType() {
       set_rd(rs1() | (1 << index));
       break;
     }
-      // TODO(riscv): End Add RISCV M extension macro
+    case RO_CZERO_EQZ: {
+      sreg_t condition = rs2();
+      set_rd(condition == 0 ? 0 : rs1());
+      break;
+    }
+    case RO_CZERO_NEZ: {
+      sreg_t condition = rs2();
+      set_rd(condition != 0 ? 0 : rs1());
+      break;
+    }
     default: {
       switch (instr_.BaseOpcode()) {
         case AMO:
@@ -3842,10 +4075,9 @@ double Simulator::RoundF2FHelper(double input_val, int rmode) {
 // are out-of-range, underflow, or NaN, and set appropriate fflags
 template <typename I_TYPE, typename F_TYPE>
 I_TYPE Simulator::RoundF2IHelper(F_TYPE original, int rmode) {
-  DCHECK(std::is_integral<I_TYPE>::value);
+  DCHECK(std::is_integral_v<I_TYPE>);
 
-  DCHECK((std::is_same<F_TYPE, float>::value ||
-          std::is_same<F_TYPE, double>::value));
+  DCHECK((std::is_same_v<F_TYPE, float> || std::is_same_v<F_TYPE, double>));
 
   I_TYPE max_i = std::numeric_limits<I_TYPE>::max();
   I_TYPE min_i = std::numeric_limits<I_TYPE>::min();
@@ -3881,7 +4113,7 @@ I_TYPE Simulator::RoundF2IHelper(F_TYPE original, int rmode) {
   // point is within the max range, we compare against (max_i+1) which would
   // have a single 1 w/ many trailing zeros
   float max_i_plus_1 =
-      std::is_same<uint64_t, I_TYPE>::value
+      std::is_same_v<uint64_t, I_TYPE>
           ? 0x1p64f  // uint64_t::max + 1 cannot be represented in integers,
                      // so use its float representation directly
           : static_cast<float>(static_cast<uint64_t>(max_i) + 1);
@@ -3897,8 +4129,7 @@ I_TYPE Simulator::RoundF2IHelper(F_TYPE original, int rmode) {
     return min_i;
   }
 
-  F_TYPE underflow_fval =
-      std::is_same<F_TYPE, float>::value ? FLT_MIN : DBL_MIN;
+  F_TYPE underflow_fval = std::is_same_v<F_TYPE, float> ? FLT_MIN : DBL_MIN;
   if (rounded < underflow_fval && rounded > -underflow_fval && rounded != 0) {
     set_fflags(kUnderflow);
   }
@@ -3928,7 +4159,7 @@ static int64_t FclassHelper(T value) {
 
 template <typename T>
 bool Simulator::CompareFHelper(T input1, T input2, FPUCondition cc) {
-  DCHECK(std::is_floating_point<T>::value);
+  DCHECK(std::is_floating_point_v<T>);
   bool result = false;
   switch (cc) {
     case LT:
@@ -3998,6 +4229,39 @@ static inline bool is_invalid_fsqrt(T src1) {
   return (src1 < 0);
 }
 
+template <typename T, typename OP>
+void Simulator::AtomicMemoryHelper(sreg_t rs1, T value, OP f,
+                                   Instruction* instr) {
+  unsigned element_size = sizeof(T);
+  uintptr_t address = rs1;
+  DCHECK_EQ(address % element_size, 0);
+
+  // First, check whether the memory is accessible (for wasm trap handling).
+  if (!ProbeMemory(address, element_size)) return;
+
+  local_monitor_.NotifyLoad();
+
+  T data = ReadMem<T>(address, instr);
+
+  if (instr->AqValue()) {
+    // Approximate load-acquire by issuing a full barrier after the load.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+  }
+
+  T result = f(data, value);
+
+  if (instr->RlValue()) {
+    GlobalMonitor::SimulatorMutex lock_guard(global_monitor_);
+    local_monitor_.NotifyStore();
+    global_monitor_->NotifyStore_Locked(&global_monitor_thread_);
+    // Approximate store-release by issuing a full barrier before the store.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+  }
+
+  WriteMem<T>(address, result, instr);
+  set_rd(T(data));
+}
+
 void Simulator::DecodeRVRAType() {
   // TODO(riscv): Add macro for RISCV A extension
   // Special handling for A extension instructions because it uses func5
@@ -4008,7 +4272,7 @@ void Simulator::DecodeRVRAType() {
       sreg_t addr = rs1();
       if (!ProbeMemory(addr, sizeof(int32_t))) return;
       {
-        base::MutexGuard lock_guard(&GlobalMonitor::Get()->mutex);
+        GlobalMonitor::SimulatorMutex lock_guard(global_monitor_);
         if ((addr & 0x3) != 0) {
           DieOrDebug();
         }
@@ -4016,8 +4280,7 @@ void Simulator::DecodeRVRAType() {
         set_rd(sext32(val), false);
         TraceMemRd(addr, val, get_register(rd_reg()));
         local_monitor_.NotifyLoadLinked(addr, TransactionSize::Word);
-        GlobalMonitor::Get()->NotifyLoadLinked_Locked(addr,
-                                                      &global_monitor_thread_);
+        global_monitor_->NotifyLoadLinked_Locked(addr, &global_monitor_thread_);
       }
       break;
     }
@@ -4027,12 +4290,12 @@ void Simulator::DecodeRVRAType() {
       if ((addr & 0x3) != 0) {
         DieOrDebug();
       }
-      base::MutexGuard lock_guard(&GlobalMonitor::Get()->mutex);
+      GlobalMonitor::SimulatorMutex lock_guard(global_monitor_);
       if (local_monitor_.NotifyStoreConditional(addr, TransactionSize::Word) &&
-          GlobalMonitor::Get()->NotifyStoreConditional_Locked(
+          global_monitor_->NotifyStoreConditional_Locked(
               addr, &global_monitor_thread_)) {
         local_monitor_.NotifyStore();
-        GlobalMonitor::Get()->NotifyStore_Locked(&global_monitor_thread_);
+        global_monitor_->NotifyStore_Locked(&global_monitor_thread_);
         WriteMem<int32_t>(rs1(), (int32_t)rs2(), instr_.instr());
         set_rd(0, false);
       } else {
@@ -4044,81 +4307,89 @@ void Simulator::DecodeRVRAType() {
       if ((rs1() & 0x3) != 0) {
         DieOrDebug();
       }
-      set_rd(sext32(amo<uint32_t>(
-          rs1(), [&](uint32_t lhs) { return (uint32_t)rs2(); }, instr_.instr(),
-          WORD)));
+      AtomicMemoryHelper<uint32_t>(
+          rs1(), (uint32_t)rs2(),
+          [&](uint32_t lhs, uint32_t rhs) { return rhs; }, instr_.instr());
       break;
     }
     case RO_AMOADD_W: {
       if ((rs1() & 0x3) != 0) {
         DieOrDebug();
       }
-      set_rd(sext32(amo<uint32_t>(
-          rs1(), [&](uint32_t lhs) { return lhs + (uint32_t)rs2(); },
-          instr_.instr(), WORD)));
+      AtomicMemoryHelper<uint32_t>(
+          rs1(), (uint32_t)(rs2()),
+          [&](uint32_t lhs, uint32_t rhs) { return lhs + rhs; },
+          instr_.instr());
       break;
     }
     case RO_AMOXOR_W: {
       if ((rs1() & 0x3) != 0) {
         DieOrDebug();
       }
-      set_rd(sext32(amo<uint32_t>(
-          rs1(), [&](uint32_t lhs) { return lhs ^ (uint32_t)rs2(); },
-          instr_.instr(), WORD)));
+      AtomicMemoryHelper<uint32_t>(
+          rs1(), (uint32_t)rs2(),
+          [&](uint32_t lhs, uint32_t rhs) { return lhs ^ rhs; },
+          instr_.instr());
       break;
     }
     case RO_AMOAND_W: {
       if ((rs1() & 0x3) != 0) {
         DieOrDebug();
       }
-      set_rd(sext32(amo<uint32_t>(
-          rs1(), [&](uint32_t lhs) { return lhs & (uint32_t)rs2(); },
-          instr_.instr(), WORD)));
+      AtomicMemoryHelper<uint32_t>(
+          rs1(), (uint32_t)rs2(),
+          [&](uint32_t lhs, uint32_t rhs) { return lhs & rhs; },
+          instr_.instr());
       break;
     }
     case RO_AMOOR_W: {
       if ((rs1() & 0x3) != 0) {
         DieOrDebug();
       }
-      set_rd(sext32(amo<uint32_t>(
-          rs1(), [&](uint32_t lhs) { return lhs | (uint32_t)rs2(); },
-          instr_.instr(), WORD)));
+      AtomicMemoryHelper<uint32_t>(
+          rs1(), (uint32_t)rs2(),
+          [&](uint32_t lhs, uint32_t rhs) { return lhs | rhs; },
+          instr_.instr());
       break;
     }
     case RO_AMOMIN_W: {
       if ((rs1() & 0x3) != 0) {
         DieOrDebug();
       }
-      set_rd(sext32(amo<int32_t>(
-          rs1(), [&](int32_t lhs) { return std::min(lhs, (int32_t)rs2()); },
-          instr_.instr(), WORD)));
+      AtomicMemoryHelper<int32_t>(
+          rs1(), (int32_t)rs2(),
+          [&](int32_t lhs, int32_t rhs) { return std::min(lhs, rhs); },
+          instr_.instr());
       break;
     }
     case RO_AMOMAX_W: {
       if ((rs1() & 0x3) != 0) {
         DieOrDebug();
       }
-      set_rd(sext32(amo<int32_t>(
-          rs1(), [&](int32_t lhs) { return std::max(lhs, (int32_t)rs2()); },
-          instr_.instr(), WORD)));
+      AtomicMemoryHelper<int32_t>(
+          rs1(), (int32_t)rs2(),
+          [&](int32_t lhs, int32_t rhs) { return std::max(lhs, rhs); },
+          instr_.instr());
       break;
     }
     case RO_AMOMINU_W: {
       if ((rs1() & 0x3) != 0) {
         DieOrDebug();
       }
-      set_rd(sext32(amo<uint32_t>(
-          rs1(), [&](uint32_t lhs) { return std::min(lhs, (uint32_t)rs2()); },
-          instr_.instr(), WORD)));
+      AtomicMemoryHelper<uint32_t>(
+          rs1(), (uint32_t)rs2(),
+          [&](uint32_t lhs, uint32_t rhs) { return std::min(lhs, rhs); },
+          instr_.instr());
       break;
     }
     case RO_AMOMAXU_W: {
       if ((rs1() & 0x3) != 0) {
         DieOrDebug();
       }
-      set_rd(sext32(amo<uint32_t>(
-          rs1(), [&](uint32_t lhs) { return std::max(lhs, (uint32_t)rs2()); },
-          instr_.instr(), WORD)));
+      AtomicMemoryHelper<uint32_t>(
+          rs1(), (uint32_t)rs2(),
+          [&](uint32_t lhs, uint32_t rhs) { return std::max(lhs, rhs); },
+          instr_.instr());
       break;
     }
 #ifdef V8_TARGET_ARCH_RISCV64
@@ -4126,25 +4397,24 @@ void Simulator::DecodeRVRAType() {
       int64_t addr = rs1();
       if (!ProbeMemory(addr, sizeof(int64_t))) return;
       {
-        base::MutexGuard lock_guard(&GlobalMonitor::Get()->mutex);
+        GlobalMonitor::SimulatorMutex lock_guard(global_monitor_);
         auto val = ReadMem<int64_t>(addr, instr_.instr());
         set_rd(val, false);
         TraceMemRd(addr, val, get_register(rd_reg()));
         local_monitor_.NotifyLoadLinked(addr, TransactionSize::DoubleWord);
-        GlobalMonitor::Get()->NotifyLoadLinked_Locked(addr,
-                                                      &global_monitor_thread_);
+        global_monitor_->NotifyLoadLinked_Locked(addr, &global_monitor_thread_);
         break;
       }
     }
     case RO_SC_D: {
       int64_t addr = rs1();
       if (!ProbeMemory(addr, sizeof(int64_t))) return;
-      base::MutexGuard lock_guard(&GlobalMonitor::Get()->mutex);
+      GlobalMonitor::SimulatorMutex lock_guard(global_monitor_);
       if (local_monitor_.NotifyStoreConditional(addr,
                                                 TransactionSize::DoubleWord) &&
-          (GlobalMonitor::Get()->NotifyStoreConditional_Locked(
+          (global_monitor_->NotifyStoreConditional_Locked(
               addr, &global_monitor_thread_))) {
-        GlobalMonitor::Get()->NotifyStore_Locked(&global_monitor_thread_);
+        global_monitor_->NotifyStore_Locked(&global_monitor_thread_);
         WriteMem<int64_t>(rs1(), rs2(), instr_.instr());
         set_rd(0, false);
       } else {
@@ -4153,56 +4423,61 @@ void Simulator::DecodeRVRAType() {
       break;
     }
     case RO_AMOSWAP_D: {
-      set_rd(amo<int64_t>(
-          rs1(), [&](int64_t lhs) { return rs2(); }, instr_.instr(), DWORD));
+      AtomicMemoryHelper<int64_t>(
+          rs1(), rs2(), [&](int64_t lhs, int64_t rhs) { return rhs; },
+          instr_.instr());
       break;
     }
     case RO_AMOADD_D: {
-      set_rd(amo<int64_t>(
-          rs1(), [&](int64_t lhs) { return lhs + rs2(); }, instr_.instr(),
-          DWORD));
+      AtomicMemoryHelper<int64_t>(
+          rs1(), rs2(), [&](int64_t lhs, int64_t rhs) { return lhs + rhs; },
+          instr_.instr());
       break;
     }
     case RO_AMOXOR_D: {
-      set_rd(amo<int64_t>(
-          rs1(), [&](int64_t lhs) { return lhs ^ rs2(); }, instr_.instr(),
-          DWORD));
+      AtomicMemoryHelper<int64_t>(
+          rs1(), rs2(), [&](int64_t lhs, int64_t rhs) { return lhs ^ rhs; },
+          instr_.instr());
       break;
     }
     case RO_AMOAND_D: {
-      set_rd(amo<int64_t>(
-          rs1(), [&](int64_t lhs) { return lhs & rs2(); }, instr_.instr(),
-          DWORD));
+      AtomicMemoryHelper<int64_t>(
+          rs1(), rs2(), [&](int64_t lhs, int64_t rhs) { return lhs & rhs; },
+          instr_.instr());
       break;
     }
     case RO_AMOOR_D: {
-      set_rd(amo<int64_t>(
-          rs1(), [&](int64_t lhs) { return lhs | rs2(); }, instr_.instr(),
-          DWORD));
+      AtomicMemoryHelper<int64_t>(
+          rs1(), rs2(), [&](int64_t lhs, int64_t rhs) { return lhs | rhs; },
+          instr_.instr());
       break;
     }
     case RO_AMOMIN_D: {
-      set_rd(amo<int64_t>(
-          rs1(), [&](int64_t lhs) { return std::min(lhs, rs2()); },
-          instr_.instr(), DWORD));
+      AtomicMemoryHelper<int64_t>(
+          rs1(), rs2(),
+          [&](int64_t lhs, int64_t rhs) { return std::min(lhs, rhs); },
+          instr_.instr());
       break;
     }
     case RO_AMOMAX_D: {
-      set_rd(amo<int64_t>(
-          rs1(), [&](int64_t lhs) { return std::max(lhs, rs2()); },
-          instr_.instr(), DWORD));
+      AtomicMemoryHelper<int64_t>(
+          rs1(), rs2(),
+          [&](int64_t lhs, int64_t rhs) { return std::max(lhs, rhs); },
+          instr_.instr());
       break;
     }
     case RO_AMOMINU_D: {
-      set_rd(amo<uint64_t>(
-          rs1(), [&](uint64_t lhs) { return std::min(lhs, (uint64_t)rs2()); },
-          instr_.instr(), DWORD));
+      AtomicMemoryHelper<uint64_t>(
+          rs1(), rs2(),
+          [&](uint64_t lhs, uint64_t rhs) { return std::min(lhs, rhs); },
+          instr_.instr());
       break;
     }
     case RO_AMOMAXU_D: {
-      set_rd(amo<uint64_t>(
-          rs1(), [&](uint64_t lhs) { return std::max(lhs, (uint64_t)rs2()); },
-          instr_.instr(), DWORD));
+      AtomicMemoryHelper<uint64_t>(
+          rs1(), rs2(),
+          [&](uint64_t lhs, uint64_t rhs) { return std::max(lhs, rhs); },
+          instr_.instr());
       break;
     }
 #endif /*V8_TARGET_ARCH_RISCV64*/
@@ -4358,7 +4633,7 @@ void Simulator::DecodeRVRFPType() {
       }
       break;
     }
-    case RO_FMV: {  // RO_FCLASS_S
+    case RO_FMV_X_W: {  // RO_FCLASS_S
       switch (instr_.Funct3Value()) {
         case 0b000: {
           if (instr_.Rs2Value() == 0b00000) {
@@ -4931,14 +5206,14 @@ void Simulator::DecodeRVIType() {
     case RO_JALR: {
       set_rd(get_pc() + kInstrSize);
       // Note: No need to shift 2 for JALR's imm12, but set lowest bit to 0.
-      sreg_t next_pc = (rs1() + imm12()) & ~sreg_t(1);
+      sreg_t next_pc = (rs1() + imm12()) & ~static_cast<sreg_t>(1);
       set_pc(next_pc);
       if (v8_flags.trace_sim) {
-        Builtin builtin = LookUp((Address)get_pc());
+        Builtin builtin = LookUp(static_cast<Address>(get_pc()));
         if (builtin != Builtin::kNoBuiltinId) {
           auto code = builtins_.code(builtin);
           if ((rs1_reg() != ra || imm12() != 0)) {
-            if ((Address)get_pc() == code->instruction_start()) {
+            if (static_cast<Address>(get_pc()) == code->instruction_start()) {
               sreg_t arg0 = get_register(a0);
               sreg_t arg1 = get_register(a1);
               sreg_t arg2 = get_register(a2);
@@ -5032,11 +5307,11 @@ void Simulator::DecodeRVIType() {
       break;
     }
     case RO_SLTI: {
-      set_rd(sreg_t(rs1()) < sreg_t(imm12()));
+      set_rd(rs1() < static_cast<sreg_t>(imm12()));
       break;
     }
     case RO_SLTIU: {
-      set_rd(reg_t(rs1()) < reg_t(imm12()));
+      set_rd(static_cast<reg_t>(rs1()) < static_cast<reg_t>(imm12()));
       break;
     }
     case RO_XORI: {
@@ -5112,10 +5387,10 @@ void Simulator::DecodeRVIType() {
               break;
             }
             case 4:
-              set_rd(int8_t(rs1()));
+              set_rd(static_cast<int8_t>(rs1()));
               break;
             case 5:
-              set_rd(int16_t(rs1()));
+              set_rd(static_cast<int16_t>(rs1()));
               break;
             default:
               UNSUPPORTED_RISCV();
@@ -5140,6 +5415,30 @@ void Simulator::DecodeRVIType() {
           require(shamt6() < xlen);
           sreg_t index = shamt6() & (xlen - 1);
           set_rd((rs1() >> index) & 1);
+          break;
+        }
+        case RO_ORCB&(kFunct6Mask | OP_SHR): {
+          reg_t rs1_val = rs1();
+          reg_t result = 0;
+          reg_t mask = 0xFF;
+          reg_t step = 8;
+          for (reg_t i = 0; i < xlen; i += step) {
+            if ((rs1_val & mask) != 0) {
+              result |= mask;
+            }
+            mask <<= step;
+          }
+          set_rd(result);
+          break;
+        }
+        case RO_RORI: {
+#ifdef V8_TARGET_ARCH_RISCV64
+          int16_t shamt = shamt6();
+#else
+          int16_t shamt = shamt5();
+#endif
+          set_rd((static_cast<reg_t>(rs1()) >> shamt) |
+                 (static_cast<reg_t>(rs1()) << (xlen - shamt)));
           break;
         }
         case RO_REV8: {
@@ -5222,11 +5521,17 @@ void Simulator::DecodeRVIType() {
     case OP_SHRW: {  //  RO_SRAI
       switch (instr_.Funct7FieldRaw() | OP_SHRW) {
         case RO_SRLIW:
-          set_rd(sext32(uint32_t(rs1()) >> shamt5()));
+          set_rd(sext32(static_cast<uint32_t>(rs1()) >> shamt5()));
           break;
         case RO_SRAIW:
-          set_rd(sext32(int32_t(rs1()) >> shamt5()));
+          set_rd(sext32(static_cast<int32_t>(rs1()) >> shamt5()));
           break;
+        case RO_RORIW: {
+          reg_t extz_rs1 = zext32(rs1());
+          int16_t shamt = shamt5();
+          set_rd(sext32((extz_rs1 >> shamt) | (extz_rs1 << (32 - shamt))));
+          break;
+        }
         default:
           UNSUPPORTED_RISCV();
       }
@@ -5244,6 +5549,40 @@ void Simulator::DecodeRVIType() {
         SoftwareInterrupt();
       } else {
         UNSUPPORTED();
+      }
+      break;
+    }
+    case RO_MOP: {
+      if ((instr_.InstructionBits() & kMopMask) == RO_MOP_R_N) {
+        switch (instr_.MopNumber()) {
+          case SSPOPCHK_MOP_NUM:
+            if (CpuFeatures::IsSupported(ZICFISS)) {
+              if (instr_.RdValue() == 0) {  // sspopchk
+                PopShadowStack(rs1());
+              } else {  // ssrdp
+                DCHECK_EQ(instr_.Rs1Value(), 0);
+                FATAL("Unimplemented Instr: ssrdp");
+              }
+              return;
+            }
+            break;
+          default:
+            break;
+        }
+        set_rd(0);
+      } else {
+        CHECK((instr_.InstructionBits() & kMopMask) == RO_MOP_RR_N);
+        switch (instr_.MopNumber()) {
+          case SSPUSH_MOP_NUM:  // sspush
+            if (CpuFeatures::IsSupported(ZICFISS)) {
+              PushShadowStack(rs2());
+              return;
+            }
+            break;
+          default:
+            break;
+        }
+        set_rd(0);
       }
       break;
     }
@@ -5534,6 +5873,7 @@ void Simulator::DecodeCIType() {
       break;
     case RO_C_FLDSP: {
       sreg_t addr = get_register(sp) + rvc_imm6_ldsp();
+      if (!ProbeMemory(addr, sizeof(uint64_t))) return;
       uint64_t val = ReadMem<uint64_t>(addr, instr_.instr());
       set_rvc_drd(Float64::FromBits(val), false);
       TraceMemRdDouble(addr, Float64::FromBits(val),
@@ -5543,6 +5883,7 @@ void Simulator::DecodeCIType() {
 #if V8_TARGET_ARCH_RISCV64
     case RO_C_LWSP: {
       sreg_t addr = get_register(sp) + rvc_imm6_lwsp();
+      if (!ProbeMemory(addr, sizeof(int32_t))) return;
       int64_t val = ReadMem<int32_t>(addr, instr_.instr());
       set_rvc_rd(sext_xlen(val), false);
       TraceMemRd(addr, val, get_register(rvc_rd_reg()));
@@ -5550,6 +5891,7 @@ void Simulator::DecodeCIType() {
     }
     case RO_C_LDSP: {
       sreg_t addr = get_register(sp) + rvc_imm6_ldsp();
+      if (!ProbeMemory(addr, sizeof(int64_t))) return;
       int64_t val = ReadMem<int64_t>(addr, instr_.instr());
       set_rvc_rd(sext_xlen(val), false);
       TraceMemRd(addr, val, get_register(rvc_rd_reg()));
@@ -5558,6 +5900,7 @@ void Simulator::DecodeCIType() {
 #elif V8_TARGET_ARCH_RISCV32
     case RO_C_FLWSP: {
       sreg_t addr = get_register(sp) + rvc_imm6_ldsp();
+      if (!ProbeMemory(addr, sizeof(int32_t))) return;
       uint32_t val = ReadMem<uint32_t>(addr, instr_.instr());
       set_rvc_frd(Float32::FromBits(val), false);
       TraceMemRdFloat(addr, Float32::FromBits(val),
@@ -5566,6 +5909,7 @@ void Simulator::DecodeCIType() {
     }
     case RO_C_LWSP: {
       sreg_t addr = get_register(sp) + rvc_imm6_lwsp();
+      if (!ProbeMemory(addr, sizeof(int32_t))) return;
       int32_t val = ReadMem<int32_t>(addr, instr_.instr());
       set_rvc_rd(sext_xlen(val), false);
       TraceMemRd(addr, val, get_register(rvc_rd_reg()));
@@ -5592,6 +5936,7 @@ void Simulator::DecodeCSSType() {
   switch (instr_.RvcOpcode()) {
     case RO_C_FSDSP: {
       sreg_t addr = get_register(sp) + rvc_imm6_sdsp();
+      if (!ProbeMemory(addr, sizeof(Float64))) return;
       WriteMem<Float64>(addr, get_fpu_register_Float64(rvc_rs2_reg()),
                         instr_.instr());
       break;
@@ -5599,6 +5944,7 @@ void Simulator::DecodeCSSType() {
 #if V8_TARGET_ARCH_RISCV32
     case RO_C_FSWSP: {
       sreg_t addr = get_register(sp) + rvc_imm6_sdsp();
+      if (!ProbeMemory(addr, sizeof(Float32))) return;
       WriteMem<Float32>(addr, get_fpu_register_Float32(rvc_rs2_reg(), false),
                         instr_.instr());
       break;
@@ -5606,12 +5952,14 @@ void Simulator::DecodeCSSType() {
 #endif
     case RO_C_SWSP: {
       sreg_t addr = get_register(sp) + rvc_imm6_swsp();
+      if (!ProbeMemory(addr, sizeof(int32_t))) return;
       WriteMem<int32_t>(addr, (int32_t)rvc_rs2(), instr_.instr());
       break;
     }
 #if V8_TARGET_ARCH_RISCV64
     case RO_C_SDSP: {
       sreg_t addr = get_register(sp) + rvc_imm6_sdsp();
+      if (!ProbeMemory(addr, sizeof(int64_t))) return;
       WriteMem<int64_t>(addr, (int64_t)rvc_rs2(), instr_.instr());
       break;
     }
@@ -5625,6 +5973,7 @@ void Simulator::DecodeCLType() {
   switch (instr_.RvcOpcode()) {
     case RO_C_LW: {
       sreg_t addr = rvc_rs1s() + rvc_imm5_w();
+      if (!ProbeMemory(addr, sizeof(int32_t))) return;
       int64_t val = ReadMem<int32_t>(addr, instr_.instr());
       set_rvc_rs2s(sext_xlen(val), false);
       TraceMemRd(addr, val, get_register(rvc_rs2s_reg()));
@@ -5632,6 +5981,7 @@ void Simulator::DecodeCLType() {
     }
     case RO_C_FLD: {
       sreg_t addr = rvc_rs1s() + rvc_imm5_d();
+      if (!ProbeMemory(addr, sizeof(int64_t))) return;
       uint64_t val = ReadMem<uint64_t>(addr, instr_.instr());
       set_rvc_drs2s(Float64::FromBits(val), false);
       break;
@@ -5639,6 +5989,7 @@ void Simulator::DecodeCLType() {
 #if V8_TARGET_ARCH_RISCV64
     case RO_C_LD: {
       sreg_t addr = rvc_rs1s() + rvc_imm5_d();
+      if (!ProbeMemory(addr, sizeof(int64_t))) return;
       int64_t val = ReadMem<int64_t>(addr, instr_.instr());
       set_rvc_rs2s(sext_xlen(val), false);
       TraceMemRd(addr, val, get_register(rvc_rs2s_reg()));
@@ -5647,6 +5998,7 @@ void Simulator::DecodeCLType() {
 #elif V8_TARGET_ARCH_RISCV32
     case RO_C_FLW: {
       sreg_t addr = rvc_rs1s() + rvc_imm5_d();
+      if (!ProbeMemory(addr, sizeof(int32_t))) return;
       uint32_t val = ReadMem<uint32_t>(addr, instr_.instr());
       set_rvc_frs2s(Float32::FromBits(val), false);
       break;
@@ -5661,18 +6013,21 @@ void Simulator::DecodeCSType() {
   switch (instr_.RvcOpcode()) {
     case RO_C_SW: {
       sreg_t addr = rvc_rs1s() + rvc_imm5_w();
+      if (!ProbeMemory(addr, sizeof(int32_t))) return;
       WriteMem<int32_t>(addr, (int32_t)rvc_rs2s(), instr_.instr());
       break;
     }
 #if V8_TARGET_ARCH_RISCV64
     case RO_C_SD: {
       sreg_t addr = rvc_rs1s() + rvc_imm5_d();
+      if (!ProbeMemory(addr, sizeof(int64_t))) return;
       WriteMem<int64_t>(addr, (int64_t)rvc_rs2s(), instr_.instr());
       break;
     }
 #endif
     case RO_C_FSD: {
       sreg_t addr = rvc_rs1s() + rvc_imm5_d();
+      if (!ProbeMemory(addr, sizeof(int64_t))) return;
       WriteMem<double>(addr, static_cast<double>(rvc_drs2s()), instr_.instr());
       break;
     }
@@ -5708,7 +6063,9 @@ void Simulator::DecodeCBType() {
       break;
     case RO_C_MISC_ALU:
       if (instr_.RvcFunct2BValue() == 0b00) {  // c.srli
-        set_rvc_rs1s(sext_xlen(sext_xlen(rvc_rs1s()) >> rvc_shamt6()));
+        // c.srli performs a logical right shift, so zero extension is needed
+        // instead of sign extension.
+        set_rvc_rs1s(sext_xlen(zext_xlen(rvc_rs1s()) >> rvc_shamt6()));
       } else if (instr_.RvcFunct2BValue() == 0b01) {  // c.srai
         require(rvc_shamt6() < xlen);
         set_rvc_rs1s(sext_xlen(sext_xlen(rvc_rs1s()) >> rvc_shamt6()));
@@ -5796,6 +6153,7 @@ T sat_subu(T x, T y, bool& sat) {
 #ifdef CAN_USE_RVV_INSTRUCTIONS
 void Simulator::DecodeRvvIVV() {
   DCHECK_EQ(instr_.InstructionBits() & (kBaseOpcodeMask | kFunct3Mask), OP_IVV);
+  DCHECK(vu_enabled_);
   switch (instr_.InstructionBits() & kVTypeMask) {
     case RO_V_VADD_VV: {
       RVV_VI_VV_LOOP({ vd = vs1 + vs2; });
@@ -6099,6 +6457,7 @@ void Simulator::DecodeRvvIVV() {
 
 void Simulator::DecodeRvvIVI() {
   DCHECK_EQ(instr_.InstructionBits() & (kBaseOpcodeMask | kFunct3Mask), OP_IVI);
+  DCHECK(vu_enabled_);
   switch (instr_.InstructionBits() & kVTypeMask) {
     case RO_V_VADD_VI: {
       RVV_VI_VI_LOOP({ vd = simm5 + vs2; })
@@ -6283,6 +6642,7 @@ void Simulator::DecodeRvvIVI() {
 
 void Simulator::DecodeRvvIVX() {
   DCHECK_EQ(instr_.InstructionBits() & (kBaseOpcodeMask | kFunct3Mask), OP_IVX);
+  DCHECK(vu_enabled_);
   switch (instr_.InstructionBits() & kVTypeMask) {
     case RO_V_VADD_VX: {
       RVV_VI_VX_LOOP({ vd = rs1 + vs2; })
@@ -6547,6 +6907,7 @@ void Simulator::DecodeRvvIVX() {
 
 void Simulator::DecodeRvvMVV() {
   DCHECK_EQ(instr_.InstructionBits() & (kBaseOpcodeMask | kFunct3Mask), OP_MVV);
+  DCHECK(vu_enabled_);
   switch (instr_.InstructionBits() & kVTypeMask) {
     case RO_V_VMUNARY0: {
       if (instr_.Vs1Value() == VID_V) {
@@ -6771,6 +7132,7 @@ void Simulator::DecodeRvvMVV() {
 
 void Simulator::DecodeRvvMVX() {
   DCHECK_EQ(instr_.InstructionBits() & (kBaseOpcodeMask | kFunct3Mask), OP_MVX);
+  DCHECK(vu_enabled_);
   switch (instr_.InstructionBits() & kVTypeMask) {
     case RO_V_VRXUNARY0:
       // vmv.s.x
@@ -6879,6 +7241,7 @@ void Simulator::DecodeRvvMVX() {
 
 void Simulator::DecodeRvvFVV() {
   DCHECK_EQ(instr_.InstructionBits() & (kBaseOpcodeMask | kFunct3Mask), OP_FVV);
+  DCHECK(vu_enabled_);
   switch (instr_.InstructionBits() & kVTypeMask) {
     case RO_V_VFDIV_VV: {
       RVV_VI_VFP_VV_LOOP(
@@ -7015,34 +7378,36 @@ void Simulator::DecodeRvvFVV() {
               })
           break;
         case VFCVT_F_XU_V:
-          RVV_VI_VFP_VF_LOOP({ UNIMPLEMENTED(); },
-                             {
-                               auto vs2_i = Rvvelt<uint32_t>(rvv_vs2_reg(), i);
-                               vd = static_cast<float>(vs2_i);
-                               USE(vs2);
-                               USE(fs1);
-                             },
-                             {
-                               auto vs2_i = Rvvelt<uint64_t>(rvv_vs2_reg(), i);
-                               vd = static_cast<double>(vs2_i);
-                               USE(vs2);
-                               USE(fs1);
-                             })
+          RVV_VI_VFP_VF_LOOP(
+              { UNIMPLEMENTED(); },
+              {
+                auto vs2_i = Rvvelt<uint32_t>(rvv_vs2_reg(), i);
+                vd = static_cast<float>(vs2_i);
+                USE(vs2);
+                USE(fs1);
+              },
+              {
+                auto vs2_i = Rvvelt<uint64_t>(rvv_vs2_reg(), i);
+                vd = static_cast<double>(vs2_i);
+                USE(vs2);
+                USE(fs1);
+              })
           break;
         case VFCVT_F_X_V:
-          RVV_VI_VFP_VF_LOOP({ UNIMPLEMENTED(); },
-                             {
-                               auto vs2_i = Rvvelt<int32_t>(rvv_vs2_reg(), i);
-                               vd = static_cast<float>(vs2_i);
-                               USE(vs2);
-                               USE(fs1);
-                             },
-                             {
-                               auto vs2_i = Rvvelt<int64_t>(rvv_vs2_reg(), i);
-                               vd = static_cast<double>(vs2_i);
-                               USE(vs2);
-                               USE(fs1);
-                             })
+          RVV_VI_VFP_VF_LOOP(
+              { UNIMPLEMENTED(); },
+              {
+                auto vs2_i = Rvvelt<int32_t>(rvv_vs2_reg(), i);
+                vd = static_cast<float>(vs2_i);
+                USE(vs2);
+                USE(fs1);
+              },
+              {
+                auto vs2_i = Rvvelt<int64_t>(rvv_vs2_reg(), i);
+                vd = static_cast<double>(vs2_i);
+                USE(vs2);
+                USE(fs1);
+              })
           break;
         case VFNCVT_F_F_W:
           RVV_VI_VFP_CVT_SCALE(
@@ -7077,59 +7442,64 @@ void Simulator::DecodeRvvFVV() {
               { ; }, { ; }, { ; }, false, (rvv_vsew() <= E32))
           break;
         case VFWCVT_F_X_V:
-          RVV_VI_VFP_CVT_SCALE({ UNREACHABLE(); },
-                               {
-                                 auto vs2 = Rvvelt<int16_t>(rvv_vs2_reg(), i);
-                                 Rvvelt<float32_t>(rvv_vd_reg(), i, true) =
-                                     static_cast<float>(vs2);
-                               },
-                               {
-                                 auto vs2 = Rvvelt<int32_t>(rvv_vs2_reg(), i);
-                                 Rvvelt<double>(rvv_vd_reg(), i, true) =
-                                     static_cast<double>(vs2);
-                               },
-                               { ; }, { ; }, { ; }, true, (rvv_vsew() >= E8))
+          RVV_VI_VFP_CVT_SCALE(
+              { UNREACHABLE(); },
+              {
+                auto vs2 = Rvvelt<int16_t>(rvv_vs2_reg(), i);
+                Rvvelt<float32_t>(rvv_vd_reg(), i, true) =
+                    static_cast<float>(vs2);
+              },
+              {
+                auto vs2 = Rvvelt<int32_t>(rvv_vs2_reg(), i);
+                Rvvelt<double>(rvv_vd_reg(), i, true) =
+                    static_cast<double>(vs2);
+              },
+              { ; }, { ; }, { ; }, true, (rvv_vsew() >= E8))
           break;
         case VFWCVT_F_XU_V:
-          RVV_VI_VFP_CVT_SCALE({ UNREACHABLE(); },
-                               {
-                                 auto vs2 = Rvvelt<uint16_t>(rvv_vs2_reg(), i);
-                                 Rvvelt<float32_t>(rvv_vd_reg(), i, true) =
-                                     static_cast<float>(vs2);
-                               },
-                               {
-                                 auto vs2 = Rvvelt<uint32_t>(rvv_vs2_reg(), i);
-                                 Rvvelt<double>(rvv_vd_reg(), i, true) =
-                                     static_cast<double>(vs2);
-                               },
-                               { ; }, { ; }, { ; }, true, (rvv_vsew() >= E8))
+          RVV_VI_VFP_CVT_SCALE(
+              { UNREACHABLE(); },
+              {
+                auto vs2 = Rvvelt<uint16_t>(rvv_vs2_reg(), i);
+                Rvvelt<float32_t>(rvv_vd_reg(), i, true) =
+                    static_cast<float>(vs2);
+              },
+              {
+                auto vs2 = Rvvelt<uint32_t>(rvv_vs2_reg(), i);
+                Rvvelt<double>(rvv_vd_reg(), i, true) =
+                    static_cast<double>(vs2);
+              },
+              { ; }, { ; }, { ; }, true, (rvv_vsew() >= E8))
           break;
         case VFWCVT_XU_F_V:
-          RVV_VI_VFP_CVT_SCALE({ UNREACHABLE(); }, { UNREACHABLE(); },
-                               {
-                                 auto vs2 = Rvvelt<float32_t>(rvv_vs2_reg(), i);
-                                 Rvvelt<uint64_t>(rvv_vd_reg(), i, true) =
-                                     static_cast<uint64_t>(vs2);
-                               },
-                               { ; }, { ; }, { ; }, true, (rvv_vsew() >= E16))
+          RVV_VI_VFP_CVT_SCALE(
+              { UNREACHABLE(); }, { UNREACHABLE(); },
+              {
+                auto vs2 = Rvvelt<float32_t>(rvv_vs2_reg(), i);
+                Rvvelt<uint64_t>(rvv_vd_reg(), i, true) =
+                    static_cast<uint64_t>(vs2);
+              },
+              { ; }, { ; }, { ; }, true, (rvv_vsew() >= E16))
           break;
         case VFWCVT_X_F_V:
-          RVV_VI_VFP_CVT_SCALE({ UNREACHABLE(); }, { UNREACHABLE(); },
-                               {
-                                 auto vs2 = Rvvelt<float32_t>(rvv_vs2_reg(), i);
-                                 Rvvelt<int64_t>(rvv_vd_reg(), i, true) =
-                                     static_cast<int64_t>(vs2);
-                               },
-                               { ; }, { ; }, { ; }, true, (rvv_vsew() >= E16))
+          RVV_VI_VFP_CVT_SCALE(
+              { UNREACHABLE(); }, { UNREACHABLE(); },
+              {
+                auto vs2 = Rvvelt<float32_t>(rvv_vs2_reg(), i);
+                Rvvelt<int64_t>(rvv_vd_reg(), i, true) =
+                    static_cast<int64_t>(vs2);
+              },
+              { ; }, { ; }, { ; }, true, (rvv_vsew() >= E16))
           break;
         case VFWCVT_F_F_V:
-          RVV_VI_VFP_CVT_SCALE({ UNREACHABLE(); }, { UNREACHABLE(); },
-                               {
-                                 auto vs2 = Rvvelt<float32_t>(rvv_vs2_reg(), i);
-                                 Rvvelt<double>(rvv_vd_reg(), i, true) =
-                                     static_cast<double>(vs2);
-                               },
-                               { ; }, { ; }, { ; }, true, (rvv_vsew() >= E16))
+          RVV_VI_VFP_CVT_SCALE(
+              { UNREACHABLE(); }, { UNREACHABLE(); },
+              {
+                auto vs2 = Rvvelt<float32_t>(rvv_vs2_reg(), i);
+                Rvvelt<double>(rvv_vd_reg(), i, true) =
+                    static_cast<double>(vs2);
+              },
+              { ; }, { ; }, { ; }, true, (rvv_vsew() >= E16))
           break;
         default:
           UNSUPPORTED_RISCV();
@@ -7142,7 +7512,7 @@ void Simulator::DecodeRvvFVV() {
               { UNIMPLEMENTED(); },
               {
                 int32_t& vd_i = Rvvelt<int32_t>(rvv_vd_reg(), i, true);
-                vd_i = int32_t(FclassHelper(vs2));
+                vd_i = static_cast<int32_t>(FclassHelper(vs2));
                 USE(fs1);
                 USE(vd);
               },
@@ -7154,15 +7524,16 @@ void Simulator::DecodeRvvFVV() {
               })
           break;
         case VFSQRT_V:
-          RVV_VI_VFP_VF_LOOP({ UNIMPLEMENTED(); },
-                             {
-                               vd = std::sqrt(vs2);
-                               USE(fs1);
-                             },
-                             {
-                               vd = std::sqrt(vs2);
-                               USE(fs1);
-                             })
+          RVV_VI_VFP_VF_LOOP(
+              { UNIMPLEMENTED(); },
+              {
+                vd = std::sqrt(vs2);
+                USE(fs1);
+              },
+              {
+                vd = std::sqrt(vs2);
+                USE(fs1);
+              })
           break;
         case VFRSQRT7_V:
           RVV_VI_VFP_VF_LOOP(
@@ -7193,29 +7564,30 @@ void Simulator::DecodeRvvFVV() {
       }
       break;
     case RO_V_VMFEQ_VV: {
-      RVV_VI_VFP_LOOP_CMP({ UNIMPLEMENTED(); },
-                          { res = CompareFHelper(vs2, vs1, EQ); },
-                          { res = CompareFHelper(vs2, vs1, EQ); }, true)
+      RVV_VI_VFP_LOOP_CMP(
+          { UNIMPLEMENTED(); }, { res = CompareFHelper(vs2, vs1, EQ); },
+          { res = CompareFHelper(vs2, vs1, EQ); }, true)
     } break;
     case RO_V_VMFNE_VV: {
-      RVV_VI_VFP_LOOP_CMP({ UNIMPLEMENTED(); },
-                          { res = CompareFHelper(vs2, vs1, NE); },
-                          { res = CompareFHelper(vs2, vs1, NE); }, true)
+      RVV_VI_VFP_LOOP_CMP(
+          { UNIMPLEMENTED(); }, { res = CompareFHelper(vs2, vs1, NE); },
+          { res = CompareFHelper(vs2, vs1, NE); }, true)
     } break;
     case RO_V_VMFLT_VV: {
-      RVV_VI_VFP_LOOP_CMP({ UNIMPLEMENTED(); },
-                          { res = CompareFHelper(vs2, vs1, LT); },
-                          { res = CompareFHelper(vs2, vs1, LT); }, true)
+      RVV_VI_VFP_LOOP_CMP(
+          { UNIMPLEMENTED(); }, { res = CompareFHelper(vs2, vs1, LT); },
+          { res = CompareFHelper(vs2, vs1, LT); }, true)
     } break;
     case RO_V_VMFLE_VV: {
-      RVV_VI_VFP_LOOP_CMP({ UNIMPLEMENTED(); },
-                          { res = CompareFHelper(vs2, vs1, LE); },
-                          { res = CompareFHelper(vs2, vs1, LE); }, true)
+      RVV_VI_VFP_LOOP_CMP(
+          { UNIMPLEMENTED(); }, { res = CompareFHelper(vs2, vs1, LE); },
+          { res = CompareFHelper(vs2, vs1, LE); }, true)
     } break;
     case RO_V_VFMAX_VV: {
-      RVV_VI_VFP_VV_LOOP({ UNIMPLEMENTED(); },
-                         { vd = FMaxMinHelper(vs2, vs1, MaxMinKind::kMax); },
-                         { vd = FMaxMinHelper(vs2, vs1, MaxMinKind::kMax); })
+      RVV_VI_VFP_VV_LOOP(
+          { UNIMPLEMENTED(); },
+          { vd = FMaxMinHelper(vs2, vs1, MaxMinKind::kMax); },
+          { vd = FMaxMinHelper(vs2, vs1, MaxMinKind::kMax); })
       break;
     }
     case RO_V_VFREDMAX_VV: {
@@ -7226,55 +7598,59 @@ void Simulator::DecodeRvvFVV() {
       break;
     }
     case RO_V_VFMIN_VV: {
-      RVV_VI_VFP_VV_LOOP({ UNIMPLEMENTED(); },
-                         { vd = FMaxMinHelper(vs2, vs1, MaxMinKind::kMin); },
-                         { vd = FMaxMinHelper(vs2, vs1, MaxMinKind::kMin); })
+      RVV_VI_VFP_VV_LOOP(
+          { UNIMPLEMENTED(); },
+          { vd = FMaxMinHelper(vs2, vs1, MaxMinKind::kMin); },
+          { vd = FMaxMinHelper(vs2, vs1, MaxMinKind::kMin); })
       break;
     }
     case RO_V_VFSGNJ_VV:
-      RVV_VFSGNJ_VV_VF_LOOP({ UNIMPLEMENTED(); },
-                            {
-                              vd = fsgnj32(Float32::FromBits(vs2),
-                                           Float32::FromBits(vs1), false, false)
-                                       .get_bits();
-                              USE(fs1);
-                            },
-                            {
-                              vd = fsgnj64(Float64::FromBits(vs2),
-                                           Float64::FromBits(vs1), false, false)
-                                       .get_bits();
-                              USE(fs1);
-                            })
+      RVV_VFSGNJ_VV_VF_LOOP(
+          { UNIMPLEMENTED(); },
+          {
+            vd = fsgnj32(Float32::FromBits(vs2), Float32::FromBits(vs1), false,
+                         false)
+                     .get_bits();
+            USE(fs1);
+          },
+          {
+            vd = fsgnj64(Float64::FromBits(vs2), Float64::FromBits(vs1), false,
+                         false)
+                     .get_bits();
+            USE(fs1);
+          })
       break;
     case RO_V_VFSGNJN_VV:
-      RVV_VFSGNJ_VV_VF_LOOP({ UNIMPLEMENTED(); },
-                            {
-                              vd = fsgnj32(Float32::FromBits(vs2),
-                                           Float32::FromBits(vs1), true, false)
-                                       .get_bits();
-                              USE(fs1);
-                            },
-                            {
-                              vd = fsgnj64(Float64::FromBits(vs2),
-                                           Float64::FromBits(vs1), true, false)
-                                       .get_bits();
-                              USE(fs1);
-                            })
+      RVV_VFSGNJ_VV_VF_LOOP(
+          { UNIMPLEMENTED(); },
+          {
+            vd = fsgnj32(Float32::FromBits(vs2), Float32::FromBits(vs1), true,
+                         false)
+                     .get_bits();
+            USE(fs1);
+          },
+          {
+            vd = fsgnj64(Float64::FromBits(vs2), Float64::FromBits(vs1), true,
+                         false)
+                     .get_bits();
+            USE(fs1);
+          })
       break;
     case RO_V_VFSGNJX_VV:
-      RVV_VFSGNJ_VV_VF_LOOP({ UNIMPLEMENTED(); },
-                            {
-                              vd = fsgnj32(Float32::FromBits(vs2),
-                                           Float32::FromBits(vs1), false, true)
-                                       .get_bits();
-                              USE(fs1);
-                            },
-                            {
-                              vd = fsgnj64(Float64::FromBits(vs2),
-                                           Float64::FromBits(vs1), false, true)
-                                       .get_bits();
-                              USE(fs1);
-                            })
+      RVV_VFSGNJ_VV_VF_LOOP(
+          { UNIMPLEMENTED(); },
+          {
+            vd = fsgnj32(Float32::FromBits(vs2), Float32::FromBits(vs1), false,
+                         true)
+                     .get_bits();
+            USE(fs1);
+          },
+          {
+            vd = fsgnj64(Float64::FromBits(vs2), Float64::FromBits(vs1), false,
+                         true)
+                     .get_bits();
+            USE(fs1);
+          })
       break;
     case RO_V_VFADD_VV:
       RVV_VI_VFP_VV_LOOP(
@@ -7517,6 +7893,7 @@ void Simulator::DecodeRvvFVV() {
 
 void Simulator::DecodeRvvFVF() {
   DCHECK_EQ(instr_.InstructionBits() & (kBaseOpcodeMask | kFunct3Mask), OP_FVF);
+  DCHECK(vu_enabled_);
   switch (instr_.InstructionBits() & kVTypeMask) {
     case RO_V_VFSGNJ_VF:
       RVV_VFSGNJ_VV_VF_LOOP(
@@ -7830,6 +8207,7 @@ void Simulator::DecodeVType() {
       set_rd(rvv_vl());
       set_rvv_vstart(0);
       rvv_trace_status();
+      vu_enabled_ = true;
       break;
     }
     case RO_V_VSETVL: {
@@ -7864,8 +8242,8 @@ void Simulator::DecodeVType() {
         set_rvv_vl(avl);
         set_rd(rvv_vl());
         rvv_trace_status();
-        break;
       }
+      vu_enabled_ = true;
       break;
     }
     default:
@@ -7976,7 +8354,7 @@ void Simulator::InstructionDecode(Instruction* instr) {
     // Object obj(*watch_address_);
     // Heap* current_heap = isolate_->heap();
     // if (obj.IsSmi() || IsValidHeapObject(current_heap,
-    // HeapObject::cast(obj))) {
+    // Cast<HeapObject>(obj))) {
     //   PrintF(" (");
     //   if (obj.IsSmi()) {
     //     PrintF("smi %d", Smi::ToInt(obj));
@@ -8092,11 +8470,97 @@ void Simulator::CallInternal(Address entry) {
   set_register(sp, sp_val);
 }
 
+void Simulator::PushShadowStack(uintptr_t value) {
+  if (csr_ssp_ <= 0) {
+    size_t old_size = shadow_stack_.size();
+    size_t new_size = old_size * 2;
+    size_t new_ssp = new_size - old_size;
+    auto new_stack = base::Vector<uintptr_t>::New(new_size);
+    new_stack.SubVectorFrom(new_ssp).OverwriteWith(shadow_stack_);
+    shadow_stack_.Dispose();
+    shadow_stack_ = new_stack;
+    csr_ssp_ = new_ssp;
+  }
+  csr_ssp_ = csr_ssp_ - 1;
+  shadow_stack_[csr_ssp_] = value;
+  SNPrintF(trace_buf_, "%016" PRIuPTR "    (%" PRId64 ")", value, icount_);
+  return;
+}
+
+uintptr_t Simulator::PopShadowStack(uintptr_t value) {
+  CHECK_LT(csr_ssp_, shadow_stack_.size());
+  CHECK_GE(csr_ssp_, 0);
+  auto temp = shadow_stack_[csr_ssp_];
+  if (temp != value) {
+    if (v8_flags.sim_abort_on_shadowstack_mismatch) {
+      FATAL("RISC-V ShadowStack mismatch");
+    } else {
+      ss_mismatch_count_ += 1;
+    }
+  } else {
+    csr_ssp_ += 1;
+  }
+  SNPrintF(trace_buf_, "%016" PRIuPTR "    (%" PRId64 ")", value, icount_);
+  return temp;
+}
+
+#ifdef V8_TARGET_ARCH_RISCV64
+void Simulator::CallImpl(Address entry, CallArgument* args) {
+  int index_gp = 0;
+  int index_fp = 0;
+  std::vector<int64_t> stack_args(0);
+  for (int i = 0; !args[i].IsEnd(); i++) {
+    CallArgument arg = args[i];
+    if (arg.IsGP() && (index_gp < 8)) {
+      set_register(index_gp + kRegCode_a0, arg.bits());
+      index_gp++;
+    } else if (arg.IsFP() && (index_fp < 8)) {
+      set_fpu_register(index_fp + kDoubleCode_fa0, arg.bits());
+      index_fp++;
+    } else {
+      DCHECK(arg.IsFP() || arg.IsGP());
+      stack_args.push_back(arg.bits());
+    }
+  }
+  if (v8_flags.trace_sim) {
+    std::cout << "CallImpl: reg_arg_count = " << index_fp + index_gp << std::hex
+              << " entry-pc (JSEntry) = 0x" << entry
+              << " a0 (Isolate-root) = 0x" << get_register(a0)
+              << " a1 (orig_func/new_target) = 0x" << get_register(a1)
+              << " a2 (func/target) = 0x" << get_register(a2)
+              << " a3 (receiver) = 0x" << get_register(a3) << " a4 (argc) = 0x"
+              << get_register(a4) << " a5 (argv) = 0x" << get_register(a5)
+              << " fa0 = 0x" << get_fpu_register(fa0) << " fa1 = 0x"
+              << get_fpu_register(fa1) << " fa2 = 0x" << get_fpu_register(fa2)
+              << " fa3 = 0x" << get_fpu_register(fa3) << " fa4 = 0x"
+              << get_fpu_register(fa4) << " fa5 = 0x" << get_fpu_register(fa5)
+              << " fa6 = 0x" << get_fpu_register(fa6) << " fa7 = 0x"
+              << get_fpu_register(fa7) << std::endl;
+  }
+  // Remaining arguments passed on stack.
+  int64_t original_stack = get_register(sp);
+  // Compute position of stack on entry to generated code.
+  int64_t stack_args_size =
+      stack_args.size() * sizeof(stack_args[0]) + kCArgsSlotsSize;
+  int64_t entry_stack = original_stack - stack_args_size;
+  if (base::OS::ActivationFrameAlignment() != 0) {
+    entry_stack &= -base::OS::ActivationFrameAlignment();
+  }
+  // Store remaining arguments on stack, from low to high memory.
+  char* stack_argument = reinterpret_cast<char*>(entry_stack);
+  memcpy(stack_argument + kCArgSlotCount, stack_args.data(),
+         stack_args.size() * sizeof(int64_t));
+  set_register(sp, entry_stack);
+  CallInternal(entry);
+  // Pop stack passed arguments.
+  CHECK_EQ(entry_stack, get_register(sp));
+  set_register(sp, original_stack);
+}
+#else
 intptr_t Simulator::CallImpl(Address entry, int argument_count,
                              const intptr_t* arguments) {
   constexpr int kRegisterPassedArguments = 8;
   // Set up arguments.
-
   // RISC-V 64G ISA has a0-a7 for passing arguments
   int reg_arg_count = std::min(kRegisterPassedArguments, argument_count);
   if (reg_arg_count > 0) set_register(a0, arguments[0]);
@@ -8107,7 +8571,6 @@ intptr_t Simulator::CallImpl(Address entry, int argument_count,
   if (reg_arg_count > 5) set_register(a5, arguments[5]);
   if (reg_arg_count > 6) set_register(a6, arguments[6]);
   if (reg_arg_count > 7) set_register(a7, arguments[7]);
-
   if (v8_flags.trace_sim) {
     std::cout << "CallImpl: reg_arg_count = " << reg_arg_count << std::hex
               << " entry-pc (JSEntry) = 0x" << entry
@@ -8118,14 +8581,12 @@ intptr_t Simulator::CallImpl(Address entry, int argument_count,
               << get_register(a4) << " a5 (argv) = 0x" << get_register(a5)
               << std::endl;
   }
-
   // Remaining arguments passed on stack.
   sreg_t original_stack = get_register(sp);
   // Compute position of stack on entry to generated code.
   int stack_args_count = argument_count - reg_arg_count;
   int stack_args_size = stack_args_count * sizeof(*arguments) + kCArgsSlotsSize;
   sreg_t entry_stack = original_stack - stack_args_size;
-
   if (base::OS::ActivationFrameAlignment() != 0) {
     entry_stack &= -base::OS::ActivationFrameAlignment();
   }
@@ -8134,17 +8595,15 @@ intptr_t Simulator::CallImpl(Address entry, int argument_count,
   memcpy(stack_argument + kCArgSlotCount, arguments + reg_arg_count,
          stack_args_count * sizeof(*arguments));
   set_register(sp, entry_stack);
-
   CallInternal(entry);
-
   // Pop stack passed arguments.
   CHECK_EQ(entry_stack, get_register(sp));
   set_register(sp, original_stack);
-
   // return get_register(a0);
   // RISCV uses a0 to return result
   return get_register(a0);
 }
+#endif  // V8_TARGET_ARCH_RISCV64
 
 double Simulator::CallFP(Address entry, double d0, double d1) {
   set_fpu_register_double(fa0, d0);
@@ -8275,7 +8734,6 @@ bool Simulator::GlobalMonitor::LinkedAddress::NotifyStoreConditional_Locked(
 void Simulator::GlobalMonitor::NotifyLoadLinked_Locked(
     uintptr_t addr, LinkedAddress* linked_address) {
   linked_address->NotifyLoadLinked_Locked(addr);
-  PrependProcessor_Locked(linked_address);
 }
 
 void Simulator::GlobalMonitor::NotifyStore_Locked(
@@ -8288,7 +8746,6 @@ void Simulator::GlobalMonitor::NotifyStore_Locked(
 
 bool Simulator::GlobalMonitor::NotifyStoreConditional_Locked(
     uintptr_t addr, LinkedAddress* linked_address) {
-  DCHECK(IsProcessorInLinkedList_Locked(linked_address));
   if (linked_address->NotifyStoreConditional_Locked(addr, true)) {
     // Notify the other processors that this StoreConditional succeeded.
     for (LinkedAddress* iter = head_; iter; iter = iter->next_) {
@@ -8302,32 +8759,21 @@ bool Simulator::GlobalMonitor::NotifyStoreConditional_Locked(
   }
 }
 
-bool Simulator::GlobalMonitor::IsProcessorInLinkedList_Locked(
-    LinkedAddress* linked_address) const {
-  return head_ == linked_address || linked_address->next_ ||
-         linked_address->prev_;
-}
-
-void Simulator::GlobalMonitor::PrependProcessor_Locked(
+void Simulator::GlobalMonitor::PrependLinkedAddress(
     LinkedAddress* linked_address) {
-  if (IsProcessorInLinkedList_Locked(linked_address)) {
-    return;
-  }
-
+  base::MutexGuard lock_guard(&mutex_);
   if (head_) {
     head_->prev_ = linked_address;
   }
   linked_address->prev_ = nullptr;
   linked_address->next_ = head_;
   head_ = linked_address;
+  num_linked_address_++;
 }
 
 void Simulator::GlobalMonitor::RemoveLinkedAddress(
     LinkedAddress* linked_address) {
-  base::MutexGuard lock_guard(&mutex);
-  if (!IsProcessorInLinkedList_Locked(linked_address)) {
-    return;
-  }
+  base::MutexGuard lock_guard(&mutex_);
 
   if (linked_address->prev_) {
     linked_address->prev_->next_ = linked_address->next_;
@@ -8339,9 +8785,22 @@ void Simulator::GlobalMonitor::RemoveLinkedAddress(
   }
   linked_address->prev_ = nullptr;
   linked_address->next_ = nullptr;
+  num_linked_address_--;
 }
 
 #undef SScanF
+#undef BRACKETS
+
+void Simulator::DoSwitchStackLimit(Instruction* instr) {
+  const int64_t stack_limit = get_register(kSimulatorBreakArgument.code());
+  // stack_limit represents js limit and adjusted by extra runaway gap.
+  // Also, stack switching code reads js_limit generated by
+  // {Simulator::StackLimit} and then resets it back here.
+  // So without adjusting back incoming value by safety gap
+  // {stack_limit_} will be shortened by kAdditionalStackMargin yielding
+  // positive feedback loop.
+  stack_limit_ = static_cast<uintptr_t>(stack_limit - kAdditionalStackMargin);
+}
 
 }  // namespace internal
 }  // namespace v8

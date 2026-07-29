@@ -27,6 +27,7 @@ class SafepointEntry;
 class RootVisitor;
 
 enum class Builtin;
+enum class LazyDeoptimizeReason : uint8_t;
 
 // Code is a container for data fields related to its associated
 // {InstructionStream} object. Since {InstructionStream} objects reside on
@@ -52,6 +53,7 @@ enum class Builtin;
 //  |           ...            |  <-- MS + handler_table_offset()
 //  |                          |  <-- MS + constant_pool_offset()
 //  |                          |  <-- MS + code_comments_offset()
+//  |                          |  <-- MS + jump_table_info_offset()
 //  |                          |  <-- MS + unwinding_info_offset()
 //  +--------------------------+  <-- MetadataEnd()
 //
@@ -92,6 +94,9 @@ class Code : public ExposedTrustedObject {
 
   inline CodeEntrypointTag entrypoint_tag() const;
 
+  // The sandboxing mode that this code expects to run in.
+  inline CodeSandboxingMode sandboxing_mode() const;
+
   inline void SetInstructionStreamAndInstructionStart(
       IsolateForSandbox isolate, Tagged<InstructionStream> code,
       WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
@@ -101,8 +106,8 @@ class Code : public ExposedTrustedObject {
   inline void UpdateInstructionStart(IsolateForSandbox isolate,
                                      Tagged<InstructionStream> istream);
 
-  inline void initialize_flags(CodeKind kind, bool is_turbofanned,
-                               int stack_slots);
+  inline void initialize_flags(CodeKind kind, bool is_context_specialized,
+                               bool is_turbofanned);
 
   // Clear uninitialized padding space. This ensures that the snapshot content
   // is deterministic.
@@ -113,23 +118,29 @@ class Code : public ExposedTrustedObject {
   void FlushICache() const;
 
   DECL_PRIMITIVE_ACCESSORS(can_have_weak_objects, bool)
-  DECL_PRIMITIVE_ACCESSORS(marked_for_deoptimization, bool)
+  DECL_PRIMITIVE_GETTER(marked_for_deoptimization, bool)
+#if V8_ENABLE_GEARBOX
+  DECL_PRIMITIVE_ACCESSORS(is_gearbox_placeholder_builtin, bool)
+#endif  // V8_ENABLE_GEARBOX
 
   DECL_PRIMITIVE_ACCESSORS(metadata_size, int)
   // [handler_table_offset]: The offset where the exception handler table
   // starts.
   DECL_PRIMITIVE_ACCESSORS(handler_table_offset, int)
+  // [jump_table_info offset]: Offset of the jump table info.
+  DECL_PRIMITIVE_ACCESSORS(jump_table_info_offset, int32_t)
   // [unwinding_info_offset]: Offset of the unwinding info section.
   DECL_PRIMITIVE_ACCESSORS(unwinding_info_offset, int32_t)
   // [deoptimization_data]: Array containing data for deopt for non-baseline
   // code.
-  DECL_ACCESSORS(deoptimization_data, Tagged<ProtectedFixedArray>)
+  DECL_ACCESSORS(deoptimization_data, Tagged<DeoptimizationData>)
   // [parameter_count]: The number of formal parameters, including the
   // receiver. Currently only available for optimized functions.
   // TODO(saelo): make this always available. This is just a matter of figuring
   // out how to obtain the parameter count during code generation when no
   // BytecodeArray is available from which it can be copied.
   DECL_PRIMITIVE_ACCESSORS(parameter_count, uint16_t)
+  inline uint16_t parameter_count_without_receiver() const;
   DECL_PRIMITIVE_ACCESSORS(wasm_js_tagged_parameter_count, uint16_t)
   DECL_PRIMITIVE_ACCESSORS(wasm_js_first_tagged_parameter, uint16_t)
 
@@ -185,6 +196,9 @@ class Code : public ExposedTrustedObject {
   inline Builtin builtin_id() const;
   inline bool is_builtin() const;
 
+  inline bool is_disabled_builtin() const;
+  inline void set_is_disabled_builtin(bool value);
+
   inline bool is_optimized_code() const;
   inline bool is_wasm_code() const;
 
@@ -194,6 +208,7 @@ class Code : public ExposedTrustedObject {
 
   // Tells whether the code checks the tiering state in the function's feedback
   // vector.
+  // TODO(olivfi, 42204201): Remove this once leaptiering is enabled everywhere.
   inline bool checks_tiering_state() const;
 
   // Tells whether the outgoing parameters of this code are tagged pointers.
@@ -207,6 +222,10 @@ class Code : public ExposedTrustedObject {
   // TurboFan optimizing compiler.
   inline bool is_turbofanned() const;
 
+  // [is_context_specialized]: Tells whether the code object was specialized to
+  // a constant context.
+  inline bool is_context_specialized() const;
+
   // [uses_safepoint_table]: Whether this InstructionStream object uses
   // safepoint tables (note the table may still be empty, see
   // has_safepoint_table).
@@ -214,10 +233,12 @@ class Code : public ExposedTrustedObject {
 
   // [stack_slots]: If {uses_safepoint_table()}, the number of stack slots
   // reserved in the code prologue; otherwise 0.
-  inline int stack_slots() const;
+  inline uint32_t stack_slots() const;
 
   inline Tagged<TrustedByteArray> SourcePositionTable(
       Isolate* isolate, Tagged<SharedFunctionInfo> sfi) const;
+  int SourcePosition(int offset) const;
+  int SourceStatementPosition(int offset) const;
 
   inline Address safepoint_table_address() const;
   inline int safepoint_table_size() const;
@@ -234,6 +255,10 @@ class Code : public ExposedTrustedObject {
   inline Address code_comments() const;
   inline int code_comments_size() const;
   inline bool has_code_comments() const;
+
+  inline Address jump_table_info() const;
+  inline int jump_table_info_size() const;
+  inline bool has_jump_table_info() const;
 
   inline Address unwinding_info_start() const;
   inline Address unwinding_info_end() const;
@@ -252,6 +277,9 @@ class Code : public ExposedTrustedObject {
 
   inline Address metadata_start() const;
   inline Address metadata_end() const;
+
+  inline void set_js_dispatch_handle(JSDispatchHandle handle);
+  inline JSDispatchHandle js_dispatch_handle() const;
 
   // The size of the associated InstructionStream object, if it exists.
   inline int InstructionStreamObjectSize() const;
@@ -283,16 +311,32 @@ class Code : public ExposedTrustedObject {
   SafepointEntry GetSafepointEntry(Isolate* isolate, Address pc);
   MaglevSafepointEntry GetMaglevSafepointEntry(Isolate* isolate, Address pc);
 
-  void SetMarkedForDeoptimization(Isolate* isolate, const char* reason);
+  void SetMarkedForDeoptimization(Isolate* isolate,
+                                  LazyDeoptimizeReason reason);
+  void TraceMarkForDeoptimization(Isolate* isolate,
+                                  LazyDeoptimizeReason reason);
 
   inline bool CanContainWeakObjects();
   inline bool IsWeakObject(Tagged<HeapObject> object);
   static inline bool IsWeakObjectInOptimizedCode(Tagged<HeapObject> object);
+  inline bool IsWeakObjectInOptimizedCode(JSDispatchHandle);
   static inline bool IsWeakObjectInDeoptimizationLiteralArray(
       Tagged<Object> object);
 
+#if V8_ENABLE_GEARBOX
+  // These helper methods copy necessary contents from src builtin (gearbox
+  // variants or kIllegal) code object to dst (gearbox placeholder) code object,
+  // which helps v8 to find correct instruction/meta data addresses.
+  static void CopyFieldsWithGearboxForSerialization(Tagged<Code> dst,
+                                                    Tagged<Code> src,
+                                                    Isolate* isolate);
+  static void CopyFieldsWithGearboxForDeserialization(Tagged<Code> dst,
+                                                      Tagged<Code> src,
+                                                      Isolate* isolate);
+#endif  // V8_ENABLE_GEARBOX
+
   // This function should be called only from GC.
-  void ClearEmbeddedObjects(Heap* heap);
+  void ClearEmbeddedObjectsAndJSDispatchHandles(Heap* heap);
 
   // [embedded_objects_cleared]: If CodeKindIsOptimizedJSFunction(kind), tells
   // whether the embedded objects in the code marked for deoptimization were
@@ -342,7 +386,6 @@ class Code : public ExposedTrustedObject {
                  Address current_pc = kNullAddress);
 #endif
 
-  DECL_CAST(Code)
   DECL_VERIFIER(Code)
 
 // Layout description.
@@ -375,6 +418,7 @@ class Code : public ExposedTrustedObject {
   /* referenced via the kSelfIndirectPointerOffset field */                    \
   V(kInstructionStartOffset, V8_ENABLE_SANDBOX_BOOL ? 0 : kSystemPointerSize)  \
   /* The serializer needs to copy bytes starting from here verbatim. */        \
+  V(kDispatchHandleOffset, kJSDispatchHandleSize)                              \
   V(kFlagsOffset, kUInt32Size)                                                 \
   V(kInstructionSizeOffset, kIntSize)                                          \
   V(kMetadataSizeOffset, kIntSize)                                             \
@@ -385,6 +429,7 @@ class Code : public ExposedTrustedObject {
   V(kUnwindingInfoOffsetOffset, kInt32Size)                                    \
   V(kConstantPoolOffsetOffset, V8_EMBEDDED_CONSTANT_POOL_BOOL ? kIntSize : 0)  \
   V(kCodeCommentsOffsetOffset, kIntSize)                                       \
+  V(kJumpTableInfoOffsetOffset, V8_JUMP_TABLE_INFO_BOOL ? kInt32Size : 0)      \
   /* This field is currently only used during deoptimization. If this space */ \
   /* is ever needed for other purposes, it would probably be possible to */    \
   /* obtain the parameter count from the BytecodeArray instead. */             \
@@ -411,18 +456,24 @@ class Code : public ExposedTrustedObject {
 
   class BodyDescriptor;
 
+#if V8_ENABLE_GEARBOX
+#define WITH_GEARBOX_FLAG(V, _) V(IsGearboxPlaceholderField, bool, 1, _)
+#else
+#define WITH_GEARBOX_FLAG(V, _)
+#endif  // V8_ENABLE_GEARBOX
+
   // Flags layout.
 #define FLAGS_BIT_FIELDS(V, _)                \
   V(KindField, CodeKind, 4, _)                \
+  V(IsDisabledBuiltinField, bool, 1, _)       \
   V(IsTurbofannedField, bool, 1, _)           \
-  /* Steal bits from here if needed: */       \
-  V(StackSlotsField, int, 24, _)              \
+  V(IsContextSpecializedField, bool, 1, _)    \
+  WITH_GEARBOX_FLAG(V, _)                     \
   V(MarkedForDeoptimizationField, bool, 1, _) \
   V(EmbeddedObjectsClearedField, bool, 1, _)  \
   V(CanHaveWeakObjectsField, bool, 1, _)
   DEFINE_BIT_FIELDS(FLAGS_BIT_FIELDS)
 #undef FLAGS_BIT_FIELDS
-  static_assert(FLAGS_BIT_FIELDS_Ranges::kBitsCount == 32);
   static_assert(FLAGS_BIT_FIELDS_Ranges::kBitsCount <=
                 FIELD_SIZE(kFlagsOffset) * kBitsPerByte);
   static_assert(kCodeKindCount <= KindField::kNumValues);
@@ -432,11 +483,14 @@ class Code : public ExposedTrustedObject {
       MarkedForDeoptimizationField::kShift;
   static const int kIsTurbofannedBit = IsTurbofannedField::kShift;
 
-  // Reserve one argument count value as the "don't adapt arguments" sentinel.
   static const int kArgumentsBits = 16;
-  static const int kMaxArguments = (1 << kArgumentsBits) - 2;
+  // Slightly less than 2^kArgumentBits-1 to allow for extra implicit arguments
+  // on the call nodes without overflowing the uint16_t input_count.
+  static const int kMaxArguments = (1 << kArgumentsBits) - 10;
 
  private:
+  DECL_PRIMITIVE_SETTER(marked_for_deoptimization, bool)
+
   inline void set_instruction_start(IsolateForSandbox isolate, Address value);
 
   // TODO(jgruber): These field names are incomplete, we've squashed in more
@@ -484,8 +538,6 @@ class Code : public ExposedTrustedObject {
 // (checked) casts do not work on GcSafeCode.
 class GcSafeCode : public HeapObject {
  public:
-  DECL_CAST(GcSafeCode)
-
   // Use with care, this casts away knowledge that we're dealing with a
   // special-semantics object.
   inline Tagged<Code> UnsafeCastToCode() const;
@@ -507,7 +559,9 @@ class GcSafeCode : public HeapObject {
   inline Tagged<Object> raw_instruction_stream() const;
   inline Address constant_pool() const;
   inline Address safepoint_table_address() const;
-  inline int stack_slots() const;
+  inline uint32_t stack_slots() const;
+  inline uint16_t parameter_count() const;
+  inline uint16_t parameter_count_without_receiver() const;
 
   inline int GetOffsetFromInstructionStart(Isolate* isolate, Address pc) const;
   inline Address InstructionStart(Isolate* isolate, Address pc) const;
@@ -531,7 +585,6 @@ class CodeWrapper : public Struct {
  public:
   DECL_CODE_POINTER_ACCESSORS(code)
 
-  DECL_CAST(CodeWrapper)
   DECL_PRINTER(CodeWrapper)
   DECL_VERIFIER(CodeWrapper)
 

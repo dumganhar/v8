@@ -5,6 +5,7 @@
 #ifndef V8_COMPILER_TURBOSHAFT_JS_GENERIC_LOWERING_REDUCER_H_
 #define V8_COMPILER_TURBOSHAFT_JS_GENERIC_LOWERING_REDUCER_H_
 
+#include "src/compiler/globals.h"
 #include "src/compiler/turboshaft/assembler.h"
 #include "src/compiler/turboshaft/index.h"
 #include "src/compiler/turboshaft/operations.h"
@@ -29,35 +30,40 @@ class JSGenericLoweringReducer : public Next {
 
   V<Object> REDUCE(GenericBinop)(V<Object> left, V<Object> right,
                                  V<FrameState> frame_state, V<Context> context,
-                                 GenericBinopOp::Kind kind) {
+                                 GenericBinopOp::Kind kind,
+                                 LazyDeoptOnThrow lazy_deopt_on_throw) {
     // Note that we're **not** calling the __WithFeedback variants of the
     // generic builtins, on purpose. There have been several experiments with
     // this in the past, and we always concluded that it wasn't worth it. The
     // latest experiment was ended with this commit:
     // https://crrev.com/c/4110858.
     switch (kind) {
-#define CASE(Name)                    \
-  case GenericBinopOp::Kind::k##Name: \
-    return __ CallBuiltin_##Name(isolate_, frame_state, context, left, right);
-      GENERIC_BINOP_LIST(CASE)
-#undef CASE
+#define BINOP_CASE(Name)                                      \
+  case GenericBinopOp::Kind::k##Name:                         \
+    return __ template CallBuiltin<builtin::Name>(            \
+        frame_state, context, {.left = left, .right = right}, \
+        lazy_deopt_on_throw);
+      GENERIC_BINOP_LIST(BINOP_CASE)
+#undef BINOP_CASE
     }
   }
 
   V<Object> REDUCE(GenericUnop)(V<Object> input, V<FrameState> frame_state,
-                                V<Context> context, GenericUnopOp::Kind kind) {
+                                V<Context> context, GenericUnopOp::Kind kind,
+                                LazyDeoptOnThrow lazy_deopt_on_throw) {
     switch (kind) {
-#define CASE(Name)                   \
-  case GenericUnopOp::Kind::k##Name: \
-    return __ CallBuiltin_##Name(isolate_, frame_state, context, input);
-      GENERIC_UNOP_LIST(CASE)
-#undef CASE
+#define UNOP_CASE(Name)                            \
+  case GenericUnopOp::Kind::k##Name:               \
+    return __ template CallBuiltin<builtin::Name>( \
+        frame_state, context, {.input = input}, lazy_deopt_on_throw);
+      GENERIC_UNOP_LIST(UNOP_CASE)
+#undef UNOP_CASE
     }
   }
 
-  OpIndex REDUCE(ToNumberOrNumeric)(V<Object> input, OpIndex frame_state,
-                                    V<Context> context,
-                                    Object::Conversion kind) {
+  OpIndex REDUCE(ToNumberOrNumeric)(V<Object> input, V<FrameState> frame_state,
+                                    V<Context> context, Object::Conversion kind,
+                                    LazyDeoptOnThrow lazy_deopt_on_throw) {
     Label<Object> done(this);
     // Avoid builtin call for Smis and HeapNumbers.
     GOTO_IF(__ ObjectIs(input, ObjectIsOp::Kind::kNumber,
@@ -66,11 +72,13 @@ class JSGenericLoweringReducer : public Next {
     switch (kind) {
       case Object::Conversion::kToNumber:
         GOTO(done,
-             __ CallBuiltin_ToNumber(isolate_, frame_state, context, input));
+             __ template CallBuiltin<builtin::ToNumber>(
+                 frame_state, context, {.input = input}, lazy_deopt_on_throw));
         break;
       case Object::Conversion::kToNumeric:
         GOTO(done,
-             __ CallBuiltin_ToNumeric(isolate_, frame_state, context, input));
+             __ template CallBuiltin<builtin::ToNumeric>(
+                 frame_state, context, {.input = input}, lazy_deopt_on_throw));
         break;
     }
     BIND(done, result);

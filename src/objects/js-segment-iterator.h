@@ -1,6 +1,7 @@
 // Copyright 2020 the V8 project authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 #ifndef V8_OBJECTS_JS_SEGMENT_ITERATOR_H_
 #define V8_OBJECTS_JS_SEGMENT_ITERATOR_H_
 
@@ -33,14 +34,15 @@ class JSSegmentIterator
     : public TorqueGeneratedJSSegmentIterator<JSSegmentIterator, JSObject> {
  public:
   // ecma402 #sec-CreateSegmentIterator
-  V8_WARN_UNUSED_RESULT static MaybeHandle<JSSegmentIterator> Create(
-      Isolate* isolate, Handle<String> input_string,
-      icu::BreakIterator* icu_break_iterator,
+  V8_WARN_UNUSED_RESULT static MaybeDirectHandle<JSSegmentIterator> Create(
+      Isolate* isolate, DirectHandle<String> input_string,
+      DirectHandle<Managed<icu::BreakIterator>> incoming_break_iterator,
       JSSegmenter::Granularity granularity);
 
   // ecma402 #sec-segment-iterator-prototype-next
-  V8_WARN_UNUSED_RESULT static MaybeHandle<JSReceiver> Next(
-      Isolate* isolate, Handle<JSSegmentIterator> segment_iterator_holder);
+  V8_WARN_UNUSED_RESULT static MaybeDirectHandle<JSReceiver> Next(
+      Isolate* isolate,
+      DirectHandle<JSSegmentIterator> segment_iterator_holder);
 
   Handle<String> GranularityAsString(Isolate* isolate) const;
 
@@ -57,9 +59,9 @@ class JSSegmentIterator
   // Bit positions in |flags|.
   DEFINE_TORQUE_GENERATED_JS_SEGMENT_ITERATOR_FLAGS()
 
-  static_assert(JSSegmenter::Granularity::GRAPHEME <= GranularityBits::kMax);
-  static_assert(JSSegmenter::Granularity::WORD <= GranularityBits::kMax);
-  static_assert(JSSegmenter::Granularity::SENTENCE <= GranularityBits::kMax);
+  static_assert(GranularityBits::is_valid(JSSegmenter::Granularity::GRAPHEME));
+  static_assert(GranularityBits::is_valid(JSSegmenter::Granularity::WORD));
+  static_assert(GranularityBits::is_valid(JSSegmenter::Granularity::SENTENCE));
 
   TQ_OBJECT_CONSTRUCTORS(JSSegmentIterator)
 };
@@ -67,8 +69,6 @@ class JSSegmentIterator
 class JSSegmentDataObject
     : public TorqueGeneratedJSSegmentDataObject<JSSegmentDataObject, JSObject> {
  public:
-  DECL_CAST(JSSegmentDataObject)
-
  private:
   TQ_OBJECT_CONSTRUCTORS(JSSegmentDataObject)
 };
@@ -77,8 +77,6 @@ class JSSegmentDataObjectWithIsWordLike
     : public TorqueGeneratedJSSegmentDataObjectWithIsWordLike<
           JSSegmentDataObjectWithIsWordLike, JSSegmentDataObject> {
  public:
-  DECL_CAST(JSSegmentDataObjectWithIsWordLike)
-
  private:
   TQ_OBJECT_CONSTRUCTORS(JSSegmentDataObjectWithIsWordLike)
 };

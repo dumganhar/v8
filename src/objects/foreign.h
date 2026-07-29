@@ -6,12 +6,12 @@
 #define V8_OBJECTS_FOREIGN_H_
 
 #include "src/objects/heap-object.h"
+#include "src/objects/objects-body-descriptors.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
 
-namespace v8 {
-namespace internal {
+namespace v8::internal {
 
 #include "torque-generated/src/objects/foreign-tq.inc"
 
@@ -33,7 +33,12 @@ class Foreign : public TorqueGeneratedForeign<Foreign, HeapObject> {
 
   // Load the address without performing a type check. Only use this when the
   // returned pointer will not be dereferenced.
+  inline Address foreign_address_unchecked(IsolateForSandbox isolate) const;
   inline Address foreign_address_unchecked() const;
+
+  // Get the tag of this foreign from the external pointer table. Non-sandbox
+  // builds will always return {kAnyExternalPointerTag}.
+  inline ExternalPointerTag GetTag() const;
 
   // Dispatched behavior.
   DECL_PRINTER(Foreign)
@@ -48,14 +53,29 @@ class Foreign : public TorqueGeneratedForeign<Foreign, HeapObject> {
   static_assert(IsAligned(kForeignAddressOffset, kExternalPointerSlotSize));
 #endif
 
-  class BodyDescriptor;
+  using BodyDescriptor = StackedBodyDescriptor<
+      FixedBodyDescriptorFor<Foreign>,
+      WithExternalPointer<kForeignAddressOffset,
+                          kAnyForeignExternalPointerTagRange>>;
 
  private:
   TQ_OBJECT_CONSTRUCTORS(Foreign)
 };
 
-}  // namespace internal
-}  // namespace v8
+// TrustedForeign is similar to Foreign but lives in trusted space.
+class TrustedForeign
+    : public TorqueGeneratedTrustedForeign<TrustedForeign, TrustedObject> {
+ public:
+  // Dispatched behavior.
+  DECL_PRINTER(TrustedForeign)
+
+  using BodyDescriptor = FixedBodyDescriptorFor<TrustedForeign>;
+
+ private:
+  TQ_OBJECT_CONSTRUCTORS(TrustedForeign)
+};
+
+}  // namespace v8::internal
 
 #include "src/objects/object-macros-undef.h"
 

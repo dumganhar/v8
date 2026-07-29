@@ -5,8 +5,10 @@
 #ifndef V8_SANDBOX_EXTERNAL_POINTER_TABLE_INL_H_
 #define V8_SANDBOX_EXTERNAL_POINTER_TABLE_INL_H_
 
-#include "src/sandbox/compactible-external-entity-table-inl.h"
 #include "src/sandbox/external-pointer-table.h"
+// Include the non-inl header before the rest of the headers.
+
+#include "src/sandbox/compactible-external-entity-table-inl.h"
 #include "src/sandbox/external-pointer.h"
 
 #ifdef V8_COMPRESS_POINTERS
@@ -14,58 +16,69 @@
 namespace v8 {
 namespace internal {
 
-void ExternalPointerTableEntry::MakeExternalPointerEntry(
-    Address value, ExternalPointerTag tag) {
-  DCHECK_EQ(0, value & kExternalPointerTagMask);
-  DCHECK(tag & kExternalPointerMarkBit);
+void ExternalPointerTableEntry::MakeExternalPointerEntry(Address value,
+                                                         ExternalPointerTag tag,
+                                                         bool mark_as_alive) {
+  // The 2nd most significant byte must be empty as we store the tag in int.
+  DCHECK_EQ(0, value & kExternalPointerTagAndMarkbitMask);
   DCHECK_NE(tag, kExternalPointerFreeEntryTag);
   DCHECK_NE(tag, kExternalPointerEvacuationEntryTag);
 
   Payload new_payload(value, tag);
+  if (V8_UNLIKELY(mark_as_alive)) {
+    new_payload.SetMarkBit();
+  }
   payload_.store(new_payload, std::memory_order_relaxed);
   MaybeUpdateRawPointerForLSan(value);
 }
 
 Address ExternalPointerTableEntry::GetExternalPointer(
-    ExternalPointerTag tag) const {
+    ExternalPointerTagRange tag_range) const {
   auto payload = payload_.load(std::memory_order_relaxed);
-  DCHECK(payload.ContainsExternalPointer());
-  return payload.Untag(tag);
+  DCHECK(payload.ContainsPointer());
+  return payload.Untag(tag_range);
 }
 
 void ExternalPointerTableEntry::SetExternalPointer(Address value,
                                                    ExternalPointerTag tag) {
-  DCHECK_EQ(0, value & kExternalPointerTagMask);
-  DCHECK(tag & kExternalPointerMarkBit);
-  DCHECK(payload_.load(std::memory_order_relaxed).ContainsExternalPointer());
+  // The 2nd most significant byte must be empty as we store the tag in int.
+  DCHECK_EQ(0, value & kExternalPointerTagAndMarkbitMask);
+  DCHECK(payload_.load(std::memory_order_relaxed).ContainsPointer());
 
   Payload new_payload(value, tag);
+  // Writing an entry currently also marks it as alive. In the future, we might
+  // want to drop this and instead use write barriers where necessary.
+  new_payload.SetMarkBit();
   payload_.store(new_payload, std::memory_order_relaxed);
   MaybeUpdateRawPointerForLSan(value);
 }
 
 bool ExternalPointerTableEntry::HasExternalPointer(
-    ExternalPointerTag tag) const {
+    ExternalPointerTagRange tag_range) const {
   auto payload = payload_.load(std::memory_order_relaxed);
-  return tag == kAnyExternalPointerTag || payload.IsTaggedWith(tag);
+  if (!payload.ContainsPointer()) return false;
+  return payload.IsTaggedWithTagIn(tag_range);
 }
 
 Address ExternalPointerTableEntry::ExchangeExternalPointer(
     Address value, ExternalPointerTag tag) {
-  DCHECK_EQ(0, value & kExternalPointerTagMask);
-  DCHECK(tag & kExternalPointerMarkBit);
+  // The 2nd most significant byte must be empty as we store the tag in int.
+  DCHECK_EQ(0, value & kExternalPointerTagAndMarkbitMask);
 
   Payload new_payload(value, tag);
+  // Writing an entry currently also marks it as alive. In the future, we might
+  // want to drop this and instead use write barriers where necessary.
+  new_payload.SetMarkBit();
   Payload old_payload =
       payload_.exchange(new_payload, std::memory_order_relaxed);
-  DCHECK(old_payload.ContainsExternalPointer());
+  DCHECK(old_payload.ContainsPointer());
   MaybeUpdateRawPointerForLSan(value);
   return old_payload.Untag(tag);
 }
 
 ExternalPointerTag ExternalPointerTableEntry::GetExternalPointerTag() const {
   auto payload = payload_.load(std::memory_order_relaxed);
-  DCHECK(payload.ContainsExternalPointer());
+  DCHECK(payload.ContainsPointer());
   return payload.ExtractTag();
 }
 
@@ -97,7 +110,7 @@ uint32_t ExternalPointerTableEntry::GetNextFreelistEntryIndex() const {
 
 void ExternalPointerTableEntry::Mark() {
   auto old_payload = payload_.load(std::memory_order_relaxed);
-  DCHECK(old_payload.ContainsExternalPointer());
+  DCHECK(old_payload.ContainsPointer());
 
   auto new_payload = old_payload;
   new_payload.SetMarkBit();
@@ -105,7 +118,7 @@ void ExternalPointerTableEntry::Mark() {
   // We don't need to perform the CAS in a loop: if the new value is not equal
   // to the old value, then the mutator must've just written a new value into
   // the entry. This in turn must've set the marking bit already (see e.g.
-  // StoreExternalPointer), so we don't need to do it again.
+  // SetExternalPointer), so we don't need to do it again.
   bool success = payload_.compare_exchange_strong(old_payload, new_payload,
                                                   std::memory_order_relaxed);
   DCHECK(success || old_payload.HasMarkBitSet());
@@ -126,7 +139,7 @@ void ExternalPointerTableEntry::Evacuate(ExternalPointerTableEntry& dest,
                                          EvacuateMarkMode mode) {
   auto payload = payload_.load(std::memory_order_relaxed);
   // We expect to only evacuate entries containing external pointers.
-  DCHECK(payload.ContainsExternalPointer());
+  DCHECK(payload.ContainsPointer());
 
   switch (mode) {
     case EvacuateMarkMode::kTransferMark:
@@ -149,34 +162,33 @@ void ExternalPointerTableEntry::Evacuate(ExternalPointerTableEntry& dest,
   MakeZappedEntry();
 }
 
+void ExternalPointerTableEntry::CopyFrom(const ExternalPointerTableEntry& src) {
+  auto payload = src.payload_.load(std::memory_order_relaxed);
+  DCHECK(payload.ContainsPointer());
+  payload_.store(payload, std::memory_order_relaxed);
+#if defined(LEAK_SANITIZER)
+  raw_pointer_for_lsan_ = src.raw_pointer_for_lsan_;
+#endif  // LEAK_SANITIZER
+}
+
 Address ExternalPointerTable::Get(ExternalPointerHandle handle,
-                                  ExternalPointerTag tag) const {
+                                  ExternalPointerTagRange tag_range) const {
   uint32_t index = HandleToIndex(handle);
-#if defined(V8_USE_ADDRESS_SANITIZER)
-  // We rely on the tagging scheme to produce non-canonical addresses when an
-  // entry isn't tagged with the expected tag. Such "safe" crashes can then be
-  // filtered out by our sandbox crash filter. However, when ASan is active, it
-  // may perform its shadow memory access prior to the actual memory access.
-  // For a non-canonical address, this can lead to a segfault at a _canonical_
-  // address, which our crash filter can then not distinguish from a "real"
-  // crash. Therefore, in ASan builds, we perform an additional CHECK here that
-  // the entry is tagged with the expected tag. The resulting CHECK failure
-  // will then be ignored by the crash filter.
-  // This check is, however, not needed when accessing the null entry, as that
-  // is always valid (it just contains nullptr).
-  CHECK(index == 0 || at(index).HasExternalPointer(tag));
-#else
-  // Otherwise, this is just a DCHECK.
-  DCHECK(index == 0 || at(index).HasExternalPointer(tag));
-#endif
-  return at(index).GetExternalPointer(tag);
+  DCHECK(index == 0 || at(index).HasExternalPointer(tag_range));
+  return at(index).GetExternalPointer(tag_range);
 }
 
 void ExternalPointerTable::Set(ExternalPointerHandle handle, Address value,
                                ExternalPointerTag tag) {
   DCHECK_NE(kNullExternalPointerHandle, handle);
   uint32_t index = HandleToIndex(handle);
+  // TODO(saelo): This works for now, but once we actually free the external
+  // object here, this will probably become awkward: it's likely not intuitive
+  // that a set_foo() call on some object causes another object to be freed.
+  // Probably at that point we should instead just forbid re-setting the
+  // external pointers if they are managed (via a DCHECK).
   FreeManagedResourceIfPresent(index);
+  TakeOwnershipOfManagedResourceIfNecessary(value, handle, tag);
   at(index).SetExternalPointer(value, tag);
 }
 
@@ -207,43 +219,42 @@ ExternalPointerHandle ExternalPointerTable::AllocateAndInitializeEntry(
     Space* space, Address initial_value, ExternalPointerTag tag) {
   DCHECK(space->BelongsTo(this));
   uint32_t index = AllocateEntry(space);
-  at(index).MakeExternalPointerEntry(initial_value, tag);
-
+  at(index).MakeExternalPointerEntry(initial_value, tag,
+                                     space->allocate_black());
   ExternalPointerHandle handle = IndexToHandle(index);
-
-  // If we allocated the entry for a managed resource, we need to also
-  // initialize that resource's back reference to the table entry.
-  if (IsManagedExternalPointerType(tag) && initial_value != kNullAddress) {
-    ManagedResource* resource =
-        reinterpret_cast<ManagedResource*>(initial_value);
-    DCHECK_EQ(resource->ept_entry_, kNullExternalPointerHandle);
-    resource->owning_table_ = this;
-    resource->ept_entry_ = handle;
-  }
-
+  TakeOwnershipOfManagedResourceIfNecessary(initial_value, handle, tag);
   return handle;
+}
+
+ExternalPointerHandle ExternalPointerTable::DuplicateEntry(
+    Space* space, ExternalPointerHandle handle) {
+  DCHECK_NE(handle, kNullExternalPointerHandle);
+  uint32_t old_index = HandleToIndex(handle);
+  uint32_t new_index = AllocateEntry(space);
+  if (new_index == 0) return kNullExternalPointerHandle;
+
+  // We do not call `TakeOwnershipOfManagedResourceIfNecessary` here as that
+  // method only has to be called for pointers owned by a `Managed` object, and
+  // for `Managed` objects it should never be necessary to duplicate the entry.
+  CHECK(!IsManagedExternalPointerType(at(old_index).GetExternalPointerTag()));
+
+  at(new_index).CopyFrom(at(old_index));
+  return IndexToHandle(new_index);
 }
 
 void ExternalPointerTable::Mark(Space* space, ExternalPointerHandle handle,
                                 Address handle_location) {
   DCHECK(space->BelongsTo(this));
 
-  // The handle_location must always contain the given handle. Except:
-  // - If the slot is lazily-initialized, the handle may transition from the
-  //   null handle to a valid handle. In that case, we'll return from this
-  //   function early (see below), which is fine since the newly-allocated
-  //   entry will already have been marked as alive during allocation.
-  // - If the slot is de-initialized, i.e. reset to the null handle. In that
-  //   case, we'll still mark the old entry as alive and potentially mark it for
-  //   evacuation. Both of these things are fine though: the entry is just kept
-  //   alive a little longer and compaction will detect that the slot has been
-  //   de-initialized and not perform the evacuation.
+  // The handle_location must always contain the given handle. Except if the
+  // slot is lazily-initialized. In that case, the handle may transition from
+  // the null handle to a valid handle. However, in that case the
+  // newly-allocated entry will already have been marked as alive during
+  // allocation, and so we don't need to do anything here.
 #ifdef DEBUG
   ExternalPointerHandle current_handle = base::AsAtomic32::Acquire_Load(
       reinterpret_cast<ExternalPointerHandle*>(handle_location));
-  DCHECK(handle == kNullExternalPointerHandle ||
-         current_handle == kNullExternalPointerHandle ||
-         handle == current_handle);
+  DCHECK(handle == kNullExternalPointerHandle || handle == current_handle);
 #endif
 
   // If the handle is null, it doesn't have an EPT entry; no mark is needed.
@@ -267,6 +278,8 @@ void ExternalPointerTable::Evacuate(Space* from_space, Space* to_space,
                                     EvacuateMarkMode mode) {
   DCHECK(from_space->BelongsTo(this));
   DCHECK(to_space->BelongsTo(this));
+
+  CHECK(IsValidHandle(handle));
 
   auto handle_ptr = reinterpret_cast<ExternalPointerHandle*>(handle_location);
 
@@ -341,11 +354,11 @@ bool ExternalPointerTable::Contains(Space* space,
 }
 
 void ExternalPointerTable::Space::NotifyExternalPointerFieldInvalidated(
-    Address field_address, ExternalPointerTag tag) {
+    Address field_address, ExternalPointerTagRange tag_range) {
   // We do not currently support invalidating fields containing managed
   // external pointers. If this is ever needed, we would probably need to free
   // the managed object here as we may otherwise fail to do so during sweeping.
-  DCHECK(!IsManagedExternalPointerType(tag));
+  DCHECK(!IsManagedExternalPointerType(tag_range));
 #ifdef DEBUG
   ExternalPointerHandle handle = base::AsAtomic32::Acquire_Load(
       reinterpret_cast<ExternalPointerHandle*>(field_address));
@@ -361,6 +374,16 @@ void ExternalPointerTable::ManagedResource::ZapExternalPointerTableEntry() {
   ept_entry_ = kNullExternalPointerHandle;
 }
 
+void ExternalPointerTable::TakeOwnershipOfManagedResourceIfNecessary(
+    Address value, ExternalPointerHandle handle, ExternalPointerTag tag) {
+  if (IsManagedExternalPointerType(tag) && value != kNullAddress) {
+    ManagedResource* resource = reinterpret_cast<ManagedResource*>(value);
+    DCHECK_EQ(resource->ept_entry_, kNullExternalPointerHandle);
+    resource->owning_table_ = this;
+    resource->ept_entry_ = handle;
+  }
+}
+
 void ExternalPointerTable::FreeManagedResourceIfPresent(uint32_t entry_index) {
   // In the future, this would be where we actually delete the external
   // resource. Currently, the deletion still happens elsewhere, and so here we
@@ -368,7 +391,17 @@ void ExternalPointerTable::FreeManagedResourceIfPresent(uint32_t entry_index) {
   // does not attempt to zap its entry when it is eventually destroyed.
   if (Address addr = at(entry_index).ExtractManagedResourceOrNull()) {
     ManagedResource* resource = reinterpret_cast<ManagedResource*>(addr);
-    DCHECK_EQ(resource->ept_entry_, IndexToHandle(entry_index));
+
+    // This can currently only happen during snapshot stress mode as we cannot
+    // normally serialized managed resources. In snapshot stress mode, the new
+    // isolate will be destroyed and the old isolate (really, the old isolate's
+    // external pointer table) therefore effectively retains ownership of the
+    // resource. As such, we need to save and restore the relevant fields of
+    // the external resource. Once the external pointer table itself destroys
+    // the managed resource when freeing the corresponding table entry, this
+    // workaround can be removed again.
+    DCHECK_IMPLIES(!v8_flags.stress_snapshot,
+                   resource->ept_entry_ == IndexToHandle(entry_index));
     resource->ept_entry_ = kNullExternalPointerHandle;
   }
 }

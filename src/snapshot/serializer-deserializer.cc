@@ -67,21 +67,9 @@ bool SerializerDeserializer::CanBeDeferred(Tagged<HeapObject> o,
   // TODO(leszeks): Could we defer string serialization if forward references
   // were resolved after object post processing?
   return !IsInternalizedString(o) &&
-         !(IsJSObject(o) && JSObject::cast(o)->GetEmbedderFieldCount() > 0) &&
+         !(IsJSObject(o) && Cast<JSObject>(o)->GetEmbedderFieldCount() > 0) &&
          !IsByteArray(o) &&
-         !(IsEmbedderDataArray(o) && EmbedderDataArray::cast(o)->length() > 0);
-}
-
-void SerializerDeserializer::RestoreExternalReferenceRedirector(
-    Isolate* isolate, Tagged<AccessorInfo> accessor_info) {
-  DisallowGarbageCollection no_gc;
-  accessor_info->init_getter_redirection(isolate);
-}
-
-void SerializerDeserializer::RestoreExternalReferenceRedirector(
-    Isolate* isolate, Tagged<FunctionTemplateInfo> function_template_info) {
-  DisallowGarbageCollection no_gc;
-  function_template_info->init_callback_redirection(isolate);
+         !(IsEmbedderDataArray(o) && Cast<EmbedderDataArray>(o)->length() > 0);
 }
 
 }  // namespace internal

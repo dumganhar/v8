@@ -55,7 +55,7 @@ class WasmLiftoffSetupFrameConstants : public TypedFrameConstants {
       TYPED_FRAME_PUSHED_VALUE_OFFSET(4)};
 
   // SP-relative.
-  static constexpr int kWasmInstanceOffset = 2 * kSystemPointerSize;
+  static constexpr int kWasmInstanceDataOffset = 2 * kSystemPointerSize;
   static constexpr int kDeclaredFunctionIndexOffset = 1 * kSystemPointerSize;
   static constexpr int kNativeModuleOffset = 0;
 };
@@ -74,8 +74,9 @@ class WasmDebugBreakFrameConstants : public TypedFrameConstants {
   // Omit ebx, which is the root register.
   static constexpr RegList kPushedGpRegs = {eax, ecx, edx, esi, edi};
 
+  // Omit xmm0, which is not an allocatable fp register.
   // Omit xmm7, which is the kScratchDoubleReg.
-  static constexpr DoubleRegList kPushedFpRegs = {xmm0, xmm1, xmm2, xmm3,
+  static constexpr DoubleRegList kPushedFpRegs = {xmm1, xmm2, xmm3,
                                                   xmm4, xmm5, xmm6};
 
   static constexpr int kNumPushedGpRegisters = kPushedGpRegs.Count();

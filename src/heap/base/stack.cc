@@ -8,8 +8,8 @@
 
 #include "src/base/sanitizer/asan.h"
 #include "src/base/sanitizer/msan.h"
-#include "src/heap/base/memory-tagging.h"
 #include "src/base/sanitizer/tsan.h"
+#include "src/heap/base/memory-tagging.h"
 
 namespace heap::base {
 
@@ -47,6 +47,9 @@ namespace {
 // No ASAN support as accessing fake frames otherwise results in
 // "stack-use-after-scope" warnings.
 DISABLE_ASAN
+// No HW ASAN support as stack iteration constructs pointers from arbitrary
+// memory which may e.g. lead to tag mismatches.
+DISABLE_HWASAN
 // No TSAN support as the stack may not be exclusively owned by the current
 // thread, e.g., for interrupt handling. Atomic reads are not enough as the
 // other thread may use a lock to synchronize the access.
@@ -72,14 +75,14 @@ void IterateAsanFakeFrameIfNecessary(StackVisitor* visitor,
       for (const void* const* current =
                reinterpret_cast<const void* const*>(fake_frame_begin);
            current < fake_frame_end; ++current) {
-        const void* address = *current;
-        if (address == nullptr) continue;
-        visitor->VisitPointer(address);
+        const void* address_curr = *current;
+        if (address_curr == nullptr) continue;
+        visitor->VisitPointer(address_curr);
       }
     }
   }
 }
-#else
+#else   // !V8_USE_ADDRESS_SANITIZER
 void IterateAsanFakeFrameIfNecessary(StackVisitor* visitor,
                                      const Stack::Segment& segment,
                                      const void* address) {}
@@ -102,9 +105,9 @@ void IteratePointersInUnsafeStackIfNecessary(StackVisitor* visitor,
   for (const void* const* current =
            reinterpret_cast<const void* const*>(segment.unsafe_stack_top);
        current < segment.unsafe_stack_start; ++current) {
-    const void* address = *current;
-    if (address == nullptr) continue;
-    visitor->VisitPointer(address);
+    const void* address_curr = *current;
+    if (address_curr == nullptr) continue;
+    visitor->VisitPointer(address_curr);
   }
 #endif  // V8_USE_SAFE_STACK
 }
@@ -114,6 +117,9 @@ void IteratePointersInUnsafeStackIfNecessary(StackVisitor* visitor,
 V8_NOINLINE
 // No ASAN support as method accesses redzones while walking the stack.
 DISABLE_ASAN
+// No HW ASAN support as stack iteration constructs pointers from arbitrary
+// memory which may e.g. lead to tag mismatches.
+DISABLE_HWASAN
 // No TSAN support as the stack may not be exclusively owned by the current
 // thread, e.g., for interrupt handling. Atomic reads are not enough as the
 // other thread may use a lock to synchronize the access.
@@ -138,7 +144,9 @@ void IteratePointersInStack(StackVisitor* visitor,
     // into a local which is unpoisoned.
     const void* address = *current;
     MSAN_MEMORY_IS_INITIALIZED(&address, sizeof(address));
-    if (address == nullptr) continue;
+    if (address == nullptr) {
+      continue;
+    }
     visitor->VisitPointer(address);
     IterateAsanFakeFrameIfNecessary(visitor, segment, address);
   }
@@ -147,21 +155,34 @@ void IteratePointersInStack(StackVisitor* visitor,
 }  // namespace
 
 void Stack::IteratePointersForTesting(StackVisitor* visitor) {
-  SetMarkerAndCallback([this, visitor]() { IteratePointers(visitor); });
+  SetMarkerAndCallback([this, visitor]() {
+    IteratePointersUntilMarker(visitor);
+    IterateBackgroundStacks(visitor);
+  });
 }
 
 void Stack::IteratePointersUntilMarker(StackVisitor* visitor) const {
+  IteratePointersInSegment(visitor, current_segment_);
+}
+
+void Stack::IteratePointersFromAddressUntilMarker(StackVisitor* visitor,
+                                                  const void* address) const {
+  DCHECK_NOT_NULL(address);
+  DCHECK(current_segment_.Contains(address));
+  Segment segment = {address, current_segment_.top};
+  IteratePointersInSegment(visitor, segment);
+}
+
+void Stack::IteratePointersInSegment(StackVisitor* visitor,
+                                     Segment segment) const {
   // Temporarily stop checking MTE tags whilst scanning the stack (whilst V8
   // may not be tagging its portion of the stack, higher frames from the OS or
   // libc could be using stack tagging.)
   SuspendTagCheckingScope s;
-  IteratePointersInStack(visitor, current_segment_);
-  IteratePointersInUnsafeStackIfNecessary(visitor, current_segment_);
-
-  for (const auto& segment : inactive_stacks_) {
-    IteratePointersInStack(visitor, segment);
-    // TODO(v8:13493): If inactive stacks are used again, consider iterating
-    // pointers in the unsafe stack here.
+  IteratePointersInStack(visitor, segment);
+  IteratePointersInUnsafeStackIfNecessary(visitor, segment);
+  if (scan_simulator_callback_) {
+    scan_simulator_callback_(visitor);
   }
 }
 
@@ -191,19 +212,6 @@ bool Stack::IsOnCurrentStack(const void* ptr) {
   return ptr <= current_stack_start && ptr >= current_stack_top;
 }
 #endif  // DEBUG
-
-void Stack::AddStackSegment(const void* start, const void* top) {
-  DCHECK_LE(top, start);
-  // TODO(v8:13493): If this method is used again, bear in mind that the
-  // StackSegments constructor implicitly uses the current values (if
-  // applicable) for:
-  // - asan_fake_start
-  // - unsafe stack start
-  // - unsafe stack top
-  inactive_stacks_.emplace_back(start, top);
-}
-
-void Stack::ClearStackSegments() { inactive_stacks_.clear(); }
 
 void Stack::TrampolineCallbackHelper(void* argument,
                                      IterateStackCallback callback) {

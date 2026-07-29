@@ -6,11 +6,14 @@
 #define V8_SANDBOX_INDIRECT_POINTER_H_
 
 #include "src/common/globals.h"
+#include "src/objects/objects.h"
 #include "src/sandbox/indirect-pointer-tag.h"
 #include "src/sandbox/isolate.h"
 
 namespace v8 {
 namespace internal {
+
+class TrustedPointerPublishingScope;
 
 // Indirect pointers.
 //
@@ -29,10 +32,10 @@ namespace internal {
 // this will allocate an entry in the trusted pointer table.
 //
 // Only available when the sandbox is enabled.
-V8_INLINE void InitSelfIndirectPointerField(Address field_address,
-                                            IsolateForSandbox isolate,
-                                            Tagged<HeapObject> host,
-                                            IndirectPointerTag tag);
+V8_INLINE void InitSelfIndirectPointerField(
+    Address field_address, IsolateForSandbox isolate, Tagged<HeapObject> host,
+    IndirectPointerTag tag,
+    TrustedPointerPublishingScope* opt_publishing_scope);
 
 // Reads the IndirectPointerHandle from the field and loads the Object
 // referenced by this handle from the appropriate pointer table. The given
@@ -43,7 +46,8 @@ V8_INLINE void InitSelfIndirectPointerField(Address field_address,
 // Only available when the sandbox is enabled.
 template <IndirectPointerTag tag>
 V8_INLINE Tagged<Object> ReadIndirectPointerField(Address field_address,
-                                                  IsolateForSandbox isolate);
+                                                  IsolateForSandbox isolate,
+                                                  AcquireLoadTag);
 
 // Loads the 'self' IndirectPointerHandle from the given object and stores it
 // into the indirect pointer field. In this way, the field becomes a (indirect)
@@ -52,7 +56,8 @@ V8_INLINE Tagged<Object> ReadIndirectPointerField(Address field_address,
 // Only available when the sandbox is enabled.
 template <IndirectPointerTag tag>
 V8_INLINE void WriteIndirectPointerField(Address field_address,
-                                         Tagged<ExposedTrustedObject> value);
+                                         Tagged<ExposedTrustedObject> value,
+                                         ReleaseStoreTag);
 
 }  // namespace internal
 }  // namespace v8

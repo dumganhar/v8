@@ -80,6 +80,11 @@ namespace internal {
 #define MAGLEV_SCRATCH_DOUBLE_REGISTERS(R)                \
   R(d30) R(d31)
 
+#define C_CALL_CALLEE_SAVE_REGISTERS \
+  x19, x20, x21, x22, x23, x24, x25, x26, x27, x28
+
+#define C_CALL_CALLEE_SAVE_FP_REGISTERS d8, d9, d10, d11, d12, d13, d14, d15
+
 // clang-format on
 
 // Some CPURegister methods can return Register and VRegister types, so we
@@ -267,9 +272,10 @@ static_assert(sizeof(Register) <= sizeof(int),
               "Register can efficiently be passed by value");
 
 // Assign |source| value to |no_reg| and return the |source|'s previous value.
-inline Register ReassignRegister(Register& source) {
-  Register result = source;
-  source = Register::no_reg();
+template <typename RegT>
+inline RegT ReassignRegister(RegT& source) {
+  RegT result = source;
+  source = RegT::no_reg();
   return result;
 }
 
@@ -324,6 +330,8 @@ VectorFormat ScalarFormatFromLaneSize(int lanesize);
 VectorFormat VectorFormatHalfWidthDoubleLanes(VectorFormat vform);
 VectorFormat VectorFormatFillQ(int laneSize);
 VectorFormat VectorFormatFillQ(VectorFormat vform);
+VectorFormat VectorFormatFillHalfQ(int laneSize);
+VectorFormat VectorFormatFillHalfQ(VectorFormat vform);
 VectorFormat ScalarFormatFromFormat(VectorFormat vform);
 V8_EXPORT_PRIVATE unsigned RegisterSizeInBitsFromFormat(VectorFormat vform);
 unsigned RegisterSizeInBytesFromFormat(VectorFormat vform);
@@ -608,11 +616,12 @@ constexpr Register kJavaScriptCallCodeStartRegister = x2;
 constexpr Register kJavaScriptCallTargetRegister = kJSFunctionRegister;
 constexpr Register kJavaScriptCallNewTargetRegister = x3;
 constexpr Register kJavaScriptCallExtraArg1Register = x2;
+constexpr Register kJavaScriptCallDispatchHandleRegister = x4;
 
 constexpr Register kRuntimeCallFunctionRegister = x1;
 constexpr Register kRuntimeCallArgCountRegister = x0;
 constexpr Register kRuntimeCallArgvRegister = x11;
-constexpr Register kWasmInstanceRegister = x7;
+constexpr Register kWasmImplicitArgRegister = x7;
 constexpr Register kWasmCompileLazyFuncIndexRegister = x8;
 constexpr Register kWasmTrapHandlerFaultAddressRegister = x16;
 constexpr Register kSimulatorHltArgument = x16;

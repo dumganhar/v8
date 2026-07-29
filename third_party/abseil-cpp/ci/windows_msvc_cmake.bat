@@ -14,18 +14,14 @@
 
 SETLOCAL ENABLEDELAYEDEXPANSION
 
-:: The commit of GoogleTest to be used in the CMake tests in this directory.
-:: Keep this in sync with the commit in the WORKSPACE file.
-:: TODO(dmauro): After the next GoogleTest release, use the stable file required
-:: by Bzlmod.  This means downloading a copy of the file and reuploading it to
-:: avoid changing checksums if the compression is changed by GitHub.  It also
-:: means stop referring to it as a commit and instead use the uploaded filename.
-SET ABSL_GOOGLETEST_COMMIT=f8d7d77c06936315286eb55f8de22cd23c188571
+:: The version of GoogleTest to be used in the CMake tests in this directory.
+:: Keep this in sync with the version in the WORKSPACE file.
+SET ABSL_GOOGLETEST_VERSION=1.17.0
 
-IF EXIST %KOKORO_GFILE_DIR%\distdir\%ABSL_GOOGLETEST_COMMIT%.zip (
-  SET ABSL_GOOGLETEST_DOWNLOAD_URL=file://%KOKORO_GFILE_DIR%\distdir\%ABSL_GOOGLETEST_COMMIT%.zip
+IF EXIST %KOKORO_GFILE_DIR%\distdir\googletest-%ABSL_GOOGLETEST_VERSION%.tar.gz (
+  SET ABSL_GOOGLETEST_DOWNLOAD_URL=file://%KOKORO_GFILE_DIR%\distdir\googletest-%ABSL_GOOGLETEST_VERSION%.tar.gz
 ) ELSE (
-  SET ABSL_GOOGLETEST_DOWNLOAD_URL=https://github.com/google/googletest/archive/%ABSL_GOOGLETEST_COMMIT%.zip
+  SET ABSL_GOOGLETEST_DOWNLOAD_URL=https://github.com/google/googletest/releases/download/v%ABSL_GOOGLETEST_VERSION%/googletest-%ABSL_GOOGLETEST_VERSION%.tar.gz
 )
 
 :: Replace '\' with '/' in Windows paths for CMake.
@@ -56,7 +52,6 @@ CD "build"
 SET CXXFLAGS="/WX"
 
 %CMAKE_BIN% ^
-  -DABSL_BUILD_TEST_HELPERS=ON ^
   -DABSL_BUILD_TESTING=ON ^
   -DABSL_GOOGLETEST_DOWNLOAD_URL=%ABSL_GOOGLETEST_DOWNLOAD_URL% ^
   -DBUILD_SHARED_LIBS=%ABSL_CMAKE_BUILD_SHARED% ^

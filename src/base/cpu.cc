@@ -14,13 +14,13 @@
 #if V8_OS_LINUX
 #include <linux/auxvec.h>  // AT_HWCAP
 #endif
-#if V8_GLIBC_PREREQ(2, 16) || V8_OS_ANDROID || __OHOS__
+#if V8_OS_LINUX
 #include <sys/auxv.h>  // getauxval()
 #endif
 #if V8_OS_QNX
 #include <sys/syspage.h>  // cpuinfo
 #endif
-#if V8_OS_LINUX && (V8_HOST_ARCH_PPC || V8_HOST_ARCH_PPC64)
+#if V8_OS_LINUX && V8_HOST_ARCH_PPC64
 #include <elf.h>
 #endif
 #if V8_OS_AIX
@@ -54,8 +54,18 @@
 #include "src/base/platform/wrappers.h"
 #if V8_OS_WIN
 #include <windows.h>
+#endif
 
-#include "src/base/win32-headers.h"
+#if V8_HOST_ARCH_RISCV64
+#include <riscv_vector.h>
+
+// The __riscv_vlenb intrinsic is only available when compiling with the RVV
+// extension enabled. Use the 'target' attribute to tell the compiler to
+// compile this function with RVV enabled.
+// We must not call this function when RVV is not supported by the CPU.
+__attribute__((target("arch=+v"))) static unsigned vlen_intrinsic() {
+  return static_cast<unsigned>(__riscv_vlenb() * 8);
+}
 #endif
 
 namespace v8 {
@@ -192,17 +202,20 @@ static V8_INLINE void __cpuidex(int cpu_info[4], int info_type,
  * HWCAP2 flags - for elf_hwcap2 (in kernel) and AT_HWCAP2
  */
 #define HWCAP2_MTE (1 << 18)
+#define HWCAP2_CSSC (1UL << 34)
+#define HWCAP2_MOPS (1UL << 43)
+#define HWCAP2_HBC (1UL << 44)
 #endif  // V8_HOST_ARCH_ARM64
 
 #if V8_HOST_ARCH_ARM || V8_HOST_ARCH_ARM64
 
-static std::tuple<uint32_t, uint32_t> ReadELFHWCaps() {
-  uint32_t hwcap = 0;
-  uint32_t hwcap2 = 0;
-#if (V8_GLIBC_PREREQ(2, 16) || V8_OS_ANDROID) && defined(AT_HWCAP)
-  hwcap = static_cast<uint32_t>(getauxval(AT_HWCAP));
+static std::tuple<uint64_t, uint64_t> ReadELFHWCaps() {
+  uint64_t hwcap = 0;
+  uint64_t hwcap2 = 0;
+#if V8_OS_LINUX && defined(AT_HWCAP)
+  hwcap = static_cast<uint64_t>(getauxval(AT_HWCAP));
 #if defined(AT_HWCAP2)
-  hwcap2 = static_cast<uint32_t>(getauxval(AT_HWCAP2));
+  hwcap2 = static_cast<uint64_t>(getauxval(AT_HWCAP2));
 #endif  // AT_HWCAP2
 #else
   // Read the ELF HWCAP flags by parsing /proc/self/auxv.
@@ -430,6 +443,7 @@ CPU::CPU()
       has_avx_(false),
       has_avx2_(false),
       has_avx_vnni_(false),
+      has_avx_vnni_int8_(false),
       has_fma3_(false),
       has_f16c_(false),
       has_bmi1_(false),
@@ -446,14 +460,22 @@ CPU::CPU()
       has_dot_prod_(false),
       has_lse_(false),
       has_mte_(false),
+      has_sha3_(false),
       has_pmull1q_(false),
       has_fp16_(false),
+      has_hbc_(false),
+      has_cssc_(false),
+      has_mops_(false),
       is_fp64_mode_(false),
       has_non_stop_time_stamp_counter_(false),
       is_running_in_vm_(false),
       has_msa_(false),
       riscv_mmu_(RV_MMU_MODE::kRiscvSV48),
-      has_rvv_(false) {
+      vlen_(kUnknownVlen),
+      has_rvv_(false),
+      has_zba_(false),
+      has_zbb_(false),
+      has_zbs_(false) {
   memcpy(vendor_, "Unknown", 8);
 
 #if defined(V8_OS_STARBOARD)
@@ -512,6 +534,7 @@ CPU::CPU()
     has_avx_ = (cpu_info[2] & 0x10000000) != 0;
     has_avx2_ = (cpu_info70[1] & 0x00000020) != 0;
     has_avx_vnni_ = (cpu_info71[0] & 0x00000010) != 0;
+    has_avx_vnni_int8_ = (cpu_info71[3] & 0x00000020) != 0;
     has_fma3_ = (cpu_info[2] & 0x00001000) != 0;
     has_f16c_ = (cpu_info[2] & 0x20000000) != 0;
     // CET shadow stack feature flag. See
@@ -705,7 +728,8 @@ CPU::CPU()
   }
 
   // Try to extract the list of CPU features from ELF hwcaps.
-  uint32_t hwcaps, hwcaps2;
+  uint64_t hwcaps = 0;
+  uint64_t hwcaps2 = 0;
   std::tie(hwcaps, hwcaps2) = ReadELFHWCaps();
   if (hwcaps != 0) {
     has_idiva_ = (hwcaps & HWCAP_IDIVA) != 0;
@@ -828,15 +852,19 @@ CPU::CPU()
 
 #elif V8_OS_LINUX
   // Try to extract the list of CPU features from ELF hwcaps.
-  uint32_t hwcaps, hwcaps2;
+  uint64_t hwcaps, hwcaps2;
   std::tie(hwcaps, hwcaps2) = ReadELFHWCaps();
+  has_cssc_ = (hwcaps2 & HWCAP2_CSSC) != 0;
   has_mte_ = (hwcaps2 & HWCAP2_MTE) != 0;
+  has_hbc_ = (hwcaps2 & HWCAP2_HBC) != 0;
+  has_mops_ = (hwcaps2 & HWCAP2_MOPS) != 0;
   if (hwcaps != 0) {
     has_jscvt_ = (hwcaps & HWCAP_JSCVT) != 0;
     has_dot_prod_ = (hwcaps & HWCAP_ASIMDDP) != 0;
     has_lse_ = (hwcaps & HWCAP_ATOMICS) != 0;
     has_pmull1q_ = (hwcaps & HWCAP_PMULL) != 0;
     has_fp16_ = (hwcaps & HWCAP_FPHP) != 0;
+    has_sha3_ = (hwcaps & HWCAP_SHA3) != 0;
   } else {
     // Try to fallback to "Features" CPUInfo field
     CPUInfo cpu_info;
@@ -846,6 +874,7 @@ CPU::CPU()
     has_lse_ = HasListItem(features, "atomics");
     has_pmull1q_ = HasListItem(features, "pmull");
     has_fp16_ = HasListItem(features, "half");
+    has_sha3_ = HasListItem(features, "sha3");
     delete[] features;
   }
 #elif V8_OS_DARWIN
@@ -890,6 +919,14 @@ CPU::CPU()
   } else {
     has_fp16_ = fp16;
   }
+  int64_t feat_sha3 = 0;
+  size_t feat_sha3_size = sizeof(feat_sha3);
+  if (sysctlbyname("hw.optional.arm.FEAT_SHA3", &feat_sha3, &feat_sha3_size,
+                   nullptr, 0) == -1) {
+    has_sha3_ = false;
+  } else {
+    has_sha3_ = feat_sha3;
+  }
 #else
   // ARM64 Macs always have JSCVT, ASIMDDP, FP16 and LSE.
   has_jscvt_ = true;
@@ -897,10 +934,11 @@ CPU::CPU()
   has_lse_ = true;
   has_pmull1q_ = true;
   has_fp16_ = true;
+  has_sha3_ = true;
 #endif  // V8_OS_IOS
 #endif  // V8_OS_WIN
 
-#elif V8_HOST_ARCH_PPC || V8_HOST_ARCH_PPC64
+#elif V8_HOST_ARCH_PPC64
 
 #ifndef USE_SIMULATOR
 #if V8_OS_LINUX
@@ -908,11 +946,7 @@ CPU::CPU()
   char* auxv_cpu_type = nullptr;
   FILE* fp = base::Fopen("/proc/self/auxv", "r");
   if (fp != nullptr) {
-#if V8_TARGET_ARCH_PPC64
     Elf64_auxv_t entry;
-#else
-    Elf32_auxv_t entry;
-#endif
     for (;;) {
       size_t n = fread(&entry, sizeof(entry), 1, fp);
       if (n == 0 || entry.a_type == AT_NULL) {
@@ -935,24 +969,14 @@ CPU::CPU()
 
   part_ = -1;
   if (auxv_cpu_type) {
-    if (strcmp(auxv_cpu_type, "power10") == 0) {
+    if (strcmp(auxv_cpu_type, "power11") == 0) {
+      part_ = kPPCPower11;
+    } else if (strcmp(auxv_cpu_type, "power10") == 0) {
       part_ = kPPCPower10;
     } else if (strcmp(auxv_cpu_type, "power9") == 0) {
       part_ = kPPCPower9;
     } else if (strcmp(auxv_cpu_type, "power8") == 0) {
       part_ = kPPCPower8;
-    } else if (strcmp(auxv_cpu_type, "power7") == 0) {
-      part_ = kPPCPower7;
-    } else if (strcmp(auxv_cpu_type, "power6") == 0) {
-      part_ = kPPCPower6;
-    } else if (strcmp(auxv_cpu_type, "power5") == 0) {
-      part_ = kPPCPower5;
-    } else if (strcmp(auxv_cpu_type, "ppc970") == 0) {
-      part_ = kPPCG5;
-    } else if (strcmp(auxv_cpu_type, "ppc7450") == 0) {
-      part_ = kPPCG4;
-    } else if (strcmp(auxv_cpu_type, "pa6t") == 0) {
-      part_ = kPPCPA6T;
     }
   }
 
@@ -966,15 +990,6 @@ CPU::CPU()
       break;
     case POWER_8:
       part_ = kPPCPower8;
-      break;
-    case POWER_7:
-      part_ = kPPCPower7;
-      break;
-    case POWER_6:
-      part_ = kPPCPower6;
-      break;
-    case POWER_5:
-      part_ = kPPCPower5;
       break;
   }
 #endif  // V8_OS_AIX
@@ -994,6 +1009,15 @@ CPU::CPU()
     }
     if (pairs[0].value & RISCV_HWPROBE_IMA_FD) {
       has_fpu_ = true;
+    }
+    if (pairs[0].value & RISCV_HWPROBE_EXT_ZBA) {
+      has_zba_ = true;
+    }
+    if (pairs[0].value & RISCV_HWPROBE_EXT_ZBB) {
+      has_zbb_ = true;
+    }
+    if (pairs[0].value & RISCV_HWPROBE_EXT_ZBS) {
+      has_zbs_ = true;
     }
   }
 #else
@@ -1019,6 +1043,9 @@ CPU::CPU()
     riscv_mmu_ = RV_MMU_MODE::kRiscvSV57;
   }
 #endif
+  if (has_rvv_) {
+    vlen_ = vlen_intrinsic();
+  }
 #endif  // V8_HOST_ARCH_RISCV64
 }
 

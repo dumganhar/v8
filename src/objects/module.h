@@ -31,7 +31,6 @@ class ZoneForwardList;
 // https://tc39.github.io/ecma262/#sec-abstract-module-records
 class Module : public TorqueGeneratedModule<Module, HeapObject> {
  public:
-  NEVER_READ_ONLY_SPACE
   DECL_VERIFIER(Module)
   DECL_PRINTER(Module)
 
@@ -47,6 +46,10 @@ class Module : public TorqueGeneratedModule<Module, HeapObject> {
     kErrored
   };
 
+#ifdef DEBUG
+  static const char* StatusString(Module::Status status);
+#endif  // DEBUG
+
   // The exception in the case {status} is kErrored.
   Tagged<Object> GetException();
 
@@ -54,15 +57,12 @@ class Module : public TorqueGeneratedModule<Module, HeapObject> {
   // i.e. has a top-level await.
   V8_WARN_UNUSED_RESULT bool IsGraphAsync(Isolate* isolate) const;
 
-  // While deprecating v8::ResolveCallback in v8.h we still need to support the
-  // version of the API that uses it, but we can't directly reference the
-  // deprecated version because of the enusing build warnings.  So, we declare
-  // this matching typedef for temporary internal use.
-  // TODO(v8:10958) Delete this typedef and all references to it once
-  // v8::ResolveCallback is removed.
-  typedef MaybeLocal<v8::Module> (*DeprecatedResolveCallback)(
-      Local<v8::Context> context, Local<v8::String> specifier,
-      Local<v8::Module> referrer);
+  struct UserResolveCallbacks {
+    v8::Module::ResolveModuleCallback module_callback = nullptr;
+    v8::Module::ResolveSourceCallback source_callback = nullptr;
+    v8::Module::ResolveModuleByIndexCallback module_callback_by_index = nullptr;
+    v8::Module::ResolveSourceByIndexCallback source_callback_by_index = nullptr;
+  };
 
   // Implementation of spec operation ModuleDeclarationInstantiation.
   // Returns false if an exception occurred during instantiation, true
@@ -70,17 +70,16 @@ class Module : public TorqueGeneratedModule<Module, HeapObject> {
   // exception is propagated.)
   static V8_WARN_UNUSED_RESULT bool Instantiate(
       Isolate* isolate, Handle<Module> module, v8::Local<v8::Context> context,
-      v8::Module::ResolveModuleCallback callback,
-      DeprecatedResolveCallback callback_without_import_assertions);
+      const UserResolveCallbacks& callbacks);
 
   // Implementation of spec operation ModuleEvaluation.
-  static V8_WARN_UNUSED_RESULT MaybeHandle<Object> Evaluate(
+  static V8_WARN_UNUSED_RESULT MaybeDirectHandle<Object> Evaluate(
       Isolate* isolate, Handle<Module> module);
 
   // Get the namespace object for [module].  If it doesn't exist yet, it is
   // created.
-  static Handle<JSModuleNamespace> GetModuleNamespace(Isolate* isolate,
-                                                      Handle<Module> module);
+  static DirectHandle<JSModuleNamespace> GetModuleNamespace(
+      Isolate* isolate, Handle<Module> module);
 
   using BodyDescriptor =
       FixedBodyDescriptor<kExportsOffset, kHeaderSize, kHeaderSize>;
@@ -100,14 +99,13 @@ class Module : public TorqueGeneratedModule<Module, HeapObject> {
   // exception (so check manually!).
   class ResolveSet;
   static V8_WARN_UNUSED_RESULT MaybeHandle<Cell> ResolveExport(
-      Isolate* isolate, Handle<Module> module, Handle<String> module_specifier,
-      Handle<String> export_name, MessageLocation loc, bool must_resolve,
-      ResolveSet* resolve_set);
+      Isolate* isolate, Handle<Module> module,
+      DirectHandle<String> module_specifier, Handle<String> export_name,
+      MessageLocation loc, bool must_resolve, ResolveSet* resolve_set);
 
   static V8_WARN_UNUSED_RESULT bool PrepareInstantiate(
-      Isolate* isolate, Handle<Module> module, v8::Local<v8::Context> context,
-      v8::Module::ResolveModuleCallback callback,
-      DeprecatedResolveCallback callback_without_import_assertions);
+      Isolate* isolate, DirectHandle<Module> module,
+      v8::Local<v8::Context> context, const UserResolveCallbacks& callbacks);
   static V8_WARN_UNUSED_RESULT bool FinishInstantiate(
       Isolate* isolate, Handle<Module> module,
       ZoneForwardList<Handle<SourceTextModule>>* stack, unsigned* dfs_index,
@@ -115,8 +113,8 @@ class Module : public TorqueGeneratedModule<Module, HeapObject> {
 
   // Set module's status back to kUnlinked and reset other internal state.
   // This is used when instantiation fails.
-  static void Reset(Isolate* isolate, Handle<Module> module);
-  static void ResetGraph(Isolate* isolate, Handle<Module> module);
+  static void Reset(Isolate* isolate, DirectHandle<Module> module);
+  static void ResetGraph(Isolate* isolate, DirectHandle<Module> module);
 
   // To set status to kErrored, RecordError should be used.
   void SetStatus(Status status);
@@ -137,10 +135,10 @@ class JSModuleNamespace
   // Retrieve the value exported by [module] under the given [name]. If there is
   // no such export, return Just(undefined). If the export is uninitialized,
   // schedule an exception and return Nothing.
-  V8_WARN_UNUSED_RESULT MaybeHandle<Object> GetExport(Isolate* isolate,
-                                                      Handle<String> name);
+  V8_WARN_UNUSED_RESULT MaybeDirectHandle<Object> GetExport(
+      Isolate* isolate, DirectHandle<String> name);
 
-  bool HasExport(Isolate* isolate, Handle<String> name);
+  bool HasExport(Isolate* isolate, DirectHandle<String> name);
 
   // Return the (constant) property attributes for the referenced property,
   // which is assumed to correspond to an export. If the export is
@@ -149,8 +147,9 @@ class JSModuleNamespace
       LookupIterator* it);
 
   static V8_WARN_UNUSED_RESULT Maybe<bool> DefineOwnProperty(
-      Isolate* isolate, Handle<JSModuleNamespace> o, Handle<Object> key,
-      PropertyDescriptor* desc, Maybe<ShouldThrow> should_throw);
+      Isolate* isolate, DirectHandle<JSModuleNamespace> o,
+      DirectHandle<Object> key, PropertyDescriptor* desc,
+      Maybe<ShouldThrow> should_throw);
 
   // In-object fields.
   enum {
@@ -166,15 +165,27 @@ class JSModuleNamespace
   TQ_OBJECT_CONSTRUCTORS(JSModuleNamespace)
 };
 
-class ScriptOrModule
-    : public TorqueGeneratedScriptOrModule<ScriptOrModule, Struct> {
+V8_OBJECT class ScriptOrModule : public StructLayout {
  public:
+  inline Tagged<Object> resource_name() const;
+  inline void set_resource_name(Tagged<Object> value,
+                                WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
+
+  inline Tagged<FixedArray> host_defined_options() const;
+  inline void set_host_defined_options(
+      Tagged<FixedArray> value, WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
+
   DECL_PRINTER(ScriptOrModule)
+  DECL_VERIFIER(ScriptOrModule)
 
   using BodyDescriptor = StructBodyDescriptor;
 
-  TQ_OBJECT_CONSTRUCTORS(ScriptOrModule)
-};
+ private:
+  friend class TorqueGeneratedScriptOrModuleAsserts;
+
+  TaggedMember<Object> resource_name_;
+  TaggedMember<FixedArray> host_defined_options_;
+} V8_OBJECT_END;
 
 }  // namespace internal
 }  // namespace v8

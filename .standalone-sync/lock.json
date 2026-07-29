@@ -1,0 +1,103 @@
+{
+  "manifest_sha256": "27fdbe36feb448923fa7bdb3822bec70502452c22d485a58ab925937b3d2f9bf",
+  "patches": [
+    {
+      "path": ".standalone-sync/patches/0001-standalone-embedder-api.patch",
+      "sha256": "d41d41b596e489de32ce4974b2f8bcb72cf38057495b8db586bef705aa46bbd6"
+    }
+  ],
+  "repositories": [
+    {
+      "commit": "e9c24d882a23b29750cd012690c6fb666bee4fae",
+      "path": ".",
+      "remote": "https://chromium.googlesource.com/v8/v8.git"
+    },
+    {
+      "commit": "2ea8e0f4b0a7fc9a65b231a159cc0904fb5e7b5d",
+      "path": "build",
+      "remote": "https://chromium.googlesource.com/chromium/src/build.git"
+    },
+    {
+      "commit": "1267724b67c1e44a778f610ae9dac191f06e2ff4",
+      "path": "buildtools",
+      "remote": "https://chromium.googlesource.com/chromium/src/buildtools.git"
+    },
+    {
+      "commit": "768d15952d4ac4789455b947375c2ebd7e78d143",
+      "path": "tools/clang",
+      "remote": "https://chromium.googlesource.com/chromium/src/tools/clang.git"
+    },
+    {
+      "commit": "dcfa08fa08bb8ee1f28a2e94d80e0ac1a7015013",
+      "path": "third_party/abseil-cpp",
+      "remote": "https://chromium.googlesource.com/chromium/src/third_party/abseil-cpp.git"
+    },
+    {
+      "commit": "6c7c925b571d54486b9ffae8d9d18a822801cbda",
+      "path": "third_party/dragonbox/src",
+      "remote": "https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox.git"
+    },
+    {
+      "commit": "cb1d42aaa1e14b09e1452cfdef373d051b8c02a4",
+      "path": "third_party/fast_float/src",
+      "remote": "https://chromium.googlesource.com/external/github.com/fastfloat/fast_float.git"
+    },
+    {
+      "commit": "3d2de1816307bac63c16a297e8c4dc501b4076df",
+      "path": "third_party/fp16/src",
+      "remote": "https://chromium.googlesource.com/external/github.com/Maratyszcza/FP16.git"
+    },
+    {
+      "commit": "4fe3307fb2d9f86d19777c7eb0e4809e9694dde7",
+      "path": "third_party/googletest/src",
+      "remote": "https://chromium.googlesource.com/external/github.com/google/googletest.git"
+    },
+    {
+      "commit": "84379d1c73de9681b54fbe1c035a23c7bd5d272d",
+      "path": "third_party/highway/src",
+      "remote": "https://chromium.googlesource.com/external/github.com/google/highway.git"
+    },
+    {
+      "commit": "a86a32e67b8d1384b33f8fa48c83a6079b86f8cd",
+      "path": "third_party/icu",
+      "remote": "https://chromium.googlesource.com/chromium/deps/icu.git"
+    },
+    {
+      "commit": "c3027d884967773057bf74b957e3fea87e5df4d7",
+      "path": "third_party/jinja2",
+      "remote": "https://chromium.googlesource.com/chromium/src/third_party/jinja2.git"
+    },
+    {
+      "commit": "99d9ab2603b02b6fb974cf19be99777f5cd99e7a",
+      "path": "third_party/libc++/src",
+      "remote": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx.git"
+    },
+    {
+      "commit": "de02e5d57052b3b6d5fcd76dccde9380bca39360",
+      "path": "third_party/libc++abi/src",
+      "remote": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxxabi.git"
+    },
+    {
+      "commit": "b2be5ea77d1978b763e282d5572be69fcbca96d1",
+      "path": "third_party/llvm-libc/src",
+      "remote": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc.git"
+    },
+    {
+      "commit": "4256084ae14175d38a3ff7d739dca83ae49ccec6",
+      "path": "third_party/markupsafe",
+      "remote": "https://chromium.googlesource.com/chromium/src/third_party/markupsafe.git"
+    },
+    {
+      "commit": "880a4923a95e0b525f7bf72da82661cfffe46fb3",
+      "path": "third_party/simdutf",
+      "remote": "https://chromium.googlesource.com/chromium/src/third_party/simdutf"
+    },
+    {
+      "commit": "63d7e16739d83e3a16c673692a348e52db1a3a11",
+      "path": "third_party/zlib",
+      "remote": "https://chromium.googlesource.com/chromium/src/third_party/zlib.git"
+    }
+  ],
+  "schema": 1,
+  "v8_version": "14.4.258.49"
+}

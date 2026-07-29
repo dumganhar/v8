@@ -5,17 +5,18 @@
 #ifndef V8_HEAP_FACTORY_INL_H_
 #define V8_HEAP_FACTORY_INL_H_
 
-#include "src/common/globals.h"
 #include "src/heap/factory.h"
+// Include the non-inl header before the rest of the headers.
 
 // Clients of this interface shouldn't depend on lots of heap internals.
 // Do not include anything from src/heap here!
 // TODO(all): Remove the heap-inl.h include below.
+#include "src/common/globals.h"
 #include "src/execution/isolate-inl.h"
 #include "src/handles/handles-inl.h"
 #include "src/heap/factory-base-inl.h"
-#include "src/heap/heap-inl.h"  // For MaxNumberToStringCacheSize.
 #include "src/objects/feedback-cell.h"
+#include "src/objects/foreign.h"
 #include "src/objects/heap-number-inl.h"
 #include "src/objects/heap-object.h"
 #include "src/objects/objects-inl.h"
@@ -34,7 +35,8 @@ namespace internal {
 MUTABLE_ROOT_LIST(ROOT_ACCESSOR)
 #undef ROOT_ACCESSOR
 
-template <typename T, typename>
+template <typename T>
+  requires(std::is_convertible_v<Handle<T>, Handle<String>>)
 Handle<String> Factory::InternalizeString(Handle<T> string) {
   // T should be a subtype of String, which is enforced by the second template
   // argument.
@@ -43,18 +45,19 @@ Handle<String> Factory::InternalizeString(Handle<T> string) {
       isolate()->string_table()->LookupString(isolate(), string), isolate());
 }
 
-template <typename T, typename>
+template <typename T>
+  requires(std::is_convertible_v<Handle<T>, Handle<Name>>)
 Handle<Name> Factory::InternalizeName(Handle<T> name) {
   // T should be a subtype of Name, which is enforced by the second template
   // argument.
   if (IsUniqueName(*name)) return name;
-  return indirect_handle(isolate()->string_table()->LookupString(
-                             isolate(), DirectHandle<String>::cast(name)),
-                         isolate());
+  return indirect_handle(
+      isolate()->string_table()->LookupString(isolate(), Cast<String>(name)),
+      isolate());
 }
 
-#ifdef V8_ENABLE_DIRECT_HANDLE
-template <typename T, typename>
+template <typename T>
+  requires(std::is_convertible_v<DirectHandle<T>, DirectHandle<String>>)
 DirectHandle<String> Factory::InternalizeString(DirectHandle<T> string) {
   // T should be a subtype of String, which is enforced by the second template
   // argument.
@@ -62,15 +65,14 @@ DirectHandle<String> Factory::InternalizeString(DirectHandle<T> string) {
   return isolate()->string_table()->LookupString(isolate(), string);
 }
 
-template <typename T, typename>
+template <typename T>
+  requires(std::is_convertible_v<DirectHandle<T>, DirectHandle<Name>>)
 DirectHandle<Name> Factory::InternalizeName(DirectHandle<T> name) {
   // T should be a subtype of Name, which is enforced by the second template
   // argument.
   if (IsUniqueName(*name)) return name;
-  return isolate()->string_table()->LookupString(
-      isolate(), DirectHandle<String>::cast(name));
+  return isolate()->string_table()->LookupString(isolate(), Cast<String>(name));
 }
-#endif
 
 template <size_t N>
 Handle<String> Factory::NewStringFromStaticChars(const char (&str)[N],
@@ -80,13 +82,10 @@ Handle<String> Factory::NewStringFromStaticChars(const char (&str)[N],
       .ToHandleChecked();
 }
 
-Handle<String> Factory::NewStringFromAsciiChecked(const char* str,
-                                                  AllocationType allocation) {
-  return NewStringFromOneByte(base::OneByteVector(str), allocation)
-      .ToHandleChecked();
-}
-
-Handle<String> Factory::NewSubString(Handle<String> str, int begin, int end) {
+template <typename T, template <typename> typename HandleType>
+  requires(std::is_convertible_v<HandleType<T>, HandleType<String>>)
+HandleType<String> Factory::NewSubString(HandleType<T> str, uint32_t begin,
+                                         uint32_t end) {
   if (begin == 0 && end == str->length()) return str;
   return NewProperSubString(str, begin, end);
 }
@@ -122,14 +121,14 @@ Handle<Foreign> Factory::NewForeign(Address addr,
   // Statically ensure that it is safe to allocate foreigns in paged spaces.
   static_assert(Foreign::kSize <= kMaxRegularHeapObjectSize);
   Tagged<Map> map = *foreign_map();
-  Tagged<Foreign> foreign = Tagged<Foreign>::cast(
+  Tagged<Foreign> foreign = Cast<Foreign>(
       AllocateRawWithImmortalMap(map->instance_size(), allocation_type, map));
   DisallowGarbageCollection no_gc;
   foreign->init_foreign_address<tag>(isolate(), addr);
   return handle(foreign, isolate());
 }
 
-Handle<Object> Factory::NewURIError() {
+DirectHandle<Object> Factory::NewURIError() {
   return NewError(isolate()->uri_error_function(),
                   MessageTemplate::kURIMalformed);
 }
@@ -154,36 +153,6 @@ Factory::CodeBuilder& Factory::CodeBuilder::set_interpreter_data(
          IsBytecodeArray(*interpreter_data));
   interpreter_data_ = interpreter_data;
   return *this;
-}
-
-void Factory::NumberToStringCacheSet(DirectHandle<Object> number, int hash,
-                                     DirectHandle<String> js_string) {
-  if (!IsUndefined(number_string_cache()->get(hash * 2), isolate()) &&
-      !v8_flags.optimize_for_size) {
-    int full_size = isolate()->heap()->MaxNumberToStringCacheSize();
-    if (number_string_cache()->length() != full_size) {
-      Handle<FixedArray> new_cache =
-          NewFixedArray(full_size, AllocationType::kOld);
-      isolate()->heap()->set_number_string_cache(*new_cache);
-      return;
-    }
-  }
-  DisallowGarbageCollection no_gc;
-  Tagged<FixedArray> cache = *number_string_cache();
-  cache->set(hash * 2, *number);
-  cache->set(hash * 2 + 1, *js_string);
-}
-
-Handle<Object> Factory::NumberToStringCacheGet(Tagged<Object> number,
-                                               int hash) {
-  DisallowGarbageCollection no_gc;
-  Tagged<FixedArray> cache = *number_string_cache();
-  Tagged<Object> key = cache->get(hash * 2);
-  if (key == number || (IsHeapNumber(key) && IsHeapNumber(number) &&
-                        Object::Number(key) == Object::Number(number))) {
-    return Handle<String>(String::cast(cache->get(hash * 2 + 1)), isolate());
-  }
-  return undefined_value();
 }
 
 }  // namespace internal

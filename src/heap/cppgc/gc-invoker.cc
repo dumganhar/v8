@@ -5,6 +5,7 @@
 #include "src/heap/cppgc/gc-invoker.h"
 
 #include <memory>
+#include <optional>
 
 #include "include/cppgc/common.h"
 #include "include/cppgc/platform.h"
@@ -23,6 +24,7 @@ class GCInvoker::GCInvokerImpl final : public GarbageCollector {
 
   void CollectGarbage(GCConfig) final;
   void StartIncrementalGarbageCollection(GCConfig) final;
+  bool RetryAllocate(v8::base::FunctionRef<bool()> allocate) final;
   size_t epoch() const final { return collector_->epoch(); }
   std::optional<EmbedderStackState> overridden_stack_state() const final {
     return collector_->overridden_stack_state();
@@ -34,9 +36,7 @@ class GCInvoker::GCInvokerImpl final : public GarbageCollector {
     collector_->clear_overridden_stack_state();
   }
 #ifdef V8_ENABLE_ALLOCATION_TIMEOUT
-  v8::base::Optional<int> UpdateAllocationTimeout() final {
-    return v8::base::nullopt;
-  }
+  std::optional<int> UpdateAllocationTimeout() final { return std::nullopt; }
 #endif  // V8_ENABLE_ALLOCATION_TIMEOUT
 
  private:
@@ -134,6 +134,21 @@ void GCInvoker::GCInvokerImpl::StartIncrementalGarbageCollection(
   collector_->StartIncrementalGarbageCollection(config);
 }
 
+bool GCInvoker::GCInvokerImpl::RetryAllocate(
+    v8::base::FunctionRef<bool()> allocate) {
+  for (int i = 0; i < 2; i++) {
+    CollectGarbage({CollectionType::kMajor, StackState::kMayContainHeapPointers,
+                    GCConfig::MarkingType::kAtomic,
+                    GCConfig::SweepingType::kIncrementalAndConcurrent,
+                    GCConfig::FreeMemoryHandling::kDiscardWherePossible});
+    bool result = allocate();
+    if (result) {
+      return true;
+    }
+  }
+  return false;
+}
+
 GCInvoker::GCInvoker(GarbageCollector* collector, cppgc::Platform* platform,
                      cppgc::Heap::StackSupport stack_support)
     : impl_(std::make_unique<GCInvoker::GCInvokerImpl>(collector, platform,
@@ -147,6 +162,10 @@ void GCInvoker::CollectGarbage(GCConfig config) {
 
 void GCInvoker::StartIncrementalGarbageCollection(GCConfig config) {
   impl_->StartIncrementalGarbageCollection(config);
+}
+
+bool GCInvoker::RetryAllocate(v8::base::FunctionRef<bool()> allocate) {
+  return impl_->RetryAllocate(std::move(allocate));
 }
 
 size_t GCInvoker::epoch() const { return impl_->epoch(); }
@@ -164,7 +183,7 @@ void GCInvoker::clear_overridden_stack_state() {
 }
 
 #ifdef V8_ENABLE_ALLOCATION_TIMEOUT
-v8::base::Optional<int> GCInvoker::UpdateAllocationTimeout() {
+std::optional<int> GCInvoker::UpdateAllocationTimeout() {
   return impl_->UpdateAllocationTimeout();
 }
 #endif  // V8_ENABLE_ALLOCATION_TIMEOUT

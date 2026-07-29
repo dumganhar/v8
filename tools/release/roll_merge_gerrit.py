@@ -11,6 +11,7 @@ import sys
 import time
 import datetime
 import urllib.parse
+import textwrap
 
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from common_includes import VERSION_FILE
 
 GERRIT_HOST = 'chromium-review.googlesource.com'
 
-ROLLER_BOT_EMAIL = "v8-ci-autoroll-builder@chops-service-accounts.iam.gserviceaccount.com"
+ROLLER_BOT_EMAIL = 'chromium-autoroll@skia-public.iam.gserviceaccount.com'
 
 AUTO_ROLLER_URL = 'https://autoroll.skia.org/r/v8-chromium-autoroll'
 
@@ -102,8 +103,9 @@ def main(sys_args=None):
             ("project", "chromium/src"),
             ("status", "NEW"),
         ],
-        "Update V8 to version",
-        limit=1)
+        "Roll V8 from",
+        o_params=['CURRENT_REVISION', 'CURRENT_COMMIT'],
+        limit=2)
     if len(changes) < 1:
       print("Didn't find a CL that looks like an active roll")
       return 1
@@ -116,10 +118,14 @@ def main(sys_args=None):
 
     roll_change = changes[0]
     subject = roll_change['subject']
-    print("Found: %s" % subject)
-    m = re.match(r"Update V8 to version ([0-9]+\.[0-9]+\.[0-9]+)", subject)
+    message = roll_change['revisions'][
+        roll_change['current_revision']]['commit']['message']
+    print("Found roll CL:")
+    for line in message.splitlines():
+      print(("> %s" % line).rstrip())
+    m = re.search(r"Version ([0-9]+\.[0-9]+\.[0-9]+)", message)
     if not m:
-      print("CL subject is not of the form \"Update V8 to version 1.2.3\"")
+      print("CL message doesn't have a \"Version 1.2.3\" commit listed")
       return 1
     branch = m.group(1)
 
@@ -172,15 +178,17 @@ def main(sys_args=None):
   # original commit.
   print("Updating commit message...")
   original_commit = gerrit_util.GetChangeCommit(GERRIT_HOST, revision)
-  commit_msg = "\n".join([
-      "Version %s (cherry-pick)" % version_string,  #
-      "",  #
-      "Merged %s" % original_commit['commit'],  #
-      "",  #
-      "%s" % original_commit['subject'],  #
-      "",  #
-      "Change-Id: %s" % cherry_pick['change_id'],  #
-  ])
+  commit_msg = f"""\
+    Merge: {original_commit['subject']}
+
+    Version {version_string}
+
+    (Cherry-pick from commit {original_commit['commit']})
+
+    Change-Id: {cherry_pick['change_id']}
+    """
+  commit_msg = textwrap.dedent(commit_msg)
+
   gerrit_util.SetChangeEditMessage(GERRIT_HOST, cherry_pick_id, commit_msg)
 
   # Publish the change edit with the v8-version.h and commit message changes.
@@ -230,9 +238,8 @@ def main(sys_args=None):
 
   print("Setting %s tag..." % version_string)
   project = urllib.parse.quote_plus(cherry_pick["project"])
-  gerrit_util.CreateGerritTag(GERRIT_HOST,
-                              project,
-                              version_string, cherry_pick_commit['commit'])
+  gerrit_util.CreateGerritTag(GERRIT_HOST, project, version_string,
+                              cherry_pick_commit['commit'])
 
   def gerrit_project_get(url):
     return gerrit_util.CallGerritApi(
@@ -284,8 +291,7 @@ def main(sys_args=None):
     if pgo_tag:
       assert pgo_tag['revision'] == cherry_pick_commit['commit'], (
           f"PGO tagged revision {pgo_tag['revision']} does not match tagged "
-          f"cherry-pick {cherry_pick_commit['commit']}"
-      )
+          f"cherry-pick {cherry_pick_commit['commit']}")
       return True
     return False
 

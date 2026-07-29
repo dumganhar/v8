@@ -52,6 +52,9 @@ using ReturnAddressLocationResolver =
 using DcheckErrorCallback = void (*)(const char* file, int line,
                                      const char* message);
 
+using V8FatalErrorCallback = void (*)(const char* file, int line,
+                                      const char* message);
+
 /**
  * Container class for static utility functions.
  */
@@ -76,6 +79,12 @@ class V8_EXPORT V8 {
 
   /** Set the callback to invoke in case of Dcheck failures. */
   static void SetDcheckErrorHandler(DcheckErrorCallback that);
+
+  /** Set the callback to invoke in the case of CHECK failures or fatal
+   * errors. This is distinct from Isolate::SetFatalErrorHandler, which
+   * is invoked in response to API usage failures.
+   * */
+  static void SetFatalErrorHandler(V8FatalErrorCallback that);
 
   /**
    * Sets V8 flags from a string.
@@ -103,11 +112,18 @@ class V8_EXPORT V8 {
     const bool kV8TargetOsIsAndroid = false;
 #endif
 
+#ifdef V8_ENABLE_CHECKS
+    const bool kV8EnableChecks = true;
+#else
+    const bool kV8EnableChecks = false;
+#endif
+
     const int kBuildConfiguration =
         (internal::PointerCompressionIsEnabled() ? kPointerCompression : 0) |
         (internal::SmiValuesAre31Bits() ? k31BitSmis : 0) |
         (internal::SandboxIsEnabled() ? kSandbox : 0) |
-        (kV8TargetOsIsAndroid ? kTargetOsIsAndroid : 0);
+        (kV8TargetOsIsAndroid ? kTargetOsIsAndroid : 0) |
+        (kV8EnableChecks ? kEnableChecks : 0);
     return Initialize(kBuildConfiguration);
   }
 
@@ -267,15 +283,9 @@ class V8_EXPORT V8 {
   static void SetFatalMemoryErrorCallback(OOMErrorCallback callback);
 
   /**
-   * Allows the host application to provide a unified callback that will be
-   * called when V8 needs to print any output (stdout, stderr, or file).
-   * If set, this callback replaces the default printing behavior.
-   *
-   * The callback receives:
-   * - type: PrintOutputType indicating stdout/stderr/file
-   * - file: FILE* for file output, nullptr for stdout/stderr
-   * - format: printf-style format string
-   * - args: variable argument list
+   * Routes V8 platform print output through `callback`. Pass nullptr to restore
+   * the default stdout, stderr, and file output behavior. Configure this before
+   * initializing V8 and do not change it concurrently with print operations.
    */
   static void SetPrintCallback(PrintCallback callback);
 
@@ -292,6 +302,7 @@ class V8_EXPORT V8 {
     k31BitSmis = 1 << 1,
     kSandbox = 1 << 2,
     kTargetOsIsAndroid = 1 << 3,
+    kEnableChecks = 1 << 4,
   };
 
   /**

@@ -6,6 +6,7 @@
 #define V8_COMPILER_TURBOSHAFT_TYPE_INFERENCE_REDUCER_H_
 
 #include <limits>
+#include <optional>
 
 #include "src/base/logging.h"
 #include "src/base/vector.h"
@@ -191,7 +192,7 @@ class TypeInferenceReducer
     {
       predecessors_.clear();
       for (const Block* pred : new_block->PredecessorsIterable()) {
-        base::Optional<table_t::Snapshot> pred_snapshot =
+        std::optional<table_t::Snapshot> pred_snapshot =
             block_to_snapshot_mapping_[pred->index()];
         DCHECK(pred_snapshot.has_value());
         predecessors_.push_back(pred_snapshot.value());
@@ -406,7 +407,7 @@ class TypeInferenceReducer
 
   void RemoveLast(OpIndex index_of_last_operation) {
     if (op_to_key_mapping_[index_of_last_operation]) {
-      op_to_key_mapping_[index_of_last_operation] = base::nullopt;
+      op_to_key_mapping_[index_of_last_operation] = std::nullopt;
       TURBOSHAFT_TRACE_TYPING_OK(
           "REM  %3d:%-40s %-40s\n", index_of_last_operation.id(),
           Asm()
@@ -444,7 +445,7 @@ class TypeInferenceReducer
     return Type::Invalid();
   }
 
-  Type GetTupleType(const TupleOp& tuple) {
+  Type GetTupleType(const MakeTupleOp& tuple) {
     base::SmallVector<Type, 4> tuple_types;
     for (OpIndex input : tuple.inputs()) {
       tuple_types.push_back(GetType(input));
@@ -456,8 +457,8 @@ class TypeInferenceReducer
     Type type = GetTypeOrInvalid(index);
     if (type.IsInvalid()) {
       const Operation& op = Asm().output_graph().Get(index);
-      if (op.Is<TupleOp>()) {
-        return GetTupleType(op.Cast<TupleOp>());
+      if (op.Is<MakeTupleOp>()) {
+        return GetTupleType(op.Cast<MakeTupleOp>());
       } else {
         return Typer::TypeForRepresentation(op.outputs_rep(),
                                             Asm().graph_zone());
@@ -554,11 +555,11 @@ class TypeInferenceReducer
       Asm().output_graph().operation_types()};
   table_t table_{Asm().phase_zone()};
   const Block* current_block_ = nullptr;
-  GrowingOpIndexSidetable<base::Optional<table_t::Key>> op_to_key_mapping_{
+  GrowingOpIndexSidetable<std::optional<table_t::Key>> op_to_key_mapping_{
       Asm().phase_zone(), &Asm().output_graph()};
-  GrowingBlockSidetable<base::Optional<table_t::Snapshot>>
+  GrowingBlockSidetable<std::optional<table_t::Snapshot>>
       block_to_snapshot_mapping_{Asm().input_graph().block_count(),
-                                 base::nullopt, Asm().phase_zone()};
+                                 std::nullopt, Asm().phase_zone()};
   // {predecessors_} is used during merging, but we use an instance variable for
   // it, in order to save memory and not reallocate it for each merge.
   ZoneVector<table_t::Snapshot> predecessors_{Asm().phase_zone()};

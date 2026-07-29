@@ -59,7 +59,11 @@ template("rust_unit_test") {
     }
   }
   _configs = invoker.configs
-  _edition = "2021"
+
+  _edition = "2024"
+  if (!rustc_nightly_capability) {
+    _edition = "2021"
+  }
   if (defined(invoker.edition)) {
     _edition = invoker.edition
   }
@@ -86,11 +90,6 @@ template("rust_unit_test") {
     _env_out_dir = target_gen_dir
   }
 
-  # TODO(crbug.com/40778298): Arrange to run test executables on try bots.
-  # TODO(crbug.com/gn/146): Allow Rust executables to depend on C/C++ source
-  # sets.
-  # This is important in cases where Rust tests may depend upon C/C++
-  # dependencies.
   executable(_exe_target_name) {
     testonly = true
     forward_variables_from(invoker,
@@ -123,8 +122,7 @@ template("rust_unit_test") {
       rustenv = []
     }
 
-    rustenv += [ "OUT_DIR=" +
-                 rebase_path(_env_out_dir, get_path_info(_crate_root, "dir")) ]
+    rustenv += [ "OUT_DIR=" + rebase_path(_env_out_dir, root_build_dir) ]
     metadata = {
       # Consumed by "rust_unit_tests_group" gni template.
       rust_unit_test_executables = [ _crate_name ]

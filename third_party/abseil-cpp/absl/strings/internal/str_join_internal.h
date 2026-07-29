@@ -33,6 +33,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -42,9 +43,11 @@
 #include <utility>
 
 #include "absl/base/config.h"
+#include "absl/base/internal/iterator_traits.h"
 #include "absl/base/internal/raw_logging.h"
 #include "absl/strings/internal/ostringstream.h"
 #include "absl/strings/internal/resize_uninitialized.h"
+#include "absl/strings/resize_and_overwrite.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 
@@ -227,9 +230,8 @@ std::string JoinAlgorithm(Iterator start, Iterator end, absl::string_view s,
 // range will be traversed twice: once to calculate the total needed size, and
 // then again to copy the elements and delimiters to the output string.
 template <typename Iterator,
-          typename = typename std::enable_if<std::is_convertible<
-              typename std::iterator_traits<Iterator>::iterator_category,
-              std::forward_iterator_tag>::value>::type>
+          typename = std::enable_if_t<
+              base_internal::IsAtLeastForwardIterator<Iterator>::value>>
 std::string JoinAlgorithm(Iterator start, Iterator end, absl::string_view s,
                           NoFormatter) {
   std::string result;
@@ -248,23 +250,25 @@ std::string JoinAlgorithm(Iterator start, Iterator end, absl::string_view s,
       constexpr uint64_t kMaxSize =
           uint64_t{(std::numeric_limits<size_t>::max)()};
       ABSL_INTERNAL_CHECK(result_size <= kMaxSize, "size_t overflow");
-      STLStringResizeUninitialized(&result, static_cast<size_t>(result_size));
 
-      // Joins strings
-      char* result_buf = &*result.begin();
-
-      memcpy(result_buf, start_value.data(), start_value.size());
-      result_buf += start_value.size();
-      for (Iterator it = start; ++it != end;) {
-        memcpy(result_buf, s.data(), s.size());
-        result_buf += s.size();
-        auto&& value = *it;
-        memcpy(result_buf, value.data(), value.size());
-        result_buf += value.size();
-      }
+      StringResizeAndOverwrite(
+          result, static_cast<size_t>(result_size),
+          [&start, &end, &start_value, s](char* result_buf,
+                                          size_t result_buf_size) {
+            // Joins strings
+            memcpy(result_buf, start_value.data(), start_value.size());
+            result_buf += start_value.size();
+            for (Iterator it = start; ++it != end;) {
+              memcpy(result_buf, s.data(), s.size());
+              result_buf += s.size();
+              auto&& value = *it;
+              memcpy(result_buf, value.data(), value.size());
+              result_buf += value.size();
+            }
+            return result_buf_size;
+          });
     }
   }
-
   return result;
 }
 
@@ -319,6 +323,15 @@ std::string JoinRange(const Range& range, absl::string_view separator) {
   using std::begin;
   using std::end;
   return JoinRange(begin(range), end(range), separator);
+}
+
+template <typename Tuple, std::size_t... I>
+std::string JoinTuple(const Tuple& value, absl::string_view separator,
+                      std::index_sequence<I...>) {
+  return JoinRange(
+      std::initializer_list<absl::string_view>{
+          static_cast<const AlphaNum&>(std::get<I>(value)).Piece()...},
+      separator);
 }
 
 }  // namespace strings_internal

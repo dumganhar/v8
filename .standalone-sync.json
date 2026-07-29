@@ -1,0 +1,148 @@
+{
+  "schema": 1,
+  "sources": [
+    {
+      "path": ".",
+      "exclude": [
+        ".github",
+        "agents",
+        "bazel",
+        "docs",
+        "infra",
+        "samples",
+        "test"
+      ],
+      "exclude_exceptions": [
+        "test/torque"
+      ]
+    },
+    {
+      "path": "build"
+    },
+    {
+      "path": "buildtools"
+    },
+    {
+      "path": "tools/clang"
+    },
+    {
+      "path": "third_party/abseil-cpp",
+      "exclude": [
+        ".github",
+        "ci"
+      ]
+    },
+    {
+      "path": "third_party/dragonbox/src",
+      "exclude": [
+        "benchmark",
+        "docs",
+        "subproject",
+        "test"
+      ]
+    },
+    {
+      "path": "third_party/fast_float/src",
+      "exclude": [
+        ".github",
+        "benchmarks",
+        "tests"
+      ]
+    },
+    {
+      "path": "third_party/fp16/src",
+      "exclude": [
+        ".github",
+        "bench",
+        "test"
+      ]
+    },
+    {
+      "path": "third_party/googletest/src",
+      "include": [
+        "googletest/include/gtest/gtest_prod.h"
+      ]
+    },
+    {
+      "path": "third_party/highway/src",
+      "exclude": [
+        ".github",
+        "docs",
+        "g3doc"
+      ]
+    },
+    {
+      "path": "third_party/icu",
+      "include": [
+        "config.gni"
+      ]
+    },
+    {
+      "path": "third_party/jinja2",
+      "exclude": [
+        "tests"
+      ]
+    },
+    {
+      "path": "third_party/libc++/src",
+      "include": [
+        "include",
+        "src"
+      ]
+    },
+    {
+      "path": "third_party/libc++abi/src",
+      "include": [
+        "include",
+        "src"
+      ]
+    },
+    {
+      "path": "third_party/llvm-libc/src",
+      "exclude": [
+        ".github",
+        "benchmarks",
+        "docs",
+        "test"
+      ]
+    },
+    {
+      "path": "third_party/markupsafe",
+      "exclude": [
+        "tests"
+      ]
+    },
+    {
+      "path": "third_party/simdutf",
+      "exclude": [
+        ".github",
+        "benchmarks",
+        "tests"
+      ]
+    },
+    {
+      "path": "third_party/zlib",
+      "exclude": [
+        "contrib/bench",
+        "contrib/tests",
+        "google/test",
+        "test"
+      ]
+    }
+  ],
+  "patches": [
+    ".standalone-sync/patches/0001-standalone-embedder-api.patch"
+  ],
+  "local_paths": [
+    ".github/workflows/build.yml",
+    ".standalone-sync.json",
+    ".standalone-sync/patches",
+    "README.md",
+    "build/config/gclient_args.gni",
+    "build-android.sh",
+    "build-ios.sh",
+    "build-mac.sh",
+    "tests/test_standalone_sync.py",
+    "tools/standalone_sync.py"
+  ]
+}

@@ -13,6 +13,8 @@
 namespace v8 {
 namespace internal {
 
+#include "src/codegen/define-code-stub-assembler-macros.inc"
+
 class AsyncFunctionBuiltinsAssembler : public AsyncBuiltinsAssembler {
  public:
   explicit AsyncFunctionBuiltinsAssembler(compiler::CodeAssemblerState* state)
@@ -34,7 +36,7 @@ void AsyncFunctionBuiltinsAssembler::AsyncFunctionAwaitResumeClosure(
          resume_mode == JSGeneratorObject::kThrow);
 
   TNode<JSAsyncFunctionObject> async_function_object =
-      CAST(LoadContextElement(context, Context::EXTENSION_INDEX));
+      CAST(LoadContextElementNoCell(context, Context::EXTENSION_INDEX));
 
   // Inline version of GeneratorPrototypeNext / GeneratorPrototypeReturn with
   // unnecessary runtime checks removed.
@@ -91,7 +93,7 @@ TF_BUILTIN(AsyncFunctionEnter, AsyncFunctionBuiltinsAssembler) {
 
   // Allocate and initialize the async function object.
   TNode<NativeContext> native_context = LoadNativeContext(context);
-  TNode<Map> async_function_object_map = CAST(LoadContextElement(
+  TNode<Map> async_function_object_map = CAST(LoadContextElementNoCell(
       native_context, Context::ASYNC_FUNCTION_OBJECT_MAP_INDEX));
   TNode<JSAsyncFunctionObject> async_function_object =
       UncheckedCast<JSAsyncFunctionObject>(
@@ -197,17 +199,14 @@ template <typename Descriptor>
 void AsyncFunctionBuiltinsAssembler::AsyncFunctionAwait() {
   auto async_function_object =
       Parameter<JSAsyncFunctionObject>(Descriptor::kAsyncFunctionObject);
-  auto value = Parameter<Object>(Descriptor::kValue);
+  auto value = Parameter<JSAny>(Descriptor::kValue);
   auto context = Parameter<Context>(Descriptor::kContext);
 
-  TNode<SharedFunctionInfo> on_resolve_sfi =
-      AsyncFunctionAwaitResolveSharedFunConstant();
-  TNode<SharedFunctionInfo> on_reject_sfi =
-      AsyncFunctionAwaitRejectSharedFunConstant();
   TNode<JSPromise> outer_promise = LoadObjectField<JSPromise>(
       async_function_object, JSAsyncFunctionObject::kPromiseOffset);
-  Await(context, async_function_object, value, outer_promise, on_resolve_sfi,
-        on_reject_sfi);
+  Await(context, async_function_object, value, outer_promise,
+        RootIndex::kAsyncFunctionAwaitResolveClosureSharedFun,
+        RootIndex::kAsyncFunctionAwaitRejectClosureSharedFun);
 
   // Return outer promise to avoid adding an load of the outer promise before
   // suspending in BytecodeGenerator.
@@ -218,6 +217,8 @@ void AsyncFunctionBuiltinsAssembler::AsyncFunctionAwait() {
 TF_BUILTIN(AsyncFunctionAwait, AsyncFunctionBuiltinsAssembler) {
   AsyncFunctionAwait<Descriptor>();
 }
+
+#include "src/codegen/undef-code-stub-assembler-macros.inc"
 
 }  // namespace internal
 }  // namespace v8

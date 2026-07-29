@@ -27,6 +27,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>  // NOLINT
 #include <type_traits>
 #include <vector>
@@ -45,10 +46,6 @@
 #include "absl/strings/string_view.h"
 #include "absl/types/optional.h"
 #include "absl/types/span.h"
-
-#if defined(ABSL_HAVE_STD_STRING_VIEW)
-#include <string_view>
-#endif
 
 namespace absl {
 ABSL_NAMESPACE_BEGIN
@@ -322,10 +319,8 @@ TEST_F(FormatConvertTest, BasicString) {
   TestStringConvert(std::string("hello"));
   TestStringConvert(std::wstring(L"hello"));
   TestStringConvert(string_view("hello"));
-#if defined(ABSL_HAVE_STD_STRING_VIEW)
   TestStringConvert(std::string_view("hello"));
   TestStringConvert(std::wstring_view(L"hello"));
-#endif  // ABSL_HAVE_STD_STRING_VIEW
 }
 
 TEST_F(FormatConvertTest, NullString) {
@@ -844,15 +839,13 @@ void TestWithMultipleFormatsHelper(Floating tested_float) {
         // Apple formats NaN differently (+nan) vs. (nan)
         if (std::isnan(tested_float)) continue;
 #endif
-        if (string_printf_result != str_format_result) {
-          // We use ASSERT_EQ here because failures are usually correlated and a
-          // bug would print way too many failed expectations causing the test
-          // to time out.
-          ASSERT_EQ(string_printf_result, str_format_result)
-              << fmt_str << " " << StrPrint("%.18g", tested_float) << " "
-              << StrPrint("%a", tested_float) << " "
-              << StrPrint("%.50f", tested_float);
-        }
+        // We use ASSERT_EQ here because failures are usually correlated and a
+        // bug would print way too many failed expectations causing the test
+        // to time out.
+        ASSERT_EQ(string_printf_result, str_format_result)
+            << fmt_str << " " << StrPrint("%.18g", tested_float) << " "
+            << StrPrint("%a", tested_float) << " "
+            << StrPrint("%.50f", tested_float);
     }
   }
 }
@@ -1066,6 +1059,17 @@ TEST_F(FormatConvertTest, DoubleRound) {
             "0.000000000000000000000000000000000002"
             "25694915357879201529997415146671170141"
             "1837869002408041296803276054561138153076171875");
+
+  // Scientific exponent cases
+  // Round to even with all zeros after round digit
+  EXPECT_EQ(format("%0.13e", 1671075773261250), "1.6710757732612e+15");
+
+  // Rounding where precision is in first digit run
+  EXPECT_EQ(format("%0.1e", -1.93437090148818698e-297), "-1.9e-297");
+  EXPECT_EQ(format("%0.1e", -9.92255780642280927e-298), "-9.9e-298");
+
+  // Rounding large negative exponent first digit
+  EXPECT_EQ(format("%0.1e", -8.956e-294), "-9.0e-294");
 }
 
 TEST_F(FormatConvertTest, DoubleRoundA) {

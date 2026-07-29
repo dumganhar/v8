@@ -66,6 +66,7 @@ StartupSerializer::StartupSerializer(
     : RootsSerializer(isolate, flags, RootIndex::kFirstStrongRoot),
       shared_heap_serializer_(shared_heap_serializer),
       accessor_infos_(isolate->heap()),
+      interceptor_infos_(isolate->heap()),
       function_template_infos_(isolate->heap()) {
   InitializeCodeAddressMap();
 
@@ -88,11 +89,17 @@ StartupSerializer::StartupSerializer(
 }
 
 StartupSerializer::~StartupSerializer() {
-  for (Handle<AccessorInfo> info : accessor_infos_) {
-    RestoreExternalReferenceRedirector(isolate(), *info);
-  }
-  for (Handle<FunctionTemplateInfo> info : function_template_infos_) {
-    RestoreExternalReferenceRedirector(isolate(), *info);
+  if (USE_SIMULATOR_BOOL) {
+    // Restore redirections removed during serialization.
+    for (DirectHandle<AccessorInfo> info : accessor_infos_) {
+      info->RestoreCallbackRedirectionAfterDeserialization(isolate());
+    }
+    for (DirectHandle<InterceptorInfo> info : interceptor_infos_) {
+      info->RestoreCallbackRedirectionAfterDeserialization(isolate());
+    }
+    for (DirectHandle<FunctionTemplateInfo> info : function_template_infos_) {
+      info->RestoreCallbackRedirectionAfterDeserialization(isolate());
+    }
   }
   OutputStatistics("StartupSerializer");
 }
@@ -124,22 +131,28 @@ void StartupSerializer::SerializeObjectImpl(Handle<HeapObject> obj,
 
   if (USE_SIMULATOR_BOOL && IsAccessorInfo(*obj, cage_base)) {
     // Wipe external reference redirects in the accessor info.
-    Handle<AccessorInfo> info = Handle<AccessorInfo>::cast(obj);
-    info->remove_getter_redirection(isolate());
+    auto info = Cast<AccessorInfo>(obj);
+    info->RemoveCallbackRedirectionForSerialization(isolate());
     accessor_infos_.Push(*info);
+  } else if (USE_SIMULATOR_BOOL && IsInterceptorInfo(*obj, cage_base)) {
+    // Wipe external reference redirects in the interceptor info.
+    auto info = Cast<InterceptorInfo>(obj);
+    info->RemoveCallbackRedirectionForSerialization(isolate());
+    interceptor_infos_.Push(*info);
   } else if (USE_SIMULATOR_BOOL && IsFunctionTemplateInfo(*obj, cage_base)) {
-    Handle<FunctionTemplateInfo> info = Handle<FunctionTemplateInfo>::cast(obj);
-    info->remove_callback_redirection(isolate());
+    auto info = Cast<FunctionTemplateInfo>(obj);
+    info->RemoveCallbackRedirectionForSerialization(isolate());
     function_template_infos_.Push(*info);
   } else if (IsScript(*obj, cage_base) &&
-             Handle<Script>::cast(obj)->IsUserJavaScript()) {
-    Handle<Script>::cast(obj)->set_context_data(
+             Cast<Script>(obj)->IsUserJavaScript()) {
+    Cast<Script>(obj)->set_context_data(
         ReadOnlyRoots(isolate()).uninitialized_symbol());
   } else if (IsSharedFunctionInfo(*obj, cage_base)) {
     // Clear inferred name for native functions.
-    Handle<SharedFunctionInfo> shared = Handle<SharedFunctionInfo>::cast(obj);
-    if (!shared->IsSubjectToDebugging() && shared->HasUncompiledData()) {
-      shared->uncompiled_data()->set_inferred_name(
+    auto shared = Cast<SharedFunctionInfo>(obj);
+    if (!shared->IsSubjectToDebugging() &&
+        shared->HasUncompiledData(isolate())) {
+      shared->uncompiled_data(isolate())->set_inferred_name(
           ReadOnlyRoots(isolate()).empty_string());
     }
   }
@@ -186,9 +199,9 @@ void StartupSerializer::SerializeStrongReferences(
 SerializedHandleChecker::SerializedHandleChecker(
     Isolate* isolate, std::vector<Tagged<Context>>* contexts)
     : isolate_(isolate) {
-  AddToSet(FixedArray::cast(isolate->heap()->serialized_objects()));
+  AddToSet(Cast<FixedArray>(isolate->heap()->serialized_objects()));
   for (auto const& context : *contexts) {
-    AddToSet(FixedArray::cast(context->serialized_objects()));
+    AddToSet(Cast<FixedArray>(context->serialized_objects()));
   }
 }
 

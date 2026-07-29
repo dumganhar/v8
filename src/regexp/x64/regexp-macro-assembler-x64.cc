@@ -45,6 +45,9 @@ namespace internal {
  * during execution of RegExp code (it doesn't hold the value assumed when
  * creating JS code), so Root related macro operations can be used.
  *
+ * xmm0 - xmm5 are free to use. On Windows, xmm6 - xmm15 are callee-saved and
+ * therefore need to be saved/restored.
+ *
  * Each call to a C++ method should retain these registers.
  *
  * The stack will have the following content, in some order, indexable from the
@@ -96,12 +99,11 @@ const int RegExpMacroAssemblerX64::kRegExpCodeSize;
 RegExpMacroAssemblerX64::RegExpMacroAssemblerX64(Isolate* isolate, Zone* zone,
                                                  Mode mode,
                                                  int registers_to_save)
-    : NativeRegExpMacroAssembler(isolate, zone),
+    : NativeRegExpMacroAssembler(isolate, zone, mode),
       masm_(isolate, CodeObjectRequired::kYes,
             NewAssemblerBuffer(kRegExpCodeSize)),
       no_root_array_scope_(&masm_),
       code_relative_fixup_positions_(zone),
-      mode_(mode),
       num_registers_(registers_to_save),
       num_saved_registers_(registers_to_save),
       entry_label_(),
@@ -126,12 +128,6 @@ RegExpMacroAssemblerX64::~RegExpMacroAssemblerX64() {
   stack_overflow_label_.Unuse();
   fallback_label_.Unuse();
 }
-
-
-int RegExpMacroAssemblerX64::stack_limit_slack()  {
-  return RegExpStack::kStackLimitSlack;
-}
-
 
 void RegExpMacroAssemblerX64::AdvanceCurrentPosition(int by) {
   if (by != 0) {
@@ -171,13 +167,10 @@ void RegExpMacroAssemblerX64::Backtrack() {
   // and jump to location.
   Pop(rbx);
   __ addq(rbx, code_object_pointer());
-#ifdef V8_ENABLE_CET_IBT
+
   // TODO(sroettger): This jump needs an endbr64 instruction but the code is
   // performance sensitive. Needs more thought how to do this in a fast way.
   __ jmp(rbx, /*notrack=*/true);
-#else
-  __ jmp(rbx);
-#endif
 }
 
 
@@ -216,7 +209,7 @@ void RegExpMacroAssemblerX64::CheckCharacterLT(base::uc16 limit,
   BranchOrBacktrack(less, on_less);
 }
 
-void RegExpMacroAssemblerX64::CheckGreedyLoop(Label* on_equal) {
+void RegExpMacroAssemblerX64::CheckFixedLengthLoop(Label* on_equal) {
   Label fallthrough;
   __ cmpl(rdi, Operand(backtrack_stackpointer(), 0));
   __ j(not_equal, &fallthrough);
@@ -289,7 +282,7 @@ void RegExpMacroAssemblerX64::CheckNotBackReferenceIgnoreCase(
     BranchOrBacktrack(greater, on_no_match);
   }
 
-  if (mode_ == LATIN1) {
+  if (mode() == LATIN1) {
     Label loop_increment;
     if (on_no_match == nullptr) {
       on_no_match = &backtrack_label_;
@@ -348,7 +341,7 @@ void RegExpMacroAssemblerX64::CheckNotBackReferenceIgnoreCase(
       __ subq(rdi, register_location(start_reg + 1));
     }
   } else {
-    DCHECK(mode_ == UC16);
+    DCHECK(mode() == UC16);
     PushCallerSavedRegisters();
 
     static const int num_arguments = 4;
@@ -460,11 +453,11 @@ void RegExpMacroAssemblerX64::CheckNotBackReference(int start_reg,
 
   Label loop;
   __ bind(&loop);
-  if (mode_ == LATIN1) {
+  if (mode() == LATIN1) {
     __ movzxbl(rax, Operand(rdx, 0));
     __ cmpb(rax, Operand(rbx, 0));
   } else {
-    DCHECK(mode_ == UC16);
+    DCHECK(mode() == UC16);
     __ movzxwl(rax, Operand(rdx, 0));
     __ cmpw(rax, Operand(rbx, 0));
   }
@@ -553,12 +546,11 @@ void RegExpMacroAssemblerX64::CallIsCharacterInRangeArray(
     const ZoneList<CharacterRange>* ranges) {
   PushCallerSavedRegisters();
 
-  static const int kNumArguments = 3;
+  static const int kNumArguments = 2;
   __ PrepareCallCFunction(kNumArguments);
 
   __ Move(kCArgRegs[0], current_character());
   __ Move(kCArgRegs[1], GetOrAddRangeArray(ranges));
-  __ LoadAddress(kCArgRegs[2], ExternalReference::isolate_address(isolate()));
 
   {
     // We have a frame (set up in GetCode), but the assembler doesn't know.
@@ -592,57 +584,429 @@ void RegExpMacroAssemblerX64::CheckBitInTable(
     Label* on_bit_set) {
   __ Move(rax, table);
   Register index = current_character();
-  if (mode_ != LATIN1 || kTableMask != String::kMaxOneByteCharCode) {
+  if (mode() != LATIN1 || kTableMask != String::kMaxOneByteCharCode) {
     __ movq(rbx, current_character());
     __ andq(rbx, Immediate(kTableMask));
     index = rbx;
   }
-  __ cmpb(FieldOperand(rax, index, times_1, ByteArray::kHeaderSize),
+  __ cmpb(FieldOperand(rax, index, times_1, OFFSET_OF_DATA_START(ByteArray)),
           Immediate(0));
   BranchOrBacktrack(not_equal, on_bit_set);
 }
 
-bool RegExpMacroAssemblerX64::CheckSpecialClassRanges(StandardCharacterSet type,
+void RegExpMacroAssemblerX64::SkipUntilBitInTable(
+    int cp_offset, Handle<ByteArray> table,
+    Handle<ByteArray> nibble_table_array, int advance_by, Label* on_match,
+    Label* on_no_match) {
+  Label scalar_repeat;
+
+  const bool use_simd = SkipUntilBitInTableUseSimd(advance_by);
+  if (use_simd) {
+    DCHECK(!nibble_table_array.is_null());
+    Label simd_repeat, found, scalar;
+    static constexpr int kVectorSize = 16;
+    const int kCharsPerVector = kVectorSize / char_size();
+
+    // Fallback to scalar version if there are less than kCharsPerVector chars
+    // left in the subject.
+    // We subtract 1 because CheckPosition assumes we are reading 1 character
+    // plus cp_offset. So the -1 is the the character that is assumed to be
+    // read by default.
+    CheckPosition(cp_offset + kCharsPerVector - 1, &scalar);
+
+    // Load table and mask constants.
+    // For a description of the table layout, check the comment on
+    // BoyerMooreLookahead::GetSkipTable in regexp-compiler.cc.
+    XMMRegister nibble_table = xmm0;
+    __ Move(r11, nibble_table_array);
+    __ Movdqu(nibble_table, FieldOperand(r11, OFFSET_OF_DATA_START(ByteArray)));
+    XMMRegister nibble_mask = xmm1;
+    __ Move(r11, 0x0f0f0f0f'0f0f0f0f);
+    __ movq(nibble_mask, r11);
+    __ Movddup(nibble_mask, nibble_mask);
+    XMMRegister hi_nibble_lookup_mask = xmm2;
+    __ Move(r11, 0x80402010'08040201);
+    __ movq(hi_nibble_lookup_mask, r11);
+    __ Movddup(hi_nibble_lookup_mask, hi_nibble_lookup_mask);
+
+    Bind(&simd_repeat);
+    // Load next characters into vector.
+    XMMRegister input_vec = xmm3;
+    __ Movdqu(input_vec, Operand(rsi, rdi, times_1, cp_offset));
+
+    // Extract low nibbles.
+    // lo_nibbles = input & 0x0f
+    XMMRegister lo_nibbles = xmm4;
+    if (CpuFeatures::IsSupported(AVX)) {
+      __ Andps(lo_nibbles, nibble_mask, input_vec);
+    } else {
+      __ Movdqa(lo_nibbles, nibble_mask);
+      __ Andps(lo_nibbles, lo_nibbles, input_vec);
+    }
+    // Extract high nibbles.
+    // hi_nibbles = (input >> 4) & 0x0f
+    __ Psrlw(input_vec, uint8_t{4});
+    XMMRegister hi_nibbles = ReassignRegister(input_vec);
+    __ Andps(hi_nibbles, hi_nibbles, nibble_mask);
+
+    // Get rows of nibbles table based on low nibbles.
+    // row = nibble_table[lo_nibbles]
+    XMMRegister row = xmm5;
+    __ Pshufb(row, nibble_table, lo_nibbles);
+
+    // Check if high nibble is set in row.
+    // bitmask = 1 << (hi_nibbles & 0x7)
+    //         = hi_nibbles_lookup_mask[hi_nibbles] & 0x7
+    // Note: The hi_nibbles & 0x7 part is implicitly executed, as pshufb sets
+    // the result byte to zero if bit 7 is set in the source byte.
+    XMMRegister bitmask = ReassignRegister(lo_nibbles);
+    __ Pshufb(bitmask, hi_nibble_lookup_mask, hi_nibbles);
+
+    // result = row & bitmask == bitmask
+    XMMRegister result = ReassignRegister(row);
+    __ Andps(result, result, bitmask);
+    __ Pcmpeqb(result, result, bitmask);
+
+    // Check if any bit is set.
+    // Copy the most significant bit of each result byte to r11.
+    __ Pmovmskb(r11, result);
+    __ testl(r11, r11);
+    __ j(not_zero, &found);
+
+    // The maximum lookahead for boyer moore is less than vector size, so we can
+    // ignore advance_by in the vectorized version.
+    AdvanceCurrentPosition(kCharsPerVector);
+    CheckPosition(cp_offset + kCharsPerVector - 1, &scalar);
+    __ jmp(&simd_repeat);
+
+    Bind(&found);
+    // Extract position.
+    __ bsfl(r11, r11);
+    if (mode() == UC16) {
+      // Make sure that we skip an even number of bytes in 2-byte subjects.
+      // Odd skips can happen if the higher byte produced a match.
+      // False positives should be rare and are no problem in general, as the
+      // following instructions will check for an exact match.
+      __ andl(r11, Immediate(0xfffe));
+    }
+    __ addq(rdi, r11);
+    __ jmp(on_match);
+    Bind(&scalar);
+  }
+
+  // Scalar version.
+  Register table_reg = r9;
+  __ Move(table_reg, table);
+
+  Bind(&scalar_repeat);
+  CheckPosition(cp_offset, on_no_match);
+  LoadCurrentCharacterUnchecked(cp_offset, 1);
+  Register index = current_character();
+  if (mode() != LATIN1 || kTableMask != String::kMaxOneByteCharCode) {
+    index = rbx;
+    __ movq(index, current_character());
+    __ andq(index, Immediate(kTableMask));
+  }
+  __ cmpb(
+      FieldOperand(table_reg, index, times_1, OFFSET_OF_DATA_START(ByteArray)),
+      Immediate(0));
+  __ j(not_equal, on_match);
+  AdvanceCurrentPosition(advance_by);
+  __ jmp(&scalar_repeat);
+}
+
+bool RegExpMacroAssemblerX64::SkipUntilBitInTableUseSimd(int advance_by) {
+  // To use the SIMD variant we require SSSE3 as there is no shuffle equivalent
+  // in older extensions.
+  // In addition we only use SIMD instead of the scalar version if we advance by
+  // 1 byte in each iteration. For higher values the scalar version performs
+  // better.
+  return v8_flags.regexp_simd && advance_by * char_size() == 1 &&
+         CpuFeatures::IsSupported(SSSE3);
+}
+
+namespace {
+
+void Pcmpeq(MacroAssembler* masm, XMMRegister dest, XMMRegister src1,
+            XMMRegister src2, int width) {
+  switch (width) {
+    case 1:
+      masm->Pcmpeqb(dest, src1, src2);
+      break;
+    case 2:
+      masm->Pcmpeqw(dest, src1, src2);
+      break;
+    case 4:
+      masm->Pcmpeqd(dest, src1, src2);
+      break;
+    default:
+      UNREACHABLE();
+  }
+}
+
+}  // namespace
+
+void RegExpMacroAssemblerX64::SkipUntilOneOfMasked(
+    int cp_offset, int advance_by, unsigned both_chars, unsigned both_mask,
+    int max_offset, unsigned chars1, unsigned mask1, unsigned chars2,
+    unsigned mask2, Label* on_match1, Label* on_match2, Label* on_failure) {
+  Label scalar_repeat;
+  const bool use_simd = SkipUntilOneOfMaskedUseSimd(advance_by);
+  // Number of characters loaded and width of mask/chars to check.
+  // TODO(pthier): Support/optimize other variants.
+  static constexpr int character_count = 4;
+  DCHECK_EQ(mode(), LATIN1);  // TODO(pthier): Support 2-byte.
+  if (use_simd) {
+    // We load the 16 characters from the subject into 4 different vector
+    // registers, each offset by 1. This is required as we want to check 4
+    // contiguous characters.
+    // E.g. "This is a sample subject" will be loaded as:
+    // input_vec1 = "This is a sample"
+    // input_vec2 = "his is a sample "
+    // input_vec3 = "is is a sample s"
+    // input_vec4 = "s is a sample su"
+    // We then check each of these vectors against both_mask and both_chars
+    // (each containing 4 characters). Whenever we find a match, we simply
+    // delegate the task of finding the exact match index to the scalar version
+    // (getting the correct index from vector registers is complicated and
+    // slower).
+    Label simd_repeat, scalar, scalar_after_simd, found;
+    static constexpr int kVectorSize = 16;
+    const int kCharsPerVector = kVectorSize / char_size();
+
+    // Fallback to scalar version if there are less than kCharsPerVector +
+    // character_count - 1 chars left in the subject. We subtract 1 from
+    // kCharsPerVector because CheckPosition assumes we are reading 1 character
+    // plus max_offset. So the -1 is the the character that is assumed to be
+    // read by default.
+    const int max_stride_offset =
+        max_offset + kCharsPerVector - 1 + character_count - 1;
+    CheckPosition(max_stride_offset, &scalar);
+
+    // Save callee-saved XMM registers.
+    // TODO(pthier): Consider saving callee-saved XMM registers in the
+    // prologue if more optimizations need them.
+    __ subq(rsp, Immediate(6 * kVectorSize));
+    __ movupd(Operand(rsp, 0), xmm6);
+    __ movupd(Operand(rsp, 1 * kVectorSize), xmm7);
+    __ movupd(Operand(rsp, 2 * kVectorSize), xmm8);
+    __ movupd(Operand(rsp, 3 * kVectorSize), xmm9);
+    __ movupd(Operand(rsp, 4 * kVectorSize), xmm10);
+    __ movupd(Operand(rsp, 5 * kVectorSize), xmm11);
+
+    // Load a 32-bit immediate and duplicate the value across all 4 lanes of a
+    // 128-bit XMM register.
+    // I.e. 0xAABBCCDD becomes 0xAABBCCDDAABBCCDDAABBCCDDAABBCCDD.
+    auto splat_imm32 = [this](XMMRegister dst, uint32_t imm) {
+      Register scratch = r11;
+      __ Move(scratch, (static_cast<uint64_t>(imm) << 32) | imm);
+      __ movq(dst, scratch);
+      if (CpuFeatures::IsSupported(SSE3)) {
+        CpuFeatureScope sse3_scope(masm(), SSE3);
+        __ Movddup(dst, dst);
+      } else {
+        __ shufpd(dst, dst, 0);
+      }
+    };
+
+    // Load constants.
+    XMMRegister both_mask_vec = xmm0;
+    splat_imm32(both_mask_vec, both_mask);
+    XMMRegister both_chars_vec = xmm1;
+    splat_imm32(both_chars_vec, both_chars);
+    XMMRegister mask1_vec = xmm2;
+    splat_imm32(mask1_vec, mask1);
+    XMMRegister chars1_vec = xmm3;
+    splat_imm32(chars1_vec, chars1);
+    XMMRegister mask2_vec = xmm4;
+    splat_imm32(mask2_vec, mask2);
+    XMMRegister chars2_vec = xmm5;
+    splat_imm32(chars2_vec, chars2);
+
+    Bind(&simd_repeat);
+
+    // Load next characters into vectors.
+    XMMRegister input_vec1 = xmm6;
+    XMMRegister input_vec2 = xmm7;
+    XMMRegister input_vec3 = xmm8;
+    XMMRegister input_vec4 = xmm9;
+
+    __ Movdqu(input_vec1, Operand(rsi, rdi, times_1, cp_offset));
+    __ Movdqu(input_vec2, Operand(rsi, rdi, times_1, cp_offset + 1));
+    __ Movdqu(input_vec3, Operand(rsi, rdi, times_1, cp_offset + 2));
+    __ Movdqu(input_vec4, Operand(rsi, rdi, times_1, cp_offset + 3));
+
+    // Helper to check if any of 4 input vectors matches. I.e. computes (input &
+    // mask) == characters for each input. If any input matched, |result| is set
+    // to a value != 0. We don't try to compute the exact match index, as this
+    // is rather expensive. Instead we use the scalar version to find the exact
+    // match index within a block.
+    XMMRegister result = xmm10;
+    auto AndCheck4CharsSimd =
+        [this, input_vec1, input_vec2, input_vec3, input_vec4](
+            XMMRegister res, XMMRegister characters, XMMRegister mask) {
+          XMMRegister tmp = xmm11;
+          if (CpuFeatures::IsSupported(AVX)) {
+            CpuFeatureScope avx_scope(masm(), AVX);
+            __ Andps(tmp, mask, input_vec1);
+            Pcmpeq(masm(), res, tmp, characters, character_count);
+            __ Andps(tmp, mask, input_vec2);
+            Pcmpeq(masm(), tmp, tmp, characters, character_count);
+            __ Orps(res, res, tmp);
+            __ Andps(tmp, mask, input_vec3);
+            Pcmpeq(masm(), tmp, tmp, characters, character_count);
+            __ Orps(res, res, tmp);
+            __ Andps(tmp, mask, input_vec4);
+            Pcmpeq(masm(), tmp, tmp, characters, character_count);
+            __ Orps(res, res, tmp);
+          } else {
+            __ Movdqa(tmp, mask);
+            __ Andps(tmp, tmp, input_vec1);
+            Pcmpeq(masm(), tmp, tmp, characters, character_count);
+            __ Movdqa(res, tmp);
+            __ Movdqa(tmp, mask);
+            __ Andps(tmp, tmp, input_vec2);
+            Pcmpeq(masm(), tmp, tmp, characters, character_count);
+            __ Orps(res, res, tmp);
+            __ Movdqa(tmp, mask);
+            __ Andps(tmp, tmp, input_vec3);
+            Pcmpeq(masm(), tmp, tmp, characters, character_count);
+            __ Orps(res, res, tmp);
+            __ Movdqa(tmp, mask);
+            __ Andps(tmp, tmp, input_vec4);
+            Pcmpeq(masm(), tmp, tmp, characters, character_count);
+            __ Orps(res, res, tmp);
+          }
+        };
+
+    // Tests if any bit was set. Sets ZF to 0 if any bit was set.
+    auto TestAnySet = [this](XMMRegister reg) {
+      Register scratch = r11;
+      if (CpuFeatures::IsSupported(SSE4_1)) {
+        CpuFeatureScope sse4_scope(masm(), SSE4_1);
+        __ Ptest(reg, reg);
+      } else {
+        __ Pmovmskb(scratch, reg);
+        __ testl(scratch, scratch);
+      }
+    };
+
+    // Check both_chars with both_mask.
+    AndCheck4CharsSimd(result, both_chars_vec, both_mask_vec);
+    TestAnySet(result);
+    __ j(not_zero, &found);
+
+    AdvanceCurrentPosition(kCharsPerVector);
+    CheckPosition(max_stride_offset, &scalar_after_simd);
+    __ jmp(&simd_repeat);
+
+    Bind(&found);
+    // Check chars1 with mask1.
+    AndCheck4CharsSimd(result, chars1_vec, mask1_vec);
+    TestAnySet(result);
+    __ j(not_zero, &scalar_after_simd);
+    // Check chars2 with mask2.
+    AndCheck4CharsSimd(result, chars2_vec, mask2_vec);
+    TestAnySet(result);
+    __ j(not_zero, &scalar_after_simd);
+    AdvanceCurrentPosition(kCharsPerVector);
+    CheckPosition(max_stride_offset, &scalar_after_simd);
+    __ jmp(&simd_repeat);
+
+    Bind(&scalar_after_simd);
+    // Restore callee-saved XMM registers.
+    __ movupd(xmm11, Operand(rsp, 5 * kVectorSize));
+    __ movupd(xmm10, Operand(rsp, 4 * kVectorSize));
+    __ movupd(xmm9, Operand(rsp, 3 * kVectorSize));
+    __ movupd(xmm8, Operand(rsp, 2 * kVectorSize));
+    __ movupd(xmm7, Operand(rsp, 1 * kVectorSize));
+    __ movupd(xmm6, Operand(rsp, 0));
+    __ addq(rsp, Immediate(6 * kVectorSize));
+
+    Bind(&scalar);
+  }
+
+  // Scalar version.
+  {
+    Label found;
+    Bind(&scalar_repeat);
+    DCHECK_GE(max_offset, cp_offset + character_count);
+    CheckPosition(max_offset, on_failure);
+    LoadCurrentCharacterUnchecked(cp_offset, character_count);
+
+    if (both_chars == 0) {
+      __ testl(current_character(), Immediate(both_mask));
+    } else {
+      __ Move(rax, both_mask);
+      __ andq(rax, current_character());
+      __ cmpl(rax, Immediate(both_chars));
+    }
+
+    __ j(equal, &found);
+    AdvanceCurrentPosition(advance_by);
+    __ jmp(&scalar_repeat);
+
+    Bind(&found);
+    __ Move(rax, mask1);
+    __ andq(rax, current_character());
+    __ cmpl(rax, Immediate(chars1));
+    __ j(equal, on_match1);
+
+    __ Move(rax, mask2);
+    __ andq(rax, current_character());
+    __ cmpl(rax, Immediate(chars2));
+    __ j(equal, on_match2);
+    AdvanceCurrentPosition(advance_by);
+    __ jmp(&scalar_repeat);
+  }
+}
+
+bool RegExpMacroAssemblerX64::SkipUntilOneOfMaskedUseSimd(int advance_by) {
+  // We only use SIMD instead of the scalar version if we advance by 1 byte
+  // in each iteration. For higher values the scalar version performs better.
+  return v8_flags.regexp_simd && advance_by * char_size() == 1;
+}
+
+void RegExpMacroAssemblerX64::CheckSpecialClassRanges(StandardCharacterSet type,
                                                       Label* on_no_match) {
+  DCHECK(CanOptimizeSpecialClassRanges(type));
   // Range checks (c in min..max) are generally implemented by an unsigned
   // (c - min) <= (max - min) check, using the sequence:
   //   leal(rax, Operand(current_character(), -min)) or sub(rax, Immediate(min))
   //   cmpl(rax, Immediate(max - min))
   // TODO(jgruber): No custom implementation (yet): s(UC16), S(UC16).
   switch (type) {
-    case StandardCharacterSet::kWhitespace:
+    case StandardCharacterSet::kWhitespace: {
       // Match space-characters.
-      if (mode_ == LATIN1) {
-        // One byte space characters are '\t'..'\r', ' ' and \u00a0.
-        Label success;
-        __ cmpl(current_character(), Immediate(' '));
-        __ j(equal, &success, Label::kNear);
-        // Check range 0x09..0x0D.
-        __ leal(rax, Operand(current_character(), -'\t'));
-        __ cmpl(rax, Immediate('\r' - '\t'));
-        __ j(below_equal, &success, Label::kNear);
-        // \u00a0 (NBSP).
-        __ cmpl(rax, Immediate(0x00A0 - '\t'));
-        BranchOrBacktrack(not_equal, on_no_match);
-        __ bind(&success);
-        return true;
-      }
-      return false;
+      DCHECK_EQ(mode(), LATIN1);
+      // One byte space characters are '\t'..'\r', ' ' and \u00a0.
+      Label success;
+      __ cmpl(current_character(), Immediate(' '));
+      __ j(equal, &success, Label::kNear);
+      // Check range 0x09..0x0D.
+      __ leal(rax, Operand(current_character(), -'\t'));
+      __ cmpl(rax, Immediate('\r' - '\t'));
+      __ j(below_equal, &success, Label::kNear);
+      // \u00a0 (NBSP).
+      __ cmpl(rax, Immediate(0x00A0 - '\t'));
+      BranchOrBacktrack(not_equal, on_no_match);
+      __ bind(&success);
+      break;
+    }
     case StandardCharacterSet::kNotWhitespace:
-      // The emitted code for generic character classes is good enough.
-      return false;
+      UNREACHABLE();
     case StandardCharacterSet::kDigit:
       // Match ASCII digits ('0'..'9').
       __ leal(rax, Operand(current_character(), -'0'));
       __ cmpl(rax, Immediate('9' - '0'));
       BranchOrBacktrack(above, on_no_match);
-      return true;
+      break;
     case StandardCharacterSet::kNotDigit:
       // Match non ASCII-digits.
       __ leal(rax, Operand(current_character(), -'0'));
       __ cmpl(rax, Immediate('9' - '0'));
       BranchOrBacktrack(below_equal, on_no_match);
-      return true;
+      break;
     case StandardCharacterSet::kNotLineTerminator: {
       // Match non-newlines (not 0x0A('\n'), 0x0D('\r'), 0x2028 and 0x2029).
       __ movl(rax, current_character());
@@ -651,7 +1015,7 @@ bool RegExpMacroAssemblerX64::CheckSpecialClassRanges(StandardCharacterSet type,
       __ subl(rax, Immediate(0x0B));
       __ cmpl(rax, Immediate(0x0C - 0x0B));
       BranchOrBacktrack(below_equal, on_no_match);
-      if (mode_ == UC16) {
+      if (mode() == UC16) {
         // Compare original value to 0x2028 and 0x2029, using the already
         // computed (current_char ^ 0x01 - 0x0B). I.e., check for
         // 0x201D (0x2028 - 0x0B) or 0x201E.
@@ -659,7 +1023,7 @@ bool RegExpMacroAssemblerX64::CheckSpecialClassRanges(StandardCharacterSet type,
         __ cmpl(rax, Immediate(0x2029 - 0x2028));
         BranchOrBacktrack(below_equal, on_no_match);
       }
-      return true;
+      break;
     }
     case StandardCharacterSet::kLineTerminator: {
       // Match newlines (0x0A('\n'), 0x0D('\r'), 0x2028 and 0x2029).
@@ -668,7 +1032,7 @@ bool RegExpMacroAssemblerX64::CheckSpecialClassRanges(StandardCharacterSet type,
       // See if current character is '\n'^1 or '\r'^1, i.e., 0x0B or 0x0C.
       __ subl(rax, Immediate(0x0B));
       __ cmpl(rax, Immediate(0x0C - 0x0B));
-      if (mode_ == LATIN1) {
+      if (mode() == LATIN1) {
         BranchOrBacktrack(above, on_no_match);
       } else {
         Label done;
@@ -681,44 +1045,44 @@ bool RegExpMacroAssemblerX64::CheckSpecialClassRanges(StandardCharacterSet type,
         BranchOrBacktrack(above, on_no_match);
         __ bind(&done);
       }
-      return true;
+      break;
     }
     case StandardCharacterSet::kWord: {
-      if (mode_ != LATIN1) {
+      if (mode() != LATIN1) {
         // Table is 256 entries, so all Latin1 characters can be tested.
         __ cmpl(current_character(), Immediate('z'));
         BranchOrBacktrack(above, on_no_match);
       }
       __ Move(rbx, ExternalReference::re_word_character_map());
       DCHECK_EQ(0,
-                word_character_map[0]);  // Character '\0' is not a word char.
+                word_character_map()[0]);  // Character '\0' is not a word char.
       __ testb(Operand(rbx, current_character(), times_1, 0),
                current_character());
       BranchOrBacktrack(zero, on_no_match);
-      return true;
+      break;
     }
     case StandardCharacterSet::kNotWord: {
       Label done;
-      if (mode_ != LATIN1) {
+      if (mode() != LATIN1) {
         // Table is 256 entries, so all Latin1 characters can be tested.
         __ cmpl(current_character(), Immediate('z'));
         __ j(above, &done);
       }
       __ Move(rbx, ExternalReference::re_word_character_map());
       DCHECK_EQ(0,
-                word_character_map[0]);  // Character '\0' is not a word char.
+                word_character_map()[0]);  // Character '\0' is not a word char.
       __ testb(Operand(rbx, current_character(), times_1, 0),
                current_character());
       BranchOrBacktrack(not_zero, on_no_match);
-      if (mode_ != LATIN1) {
+      if (mode() != LATIN1) {
         __ bind(&done);
       }
-      return true;
+      break;
     }
 
     case StandardCharacterSet::kEverything:
       // Match any character.
-      return true;
+      break;
   }
 }
 
@@ -769,7 +1133,8 @@ void RegExpMacroAssemblerX64::PopRegExpBasePointer(Register stack_pointer_out,
   StoreRegExpStackPointerToMemory(stack_pointer_out, scratch);
 }
 
-Handle<HeapObject> RegExpMacroAssemblerX64::GetCode(Handle<String> source) {
+DirectHandle<HeapObject> RegExpMacroAssemblerX64::GetCode(
+    DirectHandle<String> source, RegExpFlags flags) {
   Label return_rax;
   // Finalize code - write the entry point code now we know how many registers
   // we need.
@@ -778,6 +1143,10 @@ Handle<HeapObject> RegExpMacroAssemblerX64::GetCode(Handle<String> source) {
   // Tell the system that we have a stack frame. Because the type is MANUAL, no
   // physical frame is generated.
   FrameScope scope(&masm_, StackFrame::MANUAL);
+
+#ifdef V8_ENABLE_SANDBOX_HARDWARE_SUPPORT
+  __ AssertInSandboxedExecutionMode();
+#endif  // V8_ENABLE_SANDBOX_HARDWARE_SUPPORT
 
   // Actually emit code to start a new stack frame. This pushes the frame type
   // marker into the stack slot at kFrameTypeOffset.
@@ -892,11 +1261,7 @@ Handle<HeapObject> RegExpMacroAssemblerX64::GetCode(Handle<String> source) {
   // (effectively string position -1).
   __ movq(rbx, Operand(rbp, kStartIndexOffset));
   __ negq(rbx);
-  if (mode_ == UC16) {
-    __ leaq(rax, Operand(rdi, rbx, times_2, -char_size()));
-  } else {
-    __ leaq(rax, Operand(rdi, rbx, times_1, -char_size()));
-  }
+  __ leaq(rax, Operand(rdi, rbx, CharSizeScaleFactor(), -char_size()));
   // Store this value in a local variable, for use when clearing
   // position registers.
   __ movq(Operand(rbp, kStringStartMinusOneOffset), rax);
@@ -955,8 +1320,8 @@ Handle<HeapObject> RegExpMacroAssemblerX64::GetCode(Handle<String> source) {
       __ movq(rbx, Operand(rbp, kRegisterOutputOffset));
       __ movq(rcx, Operand(rbp, kInputEndOffset));
       __ subq(rcx, Operand(rbp, kInputStartOffset));
-      if (mode_ == UC16) {
-        __ leaq(rcx, Operand(rcx, rdx, times_2, 0));
+      if (mode() == UC16) {
+        __ leaq(rcx, Operand(rcx, rdx, CharSizeScaleFactor(), 0));
       } else {
         __ addq(rcx, rdx);
       }
@@ -967,7 +1332,7 @@ Handle<HeapObject> RegExpMacroAssemblerX64::GetCode(Handle<String> source) {
           __ movq(rdx, rax);
         }
         __ addq(rax, rcx);  // Convert to index from start, not end.
-        if (mode_ == UC16) {
+        if (mode() == UC16) {
           __ sarq(rax, Immediate(1));  // Convert byte index to character index.
         }
         __ movl(Operand(rbx, i * kIntSize), rax);
@@ -1009,7 +1374,7 @@ Handle<HeapObject> RegExpMacroAssemblerX64::GetCode(Handle<String> source) {
         // Advance current position after a zero-length match.
         Label advance;
         __ bind(&advance);
-        if (mode_ == UC16) {
+        if (mode() == UC16) {
           __ addq(rdi, Immediate(2));
         } else {
           __ incq(rdi);
@@ -1139,13 +1504,14 @@ Handle<HeapObject> RegExpMacroAssemblerX64::GetCode(Handle<String> source) {
   CodeDesc code_desc;
   Isolate* isolate = this->isolate();
   masm_.GetCode(isolate, &code_desc);
-  Handle<Code> code = Factory::CodeBuilder(isolate, code_desc, CodeKind::REGEXP)
-                          .set_self_reference(masm_.CodeObject())
-                          .set_empty_source_position_table()
-                          .Build();
+  DirectHandle<Code> code =
+      Factory::CodeBuilder(isolate, code_desc, CodeKind::REGEXP)
+          .set_self_reference(masm_.CodeObject())
+          .set_empty_source_position_table()
+          .Build();
   PROFILE(isolate,
-          RegExpCodeCreateEvent(Handle<AbstractCode>::cast(code), source));
-  return Handle<HeapObject>::cast(code);
+          RegExpCodeCreateEvent(Cast<AbstractCode>(code), source, flags));
+  return Cast<HeapObject>(code);
 }
 
 void RegExpMacroAssemblerX64::GoTo(Label* to) { BranchOrBacktrack(to); }
@@ -1198,6 +1564,7 @@ void RegExpMacroAssemblerX64::PushBacktrack(Label* label) {
 
 void RegExpMacroAssemblerX64::PushCurrentPosition() {
   Push(rdi);
+  CheckStackLimit();
 }
 
 
@@ -1205,7 +1572,11 @@ void RegExpMacroAssemblerX64::PushRegister(int register_index,
                                            StackCheckFlag check_stack_limit) {
   __ movq(rax, register_location(register_index));
   Push(rax);
-  if (check_stack_limit) CheckStackLimit();
+  if (check_stack_limit == StackCheckFlag::kCheckStackLimit) {
+    CheckStackLimit();
+  } else if (V8_UNLIKELY(v8_flags.slow_debug_code)) {
+    AssertAboveStackLimitMinusSlack();
+  }
 }
 
 void RegExpMacroAssemblerX64::ReadCurrentPositionFromRegister(int reg) {
@@ -1331,7 +1702,7 @@ int RegExpMacroAssemblerX64::CheckStackGuardState(Address* return_address,
                                                   Address re_frame,
                                                   uintptr_t extra_space) {
   Tagged<InstructionStream> re_code =
-      InstructionStream::cast(Tagged<Object>(raw_code));
+      SbxCast<InstructionStream>(Tagged<Object>(raw_code));
   return NativeRegExpMacroAssembler::CheckStackGuardState(
       frame_entry<Isolate*>(re_frame, kIsolateOffset),
       frame_entry<int>(re_frame, kStartIndexOffset),
@@ -1474,10 +1845,22 @@ void RegExpMacroAssemblerX64::CheckStackLimit() {
   __ bind(&no_stack_overflow);
 }
 
+void RegExpMacroAssemblerX64::AssertAboveStackLimitMinusSlack() {
+  DCHECK(v8_flags.slow_debug_code);
+  Label no_stack_overflow;
+  ASM_CODE_COMMENT_STRING(&masm_, "AssertAboveStackLimitMinusSlack");
+  auto l = ExternalReference::address_of_regexp_stack_limit_address(isolate());
+  __ load_rax(l);
+  __ subq(rax, Immediate(RegExpStack::kStackLimitSlackSize));
+  __ cmpq(backtrack_stackpointer(), rax);
+  __ j(above, &no_stack_overflow);
+  __ int3();
+  __ bind(&no_stack_overflow);
+}
 
 void RegExpMacroAssemblerX64::LoadCurrentCharacterUnchecked(int cp_offset,
                                                             int characters) {
-  if (mode_ == LATIN1) {
+  if (mode() == LATIN1) {
     if (characters == 4) {
       __ movl(current_character(), Operand(rsi, rdi, times_1, cp_offset));
     } else if (characters == 2) {
@@ -1487,7 +1870,7 @@ void RegExpMacroAssemblerX64::LoadCurrentCharacterUnchecked(int cp_offset,
       __ movzxbl(current_character(), Operand(rsi, rdi, times_1, cp_offset));
     }
   } else {
-    DCHECK(mode_ == UC16);
+    DCHECK(mode() == UC16);
     if (characters == 2) {
       __ movl(current_character(),
               Operand(rsi, rdi, times_1, cp_offset * sizeof(base::uc16)));

@@ -4,9 +4,20 @@
 
 #include "src/compiler/turboshaft/loop-unrolling-reducer.h"
 
+#include <optional>
+
 #include "src/base/bits.h"
 #include "src/compiler/turboshaft/index.h"
 #include "src/compiler/turboshaft/loop-finder.h"
+
+#ifdef DEBUG
+#define TRACE(x)                                                               \
+  do {                                                                         \
+    if (v8_flags.turboshaft_trace_unrolling) StdoutStream() << x << std::endl; \
+  } while (false)
+#else
+#define TRACE(x)
+#endif
 
 namespace v8::internal::compiler::turboshaft {
 
@@ -16,6 +27,8 @@ using BinOp = StaticCanonicalForLoopMatcher::BinOp;
 void LoopUnrollingAnalyzer::DetectUnrollableLoops() {
   for (const auto& [start, info] : loop_finder_.LoopHeaders()) {
     IterationCount iter_count = GetLoopIterationCount(info);
+    TRACE("LoopUnrollingAnalyzer: loop at "
+          << start->index() << " ==> iter_count=" << iter_count);
     loop_iteration_count_.insert({start, iter_count});
 
     if (ShouldFullyUnrollLoop(start) || ShouldPartiallyUnrollLoop(start)) {
@@ -113,7 +126,7 @@ bool StaticCanonicalForLoopMatcher::MatchWordBinop(
     OpIndex idx, V<Word>* left, V<Word>* right, BinOp* binop_op,
     WordRepresentation* binop_rep) const {
   WordBinopOp::Kind kind;
-  if (matcher_.MatchWordBinop(idx, left, right, &kind, binop_rep) &&
+  if (matcher_.MatchWordBinop<Word>(idx, left, right, &kind, binop_rep) &&
       BinopKindIsSupported(kind)) {
     *binop_op = BinopFromWordBinopKind(kind);
     return true;
@@ -141,14 +154,14 @@ StaticCanonicalForLoopMatcher::GetIterCountIfStaticCanonicalForLoop(
   // We have: phi(..., ...) cmp_op cmp_cst
   // eg, for (i = ...; i < 42; ...)
   uint64_t phi_cst;
-  if (matcher_.MatchUnsignedIntegralConstant(phi.input(0), &phi_cst)) {
+  if (matcher_.MatchUnsignedIntegralConstant(phi.forward_edge(), &phi_cst)) {
     // We have: phi(phi_cst, ...) cmp_op cmp_cst
     // eg, for (i = 0; i < 42; ...)
     V<Word> left, right;
     BinOp binop_op;
     WordRepresentation binop_rep;
-    if (MatchWordBinop(phi.input(1), &left, &right, &binop_op, &binop_rep) ||
-        MatchCheckedOverflowBinop(phi.input(1), &left, &right, &binop_op,
+    if (MatchWordBinop(phi.back_edge(), &left, &right, &binop_op, &binop_rep) ||
+        MatchCheckedOverflowBinop(phi.back_edge(), &left, &right, &binop_op,
                                   &binop_rep)) {
       // We have: phi(phi_cst, ... binop_op ...) cmp_op cmp_cst
       // eg, for (i = 0; i < 42; i = ... + ...)
@@ -234,7 +247,7 @@ std::ostream& operator<<(std::ostream& os, const IterationCount& count) {
   if (count.IsExact()) {
     return os << "Exact[" << count.exact_count() << "]";
   } else if (count.IsApprox()) {
-    return os << "Approx[" << count.exact_count() << "]";
+    return os << "Approx[" << count.approx_count() << "]";
   } else {
     DCHECK(count.IsUnknown());
     return os << "Unknown";
@@ -290,9 +303,9 @@ std::ostream& operator<<(std::ostream& os, const BinOp& binop) {
 namespace {
 
 template <class Int>
-base::Optional<Int> Next(Int val, Int incr,
-                         StaticCanonicalForLoopMatcher::BinOp binop_op,
-                         WordRepresentation binop_rep) {
+std::optional<Int> Next(Int val, Int incr,
+                        StaticCanonicalForLoopMatcher::BinOp binop_op,
+                        WordRepresentation binop_rep) {
   switch (binop_op) {
     case BinOp::kBitwiseAnd:
       return val & incr;
@@ -310,14 +323,14 @@ base::Optional<Int> Next(Int val, Int incr,
       int32_t res;                                                            \
       if (base::bits::Signed##op##Overflow32(                                 \
               static_cast<int32_t>(val), static_cast<int32_t>(incr), &res)) { \
-        return base::nullopt;                                                 \
+        return std::nullopt;                                                  \
       }                                                                       \
       return static_cast<Int>(res);                                           \
     } else {                                                                  \
       DCHECK_EQ(binop_rep, WordRepresentation::Word64());                     \
       int64_t res;                                                            \
       if (base::bits::Signed##op##Overflow64(val, incr, &res)) {              \
-        return base::nullopt;                                                 \
+        return std::nullopt;                                                  \
       }                                                                       \
       return static_cast<Int>(res);                                           \
     }                                                                         \
@@ -362,10 +375,20 @@ bool SubWillOverflow(Int lhs, Int rhs) {
   }
 }
 
+template <class Int>
+bool DivWillOverflow(Int dividend, Int divisor) {
+  if constexpr (std::is_unsigned_v<Int>) {
+    return false;
+  } else {
+    return dividend == std::numeric_limits<Int>::min() && divisor == -1;
+  }
+}
+
 }  // namespace
 
-// Returns true if the loop `for (i = init, i cmp_op max; i = i binop_cst
-// binop_op)` has fewer than `max_iter_` iterations.
+// Returns true if the loop
+// `for (i = init, i cmp_op max; i = i binop_op binop_cst)` has fewer than
+// `max_iter_` iterations.
 template <class Int>
 IterationCount StaticCanonicalForLoopMatcher::CountIterationsImpl(
     Int init, Int max, CmpOp cmp_op, Int binop_cst, BinOp binop_op,
@@ -419,6 +442,7 @@ IterationCount StaticCanonicalForLoopMatcher::CountIterationsImpl(
         // eventually stop.
         return {};
       }
+      DCHECK(!DivWillOverflow(max - init, binop_cst));
       Int quotient = (max - init) / binop_cst;
       DCHECK_GE(quotient, 0);
       return IterationCount::Approx(quotient);
@@ -434,6 +458,7 @@ IterationCount StaticCanonicalForLoopMatcher::CountIterationsImpl(
         // eventually stop.
         return {};
       }
+      if (DivWillOverflow(max - init, binop_cst)) return {};
       Int quotient = (max - init) / binop_cst;
       DCHECK_GE(quotient, 0);
       return IterationCount::Approx(quotient);
@@ -453,6 +478,7 @@ IterationCount StaticCanonicalForLoopMatcher::CountIterationsImpl(
         return {};
       }
 
+      if (DivWillOverflow(max - init, binop_cst)) return {};
       Int remainder = (max - init) % binop_cst;
       if (remainder != 0) {
         // Will loop forever or rely on over/underflow wrap-around to eventually
@@ -469,8 +495,9 @@ IterationCount StaticCanonicalForLoopMatcher::CountIterationsImpl(
   return {};
 }
 
-// Returns true if the loop `for (i = init, i cmp_op max; i = i binop_cst
-// binop_op)` has fewer than `max_iter_` iterations.
+// Returns true if the loop
+// `for (i = initial_input, i cmp_op cmp_cst; i = i binop_op binop_cst)` has
+// fewer than `max_iter_` iterations.
 IterationCount StaticCanonicalForLoopMatcher::CountIterations(
     uint64_t cmp_cst, CmpOp cmp_op, uint64_t initial_input, uint64_t binop_cst,
     BinOp binop_op, WordRepresentation binop_rep, bool loop_if_cond_is) const {

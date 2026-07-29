@@ -5,6 +5,8 @@
 #ifndef V8_DEOPTIMIZER_FRAME_TRANSLATION_BUILDER_H_
 #define V8_DEOPTIMIZER_FRAME_TRANSLATION_BUILDER_H_
 
+#include <optional>
+
 #include "src/codegen/register.h"
 #include "src/deoptimizer/translation-opcode.h"
 #include "src/objects/deoptimization-data.h"
@@ -27,7 +29,7 @@ class FrameTranslationBuilder {
         basis_instructions_(zone),
         zone_(zone) {}
 
-  Handle<DeoptimizationFrameTranslation> ToFrameTranslation(
+  DirectHandle<DeoptimizationFrameTranslation> ToFrameTranslation(
       LocalFactory* factory);
   base::Vector<const uint8_t> ToFrameTranslationWasm();
 
@@ -35,9 +37,10 @@ class FrameTranslationBuilder {
                        bool update_feedback);
 
   void BeginInterpretedFrame(BytecodeOffset bytecode_offset, int literal_id,
-                             unsigned height, int return_value_offset,
-                             int return_value_count);
-  void BeginInlinedExtraArguments(int literal_id, unsigned height);
+                             int bytecode_array_id, unsigned height,
+                             int return_value_offset, int return_value_count);
+  void BeginInlinedExtraArguments(int literal_id, unsigned height,
+                                  uint32_t parameter_count);
   void BeginConstructCreateStubFrame(int literal_id, unsigned height);
   void BeginConstructInvokeStubFrame(int literal_id);
   void BeginBuiltinContinuationFrame(BytecodeOffset bailout_id, int literal_id,
@@ -45,10 +48,11 @@ class FrameTranslationBuilder {
 #if V8_ENABLE_WEBASSEMBLY
   void BeginJSToWasmBuiltinContinuationFrame(
       BytecodeOffset bailout_id, int literal_id, unsigned height,
-      base::Optional<wasm::ValueKind> return_kind);
+      std::optional<wasm::ValueKind> return_kind);
   void BeginWasmInlinedIntoJSFrame(BytecodeOffset bailout_id, int literal_id,
                                    unsigned height);
-  void BeginLiftoffFrame(BytecodeOffset bailout_id, unsigned height);
+  void BeginLiftoffFrame(BytecodeOffset bailout_id, unsigned height,
+                         uint32_t wasm_function_index);
 #endif  // V8_ENABLE_WEBASSEMBLY
   void BeginJavaScriptBuiltinContinuationFrame(BytecodeOffset bailout_id,
                                                int literal_id, unsigned height);
@@ -60,10 +64,12 @@ class FrameTranslationBuilder {
   void BeginCapturedObject(int length);
   void AddUpdateFeedback(int vector_literal, int slot);
   void DuplicateObject(int object_index);
+  void StringConcat();
   void StoreRegister(TranslationOpcode opcode, Register reg);
   void StoreRegister(Register reg);
   void StoreInt32Register(Register reg);
   void StoreInt64Register(Register reg);
+  void StoreIntPtrRegister(Register reg);
   void StoreSignedBigInt64Register(Register reg);
   void StoreUnsignedBigInt64Register(Register reg);
   void StoreUint32Register(Register reg);
@@ -71,15 +77,18 @@ class FrameTranslationBuilder {
   void StoreFloatRegister(FloatRegister reg);
   void StoreDoubleRegister(DoubleRegister reg);
   void StoreHoleyDoubleRegister(DoubleRegister reg);
+  void StoreSimd128Register(Simd128Register reg);
   void StoreStackSlot(int index);
   void StoreInt32StackSlot(int index);
   void StoreInt64StackSlot(int index);
+  void StoreIntPtrStackSlot(int index);
   void StoreSignedBigInt64StackSlot(int index);
   void StoreUnsignedBigInt64StackSlot(int index);
   void StoreUint32StackSlot(int index);
   void StoreBoolStackSlot(int index);
   void StoreFloatStackSlot(int index);
   void StoreDoubleStackSlot(int index);
+  void StoreSimd128StackSlot(int index);
   void StoreHoleyDoubleStackSlot(int index);
   void StoreLiteral(int literal_id);
   void StoreOptimizedOut();

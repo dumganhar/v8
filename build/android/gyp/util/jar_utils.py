@@ -5,33 +5,19 @@
 
 import logging
 import pathlib
+import subprocess
+import tempfile
 import zipfile
 from typing import List, Optional, Union
-
-from util import build_utils
 
 _SRC_PATH = pathlib.Path(__file__).resolve().parents[4]
 _JDEPS_PATH = _SRC_PATH / 'third_party/jdk/current/bin/jdeps'
 
 _IGNORED_JAR_PATHS = [
     # This matches org_ow2_asm_asm_commons and org_ow2_asm_asm_analysis, both of
-    # which fail jdeps (not sure why).
-    'third_party/android_deps/libs/org_ow2_asm_asm',
+    # which fail jdeps (not sure why), see: https://crbug.com/348423879
+    'cipd/libs/org_ow2_asm_asm',
 ]
-
-
-def _is_relative_to(path: pathlib.Path, other_path: pathlib.Path):
-  """This replicates pathlib.Path.is_relative_to.
-
-    Since bots still run python3.8, they do not have access to is_relative_to,
-    which was introduced in python3.9.
-    """
-  try:
-    path.relative_to(other_path)
-    return True
-  except ValueError:
-    # This error is expected when path is not a subpath of other_path.
-    return False
 
 
 def _should_ignore(jar_path: pathlib.Path) -> bool:
@@ -41,22 +27,57 @@ def _should_ignore(jar_path: pathlib.Path) -> bool:
   return False
 
 
+def _create_filtered_jar_tempfile(jar_path: pathlib):
+  ret = tempfile.NamedTemporaryFile(suffix='-jdeps.jar')
+  with zipfile.ZipFile(jar_path) as in_z:
+    with zipfile.ZipFile(ret, 'w') as out_z:
+      for info in in_z.infolist():
+        if info.filename != 'module-info.class':
+          out_z.writestr(info, in_z.read(info), zipfile.ZIP_STORED)
+  return ret
+
+
 def run_jdeps(filepath: pathlib.Path,
               *,
-              jdeps_path: pathlib.Path = _JDEPS_PATH) -> Optional[str]:
+              jdeps_path: pathlib.Path = _JDEPS_PATH,
+              verbose: bool = False) -> Optional[str]:
   """Runs jdeps on the given filepath and returns the output."""
   if not filepath.exists() or _should_ignore(filepath):
     # Some __compile_java targets do not generate a .jar file, skipping these
     # does not affect correctness.
     return None
 
-  return build_utils.CheckOutput([
+  cmd = [
       str(jdeps_path),
       '-verbose:class',
+      '-filter:none',  # Necessary to include intra-package deps.
       '--multi-release',  # Some jars support multiple JDK releases.
       'base',
       str(filepath),
-  ])
+  ]
+
+  if verbose:
+    logging.debug('Starting %s', filepath)
+  result = subprocess.run(cmd, text=True, check=False, capture_output=True)
+  if result.returncode and result.stdout.startswith('Error: Module '):
+    logging.info('Retrying without modules: %s', filepath)
+    # E.g.: Error: Module net.bytebuddy not found, required by org.mockito
+    # See: https://stackoverflow.com/questions/64066952/jdeps-module-not-found-exception-when-listing-dependancies
+    with _create_filtered_jar_tempfile(filepath) as f:
+      new_cmd = cmd[:-1] + [f.name]
+      result = subprocess.run(new_cmd,
+                              text=True,
+                              check=False,
+                              capture_output=True)
+      if result.returncode:
+        # Pack all the information into the error message since that is the last
+        # thing visible in the output.
+        raise RuntimeError(
+            f'\nFilepath:\n{filepath}\ncmd:\n{" ".join(cmd)}\n'
+            f'stdout:\n{result.stdout}\nstderr:{result.stderr}\n')
+  if verbose:
+    logging.debug('Finished %s', filepath)
+  return result.stdout
 
 
 def extract_full_class_names_from_jar(

@@ -314,6 +314,14 @@ constexpr auto Compare_BaselineDescriptor::registers() {
 }
 
 // static
+constexpr auto Compare_WithEmbeddedFeedbackOffsetDescriptor::registers() {
+  // r1: left operand
+  // r0: right operand
+  // r2: feedback offset
+  return RegisterArray(r1, r0, r2);
+}
+
+// static
 constexpr auto BinaryOpDescriptor::registers() { return RegisterArray(r1, r0); }
 
 // static
@@ -343,12 +351,9 @@ CallApiCallbackOptimizedDescriptor::ActualArgumentsCountRegister() {
   return r2;
 }
 // static
-constexpr Register CallApiCallbackOptimizedDescriptor::CallDataRegister() {
+constexpr Register
+CallApiCallbackOptimizedDescriptor::FunctionTemplateInfoRegister() {
   return r3;
-}
-// static
-constexpr Register CallApiCallbackOptimizedDescriptor::HolderRegister() {
-  return r0;
 }
 
 // static
@@ -365,10 +370,6 @@ CallApiCallbackGenericDescriptor::TopmostScriptHavingContextRegister() {
 constexpr Register
 CallApiCallbackGenericDescriptor::FunctionTemplateInfoRegister() {
   return r3;
-}
-// static
-constexpr Register CallApiCallbackGenericDescriptor::HolderRegister() {
-  return r0;
 }
 
 // static

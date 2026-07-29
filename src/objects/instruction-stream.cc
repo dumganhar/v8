@@ -10,6 +10,7 @@
 #include "src/codegen/reloc-info-inl.h"
 #include "src/codegen/reloc-info.h"
 #include "src/objects/instruction-stream-inl.h"
+#include "src/objects/objects.h"
 
 namespace v8 {
 namespace internal {
@@ -29,12 +30,12 @@ void InstructionStream::Relocate(WritableJitAllocation& jit_allocation,
 }
 
 // This function performs the relocations but doesn't trigger any write barriers
-// yet. We skip the write barriers here with UNSAFE_SKIP_WRITE_BARRIER but the
+// yet. We skip the write barriers here using SKIP_WRITE_BARRIER_SCOPE but the
 // caller needs to call RelocateFromDescWriteBarriers afterwards.
 InstructionStream::WriteBarrierPromise InstructionStream::RelocateFromDesc(
     WritableJitAllocation& jit_allocation, Heap* heap, const CodeDesc& desc,
     Address constant_pool, const DisallowGarbageCollection& no_gc) {
-  WriteBarrierPromise write_barrier_promise;
+  WriteBarrierPromise write_barrier_promise(*this);
   Assembler* origin = desc.origin;
   const int mode_mask = RelocInfo::PostCodegenRelocationMask();
   for (WritableRelocIterator it(jit_allocation, *this, constant_pool,
@@ -45,19 +46,18 @@ InstructionStream::WriteBarrierPromise InstructionStream::RelocateFromDesc(
 
     RelocInfo::Mode mode = it.rinfo()->rmode();
     if (RelocInfo::IsEmbeddedObjectMode(mode)) {
-      Handle<HeapObject> p = it.rinfo()->target_object_handle(origin);
-      it.rinfo()->set_target_object(*this, *p, UNSAFE_SKIP_WRITE_BARRIER,
+      DirectHandle<HeapObject> p = it.rinfo()->target_object_handle(origin);
+      it.rinfo()->set_target_object(*this, *p, SKIP_WRITE_BARRIER_SCOPE,
                                     SKIP_ICACHE_FLUSH);
       write_barrier_promise.RegisterAddress(it.rinfo()->pc());
     } else if (RelocInfo::IsCodeTargetMode(mode)) {
       // Rewrite code handles to direct pointers to the first instruction in the
       // code object.
-      Handle<HeapObject> p = it.rinfo()->target_object_handle(origin);
-      DCHECK(IsCode(*p));
+      DirectHandle<HeapObject> p = it.rinfo()->target_object_handle(origin);
       Tagged<InstructionStream> target_istream =
-          Code::cast(*p)->instruction_stream();
+          TrustedCast<Code>(*p)->instruction_stream();
       it.rinfo()->set_target_address(*this, target_istream->instruction_start(),
-                                     UNSAFE_SKIP_WRITE_BARRIER,
+                                     SKIP_WRITE_BARRIER_SCOPE,
                                      SKIP_ICACHE_FLUSH);
       write_barrier_promise.RegisterAddress(it.rinfo()->pc());
     } else if (RelocInfo::IsNearBuiltinEntry(mode)) {
@@ -79,7 +79,7 @@ InstructionStream::WriteBarrierPromise InstructionStream::RelocateFromDesc(
       Builtin builtin = static_cast<Builtin>(stub_call_tag);
       // Store the builtin address in relocation info.
       Address entry = Builtins::EntryOf(builtin, heap->isolate());
-      it.rinfo()->set_wasm_stub_call_address(entry, SKIP_ICACHE_FLUSH);
+      it.rinfo()->set_wasm_stub_call_address(entry);
 #else
       UNREACHABLE();
 #endif
@@ -104,13 +104,13 @@ void InstructionStream::RelocateFromDescWriteBarriers(
     RelocInfo::Mode mode = it.rinfo()->rmode();
     if (RelocInfo::IsEmbeddedObjectMode(mode)) {
       Tagged<HeapObject> p = it.rinfo()->target_object(heap->isolate());
-      WriteBarrierForCode(*this, it.rinfo(), p, UPDATE_WRITE_BARRIER);
+      WriteBarrier::ForRelocInfo(*this, it.rinfo(), p, UPDATE_WRITE_BARRIER);
       write_barrier_promise.ResolveAddress(it.rinfo()->pc());
     } else if (RelocInfo::IsCodeTargetMode(mode)) {
       Tagged<InstructionStream> target_istream =
           InstructionStream::FromTargetAddress(it.rinfo()->target_address());
-      WriteBarrierForCode(*this, it.rinfo(), target_istream,
-                          UPDATE_WRITE_BARRIER);
+      WriteBarrier::ForRelocInfo(*this, it.rinfo(), target_istream,
+                                 UPDATE_WRITE_BARRIER);
       write_barrier_promise.ResolveAddress(it.rinfo()->pc());
     }
   }

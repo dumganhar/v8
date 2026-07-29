@@ -23,6 +23,8 @@ void (*g_print_stack_trace)() = nullptr;
 
 void (*g_dcheck_function)(const char*, int, const char*) = DefaultDcheckHandler;
 
+void (*g_fatal_function)(const char*, int, const char*) = nullptr;
+
 std::string PrettyPrintChar(int ch) {
   std::ostringstream oss;
   switch (ch) {
@@ -71,6 +73,10 @@ void SetDcheckFunction(void (*dcheck_function)(const char*, int, const char*)) {
   g_dcheck_function = dcheck_function ? dcheck_function : &DefaultDcheckHandler;
 }
 
+void SetFatalFunction(void (*fatal_function)(const char*, int, const char*)) {
+  g_fatal_function = fatal_function;
+}
+
 void FatalOOM(OOMType type, const char* msg) {
   // Instead of directly aborting here with a message, it could make sense to
   // call a global callback function that would then in turn call (the
@@ -83,16 +89,33 @@ void FatalOOM(OOMType type, const char* msg) {
   OS::PrintError("\n\n#\n# Fatal %s out of memory: %s\n#", type_str, msg);
 
   if (g_print_stack_trace) v8::base::g_print_stack_trace();
-  fflush(stderr);
 
-#ifdef V8_FUZZILLI
-  // When fuzzing, we generally want to ignore OOM failures.
-  // It's important that we exit with a non-zero exit status here so that the
-  // fuzzer treats it as a failed execution.
-  _exit(1);
-#else
-  OS::Abort();
-#endif  // V8_FUZZILLI
+  fflush(stderr);
+  if (FatalErrorsWithNoSecurityImpactShouldExit()) {
+    OS::ExitProcess(-1);
+  } else {
+    OS::Abort();
+  }
+}
+
+void FatalNoSecurityImpact(const char* format, ...) {
+  OS::PrintError("\n\n#\n# Fatal error with no security impact:\n# ");
+
+  va_list arguments;
+  va_start(arguments, format);
+  v8::base::OS::VPrintError(format, arguments);
+  va_end(arguments);
+
+  OS::PrintError("\n#\n");
+
+  if (g_print_stack_trace) v8::base::g_print_stack_trace();
+
+  fflush(stderr);
+  if (FatalErrorsWithNoSecurityImpactShouldExit()) {
+    OS::ExitProcess(-1);
+  } else {
+    OS::Abort();
+  }
 }
 
 // Define specialization to pretty print characters (escaping non-printable
@@ -172,11 +195,15 @@ void V8_Fatal(const char* format, ...) {
   FailureMessage message(format, arguments);
   va_end(arguments);
 
+  if (v8::base::g_fatal_function != nullptr) {
+    v8::base::g_fatal_function(file, line, message.message_);
+  }
+
   fflush(stdout);
   fflush(stderr);
 
   // Print the formatted message to stdout without cropping the output.
-  if (v8::base::g_abort_mode == v8::base::AbortMode::kSoft) {
+  if (v8::base::ControlledCrashesAreHarmless()) {
     // In this case, instead of crashing the process will be terminated
     // normally by OS::Abort. Make this clear in the output printed to stderr.
     v8::base::OS::PrintError(
@@ -206,7 +233,7 @@ void V8_Fatal(const char* format, ...) {
 }
 
 void V8_Dcheck(const char* file, int line, const char* message) {
-  if (v8::base::g_abort_mode == v8::base::AbortMode::kSoft) {
+  if (v8::base::DcheckFailuresAreIgnored()) {
     // In this mode, DCHECK failures don't lead to process termination.
     v8::base::OS::PrintError(
         "# Ignoring debug check failure in %s, line %d: %s\n", file, line,

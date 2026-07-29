@@ -18,9 +18,9 @@ absl_cc_library(
   NAME
     string_view
   HDRS
-    string_view.h
+    "string_view.h"
   SRCS
-    string_view.cc
+    "string_view.cc"
   COPTS
     ${ABSL_DEFAULT_COPTS}
   DEPS
@@ -42,7 +42,6 @@ absl_cc_library(
     "has_absl_stringify.h"
     "internal/damerau_levenshtein_distance.h"
     "internal/string_constant.h"
-    "internal/has_absl_stringify.h"
     "match.h"
     "numbers.h"
     "str_cat.h"
@@ -77,7 +76,9 @@ absl_cc_library(
     ${ABSL_DEFAULT_COPTS}
   DEPS
     absl::string_view
+    absl::strings_append_and_overwrite
     absl::strings_internal
+    absl::strings_resize_and_overwrite
     absl::base
     absl::bits
     absl::charset
@@ -85,6 +86,7 @@ absl_cc_library(
     absl::core_headers
     absl::endian
     absl::int128
+    absl::iterator_traits_internal
     absl::memory
     absl::nullability
     absl::raw_logging_internal
@@ -101,7 +103,7 @@ absl_cc_library(
   COPTS
     ${ABSL_DEFAULT_COPTS}
   DEPS
-    absl::core_headers
+    absl::config
     absl::string_view
   PUBLIC
 )
@@ -138,7 +140,63 @@ absl_cc_library(
     absl::core_headers
     absl::endian
     absl::raw_logging_internal
+    absl::strings_resize_and_overwrite
     absl::type_traits
+)
+
+absl_cc_library(
+  NAME
+    strings_resize_and_overwrite
+  HDRS
+    "resize_and_overwrite.h"
+  COPTS
+    ${ABSL_DEFAULT_COPTS}
+  DEPS
+    absl::config
+    absl::core_headers
+    absl::dynamic_annotations
+    absl::throw_delegate
+)
+
+absl_cc_test(
+  NAME
+    strings_resize_and_overwrite_test
+  SRCS
+    "resize_and_overwrite_test.cc"
+  COPTS
+    ${ABSL_TEST_COPTS}
+  DEPS
+    absl::strings_resize_and_overwrite
+    absl::absl_check
+    absl::dynamic_annotations
+    GTest::gmock_main
+)
+
+absl_cc_library(
+  NAME
+    strings_append_and_overwrite
+  HDRS
+    "internal/append_and_overwrite.h"
+  COPTS
+    ${ABSL_DEFAULT_COPTS}
+  DEPS
+    absl::config
+    absl::core_headers
+    absl::strings_resize_and_overwrite
+    absl::throw_delegate
+)
+
+absl_cc_test(
+  NAME
+    strings_append_and_overwrite_test
+  SRCS
+    "internal/append_and_overwrite_test.cc"
+  COPTS
+    ${ABSL_TEST_COPTS}
+  DEPS
+    absl::strings_resize_and_overwrite
+    absl::absl_check
+    GTest::gmock_main
 )
 
 absl_cc_test(
@@ -243,6 +301,7 @@ absl_cc_test(
   COPTS
     ${ABSL_TEST_COPTS}
   DEPS
+    absl::string_view
     absl::strings_internal
     absl::base
     absl::core_headers
@@ -336,11 +395,11 @@ absl_cc_test(
   NAME
     resize_uninitialized_test
   SRCS
-    "internal/resize_uninitialized.h"
     "internal/resize_uninitialized_test.cc"
   COPTS
     ${ABSL_TEST_COPTS}
   DEPS
+    absl::strings_internal
     absl::base
     absl::core_headers
     absl::type_traits
@@ -372,6 +431,7 @@ absl_cc_test(
   DEPS
     absl::strings
     absl::str_format
+    absl::config
     absl::core_headers
     GTest::gmock_main
 )
@@ -517,6 +577,7 @@ absl_cc_library(
     absl::utility
     absl::int128
     absl::span
+    absl::strings_internal
 )
 
 absl_cc_test(
@@ -544,6 +605,7 @@ absl_cc_test(
   COPTS
     ${ABSL_TEST_COPTS}
   DEPS
+    absl::random_random
     absl::str_format
     absl::str_format_internal
     absl::strings
@@ -659,7 +721,7 @@ absl_cc_library(
   SRCS
     "internal/pow10_helper.cc"
   COPTS
-    ${ABSL_TEST_COPTS}
+    ${ABSL_DEFAULT_COPTS}
   DEPS
     absl::config
   TESTONLY
@@ -701,10 +763,10 @@ absl_cc_library(
   COPTS
     ${ABSL_DEFAULT_COPTS}
   DEPS
-    absl::base_internal
     absl::compressed_tuple
     absl::config
     absl::container_memory
+    absl::compare
     absl::core_headers
     absl::crc_cord_state
     absl::endian
@@ -841,6 +903,7 @@ absl_cc_library(
     absl::cordz_statistics
     absl::cordz_update_tracker
     absl::core_headers
+    absl::no_destructor
     absl::inlined_vector
     absl::span
     absl::raw_logging_internal
@@ -975,7 +1038,6 @@ absl_cc_library(
     "cord.cc"
     "cord_analysis.cc"
     "cord_analysis.h"
-    "cord_buffer.cc"
   COPTS
     ${ABSL_DEFAULT_COPTS}
   DEPS
@@ -997,7 +1059,10 @@ absl_cc_library(
     absl::raw_logging_internal
     absl::span
     absl::strings
+    absl::strings_append_and_overwrite
+    absl::strings_resize_and_overwrite
     absl::type_traits
+    absl::weakly_mixed_integer
   PUBLIC
 )
 

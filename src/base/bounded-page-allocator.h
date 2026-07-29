@@ -57,7 +57,22 @@ enum class PageFreeingMode {
 // The implementation is thread-safe.
 class V8_BASE_EXPORT BoundedPageAllocator : public v8::PageAllocator {
  public:
+  enum class AllocationStatus {
+    kSuccess,
+    kFailedToCommit,
+    kRanOutOfReservation,
+    kHintedAddressTakenOrNotFound,
+  };
+
+  struct Stats {
+    size_t free_size = 0;
+    size_t largest_free_region = 0;
+    AllocationStatus allocation_status = AllocationStatus::kSuccess;
+  };
+
   using Address = uintptr_t;
+
+  static const char* AllocationStatusToString(AllocationStatus);
 
   BoundedPageAllocator(v8::PageAllocator* page_allocator, Address start,
                        size_t size, size_t allocate_page_size,
@@ -92,10 +107,17 @@ class V8_BASE_EXPORT BoundedPageAllocator : public v8::PageAllocator {
   void* AllocatePages(void* hint, size_t size, size_t alignment,
                       Permission access) override;
 
+  void* AllocatePages(
+      size_t size, size_t alignment, Permission access,
+      v8::PageAllocator::AllocationHint allocation_hint) override;
+
   bool ReserveForSharedMemoryMapping(void* address, size_t size) override;
 
   // Allocates pages at given address, returns true on success.
   bool AllocatePagesAt(Address address, size_t size, Permission access);
+
+  bool ResizeAllocationAt(void* address, size_t old_size, size_t new_size,
+                          Permission access) override;
 
   bool FreePages(void* address, size_t size) override;
 
@@ -110,6 +132,14 @@ class V8_BASE_EXPORT BoundedPageAllocator : public v8::PageAllocator {
 
   bool DecommitPages(void* address, size_t size) override;
 
+  bool SealPages(void* address, size_t size) override;
+
+  AllocationStatus get_last_allocation_status() const {
+    return allocation_status_;
+  }
+
+  Stats RecordStats();
+
  private:
   v8::base::Mutex mutex_;
   const size_t allocate_page_size_;
@@ -118,7 +148,21 @@ class V8_BASE_EXPORT BoundedPageAllocator : public v8::PageAllocator {
   v8::base::RegionAllocator region_allocator_;
   const PageInitializationMode page_initialization_mode_;
   const PageFreeingMode page_freeing_mode_;
+  AllocationStatus allocation_status_ = AllocationStatus::kSuccess;
 };
+
+constexpr const char* ToString(BoundedPageAllocator::AllocationStatus status) {
+  switch (status) {
+    case BoundedPageAllocator::AllocationStatus::kSuccess:
+      return "success";
+    case BoundedPageAllocator::AllocationStatus::kFailedToCommit:
+      return "failed to commit";
+    case BoundedPageAllocator::AllocationStatus::kRanOutOfReservation:
+      return "ran out of reservation";
+    case BoundedPageAllocator::AllocationStatus::kHintedAddressTakenOrNotFound:
+      return "hinted address taken or not found";
+  }
+}
 
 }  // namespace base
 }  // namespace v8

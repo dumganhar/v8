@@ -5,10 +5,12 @@
 #ifndef V8_STRINGS_STRING_BUILDER_INL_H_
 #define V8_STRINGS_STRING_BUILDER_INL_H_
 
+#include "src/strings/string-builder.h"
+// Include the non-inl header before the rest of the headers.
+
 #include "src/execution/isolate.h"
 #include "src/handles/handles-inl.h"
 #include "src/objects/string-inl.h"
-#include "src/strings/string-builder.h"
 
 namespace v8 {
 namespace internal {
@@ -62,11 +64,11 @@ void IncrementalStringBuilder::Append(SrcChar c) {
   DCHECK_EQ(encoding_ == String::ONE_BYTE_ENCODING, sizeof(DestChar) == 1);
   if (sizeof(DestChar) == 1) {
     DCHECK_EQ(String::ONE_BYTE_ENCODING, encoding_);
-    SeqOneByteString::cast(*current_part_)
+    Cast<SeqOneByteString>(*current_part_)
         ->SeqOneByteStringSet(current_index_++, c);
   } else {
     DCHECK_EQ(String::TWO_BYTE_ENCODING, encoding_);
-    SeqTwoByteString::cast(*current_part_)
+    Cast<SeqTwoByteString>(*current_part_)
         ->SeqTwoByteStringSet(current_index_++, c);
   }
   if (current_index_ == part_length_) Extend();
@@ -90,7 +92,7 @@ V8_INLINE void IncrementalStringBuilder::AppendCStringLiteral(
   if (length == 1) return AppendCharacter(literal[0]);
   if (encoding_ == String::ONE_BYTE_ENCODING && CurrentPartCanFit(N)) {
     const uint8_t* chars = reinterpret_cast<const uint8_t*>(literal);
-    SeqOneByteString::cast(*current_part_)
+    Cast<SeqOneByteString>(*current_part_)
         ->SeqOneByteStringSetChars(current_index_, chars, length);
     current_index_ += length;
     if (current_index_ == part_length_) Extend();
@@ -109,11 +111,27 @@ V8_INLINE void IncrementalStringBuilder::AppendCString(const SrcChar* s) {
   }
 }
 
+V8_INLINE void IncrementalStringBuilder::AppendString(std::string_view str) {
+  uint32_t length = static_cast<uint32_t>(str.length());
+  if (encoding_ == String::ONE_BYTE_ENCODING && CurrentPartCanFit(length)) {
+    Cast<SeqOneByteString>(*current_part_)
+        ->SeqOneByteStringSetChars(current_index_,
+                                   reinterpret_cast<const uint8_t*>(str.data()),
+                                   length);
+    current_index_ += str.length();
+    if (current_index_ == part_length_) Extend();
+    DCHECK(HasValidCurrentIndex());
+  } else {
+    for (size_t i = 0; i < str.length(); i++) {
+      AppendCharacter(str[i]);
+    }
+  }
+}
+
 V8_INLINE void IncrementalStringBuilder::AppendInt(int i) {
-  char buffer[kIntToCStringBufferSize];
-  const char* str =
-      IntToCString(i, base::Vector<char>(buffer, kIntToCStringBufferSize));
-  AppendCString(str);
+  char buffer[kIntToStringViewBufferSize];
+  std::string_view str = IntToStringView(i, base::ArrayVector(buffer));
+  AppendString(str);
 }
 
 V8_INLINE int IncrementalStringBuilder::EscapedLengthIfCurrentPartFits(
@@ -137,50 +155,6 @@ void IncrementalStringBuilder::ChangeEncoding() {
   Extend();
 }
 
-template <typename DestChar>
-inline IncrementalStringBuilder::NoExtend<DestChar>::NoExtend(
-    Tagged<String> string, int offset, const DisallowGarbageCollection& no_gc) {
-  DCHECK(IsSeqOneByteString(string) || IsSeqTwoByteString(string));
-  if (sizeof(DestChar) == 1) {
-    start_ = reinterpret_cast<DestChar*>(
-        SeqOneByteString::cast(string)->GetChars(no_gc) + offset);
-  } else {
-    start_ = reinterpret_cast<DestChar*>(
-        SeqTwoByteString::cast(string)->GetChars(no_gc) + offset);
-  }
-  cursor_ = start_;
-#ifdef DEBUG
-  string_ = string;
-#endif
-}
-
-#ifdef DEBUG
-template <typename DestChar>
-inline IncrementalStringBuilder::NoExtend<DestChar>::~NoExtend() {
-  DestChar* end;
-  if (sizeof(DestChar) == 1) {
-    auto one_byte_string = SeqOneByteString::cast(string_);
-    end = reinterpret_cast<DestChar*>(one_byte_string->GetChars(no_gc_) +
-                                      one_byte_string->length());
-  } else {
-    auto two_byte_string = SeqTwoByteString::cast(string_);
-    end = reinterpret_cast<DestChar*>(two_byte_string->GetChars(no_gc_) +
-                                      two_byte_string->length());
-  }
-  DCHECK_LE(cursor_, end + 1);
-}
-#endif
-
-template <typename DestChar>
-inline IncrementalStringBuilder::NoExtendBuilder<DestChar>::NoExtendBuilder(
-    IncrementalStringBuilder* builder, int required_length,
-    const DisallowGarbageCollection& no_gc)
-    : NoExtend<DestChar>(*(builder->current_part()), builder->current_index_,
-                         no_gc),
-      builder_(builder) {
-  DCHECK(builder->CurrentPartCanFit(required_length));
-}
-
 V8_INLINE Factory* IncrementalStringBuilder::factory() {
   return isolate_->factory();
 }
@@ -188,8 +162,7 @@ V8_INLINE Factory* IncrementalStringBuilder::factory() {
 V8_INLINE void IncrementalStringBuilder::ShrinkCurrentPart() {
   DCHECK(current_index_ < part_length_);
   set_current_part(SeqString::Truncate(
-      isolate_,
-      indirect_handle(DirectHandle<SeqString>::cast(current_part()), isolate_),
+      isolate_, indirect_handle(Cast<SeqString>(current_part()), isolate_),
       current_index_));
 }
 

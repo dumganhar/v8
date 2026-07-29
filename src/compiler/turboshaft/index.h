@@ -5,15 +5,18 @@
 #ifndef V8_COMPILER_TURBOSHAFT_INDEX_H_
 #define V8_COMPILER_TURBOSHAFT_INDEX_H_
 
+#include <stdint.h>
+
 #include <cstddef>
+#include <optional>
 #include <type_traits>
 
 #include "src/base/logging.h"
-#include "src/base/template-meta-programming/algorithm.h"
 #include "src/codegen/tnode.h"
 #include "src/compiler/turboshaft/fast-hash.h"
 #include "src/compiler/turboshaft/representations.h"
 #include "src/objects/heap-number.h"
+#include "src/objects/js-function.h"
 #include "src/objects/oddball.h"
 #include "src/objects/string.h"
 #include "src/objects/tagged.h"
@@ -22,13 +25,33 @@
 
 namespace v8::internal::compiler::turboshaft {
 
+#ifdef DEBUG
+class Block;
 namespace detail {
-template <typename T>
-struct lazy_false : std::false_type {};
+// In general, `.value()` on OptionalOpIndex (or OptionalV) should only be used
+// after having checked `.valid()` before. However, when generating unreachable
+// operations, surprising things can happen, and OptionalOpIndex that should
+// "obviously" be valid can end up not being valid. For instance:
+//
+//      OptionalOpIndex idx;
+//      idx = __ Word32Add(...);
+//
+// After this, it's actually possible that `idx` is still Invalid if we were
+// generating unreachable operations. To avoid all callers of `.value()` to have
+// to check this, we use a global `current_assembler_block` variable, which is
+// set/unset in the Assembler constructor/destructor and points to the
+// `current_block_` of the current Assembler (if any), and can thus be used to
+// check if we are generating unreachable operations. If that's the case, then
+// we relax the DCHECK in `.value()`.
+inline thread_local Block** current_assembler_block = nullptr;
+inline bool generating_unreachable_operations() {
+  return current_assembler_block && !*current_assembler_block;
+}
 }  // namespace detail
+#endif
 
-// Operations are stored in possibly muliple sequential storage slots.
-using OperationStorageSlot = std::aligned_storage_t<8, 8>;
+// Operations are stored in possibly multiple sequential storage slots.
+using OperationStorageSlot = uint64_t;
 // Operations occupy at least 2 slots, therefore we assign one id per two slots.
 constexpr size_t kSlotsPerId = 2;
 
@@ -44,18 +67,24 @@ class OpIndex {
   // convertible to OpIndex. FromOffset should be used instead to create an
   // OpIndex from an offset.
   explicit constexpr OpIndex(uint32_t offset) : offset_(offset) {
-    DCHECK(CheckInvariants());
+    SLOW_DCHECK(CheckInvariants());
   }
   friend class OperationBuffer;
 
  public:
-  static constexpr OpIndex FromOffset(uint32_t offset) {
+  static constexpr OpIndex FromOffset(uint32_t offset,
+                                      uint32_t generation_bit) {
+#ifdef DEBUG
+    DCHECK(generation_bit == 0 || generation_bit == 1);
+    DCHECK_EQ(offset & kGenerationMask, 0);
+    offset |= (generation_bit << kGenerationMaskShift);
+#endif
     return OpIndex(offset);
   }
   constexpr OpIndex() : offset_(std::numeric_limits<uint32_t>::max()) {}
   template <typename T, typename C>
   OpIndex(const ConstOrV<T, C>&) {  // NOLINT(runtime/explicit)
-    static_assert(detail::lazy_false<T>::value,
+    static_assert(base::tmp::lazy_false<T>::value,
                   "Cannot initialize OpIndex from ConstOrV<>. Did you forget "
                   "to resolve() it in the assembler?");
   }
@@ -66,18 +95,18 @@ class OpIndex {
     // least `kSlotsPerId` many `OperationSlot`s. Therefore, we can assign id's
     // by dividing by `kSlotsPerId`. A compact id space is important, because it
     // makes side-tables smaller.
-    DCHECK(CheckInvariants());
+    SLOW_DCHECK(CheckInvariants());
     return offset_ / sizeof(OperationStorageSlot) / kSlotsPerId;
   }
   uint32_t hash() const {
     // It can be useful to hash OpIndex::Invalid(), so we have this `hash`
     // function, which returns the id, but without DCHECKing that Invalid is
     // valid.
-    DCHECK_IMPLIES(valid(), CheckInvariants());
+    SLOW_DCHECK_IMPLIES(valid(), CheckInvariants());
     return offset_ / sizeof(OperationStorageSlot) / kSlotsPerId;
   }
   uint32_t offset() const {
-    DCHECK(CheckInvariants());
+    SLOW_DCHECK(CheckInvariants());
 #ifdef DEBUG
     return offset_ & kUnmaskGenerationMask;
 #else
@@ -178,7 +207,7 @@ class OptionalOpIndex : protected OpIndex {
 
   constexpr bool has_value() const { return valid(); }
   constexpr OpIndex value() const {
-    DCHECK(has_value());
+    DCHECK(has_value() || detail::generating_unreachable_operations());
     return OpIndex(*this);
   }
   constexpr OpIndex value_or_invalid() const { return OpIndex(*this); }
@@ -242,10 +271,10 @@ struct Compressed : public Any {};
 struct InternalTag : public Any {};
 struct FrameState : public InternalTag {};
 
-// A Union type for untagged values. For Tagged types use `UnionT` for now.
+// A Union type for untagged values. For Tagged types use `Union` for now.
 // TODO(nicohartmann@): We should think about a more uniform solution some day.
 template <typename... Ts>
-struct Union : public Any {
+struct UntaggedUnion : public Any {
   using to_list_t = base::tmp::list<Ts...>;
 };
 
@@ -294,8 +323,9 @@ struct v_traits<Compressed> {
   static constexpr bool is_abstract_tag = true;
   using rep_type = RegisterRepresentation;
   static constexpr auto rep = RegisterRepresentation::Compressed();
-  static constexpr bool allows_representation(RegisterRepresentation rep) {
-    return rep == RegisterRepresentation::Compressed();
+  static constexpr bool allows_representation(
+      RegisterRepresentation maybe_allowed_rep) {
+    return maybe_allowed_rep == RegisterRepresentation::Compressed();
   }
 
   template <typename U>
@@ -309,8 +339,9 @@ struct v_traits<Word32> {
   using rep_type = WordRepresentation;
   static constexpr auto rep = WordRepresentation::Word32();
   using constexpr_type = uint32_t;
-  static constexpr bool allows_representation(RegisterRepresentation rep) {
-    return rep == RegisterRepresentation::Word32();
+  static constexpr bool allows_representation(
+      RegisterRepresentation maybe_allowed_rep) {
+    return maybe_allowed_rep == RegisterRepresentation::Word32();
   }
 
   template <typename U>
@@ -324,8 +355,9 @@ struct v_traits<Word64> {
   using rep_type = WordRepresentation;
   static constexpr auto rep = WordRepresentation::Word64();
   using constexpr_type = uint64_t;
-  static constexpr bool allows_representation(RegisterRepresentation rep) {
-    return rep == RegisterRepresentation::Word64();
+  static constexpr bool allows_representation(
+      RegisterRepresentation maybe_allowed_rep) {
+    return maybe_allowed_rep == RegisterRepresentation::Word64();
   }
 
   template <typename U>
@@ -339,8 +371,9 @@ struct v_traits<Float32> {
   using rep_type = FloatRepresentation;
   static constexpr auto rep = FloatRepresentation::Float32();
   using constexpr_type = float;
-  static constexpr bool allows_representation(RegisterRepresentation rep) {
-    return rep == RegisterRepresentation::Float32();
+  static constexpr bool allows_representation(
+      RegisterRepresentation maybe_allowed_rep) {
+    return maybe_allowed_rep == RegisterRepresentation::Float32();
   }
 
   template <typename U>
@@ -354,8 +387,9 @@ struct v_traits<Float64> {
   using rep_type = FloatRepresentation;
   static constexpr auto rep = FloatRepresentation::Float64();
   using constexpr_type = double;
-  static constexpr bool allows_representation(RegisterRepresentation rep) {
-    return rep == RegisterRepresentation::Float64();
+  static constexpr bool allows_representation(
+      RegisterRepresentation maybe_allowed_rep) {
+    return maybe_allowed_rep == RegisterRepresentation::Float64();
   }
 
   template <typename U>
@@ -364,13 +398,30 @@ struct v_traits<Float64> {
 };
 
 template <>
+struct v_traits<Smi> {
+  static constexpr bool is_abstract_tag = false;
+  using rep_type = RegisterRepresentation;
+  static constexpr auto rep = RegisterRepresentation::Tagged();
+  using constexpr_type = Tagged<Smi>;
+  static constexpr bool allows_representation(
+      RegisterRepresentation maybe_allowed_rep) {
+    return maybe_allowed_rep == RegisterRepresentation::Tagged();
+  }
+
+  template <typename U>
+  struct implicitly_constructible_from
+      : std::bool_constant<std::is_base_of_v<Smi, U>> {};
+};
+
+template <>
 struct v_traits<Simd128> {
   static constexpr bool is_abstract_tag = true;
   using rep_type = RegisterRepresentation;
   static constexpr auto rep = RegisterRepresentation::Simd128();
   using constexpr_type = uint8_t[kSimd128Size];
-  static constexpr bool allows_representation(RegisterRepresentation rep) {
-    return rep == RegisterRepresentation::Simd128();
+  static constexpr bool allows_representation(
+      RegisterRepresentation maybe_allowed_rep) {
+    return maybe_allowed_rep == RegisterRepresentation::Simd128();
   }
 
   template <typename U>
@@ -384,8 +435,9 @@ struct v_traits<Simd256> {
   using rep_type = RegisterRepresentation;
   static constexpr auto rep = RegisterRepresentation::Simd256();
   using constexpr_type = uint8_t[kSimd256Size];
-  static constexpr bool allows_representation(RegisterRepresentation rep) {
-    return rep == RegisterRepresentation::Simd256();
+  static constexpr bool allows_representation(
+      RegisterRepresentation maybe_allowed_rep) {
+    return maybe_allowed_rep == RegisterRepresentation::Simd256();
   }
 
   template <typename U>
@@ -394,48 +446,51 @@ struct v_traits<Simd256> {
 };
 
 template <typename T>
-struct v_traits<T, std::enable_if_t<is_taggable_v<T>>> {
+struct v_traits<T, std::enable_if_t<is_taggable_v<T> && !is_union_v<T>>> {
   static constexpr bool is_abstract_tag = false;
   using rep_type = RegisterRepresentation;
   static constexpr auto rep = RegisterRepresentation::Tagged();
-  static constexpr bool allows_representation(RegisterRepresentation rep) {
-    return rep == RegisterRepresentation::Tagged();
+  static constexpr bool allows_representation(
+      RegisterRepresentation maybe_allowed_rep) {
+    return maybe_allowed_rep == RegisterRepresentation::Tagged();
   }
 
   template <typename U>
   struct implicitly_constructible_from
       : std::bool_constant<is_subtype<U, T>::value> {};
   template <typename... Us>
-  struct implicitly_constructible_from<Union<Us...>>
+  struct implicitly_constructible_from<UntaggedUnion<Us...>>
       : std::bool_constant<(
             v_traits<T>::template implicitly_constructible_from<Us>::value &&
             ...)> {};
 };
 
-template <typename T1, typename T2>
-struct v_traits<UnionT<T1, T2>,
-                std::enable_if_t<is_taggable_v<UnionT<T1, T2>>>> {
-  static_assert(!v_traits<T1>::is_abstract_tag);
-  static_assert(!v_traits<T2>::is_abstract_tag);
+template <typename T, typename... Ts>
+struct v_traits<Union<T, Ts...>> {
+  static_assert(!v_traits<T>::is_abstract_tag);
+  static_assert((!v_traits<Ts>::is_abstract_tag && ...));
   static constexpr bool is_abstract_tag = false;
-  static_assert(v_traits<T1>::rep == v_traits<T2>::rep);
-  static_assert(std::is_same_v<typename v_traits<T1>::rep_type,
-                               typename v_traits<T2>::rep_type>);
-  using rep_type = typename v_traits<T1>::rep_type;
-  static constexpr auto rep = v_traits<T1>::rep;
-  static constexpr bool allows_representation(RegisterRepresentation r) {
-    return r == rep;
+  static_assert(((v_traits<T>::rep == v_traits<Ts>::rep) && ...));
+  static_assert((std::is_same_v<typename v_traits<T>::rep_type,
+                                typename v_traits<Ts>::rep_type> &&
+                 ...));
+  using rep_type = typename v_traits<T>::rep_type;
+  static constexpr auto rep = v_traits<T>::rep;
+  static constexpr bool allows_representation(
+      RegisterRepresentation maybe_allowed_rep) {
+    return maybe_allowed_rep == rep;
   }
 
   template <typename U>
   struct implicitly_constructible_from
       : std::bool_constant<(
-            v_traits<T1>::template implicitly_constructible_from<U>::value ||
-            v_traits<T2>::template implicitly_constructible_from<U>::value)> {};
-  template <typename U1, typename U2>
-  struct implicitly_constructible_from<UnionT<U1, U2>>
-      : std::bool_constant<(implicitly_constructible_from<U1>::value &&
-                            implicitly_constructible_from<U2>::value)> {};
+            v_traits<T>::template implicitly_constructible_from<U>::value ||
+            ... ||
+            v_traits<Ts>::template implicitly_constructible_from<U>::value)> {};
+  template <typename... Us>
+  struct implicitly_constructible_from<Union<Us...>>
+      : std::bool_constant<(implicitly_constructible_from<Us>::value && ...)> {
+  };
 };
 
 namespace detail {
@@ -450,7 +505,7 @@ struct RepresentationForUnionBase<T, true> {
 template <typename T>
 struct RepresentationForUnion {};
 template <typename T, typename... Ts>
-struct RepresentationForUnion<Union<T, Ts...>>
+struct RepresentationForUnion<UntaggedUnion<T, Ts...>>
     : RepresentationForUnionBase<T, ((v_traits<T>::rep == v_traits<Ts>::rep) &&
                                      ...)> {
  private:
@@ -471,12 +526,14 @@ struct RepresentationForUnion<Union<T, Ts...>>
 }  // namespace detail
 
 template <typename... Ts>
-struct v_traits<Union<Ts...>> {
+struct v_traits<UntaggedUnion<Ts...>> {
   using rep_type =
-      typename detail::RepresentationForUnion<Union<Ts...>>::rep_type;
-  static constexpr auto rep = detail::RepresentationForUnion<Union<Ts...>>::rep;
-  static constexpr bool allows_representation(RegisterRepresentation r) {
-    return (v_traits<Ts>::allows_representation(r) || ...);
+      typename detail::RepresentationForUnion<UntaggedUnion<Ts...>>::rep_type;
+  static constexpr auto rep =
+      detail::RepresentationForUnion<UntaggedUnion<Ts...>>::rep;
+  static constexpr bool allows_representation(
+      RegisterRepresentation maybe_allowed_rep) {
+    return (v_traits<Ts>::allows_representation(maybe_allowed_rep) || ...);
   }
 
   template <typename U>
@@ -485,7 +542,7 @@ struct v_traits<Union<Ts...>> {
             v_traits<Ts>::template implicitly_constructible_from<U>::value ||
             ...)> {};
   template <typename... Us>
-  struct implicitly_constructible_from<Union<Us...>>
+  struct implicitly_constructible_from<UntaggedUnion<Us...>>
       : std::bool_constant<(implicitly_constructible_from<Us>::value && ...)> {
   };
 };
@@ -522,23 +579,34 @@ struct v_traits<Tuple<Ts...>> {
             ...)> {};
 };
 
-using Word = Union<Word32, Word64>;
-using Float = Union<Float32, Float64>;
-using Untagged = Union<Word, Float>;
-using BooleanOrNullOrUndefined = UnionT<UnionT<Boolean, Null>, Undefined>;
-using NumberOrString = UnionT<Number, String>;
-using PlainPrimitive = UnionT<NumberOrString, BooleanOrNullOrUndefined>;
-using StringOrNull = Union<String, Null>;
+using Word = UntaggedUnion<Word32, Word64>;
+using Float = UntaggedUnion<Float32, Float64>;
+using Float64OrWord32 = UntaggedUnion<Float64, Word32>;
+using Untagged = UntaggedUnion<Word, Float>;
+using BooleanOrNullOrUndefined = UnionOf<Boolean, Null, Undefined>;
+using NumberOrString = UnionOf<Number, String>;
+using PlainPrimitive = UnionOf<NumberOrString, BooleanOrNullOrUndefined>;
+using StringOrNull = UnionOf<String, Null>;
+using NumberOrUndefined = UnionOf<Number, Undefined>;
+using AnyFixedArray = UnionOf<FixedArray, FixedDoubleArray>;
+using NonBigIntPrimitive = UnionOf<Symbol, PlainPrimitive>;
+using Primitive = UnionOf<BigInt, NonBigIntPrimitive>;
+using CallTarget = UntaggedUnion<WordPtr, Code, JSFunction, Word32>;
+using AnyOrNone = UntaggedUnion<Any, None>;
+using Word32Pair = Tuple<Word32, Word32>;
 
-using NonBigIntPrimitive = Union<Symbol, PlainPrimitive>;
-using Primitive = Union<BigInt, NonBigIntPrimitive>;
-using Numeric = Union<Number, BigInt>;
-using JSPrimitive = Union<Numeric, String, Symbol, Boolean, Null, Undefined>;
-using CallTarget = Union<WordPtr, Code>;
-using AnyOrNone = Union<Any, None>;
+template <typename T>
+concept IsUntagged =
+    !std::is_same_v<T, Any> &&
+    v_traits<Untagged>::implicitly_constructible_from<T>::value;
+
+template <typename T>
+concept IsTagged = !std::is_same_v<T, Any> &&
+                   v_traits<Object>::implicitly_constructible_from<T>::value;
 
 #if V8_ENABLE_WEBASSEMBLY
 using WasmArrayNullable = Union<WasmArray, WasmNull>;
+using WasmStructNullable = Union<WasmStruct, WasmNull>;
 // The type for a nullable ref.string (stringref proposal). For imported strings
 // use StringOrNull instead.
 using WasmStringRefNullable = Union<String, WasmNull>;
@@ -550,12 +618,51 @@ constexpr bool IsWord() {
          std::is_same_v<T, Word>;
 }
 
+template <typename T>
+concept IsWordT = IsWord<T>();
+
+template <typename T>
+constexpr bool IsValidTypeFor(RegisterRepresentation repr) {
+  if (std::is_same_v<T, Any>) return true;
+
+  switch (repr.value()) {
+    case RegisterRepresentation::Enum::kWord32:
+      return std::is_same_v<T, Word> || std::is_same_v<T, Word32> ||
+             std::is_same_v<T, Untagged>;
+    case RegisterRepresentation::Enum::kWord64:
+      return std::is_same_v<T, Word> || std::is_same_v<T, Word64> ||
+             std::is_same_v<T, Untagged>;
+    case RegisterRepresentation::Enum::kFloat32:
+      return std::is_same_v<T, Float> || std::is_same_v<T, Float32> ||
+             std::is_same_v<T, Untagged>;
+    case RegisterRepresentation::Enum::kFloat64:
+      return std::is_same_v<T, Float> || std::is_same_v<T, Float64> ||
+             std::is_same_v<T, Untagged>;
+    case RegisterRepresentation::Enum::kTagged:
+      return is_subtype_v<T, Object>;
+    case RegisterRepresentation::Enum::kCompressed:
+      return is_subtype_v<T, Object>;
+    case RegisterRepresentation::Enum::kSimd128:
+      return std::is_same_v<T, Simd128>;
+    case RegisterRepresentation::Enum::kSimd256:
+      return std::is_same_v<T, Simd256>;
+  }
+}
+
 // V<> represents an SSA-value that is parameterized with the type of the value.
 // Types from the `Object` hierarchy can be provided as well as the abstract
 // representation classes (`Word32`, ...) defined above.
 // Prefer using V<> instead of a plain OpIndex where possible.
 template <typename T>
 class V : public OpIndex {
+  // V<T> is implicitly constructible from V<U> iff
+  // `v_traits<T>::implicitly_constructible_from<U>::value`. This is typically
+  // the case if T == U or T is a subclass of U. Different types may specify
+  // different conversion rules in the corresponding `v_traits` when necessary.
+  template <typename U>
+  constexpr static bool implicitly_constructible_from =
+      v_traits<T>::template implicitly_constructible_from<U>::value;
+
  public:
   using type = T;
   static constexpr auto rep = v_traits<type>::rep;
@@ -565,9 +672,8 @@ class V : public OpIndex {
   // `v_traits<T>::implicitly_constructible_from<U>::value`. This is typically
   // the case if T == U or T is a subclass of U. Different types may specify
   // different conversion rules in the corresponding `v_traits` when necessary.
-  template <typename U,
-            typename = std::enable_if_t<
-                v_traits<T>::template implicitly_constructible_from<U>::value>>
+  template <typename U>
+    requires implicitly_constructible_from<U>
   V(V<U> index) : OpIndex(index) {}  // NOLINT(runtime/explicit)
 
   static V Invalid() { return V<T>(OpIndex::Invalid()); }
@@ -578,8 +684,9 @@ class V : public OpIndex {
   }
   static V<T> Cast(OpIndex index) { return V<T>(index); }
 
-  static constexpr bool allows_representation(RegisterRepresentation rep) {
-    return v_traits<T>::allows_representation(rep);
+  static constexpr bool allows_representation(
+      RegisterRepresentation maybe_allowed_rep) {
+    return v_traits<T>::allows_representation(maybe_allowed_rep);
   }
 
 #if !defined(TURBOSHAFT_ALLOW_IMPLICIT_OPINDEX_INITIALIZATION_FOR_V)
@@ -587,35 +694,38 @@ class V : public OpIndex {
  protected:
 #endif
   // V<T> is implicitly constructible from plain OpIndex.
-  template <typename U, typename = std::enable_if_t<std::is_same_v<U, OpIndex>>>
+  template <typename U>
+    requires(std::is_same_v<U, OpIndex>)
   V(U index) : OpIndex(index) {}  // NOLINT(runtime/explicit)
 };
 
 template <typename T>
 class OptionalV : public OptionalOpIndex {
+  // OptionalV<T> is implicitly constructible from OptionalV<U> iff
+  // `v_traits<T>::implicitly_constructible_from<U>::value`. This is typically
+  // the case if T == U or T is a subclass of U. Different types may specify
+  // different conversion rules in the corresponding `v_traits` when necessary.
+  template <typename U>
+  constexpr static bool implicitly_constructible_from =
+      v_traits<T>::template implicitly_constructible_from<U>::value;
+
  public:
   using type = T;
   static constexpr auto rep = v_traits<type>::rep;
   constexpr OptionalV() : OptionalOpIndex() {}
 
-  // OptionalV<T> is implicitly constructible from OptionalV<U> iff
-  // `v_traits<T>::implicitly_constructible_from<U>::value`. This is typically
-  // the case if T == U or T is a subclass of U. Different types may specify
-  // different conversion rules in the corresponding `v_traits` when necessary.
-  template <typename U,
-            typename = std::enable_if_t<
-                v_traits<T>::template implicitly_constructible_from<U>::value>>
+  template <typename U>
+    requires implicitly_constructible_from<U>
   OptionalV(OptionalV<U> index)  // NOLINT(runtime/explicit)
       : OptionalOpIndex(index) {}
-  template <typename U,
-            typename = std::enable_if_t<
-                v_traits<T>::template implicitly_constructible_from<U>::value>>
+  template <typename U>
+    requires implicitly_constructible_from<U>
   OptionalV(V<U> index) : OptionalOpIndex(index) {}  // NOLINT(runtime/explicit)
 
   static OptionalV Nullopt() { return OptionalV(OptionalOpIndex::Nullopt()); }
 
   constexpr V<T> value() const {
-    DCHECK(has_value());
+    DCHECK(has_value() || detail::generating_unreachable_operations());
     return V<T>::Cast(OptionalOpIndex::value());
   }
   constexpr V<T> value_or_invalid() const {
@@ -630,16 +740,39 @@ class OptionalV : public OptionalOpIndex {
     return OptionalV<T>(index);
   }
 
+  static constexpr bool allows_representation(
+      RegisterRepresentation maybe_allowed_rep) {
+    return v_traits<T>::allows_representation(maybe_allowed_rep);
+  }
+
 #if !defined(TURBOSHAFT_ALLOW_IMPLICIT_OPINDEX_INITIALIZATION_FOR_V)
 
  protected:
 #endif
   // OptionalV<T> is implicitly constructible from plain OptionalOpIndex.
-  template <typename U,
-            typename = std::enable_if_t<std::is_same_v<U, OptionalOpIndex> ||
-                                        std::is_same_v<U, OpIndex>>>
+  template <typename U>
+    requires(std::is_same_v<U, OptionalOpIndex> || std::is_same_v<U, OpIndex>)
   OptionalV(U index) : OptionalOpIndex(index) {}  // NOLINT(runtime/explicit)
 };
+
+// Deduction guide for `OptionalV`.
+template <typename T>
+OptionalV(V<T>) -> OptionalV<T>;
+
+template <typename T>
+struct is_optional_index : std::bool_constant<false> {};
+template <>
+struct is_optional_index<OptionalOpIndex> : std::bool_constant<true> {};
+template <typename T>
+struct is_optional_index<OptionalV<T>> : std::bool_constant<true> {};
+
+template <typename T>
+constexpr bool is_optional_index_v = is_optional_index<T>::value;
+
+static_assert(is_optional_index_v<OptionalOpIndex>);
+static_assert(is_optional_index_v<OptionalV<Word32>>);
+static_assert(!is_optional_index_v<OpIndex>);
+static_assert(!is_optional_index_v<V<Word32>>);
 
 // ConstOrV<> is a generalization of V<> that allows constexpr values
 // (constants) to be passed implicitly. This allows reducers to write things
@@ -668,9 +801,9 @@ class ConstOrV {
 
   // ConstOrV<T> is implicitly constructible from V<U> iff V<T> is
   // constructible from V<U>.
-  template <typename U,
-            typename = std::enable_if_t<std::is_constructible_v<V<T>, V<U>>>>
+  template <typename U>
   ConstOrV(V<U> index)  // NOLINT(runtime/explicit)
+    requires(std::is_constructible_v<V<T>, V<U>>)
       : constant_value_(std::nullopt), value_(index) {}
 
   bool is_constant() const { return constant_value_.has_value(); }
@@ -688,14 +821,19 @@ class ConstOrV {
  protected:
 #endif
   // ConstOrV<T> is implicitly constructible from plain OpIndex.
-  template <typename U, typename = std::enable_if_t<std::is_same_v<U, OpIndex>>>
+  template <typename U>
   ConstOrV(U index)  // NOLINT(runtime/explicit)
+    requires(std::is_same_v<U, OpIndex>)
       : constant_value_(), value_(index) {}
 
  private:
-  base::Optional<constant_type> constant_value_;
+  std::optional<constant_type> constant_value_;
   V<type> value_;
 };
+
+// Deduction guide for `ConstOrV`.
+template <typename T>
+ConstOrV(V<T>) -> ConstOrV<T>;
 
 template <>
 struct fast_hash<OpIndex> {
@@ -781,8 +919,7 @@ class ShadowyOpIndexVectorWrapper {
   }
   template <typename U>
   operator base::Vector<const V<U>>() const {  // NOLINT(runtime/explicit)
-    return base::Vector<const V<U>>{static_cast<const V<U>*>(indices_.data()),
-                                    indices_.size()};
+    return {static_cast<const V<U>*>(indices_.data()), indices_.size()};
   }
 
   size_t size() const noexcept { return indices_.size(); }
@@ -810,6 +947,11 @@ class BlockIndex {
   bool operator>(BlockIndex other) const { return id_ > other.id_; }
   bool operator<=(BlockIndex other) const { return id_ <= other.id_; }
   bool operator>=(BlockIndex other) const { return id_ >= other.id_; }
+
+  template <typename H>
+  friend H AbslHashValue(H h, const BlockIndex& idx) {
+    return H::combine(std::move(h), idx.id_);
+  }
 
  private:
   uint32_t id_;
@@ -853,5 +995,13 @@ DEFINE_STRONG_ORDERING_COMPARISON(OptionalOpIndex, OpIndex,
 #undef DEFINE_STRONG_ORDERING_COMPARISON
 
 }  // namespace v8::internal::compiler::turboshaft
+
+template <>
+struct std::hash<v8::internal::compiler::turboshaft::OpIndex> {
+  std::size_t operator()(
+      const v8::internal::compiler::turboshaft::OpIndex& index) const {
+    return index.hash();
+  }
+};
 
 #endif  // V8_COMPILER_TURBOSHAFT_INDEX_H_

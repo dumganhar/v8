@@ -7,6 +7,7 @@
 #include "src/base/bits.h"
 #include "src/deoptimizer/deoptimizer.h"
 #include "src/objects/allocation-site-inl.h"
+#include "src/objects/contexts.h"
 #include "src/objects/dependent-code-inl.h"
 #include "src/objects/map.h"
 
@@ -14,29 +15,33 @@ namespace v8 {
 namespace internal {
 
 Tagged<DependentCode> DependentCode::GetDependentCode(
-    Tagged<HeapObject> object) {
+    Tagged<DependableObject> object) {
   if (IsMap(object)) {
-    return Map::cast(object)->dependent_code();
+    return Cast<Map>(object)->dependent_code();
   } else if (IsPropertyCell(object)) {
-    return PropertyCell::cast(object)->dependent_code();
+    return Cast<PropertyCell>(object)->dependent_code();
   } else if (IsAllocationSite(object)) {
-    return AllocationSite::cast(object)->dependent_code();
-  } else if (IsConstTrackingLetCell(object)) {
-    return ConstTrackingLetCell::cast(object)->dependent_code();
+    return Cast<AllocationSite>(object)->dependent_code();
+  } else if (IsContextCell(object)) {
+    return Cast<ContextCell>(object)->dependent_code();
+  } else if (IsScopeInfo(object)) {
+    return Cast<ScopeInfo>(object)->dependent_code();
   }
   UNREACHABLE();
 }
 
-void DependentCode::SetDependentCode(Handle<HeapObject> object,
-                                     Handle<DependentCode> dep) {
+void DependentCode::SetDependentCode(DirectHandle<DependableObject> object,
+                                     DirectHandle<DependentCode> dep) {
   if (IsMap(*object)) {
-    Handle<Map>::cast(object)->set_dependent_code(*dep);
+    Cast<Map>(object)->set_dependent_code(*dep);
   } else if (IsPropertyCell(*object)) {
-    Handle<PropertyCell>::cast(object)->set_dependent_code(*dep);
+    Cast<PropertyCell>(object)->set_dependent_code(*dep);
   } else if (IsAllocationSite(*object)) {
-    Handle<AllocationSite>::cast(object)->set_dependent_code(*dep);
-  } else if (IsConstTrackingLetCell(*object)) {
-    Handle<ConstTrackingLetCell>::cast(object)->set_dependent_code(*dep);
+    Cast<AllocationSite>(object)->set_dependent_code(*dep);
+  } else if (IsContextCell(*object)) {
+    Cast<ContextCell>(object)->set_dependent_code(*dep);
+  } else if (IsScopeInfo(*object)) {
+    Cast<ScopeInfo>(object)->set_dependent_code(*dep);
   } else {
     UNREACHABLE();
   }
@@ -57,7 +62,7 @@ void PrintDependencyGroups(DependentCode::DependencyGroups groups) {
 }  // namespace
 
 void DependentCode::InstallDependency(Isolate* isolate, Handle<Code> code,
-                                      Handle<HeapObject> object,
+                                      Handle<DependableObject> object,
                                       DependencyGroups groups) {
   if (V8_UNLIKELY(v8_flags.trace_compilation_dependencies)) {
     StdoutStream{} << "Installing dependency of [" << code << "] on [" << object
@@ -67,7 +72,7 @@ void DependentCode::InstallDependency(Isolate* isolate, Handle<Code> code,
   }
   Handle<DependentCode> old_deps(DependentCode::GetDependentCode(*object),
                                  isolate);
-  Handle<DependentCode> new_deps =
+  DirectHandle<DependentCode> new_deps =
       InsertWeakCode(isolate, old_deps, groups, code);
 
   // Update the list head if necessary.
@@ -76,9 +81,9 @@ void DependentCode::InstallDependency(Isolate* isolate, Handle<Code> code,
   }
 }
 
-Handle<DependentCode> DependentCode::InsertWeakCode(
+DirectHandle<DependentCode> DependentCode::InsertWeakCode(
     Isolate* isolate, Handle<DependentCode> entries, DependencyGroups groups,
-    Handle<Code> code) {
+    DirectHandle<Code> code) {
   if (entries->length() == entries->capacity()) {
     // We'd have to grow - try to compact first.
     entries->IterateAndCompact(
@@ -87,8 +92,8 @@ Handle<DependentCode> DependentCode::InsertWeakCode(
 
   // As the Code object lives outside of the sandbox in trusted space, we need
   // to use its in-sandbox wrapper object here.
-  MaybeObjectHandle code_slot(MakeWeak(code->wrapper()), isolate);
-  entries = Handle<DependentCode>::cast(WeakArrayList::AddToEnd(
+  MaybeObjectDirectHandle code_slot(MakeWeak(code->wrapper()), isolate);
+  entries = Cast<DependentCode>(WeakArrayList::AddToEnd(
       isolate, entries, code_slot, Smi::FromInt(groups)));
   return entries;
 }
@@ -115,7 +120,7 @@ void DependentCode::IterateAndCompact(IsolateForSandbox isolate,
       continue;
     }
 
-    if (fn(CodeWrapper::cast(obj.GetHeapObjectAssumeWeak())->code(isolate),
+    if (fn(Cast<CodeWrapper>(obj.GetHeapObjectAssumeWeak())->code(isolate),
            static_cast<DependencyGroups>(
                Get(i + kGroupsSlotOffset).ToSmi().value()))) {
       len = FillEntryFromBack(i, len);
@@ -140,9 +145,9 @@ bool DependentCode::MarkCodeForDeoptimization(
       // deopt reason. Only one group is reported to avoid string concatenation.
       DependencyGroup first_group = static_cast<DependencyGroup>(
           1 << base::bits::CountTrailingZeros32(groups & deopt_groups));
-      const char* reason = DependentCode::DependencyGroupName(first_group);
-
-      code->SetMarkedForDeoptimization(isolate, reason);
+      code->SetMarkedForDeoptimization(
+          isolate,
+          DependentCode::DependencyGroupToLazyDeoptReason(first_group));
       marked_something = true;
     }
 
@@ -160,8 +165,7 @@ int DependentCode::FillEntryFromBack(int index, int length) {
     if (obj.IsCleared()) continue;
 
     Set(index + kCodeSlotOffset, obj);
-    Set(index + kGroupsSlotOffset, Get(i + kGroupsSlotOffset),
-        SKIP_WRITE_BARRIER);
+    Set(index + kGroupsSlotOffset, Cast<Smi>(Get(i + kGroupsSlotOffset)));
     return i;
   }
   return index;  // No non-cleared entry found.
@@ -180,7 +184,7 @@ void DependentCode::DeoptimizeDependencyGroups(
 // static
 Tagged<DependentCode> DependentCode::empty_dependent_code(
     const ReadOnlyRoots& roots) {
-  return DependentCode::cast(roots.empty_weak_array_list());
+  return Cast<DependentCode>(roots.empty_weak_array_list());
 }
 
 const char* DependentCode::DependencyGroupName(DependencyGroup group) {
@@ -203,8 +207,39 @@ const char* DependentCode::DependencyGroupName(DependencyGroup group) {
       return "allocation-site-tenuring-changed";
     case kAllocationSiteTransitionChangedGroup:
       return "allocation-site-transition-changed";
-    case kConstTrackingLetChangedGroup:
-      return "const-tracking-let-changed";
+    case kContextCellChangedGroup:
+      return "script-context-slot-property-changed";
+    case kEmptyContextExtensionGroup:
+      return "empty-context-extension";
+  }
+  UNREACHABLE();
+}
+
+LazyDeoptimizeReason DependentCode::DependencyGroupToLazyDeoptReason(
+    DependencyGroup group) {
+  switch (group) {
+    case kTransitionGroup:
+      return LazyDeoptimizeReason::kMapDeprecated;
+    case kPrototypeCheckGroup:
+      return LazyDeoptimizeReason::kPrototypeChange;
+    case kPropertyCellChangedGroup:
+      return LazyDeoptimizeReason::kPropertyCellChange;
+    case kFieldConstGroup:
+      return LazyDeoptimizeReason::kFieldTypeConstChange;
+    case kFieldTypeGroup:
+      return LazyDeoptimizeReason::kFieldTypeChange;
+    case kFieldRepresentationGroup:
+      return LazyDeoptimizeReason::kFieldRepresentationChange;
+    case kInitialMapChangedGroup:
+      return LazyDeoptimizeReason::kInitialMapChange;
+    case kAllocationSiteTenuringChangedGroup:
+      return LazyDeoptimizeReason::kAllocationSiteTenuringChange;
+    case kAllocationSiteTransitionChangedGroup:
+      return LazyDeoptimizeReason::kAllocationSiteTransitionChange;
+    case kContextCellChangedGroup:
+      return LazyDeoptimizeReason::kContextCellChange;
+    case kEmptyContextExtensionGroup:
+      return LazyDeoptimizeReason::kEmptyContextExtensionChange;
   }
   UNREACHABLE();
 }

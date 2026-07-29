@@ -5,7 +5,9 @@
 #include "src/heap/cppgc-js/cpp-snapshot.h"
 
 #include <memory>
+#include <utility>
 
+#include "include/cppgc/heap-consistency.h"
 #include "include/cppgc/internal/name-trait.h"
 #include "include/cppgc/trace-trait.h"
 #include "include/cppgc/visitor.h"
@@ -16,12 +18,11 @@
 #include "src/base/logging.h"
 #include "src/execution/isolate.h"
 #include "src/heap/cppgc-js/cpp-heap.h"
-#include "src/heap/cppgc-js/wrappable-info-inl.h"
-#include "src/heap/cppgc-js/wrappable-info.h"
 #include "src/heap/cppgc/heap-object-header.h"
 #include "src/heap/cppgc/heap-visitor.h"
 #include "src/heap/cppgc/visitor.h"
 #include "src/heap/mark-compact.h"
+#include "src/objects/cpp-heap-object-wrapper-inl.h"
 #include "src/objects/js-objects.h"
 #include "src/objects/objects-inl.h"
 #include "src/profiler/heap-profiler.h"
@@ -40,13 +41,13 @@ class EmbedderNode : public v8::EmbedderGraph::Node {
  public:
   EmbedderNode(const HeapObjectHeader* header_address,
                cppgc::internal::HeapObjectName name, size_t size)
-      : header_address_(header_address), name_(name), size_(size) {
-    USE(size_);
-  }
+      : header_address_(header_address),
+        name_(name.value),
+        size_(name.name_was_hidden ? 0 : size) {}
   ~EmbedderNode() override = default;
 
-  const char* Name() final { return name_.value; }
-  size_t SizeInBytes() final { return name_.name_was_hidden ? 0 : size_; }
+  const char* Name() final { return name_; }
+  size_t SizeInBytes() final { return size_; }
 
   void SetWrapperNode(v8::EmbedderGraph::Node* wrapper_node) {
     // An embedder node may only be merged with a single wrapper node, as
@@ -69,11 +70,11 @@ class EmbedderNode : public v8::EmbedderGraph::Node {
 
   // Edge names are passed to V8 but are required to be held alive from the
   // embedder until the snapshot is compiled.
-  const char* InternalizeEdgeName(std::string edge_name) {
+  const char* InternalizeEdgeName(std::string_view edge_name) {
     const size_t edge_name_len = edge_name.length();
     named_edges_.emplace_back(std::make_unique<char[]>(edge_name_len + 1));
     char* named_edge_str = named_edges_.back().get();
-    snprintf(named_edge_str, edge_name_len + 1, "%s", edge_name.c_str());
+    snprintf(named_edge_str, edge_name_len + 1, "%s", edge_name.data());
     return named_edge_str;
   }
 
@@ -81,7 +82,7 @@ class EmbedderNode : public v8::EmbedderGraph::Node {
 
  private:
   const void* header_address_;
-  cppgc::internal::HeapObjectName name_;
+  const char* name_;
   size_t size_;
   Node* wrapper_node_ = nullptr;
   Detachedness detachedness_ = Detachedness::kUnknown;
@@ -367,11 +368,9 @@ class StateStorage final {
   }
 
   template <typename Callback>
-  void ForAllVisibleStates(Callback callback) {
+  void ForAllStates(Callback callback) {
     for (auto& state : states_) {
-      if (state.second->IsVisibleNotDependent()) {
-        callback(state.second.get());
-      }
+      callback(state.second.get());
     }
   }
 
@@ -385,27 +384,20 @@ void* ExtractEmbedderDataBackref(Isolate* isolate, CppHeap& cpp_heap,
   if (!(v8_value->IsValue() && v8_value.As<v8::Value>()->IsObject()))
     return nullptr;
 
-  Handle<Object> v8_object = Utils::OpenHandle(*v8_value);
+  DirectHandle<Object> v8_object = Utils::OpenDirectHandle(*v8_value);
   if (!IsJSObject(*v8_object) ||
-      !JSObject::cast(*v8_object)->MayHaveEmbedderFields()) {
+      !Cast<JSObject>(*v8_object)->MayHaveEmbedderFields()) {
     return nullptr;
   }
 
-  Tagged<JSObject> js_object = JSObject::cast(*v8_object);
-
-  const auto maybe_info =
-      WrappableInfo::From(isolate, js_object, cpp_heap.wrapper_descriptor());
-  if (maybe_info.has_value()) {
-    // Wrappers with 2 embedder fields.
-    return maybe_info->instance;
-  }
+  Tagged<JSObject> js_object = Cast<JSObject>(*v8_object);
   // Not every object that can have embedder fields is actually a JSApiWrapper.
   if (!IsJSApiWrapperObject(*js_object)) {
     return nullptr;
   }
   // Wrapper using cpp_heap_wrappable field.
-  return JSApiWrapper(*js_object)
-      .GetCppHeapWrappable<kAnyExternalPointerTag>(isolate);
+  return CppHeapObjectWrapper(*js_object)
+      .GetCppHeapWrappable(isolate, kAnyCppHeapPointer);
 }
 
 // The following implements a snapshotting algorithm for C++ objects that also
@@ -449,8 +441,9 @@ void* ExtractEmbedderDataBackref(Isolate* isolate, CppHeap& cpp_heap,
 // create SCCs.
 class CppGraphBuilderImpl final {
  public:
-  CppGraphBuilderImpl(CppHeap& cpp_heap, v8::EmbedderGraph& graph)
-      : cpp_heap_(cpp_heap), graph_(graph) {}
+  CppGraphBuilderImpl(
+      CppHeap& cpp_heap, v8::EmbedderGraph& graph,
+      UnorderedCppHeapExternalObjectSet&& cpp_heap_external_objects);
 
   void Run();
 
@@ -463,11 +456,13 @@ class CppGraphBuilderImpl final {
       cppgc::TraceDescriptor value_desc);
   void VisitWeakContainerForVisibility(const HeapObjectHeader&);
   void VisitRootForGraphBuilding(RootState&, const HeapObjectHeader&,
-                                 const cppgc::SourceLocation&);
+                                 cppgc::SourceLocation);
   void ProcessPendingObjects();
 
   void RecordEphemeronKey(const HeapObjectHeader&, const HeapObjectHeader&);
   void AddConservativeEphemeronKeyEdgesIfNeeded(const HeapObjectHeader&);
+
+  void AddEdgeForCppHeapExternalObject(Tagged<CppHeapExternalObject>);
 
   EmbedderRootNode* AddRootNode(const char* name) {
     return static_cast<EmbedderRootNode*>(graph_.AddNode(
@@ -475,13 +470,19 @@ class CppGraphBuilderImpl final {
   }
 
   EmbedderNode* AddNode(const HeapObjectHeader& header) {
-    return static_cast<EmbedderNode*>(graph_.AddNode(
-        std::unique_ptr<v8::EmbedderGraph::Node>{new EmbedderNode(
-            &header, header.GetName(), header.AllocatedSize())}));
+    size_t size = header.AllocatedSize();
+    EmbedderNode* node = static_cast<EmbedderNode*>(
+        graph_.AddNode(std::unique_ptr<v8::EmbedderGraph::Node>{
+            new EmbedderNode(&header, header.GetName(), size)}));
+    size_t node_size = node->SizeInBytes();
+    if (size > node_size) {
+      graph_.AddNativeSize(size - node_size);
+    }
+    return node;
   }
 
   void AddEdge(State& parent, const HeapObjectHeader& header,
-               const std::string& edge_name) {
+               std::string_view edge_name) {
     DCHECK(parent.IsVisibleNotDependent());
     auto& current = states_.GetExistingState(header);
     if (!current.IsVisibleNotDependent()) return;
@@ -504,7 +505,7 @@ class CppGraphBuilderImpl final {
   }
 
   void AddEdge(State& parent, const TracedReferenceBase& ref,
-               const std::string& edge_name) {
+               std::string_view edge_name) {
     DCHECK(parent.IsVisibleNotDependent());
     v8::Local<v8::Data> v8_data =
         ref.Get(reinterpret_cast<v8::Isolate*>(cpp_heap_.isolate()));
@@ -547,8 +548,9 @@ class CppGraphBuilderImpl final {
     }
     back_state.get_node()->SetWrapperNode(v8_node);
 
-    auto* profiler =
-        reinterpret_cast<Isolate*>(cpp_heap_.isolate())->heap_profiler();
+    auto* profiler = reinterpret_cast<Isolate*>(cpp_heap_.isolate())
+                         ->heap()
+                         ->heap_profiler();
     if (profiler->HasGetDetachednessCallback()) {
       back_state.get_node()->SetDetachedness(
           profiler->GetDetachedness(v8_data.As<v8::Value>(), 0));
@@ -587,6 +589,7 @@ class CppGraphBuilderImpl final {
   v8::EmbedderGraph& graph_;
   StateStorage states_;
   std::vector<std::unique_ptr<WorkstackItemBase>> workstack_;
+  UnorderedCppHeapExternalObjectSet cpp_heap_external_objects_;
 };
 
 // Iterating live objects to mark them as visible if needed.
@@ -658,7 +661,7 @@ class WeakVisitor : public JSVisitor {
       // In case the visitor is used stand-alone, we trace through the container
       // here to create the same state as we would when the container is traced
       // separately.
-      container_header.Trace(this);
+      container_header.TraceImpl(this);
     }
   }
   void VisitEphemeron(const void* key, const void* value,
@@ -736,7 +739,7 @@ class GraphBuildingRootVisitor final : public cppgc::internal::RootVisitorBase {
       : graph_builder_(graph_builder), parent_scope_(parent_scope) {}
 
   void VisitRoot(const void*, cppgc::TraceDescriptor desc,
-                 const cppgc::SourceLocation& loc) final {
+                 cppgc::SourceLocation loc) final {
     graph_builder_.VisitRootForGraphBuilding(
         parent_scope_.ParentAsRootState(),
         HeapObjectHeader::FromObject(desc.base_object_payload), loc);
@@ -779,9 +782,7 @@ class GraphBuildingVisitor final : public JSVisitor {
                            edge_name_);
   }
 
-  void set_edge_name(std::string edge_name) {
-    edge_name_ = std::move(edge_name);
-  }
+  void set_edge_name(std::string_view edge_name) { edge_name_ = edge_name; }
 
  private:
   CppGraphBuilderImpl& graph_builder_;
@@ -803,6 +804,13 @@ class CppGraphBuilderImpl::WorkstackItemBase {
   State* parent_;
   State& current_;
 };
+
+CppGraphBuilderImpl::CppGraphBuilderImpl(
+    CppHeap& cpp_heap, v8::EmbedderGraph& graph,
+    UnorderedCppHeapExternalObjectSet&& cpp_heap_external_objects)
+    : cpp_heap_(cpp_heap),
+      graph_(graph),
+      cpp_heap_external_objects_(std::move(cpp_heap_external_objects)) {}
 
 void CppGraphBuilderImpl::ProcessPendingObjects() {
   while (!workstack_.empty()) {
@@ -842,7 +850,7 @@ class CppGraphBuilderImpl::VisitationItem final : public WorkstackItemBase {
     VisiblityVisitor object_visitor(graph_builder, parent_scope);
     if (!current_.header()->IsInConstruction()) {
       // TODO(mlippautz): Handle in construction objects.
-      current_.header()->Trace(&object_visitor);
+      current_.header()->TraceImpl(&object_visitor);
     }
     if (!parent_) {
       current_.UnmarkPending();
@@ -874,7 +882,7 @@ void CppGraphBuilderImpl::VisitForVisibility(State* parent,
     // In case the names are visible, the graph is not traversed in this phase.
     // Explicitly trace one level to handle weak containers.
     WeakVisitor weak_visitor(*this);
-    header.Trace(&weak_visitor);
+    header.TraceImpl(&weak_visitor);
     if (parent) {
       // Eagerly update a parent object as its visibility state is now fixed.
       parent->MarkVisible();
@@ -940,11 +948,28 @@ void CppGraphBuilderImpl::VisitForVisibility(State& parent,
 
 void CppGraphBuilderImpl::VisitRootForGraphBuilding(
     RootState& root, const HeapObjectHeader& header,
-    const cppgc::SourceLocation& loc) {
+    cppgc::SourceLocation loc) {
   State& current = states_.GetExistingState(header);
   if (!current.IsVisibleNotDependent()) return;
 
   AddRootEdge(root, current, loc.ToString());
+}
+
+void CppGraphBuilderImpl::AddEdgeForCppHeapExternalObject(
+    Tagged<CppHeapExternalObject> external) {
+  void* cpp_object = CppHeapObjectWrapper(*external).GetCppHeapWrappable(
+      cpp_heap_.isolate(), kAnyCppHeapPointer);
+  State& cpp_object_state =
+      states_.GetExistingState(HeapObjectHeader::FromObject(cpp_object));
+  if (!cpp_object_state.IsVisibleNotDependent()) return;
+
+  if (!cpp_object_state.get_node()) {
+    cpp_object_state.set_node(AddNode(*cpp_object_state.header()));
+  }
+
+  auto* v8_node = graph_.V8Node(
+      Utils::CppHeapExternalToLocal(handle(external, cpp_heap_.isolate())));
+  graph_.AddEdge(v8_node, cpp_object_state.get_node());
 }
 
 namespace {
@@ -981,7 +1006,7 @@ class GraphBuildingStackVisitor
   }
 
  private:
-  void VisitConservatively(HeapObjectHeader& header) {
+  void VisitConservatively(const HeapObjectHeader& header) {
     root_visitor_.VisitRoot(header.ObjectStart(),
                             {header.ObjectStart(), nullptr},
                             cppgc::SourceLocation());
@@ -992,20 +1017,30 @@ class GraphBuildingStackVisitor
   GraphBuildingRootVisitor& root_visitor_;
 };
 
+constexpr std::string_view kEphemeronEdgeName =
+    "part of key -> value pair in ephemeron table";
+
 }  // namespace
 
 void CppGraphBuilderImpl::Run() {
   // Sweeping from a previous GC might still be running, in which case not all
   // pages have been returned to spaces yet.
   cpp_heap_.sweeper().FinishIfRunning();
+  cppgc::subtle::DisallowGarbageCollectionScope no_gc(
+      cpp_heap_.GetHeapHandle());
   // First pass: Figure out which objects should be included in the graph -- see
   // class-level comment on CppGraphBuilder.
   LiveObjectsForVisibilityIterator visitor(*this);
   visitor.Traverse(cpp_heap_.raw_heap());
   // Second pass: Add graph nodes for objects that must be shown.
-  states_.ForAllVisibleStates([this](StateBase* state_base) {
+  states_.ForAllStates([this](StateBase* state_base) {
     // No roots have been created so far, so all StateBase objects are State.
     State& state = *static_cast<State*>(state_base);
+
+    if (!state.IsVisibleNotDependent()) {
+      graph_.AddNativeSize(state.header()->AllocatedSize());
+      return;
+    }
 
     // Emit no edges for the contents of the weak containers. For both, fully
     // weak and ephemeron containers, the contents should be retained from
@@ -1016,13 +1051,12 @@ void CppGraphBuilderImpl::Run() {
     GraphBuildingVisitor object_visitor(*this, parent_scope);
     if (!state.header()->IsInConstruction()) {
       // TODO(mlippautz): Handle in-construction objects.
-      state.header()->Trace(&object_visitor);
+      state.header()->TraceImpl(&object_visitor);
     }
     state.ForAllEphemeronEdges([this, &state](const HeapObjectHeader& value) {
-      AddEdge(state, value, "part of key -> value pair in ephemeron table");
+      AddEdge(state, value, kEphemeronEdgeName);
     });
-    object_visitor.set_edge_name(
-        "part of key -> value pair in ephemeron table");
+    object_visitor.set_edge_name(kEphemeronEdgeName);
     state.ForAllEagerEphemeronEdges(
         [&object_visitor](const void* value, cppgc::TraceCallback callback) {
           callback(&object_visitor, value);
@@ -1054,15 +1088,21 @@ void CppGraphBuilderImpl::Run() {
                                             root_object_visitor);
     cpp_heap_.stack()->IteratePointersUntilMarker(&stack_visitor);
   }
+  // Connect each `CppHeapExternalObject` to its corresponding cpp object.
+  for (Tagged<CppHeapExternalObject> object : cpp_heap_external_objects_) {
+    AddEdgeForCppHeapExternalObject(object);
+  }
 }
 
 // static
-void CppGraphBuilder::Run(v8::Isolate* isolate, v8::EmbedderGraph* graph,
-                          void* data) {
+void CppGraphBuilder::Run(
+    v8::Isolate* isolate, v8::EmbedderGraph* graph, void* data,
+    UnorderedCppHeapExternalObjectSet&& cpp_heap_external_objects) {
   CppHeap* cpp_heap = static_cast<CppHeap*>(data);
   CHECK_NOT_NULL(cpp_heap);
   CHECK_NOT_NULL(graph);
-  CppGraphBuilderImpl graph_builder(*cpp_heap, *graph);
+  CppGraphBuilderImpl graph_builder(*cpp_heap, *graph,
+                                    std::move(cpp_heap_external_objects));
   graph_builder.Run();
 }
 

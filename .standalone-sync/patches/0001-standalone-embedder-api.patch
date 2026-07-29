@@ -1,0 +1,354 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index 1bb7fc9..a8ca10f 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -35,6 +35,10 @@ declare_args() {
+   # Dynamically set an additional dependency from v8/custom_deps.
+   v8_custom_deps = ""
+ 
++  # Generate only embeddable standalone targets when the source snapshot omits
++  # V8's test and sample trees.
++  v8_standalone_source_snapshot = false
++
+   # Sets -DV8_ENABLE_FUTURE.
+   v8_enable_future = false
+ 
+@@ -7776,14 +7780,17 @@ want_v8_shell =
+ group("gn_all") {
+   testonly = true
+ 
+-  deps = [
+-    ":d8",
+-    ":v8_fuzzers",
+-    ":v8_hello_world",
+-    ":v8_sample_process",
+-    "test:gn_all",
+-    "tools:gn_all",
+-  ]
++  deps = [ ":d8" ]
++
++  if (!v8_standalone_source_snapshot) {
++    deps += [
++      ":v8_fuzzers",
++      ":v8_hello_world",
++      ":v8_sample_process",
++      "test:gn_all",
++      "tools:gn_all",
++    ]
++  }
+ 
+   if (v8_custom_deps != "") {
+     # Custom dependency from directory under v8/custom_deps.
+@@ -7836,7 +7843,7 @@ group("v8_archive") {
+ 
+   deps = [ ":d8" ]
+ 
+-  if (!is_win) {
++  if (!is_win && !v8_standalone_source_snapshot) {
+     # On windows, cctest doesn't link with v8_static_library.
+     deps += [ "test/cctest" ]
+   }
+@@ -8444,9 +8451,15 @@ if (v8_enable_webassembly) {
+   }  # v8_wasm_random_fuzzers
+ }
+ 
+-v8_fuzzer("inspector_fuzzer") {
+-  sources = [ "test/fuzzer/inspector-fuzzer.cc" ]
+-  deps = [ "test/inspector:inspector_test" ]
++if (!v8_standalone_source_snapshot) {
++  v8_fuzzer("inspector_fuzzer") {
++    sources = [ "test/fuzzer/inspector-fuzzer.cc" ]
++    deps = [ "test/inspector:inspector_test" ]
++  }
++} else {
++  group("v8_simple_inspector_fuzzer") {
++    testonly = true
++  }
+ }
+ 
+ # Target to build all generated .cc files.
+diff --git a/build/toolchain/mac/BUILD.gn b/build/toolchain/mac/BUILD.gn
+index 0063a0f..acd48d0 100644
+--- a/build/toolchain/mac/BUILD.gn
++++ b/build/toolchain/mac/BUILD.gn
+@@ -22,7 +22,7 @@ template("mac_toolchain") {
+       forward_variables_from(invoker.toolchain_args, "*")
+       current_os = "mac"
+ 
+-      if (target_os == "ios") {
+-        # Use LLD for the host part of a chrome/ios build.
+-        use_lld = true
++      if (target_os == "ios") {
++        # Standalone builds use Xcode's libtool instead of Chromium's llvm-ar.
++        use_lld = false
+ 
+diff --git a/include/v8-callbacks.h b/include/v8-callbacks.h
+index e5eba5a..59c5df6 100644
+--- a/include/v8-callbacks.h
++++ b/include/v8-callbacks.h
+@@ -7,6 +7,8 @@
+ 
+ #include <stddef.h>
+ 
++#include <cstdarg>
++#include <cstdio>
+ #include <functional>
+ #include <string>
+ 
+@@ -237,6 +239,18 @@ using OOMErrorCallbackWithData = void (*)(const char* location,
+                                           const OOMDetails& details,
+                                           void* data);
+ 
++/** Identifies the destination of a V8 print operation. */
++enum class PrintOutputType { kStdout, kStderr, kFile };
++
++/**
++ * Receives output produced through V8's platform print helpers.
++ *
++ * `file` is non-null for kFile and may also be stdout or stderr. The callback
++ * must consume `args` during the call and must not retain it.
++ */
++using PrintCallback = void (*)(PrintOutputType type, FILE* file,
++                               const char* format, va_list args);
++
+ using MessageCallback = void (*)(Local<Message> message, Local<Value> data);
+ 
+ // --- Tracing ---
+diff --git a/include/v8-initialization.h b/include/v8-initialization.h
+index 46a21a0..b9462e0 100644
+--- a/include/v8-initialization.h
++++ b/include/v8-initialization.h
+@@ -282,6 +282,13 @@ class V8_EXPORT V8 {
+    */
+   static void SetFatalMemoryErrorCallback(OOMErrorCallback callback);
+ 
++  /**
++   * Routes V8 platform print output through `callback`. Pass nullptr to restore
++   * the default stdout, stderr, and file output behavior. Configure this before
++   * initializing V8 and do not change it concurrently with print operations.
++   */
++  static void SetPrintCallback(PrintCallback callback);
++
+   /**
+    * Get statistics about the shared memory usage.
+    */
+diff --git a/include/v8-isolate.h b/include/v8-isolate.h
+index 299714f..cf30572 100644
+--- a/include/v8-isolate.h
++++ b/include/v8-isolate.h
+@@ -1788,6 +1788,12 @@ class V8_EXPORT Isolate {
+    */
+   bool IsInUse();
+ 
++  /**
++   * Visits persistent handles whose wrapper class id is non-zero.
++   * Garbage collection must not be triggered from the visitor.
++   */
++  void VisitHandlesWithClassIds(PersistentHandleVisitor* visitor);
++
+   /**
+    * Set whether calling Atomics.wait (a function that may block) is allowed in
+    * this isolate. This can also be configured via
+diff --git a/include/v8-script.h b/include/v8-script.h
+index c07d955..bc42c2c 100644
+--- a/include/v8-script.h
++++ b/include/v8-script.h
+@@ -898,6 +898,9 @@ class V8_EXPORT ScriptCompiler {
+    */
+   static CachedData* CreateCodeCacheForFunction(Local<Function> function);
+ 
++  /** Destroys code cache returned by a CreateCodeCache function. */
++  static void DestroyCodeCache(CachedData* data);
++
+  private:
+   static V8_WARN_UNUSED_RESULT MaybeLocal<UnboundScript> CompileUnboundInternal(
+       Isolate* isolate, Source* source, CompileOptions options,
+diff --git a/src/api/api.cc b/src/api/api.cc
+index a614fd5..be1c541 100644
+--- a/src/api/api.cc
++++ b/src/api/api.cc
+@@ -194,6 +194,12 @@ i::ExternalPointerTag ToExternalPointerTag(v8::EmbedderDataTypeTag api_tag) {
+ }
+ 
+ static OOMErrorCallback g_oom_error_callback = nullptr;
++static PrintCallback g_print_callback = nullptr;
++
++static void ForwardPrint(base::OS::PrintOutputType type, FILE* file,
++                         const char* format, va_list args) {
++  g_print_callback(static_cast<PrintOutputType>(type), file, format, args);
++}
+ 
+ using RCCId = i::RuntimeCallCounterId;
+ 
+@@ -2809,6 +2815,10 @@ ScriptCompiler::CachedData* ScriptCompiler::CreateCodeCacheForFunction(
+   return i::CodeSerializer::Serialize(i_isolate, shared);
+ }
+ 
++void ScriptCompiler::DestroyCodeCache(ScriptCompiler::CachedData* data) {
++  delete data;
++}
++
+ MaybeLocal<Script> Script::Compile(Local<Context> context, Local<String> source,
+                                    ScriptOrigin* origin) {
+   if (origin) {
+@@ -6351,6 +6361,16 @@ void v8::V8::SetFatalMemoryErrorCallback(
+   g_oom_error_callback = oom_error_callback;
+ }
+ 
++void v8::V8::SetPrintCallback(v8::PrintCallback print_callback) {
++  if (print_callback == nullptr) {
++    base::OS::SetPrintCallback(nullptr);
++    g_print_callback = nullptr;
++    return;
++  }
++  g_print_callback = print_callback;
++  base::OS::SetPrintCallback(ForwardPrint);
++}
++
+ void v8::V8::SetEntropySource(EntropySource entropy_source) {
+   base::RandomNumberGenerator::SetEntropySource(entropy_source);
+ }
+@@ -10883,6 +10903,12 @@ bool Isolate::IsInUse() {
+   return i_isolate->IsInUse();
+ }
+ 
++void Isolate::VisitHandlesWithClassIds(PersistentHandleVisitor* visitor) {
++  i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(this);
++  i::DisallowGarbageCollection no_gc;
++  i_isolate->global_handles()->IterateAllRootsWithClassIds(visitor);
++}
++
+ void Isolate::SetAllowAtomicsWait(bool allow) {
+   i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(this);
+   i_isolate->set_allow_atomics_wait(allow);
+diff --git a/src/base/platform/platform-posix.cc b/src/base/platform/platform-posix.cc
+index 48fd004..0bb8d81 100644
+--- a/src/base/platform/platform-posix.cc
++++ b/src/base/platform/platform-posix.cc
+@@ -35,6 +35,7 @@
+ #include <android/log.h>
+ #endif
+ 
++#include <atomic>
+ #include <cmath>
+ #include <cstdlib>
+ #include <optional>
+@@ -47,10 +48,6 @@
+ #include "src/base/platform/time.h"
+ #include "src/base/utils/random-number-generator.h"
+ 
+-#ifdef V8_FAST_TLS_SUPPORTED
+-#include <atomic>
+-#endif
+-
+ #if V8_OS_DARWIN || V8_OS_LINUX
+ #include <dlfcn.h>  // for dlsym
+ #endif
+@@ -112,6 +109,8 @@ const pthread_t kNoThread = static_cast<pthread_t>(0);
+ 
+ const char* g_gc_fake_mmap = nullptr;
+ 
++std::atomic<OS::PrintCallback> g_print_callback{nullptr};
++
+ DEFINE_LAZY_LEAKY_OBJECT_GETTER(RandomNumberGenerator,
+                                 GetPlatformRandomNumberGenerator)
+ static LazyMutex rng_mutex = LAZY_MUTEX_INITIALIZER;
+@@ -1030,6 +1029,11 @@ void OS::Print(const char* format, ...) {
+ 
+ 
+ void OS::VPrint(const char* format, va_list args) {
++  if (PrintCallback callback =
++          g_print_callback.load(std::memory_order_acquire)) {
++    callback(PrintOutputType::kStdout, stdout, format, args);
++    return;
++  }
+ #if defined(ANDROID) && !defined(V8_ANDROID_LOG_STDOUT)
+   __android_log_vprint(ANDROID_LOG_INFO, LOG_TAG, format, args);
+ #else
+@@ -1047,6 +1051,14 @@ void OS::FPrint(FILE* out, const char* format, ...) {
+ 
+ 
+ void OS::VFPrint(FILE* out, const char* format, va_list args) {
++  if (PrintCallback callback =
++          g_print_callback.load(std::memory_order_acquire)) {
++    PrintOutputType type = PrintOutputType::kFile;
++    if (out == stdout) type = PrintOutputType::kStdout;
++    if (out == stderr) type = PrintOutputType::kStderr;
++    callback(type, out, format, args);
++    return;
++  }
+ #if defined(ANDROID) && !defined(V8_ANDROID_LOG_STDOUT)
+   if (out == stdout) {
+     __android_log_vprint(ANDROID_LOG_INFO, LOG_TAG, format, args);
+@@ -1067,6 +1079,11 @@ void OS::PrintError(const char* format, ...) {
+ 
+ 
+ void OS::VPrintError(const char* format, va_list args) {
++  if (PrintCallback callback =
++          g_print_callback.load(std::memory_order_acquire)) {
++    callback(PrintOutputType::kStderr, stderr, format, args);
++    return;
++  }
+ #if defined(ANDROID) && !defined(V8_ANDROID_LOG_STDOUT)
+   __android_log_vprint(ANDROID_LOG_ERROR, LOG_TAG, format, args);
+ #else
+@@ -1074,6 +1091,10 @@ void OS::VPrintError(const char* format, va_list args) {
+ #endif
+ }
+ 
++void OS::SetPrintCallback(PrintCallback callback) {
++  g_print_callback.store(callback, std::memory_order_release);
++}
++
+ 
+ int OS::SNPrintF(char* str, int length, const char* format, ...) {
+   va_list args;
+diff --git a/src/base/platform/platform.h b/src/base/platform/platform.h
+index 173cfc4..da1314a 100644
+--- a/src/base/platform/platform.h
++++ b/src/base/platform/platform.h
+@@ -197,6 +197,12 @@ class V8_BASE_EXPORT OS {
+   // Log file open mode is platform-dependent due to line ends issues.
+   static const char* const LogFileOpenMode;
+ 
++  enum class PrintOutputType { kStdout, kStderr, kFile };
++  using PrintCallback = void (*)(PrintOutputType type, FILE* file,
++                                 const char* format, va_list args);
++
++  static void SetPrintCallback(PrintCallback callback);
++
+   // Print output to console. This is mostly used for debugging output.
+   // On platforms that has standard terminal output, the output
+   // should go to stdout.
+diff --git a/src/handles/global-handles.cc b/src/handles/global-handles.cc
+index d697399..47992a4 100644
+--- a/src/handles/global-handles.cc
++++ b/src/handles/global-handles.cc
+@@ -956,6 +956,15 @@ void GlobalHandles::IterateAllRootsForTesting(
+   }
+ }
+ 
++void GlobalHandles::IterateAllRootsWithClassIds(
++    v8::PersistentHandleVisitor* visitor) {
++  for (Node* node : *regular_nodes_) {
++    if (node->IsWeakOrStrongRetainer() && node->has_wrapper_class_id()) {
++      ApplyPersistentHandleVisitor(visitor, node);
++    }
++  }
++}
++
+ void GlobalHandles::RecordStats(HeapStats* stats) {
+   stats->global_handle_count = 0;
+   stats->weak_global_handle_count = 0;
+diff --git a/src/handles/global-handles.h b/src/handles/global-handles.h
+index f53b1d8..2b06b2c 100644
+--- a/src/handles/global-handles.h
++++ b/src/handles/global-handles.h
+@@ -124,6 +124,7 @@ class V8_EXPORT_PRIVATE GlobalHandles final {
+   size_t last_gc_custom_callbacks() const { return last_gc_custom_callbacks_; }
+ 
+   void IterateAllRootsForTesting(v8::PersistentHandleVisitor* v);
++  void IterateAllRootsWithClassIds(v8::PersistentHandleVisitor* v);
+ 
+ #ifdef DEBUG
+   void PrintStats();
