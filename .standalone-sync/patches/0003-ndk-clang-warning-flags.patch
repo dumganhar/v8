@@ -1,0 +1,29 @@
+diff --git a/build/config/clang/clang.gni b/build/config/clang/clang.gni
+--- a/build/config/clang/clang.gni
++++ b/build/config/clang/clang.gni
+@@ -80 +80,5 @@ declare_args() {
++  # The standalone Android target is compiled by the NDK Clang rather than the
++  # newer Chromium Clang used by host tools.
++  standalone_use_android_ndk_clang = false
++
+   clang_base_path = default_clang_base_path
+diff --git a/build/config/compiler/BUILD.gn b/build/config/compiler/BUILD.gn
+--- a/build/config/compiler/BUILD.gn
++++ b/build/config/compiler/BUILD.gn
+@@ -2189 +2189,8 @@ config("compiler") {
++    if (is_android && standalone_use_android_ndk_clang) {
++      cflags -= [
++        "-Wno-nontrivial-memcall",
++        "-Wno-uninitialized-const-pointer",
++      ]
++    }
++
+     cflags_cc += [
+diff --git a/BUILD.gn b/BUILD.gn
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1819 +1819,4 @@ config("strict_warnings") {
++    if (is_android && standalone_use_android_ndk_clang) {
++      cflags -= [ "-Wunnecessary-virtual-specifier" ]
++    }
+   }

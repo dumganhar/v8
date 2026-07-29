@@ -1,5 +1,5 @@
 {
-  "manifest_sha256": "2edae4808a67c0a4a7ecd0b9233f0b677575bc1eeb9c02b290c6319fd0dafe61",
+  "manifest_sha256": "7b18121b76c092a3e2b0013e3ce68d76691df275cfd62dda2298370594ddcde8",
   "patches": [
     {
       "path": ".standalone-sync/patches/0001-standalone-embedder-api.patch",
@@ -8,6 +8,10 @@
     {
       "path": ".standalone-sync/patches/0002-ndk-r28c-atomic-ref.patch",
       "sha256": "01ddb942bb1b3657a376af78bd63c99c73a2f7a3444a589acdf6542d6c43597c"
+    },
+    {
+      "path": ".standalone-sync/patches/0003-ndk-clang-warning-flags.patch",
+      "sha256": "6000fc8ec324b14e7d8fee7b6c9a06adf64e4682f767c5114176253a5f298c31"
     }
   ],
   "repositories": [

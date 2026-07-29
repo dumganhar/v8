@@ -77,6 +77,10 @@ declare_args() {
   standalone_host_clang_base_path = ""
   standalone_host_clang_version = ""
 
+  # The standalone Android target is compiled by the NDK Clang rather than the
+  # newer Chromium Clang used by host tools.
+  standalone_use_android_ndk_clang = false
+
   clang_base_path = default_clang_base_path
 
   # Specifies whether or not bitcode should be embedded during compilation.

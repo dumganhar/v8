@@ -1816,6 +1816,9 @@ config("strict_warnings") {
       "-Wmissing-field-initializers",
       "-Wunnecessary-virtual-specifier",
     ]
+    if (is_android && standalone_use_android_ndk_clang) {
+      cflags -= [ "-Wunnecessary-virtual-specifier" ]
+    }
   }
 }
 

@@ -2186,6 +2186,13 @@ config("default_warnings") {
       "-Wno-uninitialized-const-pointer",
     ]
 
+    if (is_android && standalone_use_android_ndk_clang) {
+      cflags -= [
+        "-Wno-nontrivial-memcall",
+        "-Wno-uninitialized-const-pointer",
+      ]
+    }
+
     cflags_cc += [
       # TODO(crbug.com/328490295): Fix and re-enable for C flags.
       "-Wenum-compare-conditional",
