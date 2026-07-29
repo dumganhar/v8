@@ -82,7 +82,7 @@
       !defined(SIMDUTF_SPAN_DISABLED)
     #define SIMDUTF_SPAN 1
   #endif // __cpp_concepts >= 201907L && __cpp_lib_span >= 202002L
-  #if __cpp_lib_atomic_ref >= 201806L
+  #if __cpp_lib_atomic_ref >= 201806L || SIMDUTF_ATOMIC_REF_COMPAT
     #define SIMDUTF_ATOMIC_REF 1
   #endif // __cpp_lib_atomic_ref
   #if __has_cpp_attribute(maybe_unused) >= 201603L

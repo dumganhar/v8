@@ -16427,23 +16427,49 @@ inline size_t convert_valid(const char32_t *buf, size_t len,
 namespace simdutf {
 namespace scalar {
 
+#if SIMDUTF_ATOMIC_REF_COMPAT
+template <typename T> class atomic_ref {
+public:
+  static constexpr size_t required_alignment = sizeof(T);
+
+  explicit atomic_ref(T &value) : ptr_(&value) {}
+
+  T load(std::memory_order) const {
+    return __atomic_load_n(aligned_ptr(), __ATOMIC_RELAXED);
+  }
+
+  void store(T value, std::memory_order) const {
+    __atomic_store_n(aligned_ptr(), value, __ATOMIC_RELAXED);
+  }
+
+private:
+  T *aligned_ptr() const {
+    return static_cast<T *>(
+        __builtin_assume_aligned(ptr_, required_alignment));
+  }
+
+  T *ptr_;
+};
+#else
+template <typename T> using atomic_ref = std::atomic_ref<T>;
+#endif
+
 // This function is a memcpy that uses atomic operations to read from the
 // source.
 inline void memcpy_atomic_read(char *dst, const char *src, size_t len) {
-  static_assert(std::atomic_ref<char>::required_alignment == sizeof(char),
+  static_assert(atomic_ref<char>::required_alignment == sizeof(char),
                 "std::atomic_ref requires the same alignment as char_type");
   // We expect all 64-bit systems to be able to read 64-bit words from an
   // aligned memory region atomically. You might be able to do better on
   // specific systems, e.g., x64 systems can read 128-bit words atomically.
-  constexpr size_t alignment = sizeof(uint64_t);
-
+  constexpr size_t alignment = sizeof(uintptr_t);
   // Lambda for atomic byte-by-byte copy
   auto bbb_memcpy_atomic_read = [](char *bytedst, const char *bytesrc,
                                    size_t bytelen) noexcept {
     char *mutable_src = const_cast<char *>(bytesrc);
     for (size_t j = 0; j < bytelen; ++j) {
       bytedst[j] =
-          std::atomic_ref<char>(mutable_src[j]).load(std::memory_order_relaxed);
+          atomic_ref<char>(mutable_src[j]).load(std::memory_order_relaxed);
     }
   };
 
@@ -16459,10 +16485,10 @@ inline void memcpy_atomic_read(char *dst, const char *src, size_t len) {
 
   // Process aligned 64-bit chunks
   while (len >= alignment) {
-    auto *src_aligned = reinterpret_cast<uint64_t *>(const_cast<char *>(src));
+    auto *src_aligned = reinterpret_cast<uintptr_t *>(const_cast<char *>(src));
     const auto dst_value =
-        std::atomic_ref<uint64_t>(*src_aligned).load(std::memory_order_relaxed);
-    std::memcpy(dst, &dst_value, sizeof(uint64_t));
+        atomic_ref<uintptr_t>(*src_aligned).load(std::memory_order_relaxed);
+    std::memcpy(dst, &dst_value, sizeof(uintptr_t));
     src += alignment;
     dst += alignment;
     len -= alignment;
@@ -16477,19 +16503,18 @@ inline void memcpy_atomic_read(char *dst, const char *src, size_t len) {
 // This function is a memcpy that uses atomic operations to write to the
 // destination.
 inline void memcpy_atomic_write(char *dst, const char *src, size_t len) {
-  static_assert(std::atomic_ref<char>::required_alignment == sizeof(char),
+  static_assert(atomic_ref<char>::required_alignment == sizeof(char),
                 "std::atomic_ref requires the same alignment as char");
   // We expect all 64-bit systems to be able to write 64-bit words to an aligned
   // memory region atomically.
   // You might be able to do better on specific systems, e.g., x64 systems can
   // write 128-bit words atomically.
-  constexpr size_t alignment = sizeof(uint64_t);
-
+  constexpr size_t alignment = sizeof(uintptr_t);
   // Lambda for atomic byte-by-byte write
   auto bbb_memcpy_atomic_write = [](char *bytedst, const char *bytesrc,
                                     size_t bytelen) noexcept {
     for (size_t j = 0; j < bytelen; ++j) {
-      std::atomic_ref<char>(bytedst[j])
+      atomic_ref<char>(bytedst[j])
           .store(bytesrc[j], std::memory_order_relaxed);
     }
   };
@@ -16506,11 +16531,11 @@ inline void memcpy_atomic_write(char *dst, const char *src, size_t len) {
 
   // Process aligned 64-bit chunks
   while (len >= alignment) {
-    auto *dst_aligned = reinterpret_cast<uint64_t *>(dst);
-    uint64_t src_val;
-    std::memcpy(&src_val, src, sizeof(uint64_t)); // Non-atomic read from src
-    std::atomic_ref<uint64_t>(*dst_aligned)
-        .store(src_val, std::memory_order_relaxed);
+    auto *dst_aligned = reinterpret_cast<uintptr_t *>(dst);
+    uintptr_t src_val;
+    std::memcpy(&src_val, src, sizeof(uintptr_t)); // Non-atomic read from src
+    atomic_ref<uintptr_t>(*dst_aligned).store(src_val,
+                                               std::memory_order_relaxed);
     dst += alignment;
     src += alignment;
     len -= alignment;

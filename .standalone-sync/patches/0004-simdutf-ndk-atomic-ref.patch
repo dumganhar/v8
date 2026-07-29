@@ -1,0 +1,103 @@
+diff --git a/third_party/simdutf/BUILD.gn b/third_party/simdutf/BUILD.gn
+--- a/third_party/simdutf/BUILD.gn
++++ b/third_party/simdutf/BUILD.gn
+@@ -5,3 +5,4 @@
+-import("//build/config/avx512.gni")
+-
++import("//build/config/avx512.gni")
++import("//build/config/clang/clang.gni")
++
+ source_set("header") {
+@@ -9 +10,4 @@ source_set("header") {
++  if (is_android && standalone_use_android_ndk_clang) {
++    public_defines = [ "SIMDUTF_ATOMIC_REF_COMPAT=1" ]
++  }
+ }
+diff --git a/third_party/simdutf/simdutf.h b/third_party/simdutf/simdutf.h
+--- a/third_party/simdutf/simdutf.h
++++ b/third_party/simdutf/simdutf.h
+@@ -85,2 +85,2 @@
+-  #if __cpp_lib_atomic_ref >= 201806L
++  #if __cpp_lib_atomic_ref >= 201806L || SIMDUTF_ATOMIC_REF_COMPAT
+     #define SIMDUTF_ATOMIC_REF 1
+diff --git a/third_party/simdutf/simdutf.cpp b/third_party/simdutf/simdutf.cpp
+--- a/third_party/simdutf/simdutf.cpp
++++ b/third_party/simdutf/simdutf.cpp
+@@ -16430 +16430,28 @@ namespace scalar {
++#if SIMDUTF_ATOMIC_REF_COMPAT
++template <typename T> class atomic_ref {
++public:
++  static constexpr size_t required_alignment = sizeof(T);
++
++  explicit atomic_ref(T &value) : ptr_(&value) {}
++
++  T load(std::memory_order) const {
++    return __atomic_load_n(aligned_ptr(), __ATOMIC_RELAXED);
++  }
++
++  void store(T value, std::memory_order) const {
++    __atomic_store_n(aligned_ptr(), value, __ATOMIC_RELAXED);
++  }
++
++private:
++  T *aligned_ptr() const {
++    return static_cast<T *>(
++        __builtin_assume_aligned(ptr_, required_alignment));
++  }
++
++  T *ptr_;
++};
++#else
++template <typename T> using atomic_ref = std::atomic_ref<T>;
++#endif
++
+ // This function is a memcpy that uses atomic operations to read from the
+@@ -16433,2 +16460,2 @@ inline void memcpy_atomic_read(char *dst, const char *src, size_t len) {
+-  static_assert(std::atomic_ref<char>::required_alignment == sizeof(char),
++  static_assert(atomic_ref<char>::required_alignment == sizeof(char),
+                 "std::atomic_ref requires the same alignment as char_type");
+@@ -16437,4 +16464,3 @@ inline void memcpy_atomic_read(char *dst, const char *src, size_t len) {
+   // specific systems, e.g., x64 systems can read 128-bit words atomically.
+-  constexpr size_t alignment = sizeof(uint64_t);
+-
++  constexpr size_t alignment = sizeof(uintptr_t);
+   // Lambda for atomic byte-by-byte copy
+@@ -16446,2 +16472,2 @@ inline void memcpy_atomic_read(char *dst, const char *src, size_t len) {
+-          std::atomic_ref<char>(mutable_src[j]).load(std::memory_order_relaxed);
++          atomic_ref<char>(mutable_src[j]).load(std::memory_order_relaxed);
+     }
+@@ -16462,5 +16488,5 @@ inline void memcpy_atomic_read(char *dst, const char *src, size_t len) {
+-    auto *src_aligned = reinterpret_cast<uint64_t *>(const_cast<char *>(src));
++    auto *src_aligned = reinterpret_cast<uintptr_t *>(const_cast<char *>(src));
+     const auto dst_value =
+-        std::atomic_ref<uint64_t>(*src_aligned).load(std::memory_order_relaxed);
+-    std::memcpy(dst, &dst_value, sizeof(uint64_t));
++        atomic_ref<uintptr_t>(*src_aligned).load(std::memory_order_relaxed);
++    std::memcpy(dst, &dst_value, sizeof(uintptr_t));
+     src += alignment;
+@@ -16480,2 +16506,2 @@ inline void memcpy_atomic_write(char *dst, const char *src, size_t len) {
+-  static_assert(std::atomic_ref<char>::required_alignment == sizeof(char),
++  static_assert(atomic_ref<char>::required_alignment == sizeof(char),
+                 "std::atomic_ref requires the same alignment as char");
+@@ -16485,4 +16511,3 @@ inline void memcpy_atomic_write(char *dst, const char *src, size_t len) {
+   // write 128-bit words atomically.
+-  constexpr size_t alignment = sizeof(uint64_t);
+-
++  constexpr size_t alignment = sizeof(uintptr_t);
+   // Lambda for atomic byte-by-byte write
+@@ -16492,2 +16517,2 @@ inline void memcpy_atomic_write(char *dst, const char *src, size_t len) {
+-      std::atomic_ref<char>(bytedst[j])
++      atomic_ref<char>(bytedst[j])
+           .store(bytesrc[j], std::memory_order_relaxed);
+@@ -16509,6 +16534,6 @@ inline void memcpy_atomic_write(char *dst, const char *src, size_t len) {
+-    auto *dst_aligned = reinterpret_cast<uint64_t *>(dst);
+-    uint64_t src_val;
+-    std::memcpy(&src_val, src, sizeof(uint64_t)); // Non-atomic read from src
+-    std::atomic_ref<uint64_t>(*dst_aligned)
+-        .store(src_val, std::memory_order_relaxed);
++    auto *dst_aligned = reinterpret_cast<uintptr_t *>(dst);
++    uintptr_t src_val;
++    std::memcpy(&src_val, src, sizeof(uintptr_t)); // Non-atomic read from src
++    atomic_ref<uintptr_t>(*dst_aligned).store(src_val,
++                                               std::memory_order_relaxed);
+     dst += alignment;
