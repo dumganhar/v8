@@ -10,6 +10,7 @@
 #include <atomic>
 
 #include "include/v8config.h"
+#include "src/base/atomic-ref.h"
 #include "src/base/base-export.h"
 #include "src/base/bits.h"
 #include "src/base/macros.h"
@@ -252,7 +253,7 @@ inline void Relaxed_Memset(T* destination, T value, size_t count)
   requires std::is_integral_v<T>
 {
   for (size_t i = 0; i < count; i++) {
-    std::atomic_ref<T>(destination[i]).store(value, std::memory_order_relaxed);
+    AtomicRef<T>(destination[i]).store(value, std::memory_order_relaxed);
   }
 }
 

@@ -144,7 +144,8 @@
     }
   ],
   "patches": [
-    ".standalone-sync/patches/0001-standalone-embedder-api.patch"
+    ".standalone-sync/patches/0001-standalone-embedder-api.patch",
+    ".standalone-sync/patches/0002-ndk-r28c-atomic-ref.patch"
   ],
   "local_paths": [
     ".github/workflows/build.yml",

@@ -79,7 +79,6 @@ clang_version=\"${ANDROID_CLANG_VERSION}\"
 standalone_host_clang_base_path=\"${HOST_CLANG_BASE_PATH}\"
 standalone_host_clang_version=\"${HOST_CLANG_VERSION}\"
 android_ndk_version=\"r28c\"
-android_ndk_major_version=28
 android_ndk_api_level=23
 use_custom_libunwind=false
 use_ml_inliner=false

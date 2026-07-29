@@ -1,0 +1,202 @@
+diff --git a/src/base/atomic-ref.h b/src/base/atomic-ref.h
+new file mode 100644
+--- /dev/null
++++ b/src/base/atomic-ref.h
+@@ -0,0 +1,104 @@
++// Copyright 2026 the V8 project authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef V8_BASE_ATOMIC_REF_H_
++#define V8_BASE_ATOMIC_REF_H_
++
++#include <atomic>
++#include <type_traits>
++
++namespace v8::base {
++
++#if defined(__cpp_lib_atomic_ref)
++
++template <typename T>
++using AtomicRef = std::atomic_ref<T>;
++
++#else
++
++namespace atomic_ref_internal {
++
++constexpr int ToBuiltinMemoryOrder(std::memory_order order) {
++  if (order == std::memory_order_relaxed) return __ATOMIC_RELAXED;
++  if (order == std::memory_order_consume) return __ATOMIC_CONSUME;
++  if (order == std::memory_order_acquire) return __ATOMIC_ACQUIRE;
++  if (order == std::memory_order_release) return __ATOMIC_RELEASE;
++  if (order == std::memory_order_acq_rel) return __ATOMIC_ACQ_REL;
++  return __ATOMIC_SEQ_CST;
++}
++
++constexpr std::memory_order CompareExchangeFailureOrder(
++    std::memory_order order) {
++  if (order == std::memory_order_release) return std::memory_order_relaxed;
++  if (order == std::memory_order_acq_rel) return std::memory_order_acquire;
++  return order;
++}
++
++}  // namespace atomic_ref_internal
++
++// Android NDK r28c's libc++ does not implement C++20 std::atomic_ref. Clang's
++// atomic builtins provide the same operations without changing the lifetime or
++// type of the referenced object.
++template <typename T>
++class AtomicRef {
++  static_assert(std::is_integral_v<T>);
++
++ public:
++  explicit AtomicRef(T& value) : ptr_(&value) {}
++
++  void store(T value,
++             std::memory_order order = std::memory_order_seq_cst) const {
++    __atomic_store_n(ptr_, value,
++                     atomic_ref_internal::ToBuiltinMemoryOrder(order));
++  }
++
++  T load(std::memory_order order = std::memory_order_seq_cst) const {
++    return __atomic_load_n(ptr_,
++                           atomic_ref_internal::ToBuiltinMemoryOrder(order));
++  }
++
++  T exchange(T value,
++             std::memory_order order = std::memory_order_seq_cst) const {
++    return __atomic_exchange_n(
++        ptr_, value, atomic_ref_internal::ToBuiltinMemoryOrder(order));
++  }
++
++  bool compare_exchange_strong(T& expected, T desired,
++                               std::memory_order success,
++                               std::memory_order failure) const {
++    return __atomic_compare_exchange_n(
++        ptr_, &expected, desired, false,
++        atomic_ref_internal::ToBuiltinMemoryOrder(success),
++        atomic_ref_internal::ToBuiltinMemoryOrder(failure));
++  }
++
++  bool compare_exchange_strong(
++      T& expected, T desired,
++      std::memory_order order = std::memory_order_seq_cst) const {
++    return compare_exchange_strong(
++        expected, desired, order,
++        atomic_ref_internal::CompareExchangeFailureOrder(order));
++  }
++
++  T fetch_or(T value,
++             std::memory_order order = std::memory_order_seq_cst) const {
++    return __atomic_fetch_or(ptr_, value,
++                             atomic_ref_internal::ToBuiltinMemoryOrder(order));
++  }
++
++  T fetch_add(T value,
++              std::memory_order order = std::memory_order_seq_cst) const {
++    return __atomic_fetch_add(ptr_, value,
++                              atomic_ref_internal::ToBuiltinMemoryOrder(order));
++  }
++
++ private:
++  T* ptr_;
++};
++
++#endif  // defined(__cpp_lib_atomic_ref)
++
++}  // namespace v8::base
++
++#endif  // V8_BASE_ATOMIC_REF_H_
+diff --git a/src/base/atomicops.h b/src/base/atomicops.h
+--- a/src/base/atomicops.h
++++ b/src/base/atomicops.h
+@@ -12 +12,2 @@
++#include "src/base/atomic-ref.h"
+ #include "src/base/base-export.h"
+@@ -80,3 +81,3 @@ inline std::type_identity_t<T> Relaxed_CompareAndSwap(
+-  std::atomic_ref<T>(*ptr).compare_exchange_strong(old_value, new_value,
+-                                                   std::memory_order_relaxed);
++  AtomicRef<T>(*ptr).compare_exchange_strong(old_value, new_value,
++                                             std::memory_order_relaxed);
+   return old_value;
+@@ -89,4 +90,4 @@ inline std::type_identity_t<T> AcquireRelease_CompareAndSwap(
+-  std::atomic_ref<T>(*ptr).compare_exchange_strong(old_value, new_value,
+-                                                   std::memory_order_acq_rel,
+-                                                   std::memory_order_acquire);
++  AtomicRef<T>(*ptr).compare_exchange_strong(old_value, new_value,
++                                             std::memory_order_acq_rel,
++                                             std::memory_order_acquire);
+   return old_value;
+@@ -99,4 +100,4 @@ inline std::type_identity_t<T> Release_CompareAndSwap(
+-  std::atomic_ref<T>(*ptr).compare_exchange_strong(old_value, new_value,
+-                                                   std::memory_order_release,
+-                                                   std::memory_order_relaxed);
++  AtomicRef<T>(*ptr).compare_exchange_strong(old_value, new_value,
++                                             std::memory_order_release,
++                                             std::memory_order_relaxed);
+   return old_value;
+@@ -109,4 +110,4 @@ inline std::type_identity_t<T> SeqCst_CompareAndSwap(
+-  std::atomic_ref<T>(*ptr).compare_exchange_strong(old_value, new_value,
+-                                                   std::memory_order_seq_cst,
+-                                                   std::memory_order_seq_cst);
++  AtomicRef<T>(*ptr).compare_exchange_strong(old_value, new_value,
++                                             std::memory_order_seq_cst,
++                                             std::memory_order_seq_cst);
+   return old_value;
+@@ -119,3 +120,2 @@ inline std::type_identity_t<T> Relaxed_AtomicExchange(
+-  return std::atomic_ref<T>(*ptr).exchange(new_value,
+-                                           std::memory_order_relaxed);
++  return AtomicRef<T>(*ptr).exchange(new_value, std::memory_order_relaxed);
+ }
+@@ -126,3 +126,2 @@ inline std::type_identity_t<T> SeqCst_AtomicExchange(
+-  return std::atomic_ref<T>(*ptr).exchange(new_value,
+-                                           std::memory_order_seq_cst);
++  return AtomicRef<T>(*ptr).exchange(new_value, std::memory_order_seq_cst);
+ }
+@@ -133,2 +132,2 @@ inline std::type_identity_t<T> Relaxed_FetchOr(T* ptr,
+-  return std::atomic_ref<T>(*ptr).fetch_or(bits, std::memory_order_relaxed);
++  return AtomicRef<T>(*ptr).fetch_or(bits, std::memory_order_relaxed);
+ }
+@@ -139,3 +138,3 @@ inline std::type_identity_t<T> Relaxed_AtomicIncrement(
+-  return increment + std::atomic_ref<T>(*ptr).fetch_add(
+-                         increment, std::memory_order_relaxed);
++  return increment +
++         AtomicRef<T>(*ptr).fetch_add(increment, std::memory_order_relaxed);
+ }
+@@ -145,2 +144,2 @@ inline void Relaxed_Store(T* ptr, std::type_identity_t<T> value) {
+-  std::atomic_ref<T>(*ptr).store(value, std::memory_order_relaxed);
++  AtomicRef<T>(*ptr).store(value, std::memory_order_relaxed);
+ }
+@@ -150,2 +149,2 @@ inline void Release_Store(T* ptr, std::type_identity_t<T> value) {
+-  std::atomic_ref<T>(*ptr).store(value, std::memory_order_release);
++  AtomicRef<T>(*ptr).store(value, std::memory_order_release);
+ }
+@@ -155,2 +154,2 @@ inline void SeqCst_Store(T* ptr, std::type_identity_t<T> value) {
+-  std::atomic_ref<T>(*ptr).store(value, std::memory_order_seq_cst);
++  AtomicRef<T>(*ptr).store(value, std::memory_order_seq_cst);
+ }
+@@ -160,3 +159,2 @@ inline T Relaxed_Load(const T* ptr) {
+-  return std::atomic_ref<T>(*const_cast<T*>(ptr))
+-      .load(std::memory_order_relaxed);
++  return AtomicRef<T>(*const_cast<T*>(ptr)).load(std::memory_order_relaxed);
+ }
+@@ -166,3 +164,2 @@ inline T Acquire_Load(const T* ptr) {
+-  return std::atomic_ref<T>(*const_cast<T*>(ptr))
+-      .load(std::memory_order_acquire);
++  return AtomicRef<T>(*const_cast<T*>(ptr)).load(std::memory_order_acquire);
+ }
+@@ -172,3 +169,2 @@ inline T SeqCst_Load(const T* ptr) {
+-  return std::atomic_ref<T>(*const_cast<T*>(ptr))
+-      .load(std::memory_order_seq_cst);
++  return AtomicRef<T>(*const_cast<T*>(ptr)).load(std::memory_order_seq_cst);
+ }
+diff --git a/src/base/memcopy.h b/src/base/memcopy.h
+--- a/src/base/memcopy.h
++++ b/src/base/memcopy.h
+@@ -13 +13,2 @@
++#include "src/base/atomic-ref.h"
+ #include "src/base/base-export.h"
+@@ -255,2 +256,2 @@ inline void Relaxed_Memset(T* destination, T value, size_t count)
+-    std::atomic_ref<T>(destination[i]).store(value, std::memory_order_relaxed);
++    AtomicRef<T>(destination[i]).store(value, std::memory_order_relaxed);
+   }

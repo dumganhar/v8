@@ -9,6 +9,7 @@
 
 #include <atomic>
 
+#include "src/base/atomic-ref.h"
 #include "src/base/base-export.h"
 #include "src/base/macros.h"
 
@@ -78,8 +79,8 @@ template <AtomicTypeForTrivialOperations T>
 inline std::type_identity_t<T> Relaxed_CompareAndSwap(
     T* ptr, std::type_identity_t<T> old_value,
     std::type_identity_t<T> new_value) {
-  std::atomic_ref<T>(*ptr).compare_exchange_strong(old_value, new_value,
-                                                   std::memory_order_relaxed);
+  AtomicRef<T>(*ptr).compare_exchange_strong(old_value, new_value,
+                                             std::memory_order_relaxed);
   return old_value;
 }
 
@@ -87,9 +88,9 @@ template <AtomicTypeForTrivialOperations T>
 inline std::type_identity_t<T> AcquireRelease_CompareAndSwap(
     T* ptr, std::type_identity_t<T> old_value,
     std::type_identity_t<T> new_value) {
-  std::atomic_ref<T>(*ptr).compare_exchange_strong(old_value, new_value,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_acquire);
+  AtomicRef<T>(*ptr).compare_exchange_strong(old_value, new_value,
+                                             std::memory_order_acq_rel,
+                                             std::memory_order_acquire);
   return old_value;
 }
 
@@ -97,9 +98,9 @@ template <AtomicTypeForTrivialOperations T>
 inline std::type_identity_t<T> Release_CompareAndSwap(
     T* ptr, std::type_identity_t<T> old_value,
     std::type_identity_t<T> new_value) {
-  std::atomic_ref<T>(*ptr).compare_exchange_strong(old_value, new_value,
-                                                   std::memory_order_release,
-                                                   std::memory_order_relaxed);
+  AtomicRef<T>(*ptr).compare_exchange_strong(old_value, new_value,
+                                             std::memory_order_release,
+                                             std::memory_order_relaxed);
   return old_value;
 }
 
@@ -107,70 +108,65 @@ template <AtomicTypeForTrivialOperations T>
 inline std::type_identity_t<T> SeqCst_CompareAndSwap(
     T* ptr, std::type_identity_t<T> old_value,
     std::type_identity_t<T> new_value) {
-  std::atomic_ref<T>(*ptr).compare_exchange_strong(old_value, new_value,
-                                                   std::memory_order_seq_cst,
-                                                   std::memory_order_seq_cst);
+  AtomicRef<T>(*ptr).compare_exchange_strong(old_value, new_value,
+                                             std::memory_order_seq_cst,
+                                             std::memory_order_seq_cst);
   return old_value;
 }
 
 template <AtomicTypeForTrivialOperations T>
 inline std::type_identity_t<T> Relaxed_AtomicExchange(
     T* ptr, std::type_identity_t<T> new_value) {
-  return std::atomic_ref<T>(*ptr).exchange(new_value,
-                                           std::memory_order_relaxed);
+  return AtomicRef<T>(*ptr).exchange(new_value, std::memory_order_relaxed);
 }
 
 template <AtomicTypeForTrivialOperations T>
 inline std::type_identity_t<T> SeqCst_AtomicExchange(
     T* ptr, std::type_identity_t<T> new_value) {
-  return std::atomic_ref<T>(*ptr).exchange(new_value,
-                                           std::memory_order_seq_cst);
+  return AtomicRef<T>(*ptr).exchange(new_value, std::memory_order_seq_cst);
 }
 
 template <AtomicTypeForTrivialOperations T>
 inline std::type_identity_t<T> Relaxed_FetchOr(T* ptr,
                                                std::type_identity_t<T> bits) {
-  return std::atomic_ref<T>(*ptr).fetch_or(bits, std::memory_order_relaxed);
+  return AtomicRef<T>(*ptr).fetch_or(bits, std::memory_order_relaxed);
 }
 
 template <AtomicTypeForTrivialOperations T>
 inline std::type_identity_t<T> Relaxed_AtomicIncrement(
     T* ptr, std::type_identity_t<T> increment) {
-  return increment + std::atomic_ref<T>(*ptr).fetch_add(
-                         increment, std::memory_order_relaxed);
+  return increment +
+         AtomicRef<T>(*ptr).fetch_add(increment, std::memory_order_relaxed);
 }
 
 template <AtomicTypeForTrivialOperations T>
 inline void Relaxed_Store(T* ptr, std::type_identity_t<T> value) {
-  std::atomic_ref<T>(*ptr).store(value, std::memory_order_relaxed);
+  AtomicRef<T>(*ptr).store(value, std::memory_order_relaxed);
 }
 
 template <AtomicTypeForTrivialOperations T>
 inline void Release_Store(T* ptr, std::type_identity_t<T> value) {
-  std::atomic_ref<T>(*ptr).store(value, std::memory_order_release);
+  AtomicRef<T>(*ptr).store(value, std::memory_order_release);
 }
 
 template <AtomicTypeForTrivialOperations T>
 inline void SeqCst_Store(T* ptr, std::type_identity_t<T> value) {
-  std::atomic_ref<T>(*ptr).store(value, std::memory_order_seq_cst);
+  AtomicRef<T>(*ptr).store(value, std::memory_order_seq_cst);
 }
 
 template <AtomicTypeForTrivialOperations T>
 inline T Relaxed_Load(const T* ptr) {
-  return std::atomic_ref<T>(*const_cast<T*>(ptr))
-      .load(std::memory_order_relaxed);
+  return AtomicRef<T>(*const_cast<T*>(ptr)).load(std::memory_order_relaxed);
 }
 
 template <AtomicTypeForTrivialOperations T>
 inline T Acquire_Load(const T* ptr) {
-  return std::atomic_ref<T>(*const_cast<T*>(ptr))
-      .load(std::memory_order_acquire);
+  return AtomicRef<T>(*const_cast<T*>(ptr)).load(std::memory_order_acquire);
 }
 
 template <AtomicTypeForTrivialOperations T>
 inline T SeqCst_Load(const T* ptr) {
-  return std::atomic_ref<T>(*const_cast<T*>(ptr))
-      .load(std::memory_order_seq_cst);
+  return AtomicRef<T>(*const_cast<T*>(ptr)).load(std::memory_order_seq_cst);
 }
 
 inline void Relaxed_Memcpy(Atomic8* dst, const Atomic8* src, size_t bytes) {
