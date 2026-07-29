@@ -12,7 +12,16 @@ patches under `.standalone-sync/patches`.
 ## Synchronize
 
 The source checkout must already be synchronized by `gclient` and every source
-selected by `.standalone-sync.json` must be a Git repository.
+selected by `.standalone-sync.json` must be a Git repository. Android source
+dependencies are conditional in V8's `DEPS`, so the source checkout's
+`.gclient` must contain:
+
+```py
+target_os = ["android"]
+```
+
+Run `gclient sync` after changing this setting and before creating a standalone
+candidate.
 
 Create an isolated candidate and inspect the diff:
 

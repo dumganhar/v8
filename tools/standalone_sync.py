@@ -107,8 +107,10 @@ def extract_archive(repo: Path, destination: Path, destination_prefix: PurePosix
         with tarfile.open(fileobj=process.stdout, mode="r|") as archive:
             for member in archive:
                 source_path = normalized_relative(member.name.rstrip("/"))
-                excluded = (is_excluded(source_path, excludes) and
-                            not is_included(source_path, exclude_exceptions))
+                excepted = bool(exclude_exceptions) and is_included(
+                    source_path, exclude_exceptions
+                )
+                excluded = is_excluded(source_path, excludes) and not excepted
                 if not is_included(source_path, includes) or excluded:
                     continue
                 relative = destination_prefix / source_path

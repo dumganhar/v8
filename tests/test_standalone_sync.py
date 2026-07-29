@@ -58,6 +58,7 @@ class StandaloneSyncTest(unittest.TestCase):
             self.source / "dep",
             {
                 "include/public.h": "public\n",
+                "include/drop.h": "drop\n",
                 "private/internal.h": "private\n",
             },
         )
@@ -86,7 +87,11 @@ class StandaloneSyncTest(unittest.TestCase):
                             "exclude": ["test"],
                             "exclude_exceptions": ["test/torque"],
                         },
-                        {"path": "dep", "include": ["include"]},
+                        {
+                            "path": "dep",
+                            "include": ["include"],
+                            "exclude": ["include/drop.h"],
+                        },
                     ],
                     "patches": [".standalone-sync/patches/api.patch"],
                     "local_paths": [sync.MANIFEST_NAME, "README.md"],
@@ -117,6 +122,7 @@ class StandaloneSyncTest(unittest.TestCase):
         self.assertEqual("patched\n", (first / "src/keep.cc").read_text())
         self.assertTrue((first / "test/torque/keep.tq").is_file())
         self.assertTrue((first / "dep/include/public.h").is_file())
+        self.assertFalse((first / "dep/include/drop.h").exists())
         self.assertFalse((first / "test/drop.cc").exists())
         self.assertFalse((first / "dep/private/internal.h").exists())
         self.assertFalse(any(first.rglob(".git")))

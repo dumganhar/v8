@@ -33,6 +33,19 @@
       ]
     },
     {
+      "path": "third_party/cpu_features/src",
+      "include": [
+        "LICENSE",
+        "include",
+        "ndk_compat/cpu-features.c",
+        "ndk_compat/cpu-features.h",
+        "src"
+      ],
+      "exclude": [
+        "src/utils"
+      ]
+    },
+    {
       "path": "third_party/dragonbox/src",
       "exclude": [
         "benchmark",

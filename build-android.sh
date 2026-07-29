@@ -72,8 +72,7 @@ clang_base_path=\"${CLANG_BASE_PATH}\"
 clang_version=\"${CLANG_VERSION}\"
 android_ndk_version=\"r28c\"
 android_ndk_major_version=28
-android32_ndk_api_level=21
-android64_ndk_api_level=21
+android_ndk_api_level=21
 use_custom_libunwind=false
 use_ml_inliner=false
 "
