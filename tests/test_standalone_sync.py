@@ -136,6 +136,20 @@ class StandaloneSyncTest(unittest.TestCase):
         )
         self.assertFalse((self.target / "obsolete.txt").exists())
 
+    def test_snapshot_rejects_candidate_files_ignored_by_git(self) -> None:
+        (self.local / ".gitignore").write_text("/dep\n", encoding="utf-8")
+        manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
+        manifest["local_paths"].append(".gitignore")
+        self.manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            sync.SyncError,
+            r"(?s)Candidate contains files excluded.*dep/include/public\.h",
+        ):
+            self.create_stage("ignored")
+
+        self.assertFalse((self.root / "ignored/.git").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -246,6 +246,42 @@ def ensure_no_nested_git(stage: Path) -> None:
         raise SyncError(f"Nested Git metadata found in candidate: {values}")
 
 
+def ensure_candidate_not_ignored(stage: Path) -> None:
+    paths = sorted(candidate_files(stage))
+    if not paths:
+        return
+
+    run(["git", "init", "-q"], cwd=stage)
+    try:
+        result = subprocess.run(
+            ["git", "check-ignore", "--no-index", "-z", "--stdin"],
+            cwd=stage,
+            input=b"\0".join(path.encode("utf-8") for path in paths) + b"\0",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode not in (0, 1):
+            stderr = result.stderr.decode("utf-8", "replace")
+            raise SyncError(f"git check-ignore failed ({result.returncode}):\n{stderr}")
+        ignored = [
+            item.decode("utf-8", "replace")
+            for item in result.stdout.split(b"\0")
+            if item
+        ]
+        if ignored:
+            preview = "\n".join(ignored[:20])
+            remainder = len(ignored) - 20
+            suffix = f"\n... and {remainder} more" if remainder > 0 else ""
+            raise SyncError(
+                "Candidate contains files excluded by its Git ignore rules; "
+                "adjust .gitignore so the standalone snapshot can be committed:\n"
+                f"{preview}{suffix}"
+            )
+    finally:
+        remove_path(stage / ".git")
+
+
 def file_state(path: Path) -> tuple[str, int, str]:
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode):
@@ -436,6 +472,7 @@ def create_stage(source_root: Path, target: Path, local_root: Path, manifest_pat
         copy_local_path(local_root, stage, relative)
     write_lock(stage, manifest_path, repositories, patch_records)
     ensure_no_nested_git(stage)
+    ensure_candidate_not_ignored(stage)
     report = compare_candidate(stage, target)
     report["candidate"] = str(stage)
     report["v8_version"] = v8_version(stage)

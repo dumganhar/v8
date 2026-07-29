@@ -145,3 +145,13 @@ bazel-out
 bazel-testlogs
 bazel-v8
 launch.json
+
+# Flattened standalone snapshot owns these imported dependency trees.
+!/build/
+!/build/**
+!/buildtools/
+!/buildtools/**
+!/tools/clang/
+!/tools/clang/**
+!/third_party/
+!/third_party/**

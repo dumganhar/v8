@@ -352,3 +352,41 @@ index f53b1d8..2b06b2c 100644
  
  #ifdef DEBUG
    void PrintStats();
+diff --git a/.gitignore b/.gitignore
+--- a/.gitignore
++++ b/.gitignore
+@@ -145,3 +145,13 @@ bazel-out
+ bazel-testlogs
+ bazel-v8
+ launch.json
++
++# Flattened standalone snapshot owns these imported dependency trees.
++!/build/
++!/build/**
++!/buildtools/
++!/buildtools/**
++!/tools/clang/
++!/tools/clang/**
++!/third_party/
++!/third_party/**
+diff --git a/build/.gitignore b/build/.gitignore
+--- a/build/.gitignore
++++ b/build/.gitignore
+@@ -26,3 +26,7 @@ ciopfs
+ /mac_files
+ 
+ !/util/LASTCHANGE.dummy
++
++!/config/gclient_args.gni
++!/util/lastchange.gni
++!/util/lastchange.py
+diff --git a/third_party/highway/src/.gitignore b/third_party/highway/src/.gitignore
+--- a/third_party/highway/src/.gitignore
++++ b/third_party/highway/src/.gitignore
+@@ -1,4 +1,4 @@
+-build
++build/
+ bazel-bin
+ bazel-highway
+ bazel-out
+diff --git a/BUILD.gn b/BUILD.gn
