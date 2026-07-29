@@ -1,18 +1,23 @@
 diff --git a/third_party/simdutf/BUILD.gn b/third_party/simdutf/BUILD.gn
 --- a/third_party/simdutf/BUILD.gn
 +++ b/third_party/simdutf/BUILD.gn
-@@ -5,3 +5,4 @@
+@@ -5,3 +5,10 @@
 -import("//build/config/avx512.gni")
 -
 +import("//build/config/avx512.gni")
 +import("//build/config/clang/clang.gni")
 +
- source_set("header") {
-@@ -9 +10,4 @@ source_set("header") {
++config("atomic_ref_compat") {
 +  if (is_android && standalone_use_android_ndk_clang) {
-+    public_defines = [ "SIMDUTF_ATOMIC_REF_COMPAT=1" ]
++    defines = [ "SIMDUTF_ATOMIC_REF_COMPAT=1" ]
 +  }
- }
++}
++
+ source_set("header") {
+@@ -13,2 +20,3 @@ source_set("simdutf") {
+   public_deps = [ ":header" ]
++  public_configs = [ ":atomic_ref_compat" ]
+   cflags_cc = [
 diff --git a/third_party/simdutf/simdutf.h b/third_party/simdutf/simdutf.h
 --- a/third_party/simdutf/simdutf.h
 +++ b/third_party/simdutf/simdutf.h

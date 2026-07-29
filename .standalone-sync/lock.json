@@ -15,7 +15,7 @@
     },
     {
       "path": ".standalone-sync/patches/0004-simdutf-ndk-atomic-ref.patch",
-      "sha256": "9d73cc4aa25cb97a4a0b6991edfaa96fee646d807454b303b087342f14638177"
+      "sha256": "ba0dd65569e863e114d0273725babb41e8ecd0ec5657680d7b7da26be29a0529"
     },
     {
       "path": ".standalone-sync/patches/0005-ios-x64-page-alignment.patch",

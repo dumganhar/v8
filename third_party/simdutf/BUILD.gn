@@ -5,16 +5,20 @@
 import("//build/config/avx512.gni")
 import("//build/config/clang/clang.gni")
 
+config("atomic_ref_compat") {
+  if (is_android && standalone_use_android_ndk_clang) {
+    defines = [ "SIMDUTF_ATOMIC_REF_COMPAT=1" ]
+  }
+}
+
 source_set("header") {
   sources = [ "simdutf.h" ]
-  if (is_android && standalone_use_android_ndk_clang) {
-    public_defines = [ "SIMDUTF_ATOMIC_REF_COMPAT=1" ]
-  }
 }
 
 source_set("simdutf") {
   sources = [ "simdutf.cpp" ]
   public_deps = [ ":header" ]
+  public_configs = [ ":atomic_ref_compat" ]
   cflags_cc = [
     "-Wno-unused-const-variable",
     "-Wno-unused-function",
