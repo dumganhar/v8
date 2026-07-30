@@ -148,7 +148,8 @@
     ".standalone-sync/patches/0002-ndk-r28c-atomic-ref.patch",
     ".standalone-sync/patches/0003-ndk-clang-warning-flags.patch",
     ".standalone-sync/patches/0004-simdutf-ndk-atomic-ref.patch",
-    ".standalone-sync/patches/0005-ios-x64-page-alignment.patch"
+    ".standalone-sync/patches/0005-ios-x64-page-alignment.patch",
+    ".standalone-sync/patches/0006-ndk-clang19-regexp-constexpr.patch"
   ],
   "local_paths": [
     ".github/workflows/build.yml",
