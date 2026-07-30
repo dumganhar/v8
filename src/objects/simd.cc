@@ -4,6 +4,7 @@
 
 #include "src/objects/simd.h"
 
+#include "src/base/atomic-ref.h"
 #include "src/base/cpu.h"
 #include "src/codegen/cpu-features.h"
 #include "src/objects/compressed-slots.h"
@@ -487,7 +488,7 @@ void AtomicUint8ArrayToHexSlow(const char* bytes, size_t length,
   char* mutable_bytes = const_cast<char*>(bytes);
   for (size_t i = 0; i < length; i++) {
     uint8_t byte =
-        std::atomic_ref<char>(mutable_bytes[i]).load(std::memory_order_relaxed);
+        base::AtomicRef<char>(mutable_bytes[i]).load(std::memory_order_relaxed);
     PerformNibbleToHexAndWriteIntoStringOutPut(byte, index, string_output);
     index += 2;
   }
@@ -1085,7 +1086,7 @@ bool ArrayBufferFromHex(const base::Vector<T>& input_vector, bool is_shared,
     result = HandleRemainingHexValues(input_vector, i);
     if (result.has_value()) {
       if (is_shared) {
-        std::atomic_ref<uint8_t>(buffer[index++])
+        base::AtomicRef<uint8_t>(buffer[index++])
             .store(result.value(), std::memory_order_relaxed);
       } else {
         buffer[index++] = result.value();

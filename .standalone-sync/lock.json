@@ -7,7 +7,7 @@
     },
     {
       "path": ".standalone-sync/patches/0002-ndk-r28c-atomic-ref.patch",
-      "sha256": "01ddb942bb1b3657a376af78bd63c99c73a2f7a3444a589acdf6542d6c43597c"
+      "sha256": "295b0ac5cd0204e76787aa5e1e3268b898e9eda3e187bd27f170b818d1e35e60"
     },
     {
       "path": ".standalone-sync/patches/0003-ndk-clang-warning-flags.patch",

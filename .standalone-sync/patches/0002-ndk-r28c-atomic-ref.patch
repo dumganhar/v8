@@ -200,3 +200,26 @@ diff --git a/src/base/memcopy.h b/src/base/memcopy.h
 -    std::atomic_ref<T>(destination[i]).store(value, std::memory_order_relaxed);
 +    AtomicRef<T>(destination[i]).store(value, std::memory_order_relaxed);
    }
+diff --git a/src/objects/simd.cc b/src/objects/simd.cc
+--- a/src/objects/simd.cc
++++ b/src/objects/simd.cc
+@@ -7 +7,2 @@
++#include "src/base/atomic-ref.h"
+ #include "src/base/cpu.h"
+@@ -487,7 +488,7 @@ void AtomicUint8ArrayToHexSlow(
+   char* mutable_bytes = const_cast<char*>(bytes);
+   for (size_t i = 0; i < length; i++) {
+     uint8_t byte =
+-        std::atomic_ref<char>(mutable_bytes[i]).load(std::memory_order_relaxed);
++        base::AtomicRef<char>(mutable_bytes[i]).load(std::memory_order_relaxed);
+     PerformNibbleToHexAndWriteIntoStringOutPut(byte, index, string_output);
+     index += 2;
+   }
+@@ -1086,6 +1087,6 @@ bool ArrayBufferFromHex(const base::Vector<T>& input_vector, bool is_shared,
+     if (result.has_value()) {
+       if (is_shared) {
+-        std::atomic_ref<uint8_t>(buffer[index++])
++        base::AtomicRef<uint8_t>(buffer[index++])
+             .store(result.value(), std::memory_order_relaxed);
+       } else {
+         buffer[index++] = result.value();
