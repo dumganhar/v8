@@ -1,0 +1,50 @@
+diff --git a/build/config/android/config.gni b/build/config/android/config.gni
+--- a/build/config/android/config.gni
++++ b/build/config/android/config.gni
+@@ -157,7 +157,9 @@ if (is_android) {
+     }
+   }
+ 
+-  android_ndk_root = "//third_party/android_toolchain/ndk"
++  declare_args() {
++    android_ndk_root = "//third_party/android_toolchain/ndk"
++  }
+ 
+   public_android_sdk_root = "//third_party/android_sdk/public"
+   public_android_sdk_platform_version = "37.0"
+diff --git a/build/config/compiler/BUILD.gn b/build/config/compiler/BUILD.gn
+--- a/build/config/compiler/BUILD.gn
++++ b/build/config/compiler/BUILD.gn
+@@ -576,7 +576,8 @@ config("compiler") {
+   if (is_clang) {
+     # Flags for diagnostics.
+     cflags += [ "-fcolor-diagnostics" ]
+-    if (!is_wasm && !standalone_use_xcode_clang) {
++    if (!is_wasm && !standalone_use_xcode_clang &&
++        !standalone_use_android_ndk_clang) {
+       if (!is_win) {
+         cflags += [ "-fdiagnostics-show-inlining-chain" ]
+       } else {
+@@ -617,7 +618,8 @@ config("compiler") {
+     # The performance improvement does not seem worth the risk. See
+     # https://crbug.com/484082200 for background and https://crrev.com/c/7593035
+     # for discussion.
+-    if (!is_wasm && !standalone_use_xcode_clang) {
++    if (!is_wasm && !standalone_use_xcode_clang &&
++        !standalone_use_android_ndk_clang) {
+       cflags += [ "-fno-lifetime-dse" ]
+     }
+ 
+diff --git a/build/config/sanitizers/sanitizers.gni b/build/config/sanitizers/sanitizers.gni
+--- a/build/config/sanitizers/sanitizers.gni
++++ b/build/config/sanitizers/sanitizers.gni
+@@ -533,7 +533,8 @@ template("ubsan_hardening") {
+         "-fsanitize=${invoker.sanitizer}",
+         "-fsanitize-trap=${invoker.sanitizer}",
+       ]
+-      if (!standalone_use_xcode_clang) {
++      if (!standalone_use_xcode_clang &&
++          !standalone_use_android_ndk_clang) {
+         # Prevents `__has_feature(undefined_behavior_sanitizer)`
+         # from evaluating true. Configs defined here are intended to
+         # be usable even in release builds, i.e. as widely as possible.

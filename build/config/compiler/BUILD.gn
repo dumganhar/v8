@@ -576,7 +576,8 @@ config("compiler") {
   if (is_clang) {
     # Flags for diagnostics.
     cflags += [ "-fcolor-diagnostics" ]
-    if (!is_wasm && !standalone_use_xcode_clang) {
+    if (!is_wasm && !standalone_use_xcode_clang &&
+        !standalone_use_android_ndk_clang) {
       if (!is_win) {
         cflags += [ "-fdiagnostics-show-inlining-chain" ]
       } else {
@@ -617,7 +618,8 @@ config("compiler") {
     # The performance improvement does not seem worth the risk. See
     # https://crbug.com/484082200 for background and https://crrev.com/c/7593035
     # for discussion.
-    if (!is_wasm && !standalone_use_xcode_clang) {
+    if (!is_wasm && !standalone_use_xcode_clang &&
+        !standalone_use_android_ndk_clang) {
       cflags += [ "-fno-lifetime-dse" ]
     }
 

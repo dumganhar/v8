@@ -1,5 +1,5 @@
 {
-  "manifest_sha256": "5bfa685ac76b13018876d6dd88dadf2c2d8e1f492f5ed9a0566cc93b342489be",
+  "manifest_sha256": "7986dfd6d4cba67082230c085d87cf5bd749b8d02ea74ceb81322715c042f43d",
   "patches": [
     {
       "path": ".standalone-sync/patches/0001-standalone-embedder-api.patch",
@@ -32,6 +32,10 @@
     {
       "path": ".standalone-sync/patches/0008-xcode-clang-flags.patch",
       "sha256": "070a420b0eceb7da646e25eeaf3562832a43034b096ed0290ba2727530e36977"
+    },
+    {
+      "path": ".standalone-sync/patches/0009-ndk-clang19-toolchain-args.patch",
+      "sha256": "56691e0b839d3baa3f112332858ccefdae7f85a0ea5504a92f9263850629babe"
     }
   ],
   "repositories": [

@@ -165,7 +165,8 @@
     ".standalone-sync/patches/0005-ios-x64-page-alignment.patch",
     ".standalone-sync/patches/0006-ndk-clang19-regexp-constexpr.patch",
     ".standalone-sync/patches/0007-ndk-r28c-cppgc-atomic-ref.patch",
-    ".standalone-sync/patches/0008-xcode-clang-flags.patch"
+    ".standalone-sync/patches/0008-xcode-clang-flags.patch",
+    ".standalone-sync/patches/0009-ndk-clang19-toolchain-args.patch"
   ],
   "local_paths": [
     ".github/workflows/build.yml",

@@ -536,7 +536,8 @@ template("ubsan_hardening") {
         "-fsanitize=${invoker.sanitizer}",
         "-fsanitize-trap=${invoker.sanitizer}",
       ]
-      if (!standalone_use_xcode_clang) {
+      if (!standalone_use_xcode_clang &&
+          !standalone_use_android_ndk_clang) {
         # Prevents `__has_feature(undefined_behavior_sanitizer)`
         # from evaluating true. Configs defined here are intended to
         # be usable even in release builds, i.e. as widely as possible.
