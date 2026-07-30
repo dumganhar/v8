@@ -155,6 +155,7 @@
     ".github/workflows/build.yml",
     ".standalone-sync.json",
     ".standalone-sync/patches",
+    "AGENTS.md",
     "README.md",
     "build/config/gclient_args.gni",
     "build-android.sh",

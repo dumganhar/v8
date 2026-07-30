@@ -1,5 +1,5 @@
 {
-  "manifest_sha256": "72db06a552e5fee5bb4cf223d6a2e19b17798cf586564b98562340a0d6c81e4e",
+  "manifest_sha256": "01910149086fbdd5e1855221f6d8a25a125fbf5cd74bae7737bfdd387960a56d",
   "patches": [
     {
       "path": ".standalone-sync/patches/0001-standalone-embedder-api.patch",
