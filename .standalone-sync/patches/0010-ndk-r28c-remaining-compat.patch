@@ -1,0 +1,65 @@
+diff --git a/include/cppgc/allocation.h b/include/cppgc/allocation.h
+--- a/include/cppgc/allocation.h
++++ b/include/cppgc/allocation.h
+@@ -11,6 +11,7 @@
+ #include <type_traits>
+ #include <utility>
+ 
++#include "src/base/atomic-ref.h"
+ #include "cppgc/custom-space.h"
+ #include "cppgc/internal/api-constants.h"
+ #include "cppgc/internal/gc-info.h"
+@@ -54,7 +55,7 @@ class MakeGarbageCollectedTraitInternal {
+ 
+   static inline void MarkObjectAsFullyConstructed(const void* payload) {
+     // See api_constants for an explanation of the constants.
+-    std::atomic_ref<uint16_t> atomic_mutable_bitfield(
++    v8::base::AtomicRef<uint16_t> atomic_mutable_bitfield(
+         *const_cast<uint16_t*>(reinterpret_cast<const uint16_t*>(
+             reinterpret_cast<const uint8_t*>(payload) -
+             api_constants::kFullyConstructedBitFieldOffsetFromPayload)));
+diff --git a/build/config/compiler/BUILD.gn b/build/config/compiler/BUILD.gn
+--- a/build/config/compiler/BUILD.gn
++++ b/build/config/compiler/BUILD.gn
+@@ -1586,7 +1586,8 @@ ubsan_hardening("c_array_bounds") {
+   # the related warning about "unsafe-buffer-usage-in-static-sized-array",
+   # since we know that the array bounds sanitizing will catch any out-of-
+   # bounds accesses.
+-  if (!standalone_use_xcode_clang) {
++  if (!standalone_use_xcode_clang &&
++      !standalone_use_android_ndk_clang) {
+     cflags = [ "-Wno-unsafe-buffer-usage-in-static-sized-array" ]
+   }
+ }
+@@ -1950,6 +1951,7 @@ config("default_warnings") {
+       cflags -= [
+         "-Wno-nontrivial-memcall",
+         "-Wno-uninitialized-const-pointer",
++        "-Wno-unused-but-set-global",
+       ]
+     }
+ 
+diff --git a/BUILD.gn b/BUILD.gn
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1832,7 +1832,8 @@ config("internal_config") {
+     # rolling the compiler update into V8 instead.
+     if (!build_with_chromium && v8_current_cpu != "ppc64" &&
+         v8_current_cpu != "s390x" &&
+-        !standalone_use_xcode_clang) {
++        !standalone_use_xcode_clang &&
++        !standalone_use_android_ndk_clang) {
+       cflags += [ "-Wlifetime-safety-permissive" ]
+     }
+ 
+@@ -1935,7 +1936,8 @@ config("strict_warnings") {
+         v8_current_cpu == "mips64el" || v8_current_cpu == "riscv64") {
+       cflags += [ "-Wshorten-64-to-32" ]
+     }
+     cflags += [ "-Wmissing-field-initializers" ]
+-    if (v8_current_cpu != "ppc64" && v8_current_cpu != "s390x") {
++    if (v8_current_cpu != "ppc64" && v8_current_cpu != "s390x" &&
++        !standalone_use_android_ndk_clang) {
+       cflags += [ "-Wunnecessary-virtual-specifier" ]
+     }
+   }

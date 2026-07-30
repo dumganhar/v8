@@ -1586,7 +1586,8 @@ ubsan_hardening("c_array_bounds") {
   # the related warning about "unsafe-buffer-usage-in-static-sized-array",
   # since we know that the array bounds sanitizing will catch any out-of-
   # bounds accesses.
-  if (!standalone_use_xcode_clang) {
+  if (!standalone_use_xcode_clang &&
+      !standalone_use_android_ndk_clang) {
     cflags = [ "-Wno-unsafe-buffer-usage-in-static-sized-array" ]
   }
 }
@@ -1951,6 +1952,7 @@ config("default_warnings") {
       cflags -= [
         "-Wno-nontrivial-memcall",
         "-Wno-uninitialized-const-pointer",
+        "-Wno-unused-but-set-global",
       ]
     }
 

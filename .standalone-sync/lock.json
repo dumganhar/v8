@@ -1,5 +1,5 @@
 {
-  "manifest_sha256": "7986dfd6d4cba67082230c085d87cf5bd749b8d02ea74ceb81322715c042f43d",
+  "manifest_sha256": "18157fc9a5f5f0ef519dad3f0d4b347973db4a9bcaf18df4b4a88493bb6f3ad2",
   "patches": [
     {
       "path": ".standalone-sync/patches/0001-standalone-embedder-api.patch",
@@ -36,6 +36,10 @@
     {
       "path": ".standalone-sync/patches/0009-ndk-clang19-toolchain-args.patch",
       "sha256": "56691e0b839d3baa3f112332858ccefdae7f85a0ea5504a92f9263850629babe"
+    },
+    {
+      "path": ".standalone-sync/patches/0010-ndk-r28c-remaining-compat.patch",
+      "sha256": "ab5fa9297e17d2df22cf36d53aad7a0a5e9ce6a985025f0871c788ba993223a2"
     }
   ],
   "repositories": [
