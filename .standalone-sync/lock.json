@@ -1,5 +1,5 @@
 {
-  "manifest_sha256": "9c4426e4e742d8c7d657eeedf795b40eef911fff06814a1ee6c195d077abc2f8",
+  "manifest_sha256": "5bfa685ac76b13018876d6dd88dadf2c2d8e1f492f5ed9a0566cc93b342489be",
   "patches": [
     {
       "path": ".standalone-sync/patches/0001-standalone-embedder-api.patch",
@@ -59,6 +59,11 @@
       "commit": "d8e483edd8b44da1845874ee84b42489589bb90f",
       "path": "third_party/abseil-cpp",
       "remote": "https://chromium.googlesource.com/chromium/src/third_party/abseil-cpp.git"
+    },
+    {
+      "commit": "4974e2063946d9dd2a417c27db139fd982ff447a",
+      "path": "third_party/cpu_features",
+      "remote": "https://chromium.googlesource.com/chromium/src/third_party/cpu_features.git"
     },
     {
       "commit": "81d13c49649f0714dd41fb56bb246398b6584085",

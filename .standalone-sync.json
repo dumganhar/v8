@@ -33,6 +33,14 @@
       ]
     },
     {
+      "path": "third_party/cpu_features",
+      "include": [
+        "BUILD.gn",
+        "OWNERS",
+        "README.chromium"
+      ]
+    },
+    {
       "path": "third_party/cpu_features/src",
       "include": [
         "LICENSE",
