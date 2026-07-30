@@ -1,2 +1,6 @@
 # Generated for the flattened standalone checkout.
+declare_args() {
+  android_ndk_version = "r28c"
+}
+
 checkout_src_internal = false
