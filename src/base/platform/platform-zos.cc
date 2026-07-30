@@ -27,6 +27,12 @@ __attribute__((constructor)) void init() {
 }  // namespace
 
 namespace v8 {
+
+namespace internal {
+// Used in simulator.h for its Associated Data Area pointer in codegen dispatch:
+void ZosFuncForJSEnv() {}
+}  // namespace internal
+
 namespace base {
 
 void OS::Free(void* address, const size_t size) {
@@ -77,10 +83,10 @@ TimezoneCache* OS::CreateTimezoneCache() { return new ZOSTimezoneCache(); }
 
 // static
 void* OS::AllocateShared(void* hint, size_t size, MemoryPermission access,
-                         PlatformSharedMemoryHandle handle, uint64_t offset) {
+                         SharedMemoryHandle handle, uint64_t offset) {
   DCHECK_EQ(0, size % AllocatePageSize());
   int prot = GetProtectionFromMemoryPermission(access);
-  int fd = FileDescriptorFromSharedMemoryHandle(handle);
+  int fd = handle.GetPlatformHandle();
   return mmap(hint, size, prot, MAP_SHARED, fd, offset);
 }
 
@@ -92,11 +98,11 @@ void OS::FreeShared(void* address, size_t size) {
 
 bool AddressSpaceReservation::AllocateShared(void* address, size_t size,
                                              OS::MemoryPermission access,
-                                             PlatformSharedMemoryHandle handle,
+                                             SharedMemoryHandle handle,
                                              uint64_t offset) {
   DCHECK(Contains(address, size));
   int prot = GetProtectionFromMemoryPermission(access);
-  int fd = FileDescriptorFromSharedMemoryHandle(handle);
+  int fd = handle.GetPlatformHandle();
   return mmap(address, size, prot, MAP_SHARED | MAP_FIXED, fd, offset) !=
          MAP_FAILED;
 }

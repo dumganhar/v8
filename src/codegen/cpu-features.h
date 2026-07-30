@@ -32,6 +32,7 @@ enum CpuFeature {
   INTEL_JCC_ERRATUM_MITIGATION,
   CETSS,
   F16C,
+  APX_F,
 
 #elif V8_TARGET_ARCH_ARM
   // - Standard configurations. The baseline is ARMv6+VFPv2.
@@ -62,6 +63,10 @@ enum CpuFeature {
   CSSC,
   // Standardization of memory operations
   MOPS,
+  // Scalable Vector Extension
+  SVE,
+  // Scalable Vector Bit Permutes instructions
+  SVEBITPERM,
 
 #elif V8_TARGET_ARCH_MIPS64
   FPU,
@@ -73,9 +78,10 @@ enum CpuFeature {
 
 #elif V8_TARGET_ARCH_LOONG64
   FPU,
+  LSX,
+  LASX,
 
 #elif V8_TARGET_ARCH_PPC64
-  PPC_8_PLUS,
   PPC_9_PLUS,
   PPC_10_PLUS,
   PPC_11_PLUS,
@@ -95,16 +101,22 @@ enum CpuFeature {
 #elif V8_TARGET_ARCH_RISCV64 || V8_TARGET_ARCH_RISCV32
   FPU,
   FP64FPU,
-  RISCV_SIMD,
+  RVV,
   ZBA,
   ZBB,
   ZBS,
+  ZFA,
+  ZFH,
+  ZVFH,
   ZICOND,
   ZICFISS,
+  RVC,
 #endif
 
   NUMBER_OF_CPU_FEATURES
 };
+
+using CpuFeatureSet = base::EnumSet<CpuFeature, unsigned>;
 
 // CpuFeatures keeps track of which features are supported by the target CPU.
 // Supported features must be enabled by a CpuFeatureScope before use.
@@ -127,19 +139,19 @@ class V8_EXPORT_PRIVATE CpuFeatures : public AllStatic {
     ProbeImpl(cross_compile);
   }
 
-  static unsigned SupportedFeatures() {
+  static CpuFeatureSet SupportedFeatures() {
     Probe(false);
     return supported_;
   }
 
-  static bool IsSupported(CpuFeature f) {
-    return (supported_ & (1u << f)) != 0;
-  }
+  static bool IsSupported(CpuFeature f) { return supported_.contains(f); }
 
-  static void SetSupported(CpuFeature f) { supported_ |= 1u << f; }
-  static void SetUnsupported(CpuFeature f) { supported_ &= ~(1u << f); }
+  static void SetSupported(CpuFeature f) { supported_.Add(f); }
+  static void SetSupported(CpuFeatureSet f_set) { supported_.Add(f_set); }
+  static void SetUnsupported(CpuFeature f) { supported_.Remove(f); }
+  static void SetUnsupported(CpuFeatureSet f_set) { supported_.Remove(f_set); }
 
-  static bool SupportsWasmSimd128();
+  static bool SupportsSimd128();
 
   static inline bool SupportsOptimizer();
 
@@ -158,8 +170,7 @@ class V8_EXPORT_PRIVATE CpuFeatures : public AllStatic {
     return vlen_;
   }
 
-  static void PrintTarget();
-  static void PrintFeatures();
+  static void PrintInformation();
 
  private:
   friend void V8_EXPORT_PRIVATE FlushInstructionCache(void*, size_t);
@@ -170,14 +181,14 @@ class V8_EXPORT_PRIVATE CpuFeatures : public AllStatic {
   // Platform-dependent implementation.
   static void ProbeImpl(bool cross_compile);
 
-  static unsigned supported_;
+  static CpuFeatureSet supported_;
   static unsigned icache_line_size_;
   static unsigned dcache_line_size_;
   static bool initialized_;
-  // This variable is only used for certain archs to query SupportWasmSimd128()
+  // This variable is only used for certain archs to query SupportsSimd128()
   // at runtime in builtins using an extern ref. Other callers should use
-  // CpuFeatures::SupportWasmSimd128().
-  static bool supports_wasm_simd_128_;
+  // CpuFeatures::SupportsSimd128().
+  static bool supports_simd_128_;
   static bool supports_cetss_;
   // VLEN is the length in bits of the vector registers on RISC-V.
   static unsigned vlen_;

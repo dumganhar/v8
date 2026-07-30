@@ -66,12 +66,16 @@ class FindBadConstructsConsumer
                         clang::SourceLocation record_location,
                         clang::CXXRecordDecl* record) override;
 
+  void CheckStdRangesPipeOperator(clang::CallExpr* call_expr);
+
  private:
   // The type of problematic ref-counting pattern that was encountered.
   enum RefcountIssue { None, ImplicitDestructor, PublicDestructor };
 
   void CheckCtorDtorWeight(clang::SourceLocation record_location,
                            clang::CXXRecordDecl* record);
+
+  bool IsRecursivelyAggregate(clang::CXXRecordDecl* record);
 
   // Returns a diagnostic builder that only emits the diagnostic if the spelling
   // location (the actual characters that make up the token) is not in an
@@ -144,6 +148,7 @@ class FindBadConstructsConsumer
   unsigned diag_note_protected_non_virtual_dtor_;
   unsigned diag_span_from_string_literal_;
   unsigned diag_note_span_from_string_literal1_;
+  unsigned diag_std_ranges_pipe_operator_;
 
   std::unique_ptr<BlinkDataMemberTypeChecker> blink_data_member_type_checker_;
   std::unique_ptr<CheckIPCVisitor> ipc_visitor_;

@@ -61,8 +61,8 @@ constexpr ImportCallKind kDefaultImportCallKind = ImportCallKind::kJSFunction;
 // Resolves which import call wrapper is required for the given JS callable.
 // Provides the kind of wrapper needed, the ultimate target callable, and the
 // suspender object if applicable. Note that some callables (e.g. a
-// {WasmExportedFunction} or {WasmJSFunction}) just wrap another target, which
-// is why the ultimate target is provided as well.
+// {WasmExportedFunction}) just wrap another target, which is why the ultimate
+// target is provided as well.
 class ResolvedWasmImport {
  public:
   V8_EXPORT_PRIVATE ResolvedWasmImport(
@@ -112,7 +112,7 @@ MaybeDirectHandle<WasmInstanceObject> InstantiateToInstanceObject(
 // beneficial for performance to create the corresponding WasmExportedFunctions
 // along with any internal funcrefs.
 std::optional<MessageTemplate> InitializeElementSegment(
-    Zone* zone, Isolate* isolate,
+    Isolate* isolate,
     DirectHandle<WasmTrustedInstanceData> trusted_instance_data,
     DirectHandle<WasmTrustedInstanceData> shared_trusted_instance_data,
     uint32_t segment_index,
@@ -129,8 +129,6 @@ struct WrapperCompilationInfo {
   wasm::ImportCallKind import_kind = kDefaultImportCallKind;
   int expected_arity = 0;
   wasm::Suspend suspend = kNoSuspend;
-  // For js-wasm wrappers:
-  bool receiver_is_first_param = false;
 };
 
 }  // namespace wasm

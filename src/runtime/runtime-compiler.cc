@@ -5,7 +5,7 @@
 #include <optional>
 
 #include "src/asmjs/asm-js.h"
-#include "src/codegen/compilation-cache.h"
+#include "src/codegen/assembler-inl.h"
 #include "src/codegen/compiler.h"
 #include "src/common/assert-scope.h"
 #include "src/common/globals.h"
@@ -14,10 +14,15 @@
 #include "src/execution/arguments-inl.h"
 #include "src/execution/frames-inl.h"
 #include "src/execution/isolate-inl.h"
+#include "src/objects/abstract-code-inl.h"
 #include "src/objects/js-array-buffer-inl.h"
 #include "src/objects/objects-inl.h"
 #include "src/objects/shared-function-info.h"
 #include "src/runtime/runtime-utils.h"
+
+#ifdef V8_ENABLE_SPARKPLUG_PLUS
+#include "src/common/code-memory-access.h"
+#endif  // V8_ENABLE_SPARKPLUG_PLUS
 
 namespace v8::internal {
 
@@ -26,14 +31,13 @@ void LogExecution(Isolate* isolate, DirectHandle<JSFunction> function) {
   DCHECK(v8_flags.log_function_events);
   if (!function->has_feedback_vector()) return;
   DCHECK(function->IsLoggingRequested(isolate));
-  IsolateGroup::current()->js_dispatch_table()->ResetTieringRequest(
-      function->dispatch_handle());
+  isolate->js_dispatch_table().ResetTieringRequest(function->dispatch_handle());
   DirectHandle<SharedFunctionInfo> sfi(function->shared(), isolate);
   DirectHandle<String> name = SharedFunctionInfo::DebugName(isolate, sfi);
   DisallowGarbageCollection no_gc;
   Tagged<SharedFunctionInfo> raw_sfi = *sfi;
   std::string event_name = "first-execution";
-  CodeKind kind = function->abstract_code(isolate)->kind(isolate);
+  CodeKind kind = function->abstract_code(isolate)->kind();
   // Not adding "-interpreter" for tooling backwards compatibility.
   if (kind != CodeKind::INTERPRETED_FUNCTION) {
     event_name += "-";
@@ -43,6 +47,93 @@ void LogExecution(Isolate* isolate, DirectHandle<JSFunction> function) {
                    event_name.c_str(), Cast<Script>(raw_sfi->script())->id(), 0,
                    raw_sfi->StartPosition(), raw_sfi->EndPosition(), *name));
 }
+
+#ifdef V8_ENABLE_SPARKPLUG_PLUS
+Builtin GetTypedBinaryOpBuiltin(int hint, Builtin current_builtin) noexcept {
+  Builtin target_builtin = Builtin::kNoBuiltinId;
+
+#define TYPED_BINARY_OP_CASE(hint_type, op_type, hint_value)        \
+  case static_cast<int>(hint_type::Type::k##hint_value):            \
+    target_builtin = Builtin::k##op_type##_##hint_value##_Baseline; \
+    break;
+#define TYPED_STRICTEQUAL_CASE(hint_value) \
+  TYPED_BINARY_OP_CASE(CompareOperationFeedback, StrictEqual, hint_value)
+#define TYPED_EQUAL_CASE(hint_value) \
+  TYPED_BINARY_OP_CASE(CompareOperationFeedback, Equal, hint_value)
+#define TYPED_LESSTHAN_CASE(hint_value) \
+  TYPED_BINARY_OP_CASE(CompareOperationFeedback, LessThan, hint_value)
+#define TYPED_GREATERTHAN_CASE(hint_value) \
+  TYPED_BINARY_OP_CASE(CompareOperationFeedback, GreaterThan, hint_value)
+#define TYPED_LESSTHANOREQUAL_CASE(hint_value) \
+  TYPED_BINARY_OP_CASE(CompareOperationFeedback, LessThanOrEqual, hint_value)
+#define TYPED_GREATERTHANOREQUAL_CASE(hint_value) \
+  TYPED_BINARY_OP_CASE(CompareOperationFeedback, GreaterThanOrEqual, hint_value)
+
+#define TYPED_BINARY_OP_SWITCH(type_list_name, op_name, op_type)         \
+  if (IsTyped##op_type##Builtin(current_builtin)) {                      \
+    switch (hint) {                                                      \
+      TYPED_##type_list_name##_STUB_LIST(TYPED_##op_name##_CASE) default \
+          : target_builtin = Builtin::k##op_type##_Generic_Baseline;     \
+      break;                                                             \
+    }                                                                    \
+  } else
+
+#define TYPED_BINARY_OP_LIST(V)                           \
+  V(STRICTEQUAL, STRICTEQUAL, StrictEqual)                \
+  V(EQUAL, EQUAL, Equal)                                  \
+  V(RELATIONAL_COMPARE, LESSTHAN, LessThan)               \
+  V(RELATIONAL_COMPARE, GREATERTHAN, GreaterThan)         \
+  V(RELATIONAL_COMPARE, LESSTHANOREQUAL, LessThanOrEqual) \
+  V(RELATIONAL_COMPARE, GREATERTHANOREQUAL, GreaterThanOrEqual)
+
+  TYPED_BINARY_OP_LIST(TYPED_BINARY_OP_SWITCH)
+  /* else */ {}
+
+  return target_builtin;
+#undef TYPED_BINARY_OP_LIST
+#undef TYPED_BINARY_OP_SWITCH
+#undef TYPED_GREATERTHANOREQUAL_CASE
+#undef TYPED_LESSTHANOREQUAL_CASE
+#undef TYPED_GREATERTHAN_CASE
+#undef TYPED_LESSTHAN_CASE
+#undef TYPED_EQUAL_CASE
+#undef TYPED_STRICTEQUAL_CASE
+#undef TYPED_BINARY_OP_CASE
+}
+
+V8_INLINE void UpdateEmbeddedFeedback(Tagged<BytecodeArray> bytecode_array,
+                                      int feedback_offset,
+                                      int current_feedback) {
+  feedback_offset -= BytecodeArray::kHeaderSize - kHeapObjectTag;
+  bytecode_array->set(feedback_offset, static_cast<uint8_t>(current_feedback));
+}
+
+V8_INLINE void TryPatchBaselineCode(Isolate* isolate, int current_feedback) {
+  DisallowGarbageCollection no_gc;
+  const Address entry = Isolate::c_entry_fp(isolate->thread_local_top());
+  Address* pc_address =
+      reinterpret_cast<Address*>(entry + ExitFrameConstants::kCallerPCOffset);
+  Address pc =
+      StackFrame::ReadPC(pc_address) - Assembler::kCallTargetAddressOffset;
+  Address current = Assembler::target_address_at(pc, kNullAddress);
+  // TODO(chromium:429351411): Consider using a cache.
+  Builtin current_builtin =
+      OffHeapInstructionStream::TryLookupCode(isolate, current);
+  Builtin target_builtin = GetTypedBinaryOpBuiltin(
+      CompareOperationFeedback::DecodeTypeIndex(
+          static_cast<CompareOperationFeedback::TypeIndex>(current_feedback)),
+      current_builtin);
+
+  if (target_builtin != Builtin::kNoBuiltinId) {
+    Address target = Builtins::EntryOf(target_builtin, isolate);
+    WritableJitAllocation jit_allocation =
+        WritableJitAllocation::ForPatchableBaselineJIT(
+            pc, Assembler::kCallTargetAddressOffset);
+    Assembler::set_target_address_at(pc, kNullAddress, target, &jit_allocation,
+                                     FLUSH_ICACHE_IF_NEEDED);
+  }
+}
+#endif  // V8_ENABLE_SPARKPLUG_PLUS
 }  // namespace
 
 RUNTIME_FUNCTION(Runtime_CompileLazy) {
@@ -127,7 +218,7 @@ namespace {
 void CompileOptimized(DirectHandle<JSFunction> function, ConcurrencyMode mode,
                       CodeKind target_kind, Isolate* isolate) {
   // Ensure that the tiering request is reset even if compilation fails.
-  function->ResetTieringRequests();
+  function->ResetTieringRequests(isolate);
 
   // As a pre- and post-condition of CompileOptimized, the function *must* be
   // compiled, i.e. the installed InstructionStream object must not be
@@ -228,7 +319,7 @@ RUNTIME_FUNCTION(Runtime_MarkLazyDeoptimized) {
   }
 
   if (!function->code(isolate)->marked_for_deoptimization()) {
-    function->ResetTieringRequests();
+    function->ResetTieringRequests(isolate);
     if (reoptimize) {
       // Set the budget such that we have one invocation which allows us to
       // detect if any ICs need updating before re-optimization.
@@ -442,6 +533,26 @@ Tagged<Object> CompileOptimizedOSR(Isolate* isolate,
 
 }  // namespace
 
+#ifdef V8_DUMPLING
+RUNTIME_FUNCTION(Runtime_PrintDumpedFrame) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(args.length(), 1);
+  CHECK(isolate->context().is_null());
+
+  DCHECK(!AllowGarbageCollection::IsAllowed());
+
+  Deoptimizer* dumper = isolate->GetAndClearCurrentDeoptimizer();
+
+  Tagged<Context> saved_context = isolate->context();
+  isolate->set_context(dumper->function()->native_context());
+  dumper->VirtualMaterializeAndPrint();
+  delete dumper;
+
+  isolate->set_context(saved_context);
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+#endif  // V8_DUMPLING
+
 RUNTIME_FUNCTION(Runtime_NotifyDeoptimized) {
   HandleScope scope(isolate);
   DCHECK_EQ(0, args.length());
@@ -451,7 +562,7 @@ RUNTIME_FUNCTION(Runtime_NotifyDeoptimized) {
   DCHECK(isolate->context().is_null());
 
   TimerEventScope<TimerEventDeoptimizeCode> timer(isolate);
-  TRACE_EVENT0("v8", "V8.DeoptimizeCode");
+  TRACE_EVENT("v8", "V8.DeoptimizeCode");
   DirectHandle<JSFunction> function = deoptimizer->function();
   // For OSR the optimized code isn't installed on the function, so get the
   // code object from deoptimizer.
@@ -724,7 +835,7 @@ static Tagged<Object> CompileGlobalEval(
   static const ParseRestriction restriction = NO_PARSE_RESTRICTION;
   DirectHandle<JSFunction> compiled;
   DirectHandle<Context> context(isolate->context(), isolate);
-  if (!Is<NativeContext>(*context) && v8_flags.reuse_scope_infos) {
+  if (!Is<NativeContext>(*context)) {
     Tagged<WeakFixedArray> array = Cast<Script>(outer_info->script())->infos();
     Tagged<ScopeInfo> stored_info;
     CHECK(array->get(eval_scope_info_index)
@@ -760,5 +871,37 @@ RUNTIME_FUNCTION(Runtime_ResolvePossiblyDirectEval) {
                            language_mode, args.smi_value_at(4),
                            args.smi_value_at(5));
 }
+
+#ifdef V8_ENABLE_SPARKPLUG_PLUS
+RUNTIME_FUNCTION(Runtime_PatchBaselineCode) {
+  HandleScope scope(isolate);
+  CHECK(v8_flags.sparkplug_plus);
+  DCHECK_EQ(4, args.length());
+
+  DirectHandle<Boolean> compare_result = args.at<Boolean>(1);
+  int current_feedback = args.smi_value_at(0);
+  DCHECK_LE(current_feedback, std::numeric_limits<uint8_t>::max());
+  UpdateEmbeddedFeedback(TrustedCast<BytecodeArray>(args[2]),
+                         static_cast<int>(args.number_value_at(3)),
+                         current_feedback);
+  TryPatchBaselineCode(isolate, current_feedback);
+  return *compare_result;
+}
+
+RUNTIME_FUNCTION(Runtime_PatchBaselineCodeAndThrow) {
+  HandleScope scope(isolate);
+  CHECK(v8_flags.sparkplug_plus);
+  DCHECK_EQ(4, args.length());
+
+  DirectHandle<Object> exception = args.at<Object>(1);
+  int current_feedback = args.smi_value_at(0);
+  DCHECK_LE(current_feedback, std::numeric_limits<uint8_t>::max());
+  UpdateEmbeddedFeedback(TrustedCast<BytecodeArray>(args[2]),
+                         static_cast<int>(args.number_value_at(3)),
+                         current_feedback);
+  TryPatchBaselineCode(isolate, current_feedback);
+  return isolate->ReThrow(*exception);
+}
+#endif  // V8_ENABLE_SPARKPLUG_PLUS
 
 }  // namespace v8::internal

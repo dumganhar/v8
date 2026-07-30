@@ -13,7 +13,6 @@
 #include "src/objects/heap-object.h"
 #include "src/objects/objects.h"
 #include "src/roots/roots.h"
-#include "src/sandbox/code-pointer-table.h"
 #include "src/sandbox/js-dispatch-table.h"
 
 namespace v8 {
@@ -23,12 +22,13 @@ class SharedMemoryStatistics;
 namespace internal {
 
 class Isolate;
-class PageMetadata;
+class NormalPage;
 class ReadOnlyArtifacts;
-class ReadOnlyPageMetadata;
+class ReadOnlyPage;
 class ReadOnlySpace;
 class SharedReadOnlySpace;
 class SnapshotData;
+class EarlyReadOnlyRoots;
 
 // This class transparently manages read-only space, roots and cache creation
 // and destruction.
@@ -73,17 +73,10 @@ class ReadOnlyHeap final {
   V8_EXPORT_PRIVATE static bool SandboxSafeContains(Tagged<HeapObject> object);
   // Returns the current isolates roots table during initialization as opposed
   // to the shared one in case the latter is not initialized yet.
-  V8_EXPORT_PRIVATE inline static ReadOnlyRoots EarlyGetReadOnlyRoots(
+  V8_EXPORT_PRIVATE inline static EarlyReadOnlyRoots EarlyGetReadOnlyRoots(
       Tagged<HeapObject> object);
 
   ReadOnlySpace* read_only_space() const { return read_only_space_; }
-
-#ifdef V8_ENABLE_SANDBOX
-  CodePointerTable::Space* code_pointer_space() { return &code_pointer_space_; }
-#endif  // V8_ENABLE_SANDBOX
-  JSDispatchTable::Space* js_dispatch_table_space() {
-    return &js_dispatch_table_space_;
-  }
 
   void InitializeIsolateRoots(Isolate* isolate);
   void InitializeFromIsolateRoots(Isolate* isolate);
@@ -111,12 +104,9 @@ class ReadOnlyHeap final {
   bool roots_init_complete_ = false;
   ReadOnlySpace* read_only_space_ = nullptr;
 
-#ifdef V8_ENABLE_SANDBOX
-  // The read-only heap has its own code pointer space. Entries in this space
-  // are never deallocated.
-  CodePointerTable::Space code_pointer_space_;
-#endif  // V8_ENABLE_SANDBOX
-  JSDispatchTable::Space js_dispatch_table_space_;
+#if V8_ENABLE_WEBASSEMBLY
+  Address wasm_null_payload_ = kNullAddress;
+#endif
 
  private:
   friend ReadOnlyRoots GetReadOnlyRoots();
@@ -133,20 +123,19 @@ enum class SkipFreeSpaceOrFiller {
 class V8_EXPORT_PRIVATE ReadOnlyPageObjectIterator final {
  public:
   explicit ReadOnlyPageObjectIterator(
-      const ReadOnlyPageMetadata* page,
+      const ReadOnlyPage* page,
       SkipFreeSpaceOrFiller skip_free_space_or_filler =
           SkipFreeSpaceOrFiller::kYes);
-  ReadOnlyPageObjectIterator(const ReadOnlyPageMetadata* page,
-                             Address current_addr,
+  ReadOnlyPageObjectIterator(const ReadOnlyPage* page, Address current_addr,
                              SkipFreeSpaceOrFiller skip_free_space_or_filler =
                                  SkipFreeSpaceOrFiller::kYes);
 
   Tagged<HeapObject> Next();
 
  private:
-  void Reset(const ReadOnlyPageMetadata* page);
+  void Reset(const ReadOnlyPage* page);
 
-  const ReadOnlyPageMetadata* page_;
+  const ReadOnlyPage* page_;
   Address current_addr_;
   const SkipFreeSpaceOrFiller skip_free_space_or_filler_;
 
@@ -164,7 +153,7 @@ class V8_EXPORT_PRIVATE ReadOnlyHeapObjectIterator final {
 
  private:
   const ReadOnlySpace* const ro_space_;
-  std::vector<ReadOnlyPageMetadata*>::const_iterator current_page_;
+  std::vector<ReadOnlyPage*>::const_iterator current_page_;
   ReadOnlyPageObjectIterator page_iterator_;
 };
 

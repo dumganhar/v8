@@ -27,6 +27,7 @@ from devil.android.sdk import version_codes
 from devil.android import logcat_monitor
 from devil.android.tools import system_app
 from devil.android.tools import webview_app
+from devil.android import device_utils
 from devil.utils import reraiser_thread
 from incremental_install import installer
 from lib.proto import exception_recorder
@@ -42,7 +43,6 @@ from pylib.local.device import local_device_environment
 from pylib.local.device import local_device_test_run
 from pylib.output import remote_output_manager
 from pylib.symbols import stack_symbolizer
-from pylib.utils import chrome_proxy_utils
 from pylib.utils import code_coverage_utils
 from pylib.utils import device_dependencies
 from pylib.utils import gold_utils
@@ -64,10 +64,6 @@ _DEVICE_TEMP_DIR_DATA_ROOT = posixpath.join('/data/local/tmp',
 _JINJA_TEMPLATE_DIR = os.path.join(
     host_paths.DIR_SOURCE_ROOT, 'build', 'android', 'pylib', 'instrumentation')
 _JINJA_TEMPLATE_FILENAME = 'render_test.html.jinja'
-
-_WPR_GO_LINUX_X86_64_PATH = os.path.join(host_paths.DIR_SOURCE_ROOT,
-                                         'third_party', 'webpagereplay', 'cipd',
-                                         'bin', 'linux', 'x86_64', 'wpr')
 
 _TAG = 'test_runner_py'
 
@@ -125,16 +121,13 @@ _VALUE_WEBVIEW_REBASELINE_MODE = 'rebaseline'
 
 FEATURE_ANNOTATION = 'Feature'
 RENDER_TEST_FEATURE_ANNOTATION = 'RenderTest'
-WPR_ARCHIVE_FILE_PATH_ANNOTATION = 'WPRArchiveDirectory'
-WPR_ARCHIVE_NAME_ANNOTATION = 'WPRArchiveDirectory$ArchiveName'
-WPR_RECORD_REPLAY_TEST_FEATURE_ANNOTATION = 'WPRRecordReplayTest'
 
 _DEVICE_GOLD_DIR = 'skia_gold'
 # A map of Android product models to SDK ints. The keys can be found via `adb
 # shell getprop ro.product.model`.
 RENDER_TEST_MODEL_SDK_CONFIGS = {
     # Android x64 emulator.
-    'sdk_gphone64_x86_64': [35],
+    'sdk_gphone64_x86_64': [32, 36],
 }
 
 _BATCH_SUFFIX = '_batch'
@@ -247,12 +240,6 @@ _CURRENT_FOCUS_CRASH_RE = re.compile(
     r'\s*mCurrentFocus.*Application (Error|Not Responding): (\S+)}')
 
 
-def _GetTargetPackageName(test_apk):
-  # apk_under_test does not work for smoke tests, where it is set to an
-  # apk that is not listed as the targetPackage in the test apk's manifest.
-  return test_apk.GetAllInstrumentations()[0]['android:targetPackage']
-
-
 def _ParseTestListOutputFromChromiumListener(output):
   parser = instrumentation_parser.InstrumentationParser(output)
   tests_by_class = collections.defaultdict(list)
@@ -335,7 +322,6 @@ class LocalDeviceInstrumentationTestRun(
     local_device_test_run.LocalDeviceTestRun):
   def __init__(self, env, test_instance):
     super().__init__(env, test_instance)
-    self._chrome_proxy = None
     self._context_managers = collections.defaultdict(list)
     self._flag_changers = {}
     self._webview_flag_changers = {}
@@ -349,8 +335,6 @@ class LocalDeviceInstrumentationTestRun(
 
   #override
   def SetUp(self):
-    target_package = _GetTargetPackageName(self._test_instance.test_apk)
-
     @local_device_environment.handle_shard_failures_with(
         self._env.DenylistDevice)
     @measures.timed_func('device_setup')
@@ -587,7 +571,7 @@ class LocalDeviceInstrumentationTestRun(
         cmd = ['am', 'set-debug-app', '--persistent']
         if self._test_instance.wait_for_java_debugger:
           cmd.append('-w')
-        cmd.append(target_package)
+        cmd.append(self._test_instance.target_package)
         dev.RunShellCommand(cmd, check_return=True)
 
       @measures.timed_func('device_setup', 'approve_app_links')
@@ -678,10 +662,59 @@ class LocalDeviceInstrumentationTestRun(
           logging.debug('Attempting to set WebView flags: %r', webview_flags)
           self._webview_flag_changers[str(dev)].AddFlags(webview_flags)
 
-      install_steps += [push_test_data, create_flag_changer]
+      @measures.timed_func('device_setup', 'setup_soft_keyboard')
+      @trace_event.traced
+      def setup_soft_keyboard(dev):
+        flags = self._test_instance.flags
+        # Treat as desktop if the flag is present.
+        is_desktop = dev.is_desktop or any('--force-desktop-android' in f
+                                           for f in flags)
+
+        if not dev.IsApplicationInstalled(device_utils.GBOARD_PKG):
+          pass
+        elif is_desktop:
+          logging.info('Disabling Gboard for desktop environment')
+          dev.SetAppEnabled(device_utils.GBOARD_PKG, False)
+          # Disable Voice IME to prevent it from appearing as fallback.
+          logging.info('Disabling com.google.android.tts package')
+          dev.SetAppEnabled('com.google.android.tts', False)
+        elif dev.build_version_sdk >= version_codes.BAKLAVA:
+          logging.info('Enabling Gboard and setting preferences for '
+                       'non-desktop Baklava+')
+          try:
+            dev.SetAppEnabled(device_utils.GBOARD_PKG, True)
+          except device_errors.CommandFailedError as e:
+            logging.warning('Failed to enable Gboard: %s', e)
+
+          # Writing Gboard's private prefs requires root; skip on non-rooted
+          # devices.
+          if dev.HasRoot():
+            try:
+              with dev.GboardPreferences() as gboard_prefs:
+                # Disable the stylus.
+                gboard_prefs.SetBoolean('enable_scribe', False)
+                # Always show the soft keyboard.
+                gboard_prefs.SetBoolean('pk_always_show_vk', True)
+            except device_errors.CommandFailedError as e:
+              logging.warning('Failed to set Gboard preferences: %s', e)
+
+          # Enable Voice IME for non-desktop to restore it if previously
+          # disabled.
+          try:
+            logging.info(
+                'Enabling com.google.android.tts package for non-desktop')
+            dev.SetAppEnabled('com.google.android.tts', True)
+          except device_errors.CommandFailedError as e:
+            logging.warning(
+                'Failed to enable com.google.android.tts '
+                '(expected if not present): %s', e)
+
+      install_steps += [
+          push_test_data, create_flag_changer, setup_soft_keyboard
+      ]
       post_install_steps += [
-          set_debug_app, approve_app_links, disable_system_modals,
-          set_vega_permissions, DismissCrashDialogs
+          self._SetDefaultBrowserApp, set_debug_app, approve_app_links,
+          disable_system_modals, set_vega_permissions, DismissCrashDialogs
       ]
 
       def bind_crash_handler(step, dev):
@@ -732,7 +765,7 @@ class LocalDeviceInstrumentationTestRun(
     if self._test_instance.wait_for_java_debugger:
       logging.warning('*' * 80)
       logging.warning('Waiting for debugger to attach to process: %s',
-                      target_package)
+                      self._test_instance.target_package)
       logging.warning('*' * 80)
 
   #override
@@ -758,6 +791,8 @@ class LocalDeviceInstrumentationTestRun(
       if self._webview_flag_changers[str(dev)].GetCurrentFlags():
         self._webview_flag_changers[str(dev)].Restore()
 
+      self._ClearDefaultBrowserApp(dev)
+
       # Remove package-specific configuration
       dev.RunShellCommand(['am', 'clear-debug-app'], check_return=True)
 
@@ -778,6 +813,63 @@ class LocalDeviceInstrumentationTestRun(
         # pylint: enable=no-member
 
     self._env.parallel_devices.pMap(individual_device_tear_down)
+
+  def _SetDefaultBrowserApp(self, dev):
+    # Safely granting the browser role requires the
+    # "set-bypassing-role-qualification" ADB command, which was introduced in
+    # Android 13 (API 33).
+    if dev.build_version_sdk < version_codes.TIRAMISU:
+      return
+
+    browser_activity_names = (
+        self._test_instance.test_apk.GetActivityNamesWithCategory(
+            'android.intent.category.APP_BROWSER'))
+    if browser_activity_names:
+      # By default, the add-role-holder command targets the system user
+      # (User 0).
+      #
+      # However, some bots (such as automotive bots) run in the Headless System
+      # User Mode, where User 0 runs in the background, while the actual
+      # "driver" user is usually User 10 (or higher).
+      #
+      # Therefore, we must specify the current user ID when running the
+      # add-role-holder command as the test APK may not be installed for
+      # User 0.
+      #
+      # Additionally, we should bypass role qualification in case the test APK
+      # doesn't meet Android requirements for the browser role (such as
+      # declaring specific Intent filters in its manifest to handle web links).
+      user_id = dev.GetCurrentUser()
+      dev.RunShellCommand(
+          ['cmd', 'role', 'set-bypassing-role-qualification', 'true'],
+          check_return=True)
+      dev.RunShellCommand([
+          'cmd', 'role', 'add-role-holder', '--user',
+          str(user_id), 'android.app.role.BROWSER',
+          self._test_instance.test_apk.GetPackageName()
+      ],
+                          check_return=True)
+
+  def _ClearDefaultBrowserApp(self, dev):
+    # We only set the test APK as the default browser app for Android 13+.
+    # See _SetDefaultBrowserApp().
+    if dev.build_version_sdk < version_codes.TIRAMISU:
+      return
+
+    browser_activity_names = (
+        self._test_instance.test_apk.GetActivityNamesWithCategory(
+            'android.intent.category.APP_BROWSER'))
+    if browser_activity_names:
+      user_id = dev.GetCurrentUser()
+      dev.RunShellCommand([
+          'cmd', 'role', 'remove-role-holder', '--user',
+          str(user_id), 'android.app.role.BROWSER',
+          self._test_instance.test_apk.GetPackageName()
+      ],
+                          check_return=True)
+      dev.RunShellCommand(
+          ['cmd', 'role', 'set-bypassing-role-qualification', 'false'],
+          check_return=True)
 
   def _ToggleAppLinks(self, dev, state):
     # The set-app-links command was added in Android 12 (sdk = 31). The
@@ -1073,16 +1165,18 @@ class LocalDeviceInstrumentationTestRun(
 
       test_names, timeouts = list(zip(*(name_and_timeout(t) for t in test)))
 
-      test_name = instrumentation_test_instance.GetTestName(
-          test[0]) + _BATCH_SUFFIX
-      extras['class'] = ','.join(test_names)
+      test_method_name = instrumentation_test_instance.GetTestName(test[0])
+      test_name = test_method_name + _BATCH_SUFFIX
       test_display_name = test_name
+      extras['testMethodName'] = test_method_name
+      extras['class'] = ','.join(test_names)
       timeout = min(MAX_BATCH_TEST_TIMEOUT,
                     FIXED_TEST_TIMEOUT_OVERHEAD + sum(timeouts))
     else:
       test_name = instrumentation_test_instance.GetTestName(test)
       test_display_name = self._GetUniqueTestName(test)
 
+      extras['testMethodName'] = test_name
       extras['class'] = test_name
       if 'flags' in test and test['flags']:
         flags_to_add.extend(test['flags'])
@@ -1109,40 +1203,6 @@ class LocalDeviceInstrumentationTestRun(
 
     if self._test_instance.webview_rebaseline_mode:
       extras[_EXTRA_WEBVIEW_REBASELINE_MODE] = _VALUE_WEBVIEW_REBASELINE_MODE
-
-    if _IsWPRRecordReplayTest(test):
-      wpr_archive_relative_path = _GetWPRArchivePath(test)
-      if not wpr_archive_relative_path:
-        raise RuntimeError('Could not find the WPR archive file path '
-                           'from annotation.')
-      wpr_archive_path = os.path.join(host_paths.DIR_SOURCE_ROOT,
-                                      wpr_archive_relative_path)
-      if not os.path.isdir(wpr_archive_path):
-        raise RuntimeError('WPRArchiveDirectory annotation should point '
-                           'to a directory only. '
-                           '{0} exist: {1}'.format(
-                               wpr_archive_path,
-                               os.path.exists(wpr_archive_path)))
-
-      file_name = _GetWPRArchiveFileName(
-          test) or self._GetUniqueTestName(test) + '.wprgo'
-
-      # Some linux version does not like # in the name. Replaces it with __.
-      archive_path = os.path.join(wpr_archive_path,
-                                  _ReplaceUncommonChars(file_name))
-
-      if not os.path.exists(_WPR_GO_LINUX_X86_64_PATH):
-        # If we got to this stage, then we should have
-        # checkout_android set.
-        raise RuntimeError(
-            'WPR Go binary not found at {}'.format(_WPR_GO_LINUX_X86_64_PATH))
-      # Tells the server to use the binaries retrieved from CIPD.
-      chrome_proxy_utils.ChromeProxySession.SetWPRServerBinary(
-          _WPR_GO_LINUX_X86_64_PATH)
-      self._chrome_proxy = chrome_proxy_utils.ChromeProxySession()
-      self._chrome_proxy.wpr_record_mode = self._test_instance.wpr_record_mode
-      self._chrome_proxy.Start(device, archive_path)
-      flags_to_add.extend(self._chrome_proxy.GetFlags())
 
     if flags_to_add:
       self._CreateFlagChangersIfNeeded(device)
@@ -1271,15 +1331,6 @@ class LocalDeviceInstrumentationTestRun(
         json_data['image_link'] = image_archive.Link()
         return json_data
 
-      def stop_chrome_proxy():
-        # Removes the port forwarding
-        if self._chrome_proxy:
-          self._chrome_proxy.Stop(device)
-          if not self._chrome_proxy.wpr_replay_mode:
-            logging.info('WPR Record test generated archive file %s',
-                         self._chrome_proxy.wpr_archive_path)
-          self._chrome_proxy = None
-
       def pull_baseline_profile():
         # Search though status responses for the one with the key we are
         # looking for.
@@ -1305,9 +1356,8 @@ class LocalDeviceInstrumentationTestRun(
       # the results! Things such as whether the test CRASHED have not yet been
       # determined.
       post_test_steps = [
-          restore_flags, stop_chrome_proxy, handle_coverage_data,
-          handle_render_test_data, pull_ui_screen_captures,
-          pull_baseline_profile
+          restore_flags, handle_coverage_data, handle_render_test_data,
+          pull_ui_screen_captures, pull_baseline_profile
       ]
       if self._env.concurrent_adb:
         reraiser_thread.RunAsync(post_test_steps)
@@ -1534,9 +1584,11 @@ class LocalDeviceInstrumentationTestRun(
     try:
       with self._env.output_manager.ArchivedTempfile(
           stream_name, 'logcat', output_manager.Datatype.TEXT,
-          _GetTargetPackageName(self._test_instance.test_apk)) as logcat_file:
+          self._test_instance.GetLogcatPackageNames()) as logcat_file:
         symbolizer = stack_symbolizer.PassThroughSymbolizerPool(
-            device.product_cpu_abi)
+            device.product_cpu_abi,
+            os.path.dirname(self._test_instance.apk_under_test.path)
+            if self._test_instance.apk_under_test else None)
         with symbolizer:
           with logcat_monitor.LogcatMonitor(
               device.adb,
@@ -1894,27 +1946,6 @@ class LocalDeviceInstrumentationTestRun(
     timeout *= cls._GetTimeoutScaleFromAnnotations(annotations)
 
     return timeout
-
-
-def _IsWPRRecordReplayTest(test):
-  """Determines whether a test or a list of tests is a WPR RecordReplay Test."""
-  if not isinstance(test, list):
-    test = [test]
-  return any(WPR_RECORD_REPLAY_TEST_FEATURE_ANNOTATION in t['annotations'].get(
-      FEATURE_ANNOTATION, {}).get('value', ()) for t in test)
-
-
-def _GetWPRArchivePath(test):
-  """Retrieves the archive path from the WPRArchiveDirectory annotation."""
-  return test['annotations'].get(WPR_ARCHIVE_FILE_PATH_ANNOTATION,
-                                 {}).get('value', ())
-
-
-def _GetWPRArchiveFileName(test):
-  """Retrieves the WPRArchiveDirectory.ArchiveName annotation."""
-  value = test['annotations'].get(WPR_ARCHIVE_NAME_ANNOTATION,
-                                  {}).get('value', None)
-  return value[0] if value else None
 
 
 def _ReplaceUncommonChars(original):

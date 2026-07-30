@@ -7,13 +7,14 @@
 
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <variant>
 
 #include "v8-internal.h"      // NOLINT(build/include_directory)
 #include "v8-local-handle.h"  // NOLINT(build/include_directory)
-#include "v8-memory-span.h"   // NOLINT(build/include_directory)
 #include "v8-object.h"        // NOLINT(build/include_directory)
+#include "v8-platform.h"      // NOLINT(build/include_directory)
 #include "v8config.h"         // NOLINT(build/include_directory)
 
 namespace v8 {
@@ -51,7 +52,7 @@ class V8_EXPORT CompiledWasmModule {
   /**
    * Get the (wasm-encoded) wire bytes that were used to compile this module.
    */
-  MemorySpan<const uint8_t> GetWireBytesRef();
+  std::span<const uint8_t> GetWireBytesRef();
 
   const std::string& source_url() const { return source_url_; }
 
@@ -110,7 +111,7 @@ class V8_EXPORT WasmModuleObject : public Object {
    * Compile a Wasm module from the provided uncompiled bytes.
    */
   static MaybeLocal<WasmModuleObject> Compile(
-      Isolate* isolate, MemorySpan<const uint8_t> wire_bytes);
+      Isolate* isolate, std::span<const uint8_t> wire_bytes);
 
   V8_INLINE static WasmModuleObject* Cast(Value* value) {
 #ifdef V8_ENABLE_CHECKS
@@ -138,7 +139,7 @@ class V8_EXPORT WasmStreaming final {
   class ModuleCachingInterface {
    public:
     // Get the full wire bytes, to check against the cached version.
-    virtual MemorySpan<const uint8_t> GetWireBytes() const = 0;
+    virtual std::span<const uint8_t> GetWireBytes() const = 0;
     // Pass serialized (cached) compiled module bytes, to be deserialized and
     // used as the result of this streaming compilation.
     // The passed bytes will only be accessed inside this callback, i.e.
@@ -146,7 +147,7 @@ class V8_EXPORT WasmStreaming final {
     // The return value indicates whether V8 could use the passed bytes; {false}
     // would be returned on e.g. version mismatch.
     // This method can only be called once.
-    virtual bool SetCachedCompiledModuleBytes(MemorySpan<const uint8_t>) = 0;
+    virtual bool SetCachedCompiledModuleBytes(std::span<const uint8_t>) = 0;
   };
 
   using ModuleCachingCallback = std::function<void(ModuleCachingInterface&)>;
@@ -160,28 +161,6 @@ class V8_EXPORT WasmStreaming final {
    * The buffer passed into {OnBytesReceived} is owned by the caller.
    */
   void OnBytesReceived(const uint8_t* bytes, size_t size);
-
-  /**
-   * {Finish} should be called after all received bytes where passed to
-   * {OnBytesReceived} to tell V8 that there will be no more bytes. {Finish}
-   * must not be called after {Abort} has been called already.
-   * If {can_use_compiled_module} is true and {SetCompiledModuleBytes} was
-   * previously called, the compiled module bytes can be used.
-   * If {can_use_compiled_module} is false, the compiled module bytes previously
-   * set by {SetCompiledModuleBytes} should not be used.
-   */
-  V8_DEPRECATE_SOON(
-      "Use the new variant of Finish which takes the caching callback argument")
-  void Finish(bool can_use_compiled_module = true) {
-    ModuleCachingCallback callback;
-    if (can_use_compiled_module && !cached_compiled_module_bytes_.empty()) {
-      callback = [bytes = cached_compiled_module_bytes_](
-                     ModuleCachingInterface& caching_interface) {
-        caching_interface.SetCachedCompiledModuleBytes(bytes);
-      };
-    }
-    Finish(callback);
-  }
 
   /**
    * {Finish} should be called after all received bytes where passed to
@@ -201,25 +180,6 @@ class V8_EXPORT WasmStreaming final {
    * {Abort} must not be called repeatedly, or after {Finish}.
    */
   void Abort(MaybeLocal<Value> exception);
-
-  /**
-   * Passes previously compiled module bytes. This must be called before
-   * {OnBytesReceived}, {Finish}, or {Abort}. Returns true if the module bytes
-   * can be used, false otherwise. The buffer passed via {bytes} and {size}
-   * is owned by the caller. If {SetCompiledModuleBytes} returns true, the
-   * buffer must remain valid until either {Finish} or {Abort} completes.
-   * The compiled module bytes should not be used until {Finish(true)} is
-   * called, because they can be invalidated later by {Finish(false)}.
-   */
-  V8_DEPRECATE_SOON(
-      "Use SetHasCompiledModule in combination with the new variant of Finish")
-  bool SetCompiledModuleBytes(const uint8_t* bytes, size_t size) {
-    SetHasCompiledModuleBytes();
-    cached_compiled_module_bytes_ = {bytes, size};
-    // Optimistically return true here, even though we might later find out that
-    // we cannot use the bytes.
-    return true;
-  }
 
   /**
    * Mark that the embedder has (potentially) cached compiled module bytes (i.e.
@@ -254,9 +214,6 @@ class V8_EXPORT WasmStreaming final {
 
  private:
   std::unique_ptr<WasmStreamingImpl> impl_;
-  // Temporarily store the compiled module bytes here until the deprecation (see
-  // methods above) has gone through.
-  MemorySpan<const uint8_t> cached_compiled_module_bytes_;
 };
 
 /**
@@ -349,20 +306,15 @@ class V8_EXPORT WasmMemoryMapDescriptor : public Object {
  public:
   WasmMemoryMapDescriptor() = delete;
 
-  V8_INLINE static WasmMemoryMapDescriptor* Cast(Value* value) {
-#ifdef V8_ENABLE_CHECKS
-    CheckCast(value);
-#endif
-    return static_cast<WasmMemoryMapDescriptor*>(value);
-  }
-
-  using WasmFileDescriptor = int32_t;
+  using WasmFileDescriptor = SharedMemoryHandle::PlatformHandle;
 
   static Local<WasmMemoryMapDescriptor> New(Isolate* isolate,
                                             WasmFileDescriptor fd);
 
- private:
-  static void CheckCast(Value* object);
+  static bool Unmap(Isolate* isolate, Local<Object> wasm_memory_map_descriptor);
+
+  static size_t Map(Isolate* isolate, Local<Object> wasm_memory_map_descriptor,
+                    Local<WasmMemoryObject> memory, size_t offset);
 };
 }  // namespace v8
 

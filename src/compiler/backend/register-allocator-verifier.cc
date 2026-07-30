@@ -10,9 +10,7 @@
 #include "src/utils/bit-vector.h"
 #include "src/utils/ostreams.h"
 
-namespace v8 {
-namespace internal {
-namespace compiler {
+namespace v8::internal::compiler {
 
 namespace {
 
@@ -56,6 +54,7 @@ int GetValue(const ImmediateOperand* imm) {
     case ImmediateOperand::INDEXED_IMM:
       return imm->indexed_value();
   }
+  UNREACHABLE();
 }
 
 }  // namespace
@@ -277,6 +276,7 @@ void RegisterAllocatorVerifier::CheckConstraint(
       CHECK_WITH_MSG(false, caller_info_);
       return;
   }
+  UNREACHABLE();
 }
 
 void BlockAssessments::PerformMoves(const Instruction* instruction) {
@@ -435,6 +435,7 @@ BlockAssessments* RegisterAllocatorVerifier::CreateForBlock(
   return ret;
 }
 
+V8_CLANG_NO_SANITIZE("coverage")
 void RegisterAllocatorVerifier::ValidatePendingAssessment(
     RpoNumber block_id, InstructionOperand op,
     const BlockAssessments* current_assessments,
@@ -522,6 +523,7 @@ void RegisterAllocatorVerifier::ValidatePendingAssessment(
   assessment->AddAlias(virtual_register);
 }
 
+V8_CLANG_NO_SANITIZE("coverage")
 void RegisterAllocatorVerifier::ValidateUse(
     RpoNumber block_id, BlockAssessments* current_assessments,
     InstructionOperand op, int virtual_register) {
@@ -547,6 +549,10 @@ void RegisterAllocatorVerifier::ValidateUse(
   }
 }
 
+// Disable coverage tracing for `VerifyGapMoves` and methods called from this.
+// This speeds up many large fuzzer test cases, and coverage of these
+// verification methods is not helpful for covering the code better.
+V8_CLANG_NO_SANITIZE("coverage")
 void RegisterAllocatorVerifier::VerifyGapMoves() {
   CHECK(assessments_.empty());
   CHECK(outstanding_assessments_.empty());
@@ -627,6 +633,4 @@ void RegisterAllocatorVerifier::VerifyGapMoves() {
   }
 }
 
-}  // namespace compiler
-}  // namespace internal
-}  // namespace v8
+}  // namespace v8::internal::compiler

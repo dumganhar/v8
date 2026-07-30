@@ -5,23 +5,30 @@
 #ifndef V8_INIT_ISOLATE_GROUP_H_
 #define V8_INIT_ISOLATE_GROUP_H_
 
+#include <atomic>
+#include <functional>
+#include <map>
 #include <memory>
+#include <span>
+#include <string>
+#include <string_view>
 
 #include "absl/container/flat_hash_set.h"
-#include "include/v8-memory-span.h"
+#include "include/v8config.h"
 #include "src/base/logging.h"
 #include "src/base/once.h"
 #include "src/base/page-allocator.h"
+#include "src/base/platform/condition-variable.h"
 #include "src/base/platform/mutex.h"
+#include "src/base/platform/time.h"
 #include "src/codegen/external-reference-table.h"
 #include "src/common/globals.h"
+#include "src/execution/thread-id.h"
 #include "src/flags/flags.h"
 #include "src/heap/memory-chunk-constants.h"
 #include "src/sandbox/check.h"
-#include "src/sandbox/code-pointer-table.h"
-#include "src/utils/allocation.h"
-
 #include "src/sandbox/js-dispatch-table.h"
+#include "src/utils/allocation.h"
 
 #ifdef V8_ENABLE_SANDBOX
 #include "src/base/region-allocator.h"
@@ -40,13 +47,15 @@ namespace internal {
 class MemoryPool;
 
 #ifdef V8_ENABLE_SANDBOX
-class MemoryChunkMetadata;
+class BasePage;
 class Sandbox;
 
 class SandboxedArrayBufferAllocatorBase {
  public:
   virtual void* Allocate(size_t length) = 0;
   virtual void* AllocateUninitialized(size_t length) = 0;
+  // On allocation failure, triggers an OOM crash instead of returning nullptr.
+  virtual void* AllocateUninitializedOrCrash(size_t length) = 0;
   virtual void Free(void* ptr) = 0;
 };
 
@@ -71,6 +80,7 @@ class SandboxedArrayBufferAllocator final
 
   void* Allocate(size_t length) override;
   void* AllocateUninitialized(size_t length) override;
+  void* AllocateUninitializedOrCrash(size_t length) override;
   void Free(void* data) override;
 
   void TearDown();
@@ -107,6 +117,7 @@ class PABackedSandboxedArrayBufferAllocator
 
   void* Allocate(size_t length) override;
   void* AllocateUninitialized(size_t length) override;
+  void* AllocateUninitializedOrCrash(size_t length) override;
   void Free(void* data) override;
 
   void TearDown();
@@ -151,7 +162,7 @@ class SnapshotData;
 class V8_EXPORT_PRIVATE IsolateGroup final {
  public:
 #ifdef V8_ENABLE_SANDBOX
-  class MemoryChunkMetadataTableEntry {
+  class BasePageTableEntry {
    public:
     void CheckIfMetadataAccessibleFromIsolate(const Isolate* isolate) const {
       if (isolate_ ==
@@ -165,23 +176,22 @@ class V8_EXPORT_PRIVATE IsolateGroup final {
       CHECK_EQ(isolate_, isolate);
     }
 
-    void SetMetadata(MemoryChunkMetadata* metadata, Isolate* isolate);
+    void SetMetadata(BasePage* metadata, Isolate* isolate);
 
     const Isolate* isolate() const { return isolate_; }
-    MemoryChunkMetadata* metadata() const { return metadata_; }
+    BasePage* metadata() const { return metadata_; }
 
-    MemoryChunkMetadata** metadata_slot() { return &metadata_; }
+    BasePage** metadata_slot() { return &metadata_; }
 
    private:
     // This indicates that the metadata entry can be read from any isolates
     // (in essence, for the read-only or shared pages).
     static constexpr uintptr_t kReadOnlyOrSharedEntryIsolateSentinel = -1;
 
-    MemoryChunkMetadata* metadata_ = nullptr;
+    BasePage* metadata_ = nullptr;
     Isolate* isolate_ = nullptr;
   };
-  static_assert(sizeof(MemoryChunkMetadataTableEntry) ==
-                2 * kSystemPointerSize);
+  static_assert(sizeof(BasePageTableEntry) == 2 * kSystemPointerSize);
 #endif  // V8_ENABLE_SANDBOX
 
   // InitializeOncePerProcess should be called early on to initialize the
@@ -254,7 +264,7 @@ class V8_EXPORT_PRIVATE IsolateGroup final {
   static IsolateGroup* current() { return GetDefault(); }
 #endif  // V8_COMPRESS_POINTERS_IN_MULTIPLE_CAGES
 
-  MemorySpan<Address> external_ref_table() { return external_ref_table_; }
+  std::span<Address> external_ref_table() { return external_ref_table_; }
 
   bool has_shared_space_isolate() const {
     return shared_space_isolate_ != nullptr;
@@ -293,16 +303,12 @@ class V8_EXPORT_PRIVATE IsolateGroup final {
 
   Sandbox* sandbox() { return sandbox_; }
 
-  CodePointerTable* code_pointer_table() { return &code_pointer_table_; }
-
-  MemoryChunkMetadataTableEntry* metadata_pointer_table() {
+  BasePageTableEntry* metadata_pointer_table() {
     return metadata_pointer_table_;
   }
 
   SandboxedArrayBufferAllocatorBase* GetSandboxedArrayBufferAllocator();
 #endif  // V8_ENABLE_SANDBOX
-
-  JSDispatchTable* js_dispatch_table() { return &js_dispatch_table_; }
 
   void SetupReadOnlyHeap(Isolate* isolate,
                          SnapshotData* read_only_snapshot_data,
@@ -349,6 +355,30 @@ class V8_EXPORT_PRIVATE IsolateGroup final {
 
   V8_INLINE static IsolateGroup* GetDefault() { return default_isolate_group_; }
 
+  // Arms the given synchronization point. When a thread reaches it, it will
+  // block for the specified timeout (or less, if the point is resumed).
+  void SetBlockAtSynchronizationPointForTesting(
+      std::string synchronization_point, base::TimeDelta timeout);
+  // Resumes a thread currently blocked at the given synchronization point.
+  // Returns false if it wasn't armed.
+  bool ResumeSynchronizationPointForTesting(
+      std::string_view synchronization_point);
+  // Waits until the given synchronization point is reached by some thread.
+  // Returns false if it wasn't armed or on timeout (in which case `timed_out`
+  // is set to true as well). Note: this does not arm the synchronization point;
+  // it must be armed first.
+  bool WaitUntilBlockedForTesting(std::string_view synchronization_point,
+                                  base::TimeDelta timeout, bool& timed_out);
+  // Called when the synchronization point is reached; blocks if it was armed.
+  V8_INLINE void DoSynchronizationPointForTesting(
+      std::string_view synchronization_point) {
+    if (!any_synchronization_point_for_testing_.load(std::memory_order_relaxed))
+        [[likely]] {
+      return;
+    }
+    DoSynchronizationPointForTestingSlow(synchronization_point);
+  }
+
  private:
   friend class base::LeakyObject<IsolateGroup>;
   friend class MemoryPool;
@@ -377,6 +407,27 @@ class V8_EXPORT_PRIVATE IsolateGroup final {
   static IsolateGroup* current_non_inlined();
   static void set_current_non_inlined(IsolateGroup* group);
 #endif
+
+  void DoSynchronizationPointForTestingSlow(
+      std::string_view synchronization_point);
+
+  struct SynchronizationPointDataForTesting {
+    base::ConditionVariable cv;
+    // Set to true to signal that any thread that reaches this point should
+    // block.
+    bool block_requested = false;
+    // Number of threads that have reached the point and are currently blocked.
+    int blocked_threads = 0;
+    // The identity of the thread that set the `block_requested` flag.
+    ThreadId block_requester_thread = ThreadId::Invalid();
+    // How long a thread should remain blocked, unless resumed.
+    base::TimeDelta block_timeout;
+  };
+  std::atomic<bool> any_synchronization_point_for_testing_{false};
+  base::Mutex synchronization_point_mutex_for_testing_;
+  std::map<std::string, std::unique_ptr<SynchronizationPointDataForTesting>,
+           std::less<>>
+      synchronization_point_data_for_testing_;
 
   std::atomic<int> reference_count_{1};
   v8::PageAllocator* page_allocator_ = nullptr;
@@ -420,8 +471,7 @@ class V8_EXPORT_PRIVATE IsolateGroup final {
 
 #ifdef V8_ENABLE_SANDBOX
   Sandbox* sandbox_ = nullptr;
-  CodePointerTable code_pointer_table_;
-  MemoryChunkMetadataTableEntry metadata_pointer_table_
+  BasePageTableEntry metadata_pointer_table_
       [MemoryChunkConstants::kMetadataPointerTableSize]{};
 #ifdef V8_ENABLE_PARTITION_ALLOC
   PABackedSandboxedArrayBufferAllocator backend_allocator_;
@@ -430,11 +480,14 @@ class V8_EXPORT_PRIVATE IsolateGroup final {
 #endif
   TrustedRange trusted_range_;
 #endif  // V8_ENABLE_SANDBOX
-
-  JSDispatchTable js_dispatch_table_;
 };
 
 }  // namespace internal
 }  // namespace v8
+
+// A synchronization point that allows background threads to be predictably
+// blocked and resumed by JS testing intrinsics (%BlockAt and %Resume).
+#define SYNCHRONIZATION_POINT_FOR_TESTING(sync_point_name) \
+  IsolateGroup::current()->DoSynchronizationPointForTesting(sync_point_name)
 
 #endif  // V8_INIT_ISOLATE_GROUP_H_

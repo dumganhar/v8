@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "src/base/bit-field.h"
+#include "src/base/logging.h"
 #include "src/heap/base/basic-slot-set.h"
 #include "src/objects/compressed-slots.h"
 #include "src/objects/slots.h"
@@ -142,6 +143,7 @@ class SlotSet final : public ::heap::base::BasicSlotSet<kTaggedSize> {
       case v8::internal::AccessMode::NON_ATOMIC:
         return BasicSlotSet::AccessMode::NON_ATOMIC;
     }
+    UNREACHABLE();
   }
 
   // Similar to BasicSlotSet::Iterate() but Callback takes the parameter of type
@@ -266,7 +268,7 @@ enum class SlotType : uint8_t {
 // Data structure for maintaining a list of typed slots in a page.
 // Typed slots can only appear in Code objects, so
 // the maximum possible offset is limited by the
-// LargePageMetadata::kMaxCodePageSize. The implementation is a chain of chunks,
+// LargePage::kMaxCodePageSize. The implementation is a chain of chunks,
 // where each chunk is an array of encoded (slot type, slot offset) pairs. There
 // is no duplicate detection and we do not expect many duplicates because typed
 // slots contain V8 internal pointers that are not directly exposed to JS.

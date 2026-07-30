@@ -19,7 +19,7 @@
 #include "src/heap/marking-worklist-inl.h"
 #include "src/heap/marking-worklist.h"
 #include "src/heap/minor-mark-sweep.h"
-#include "src/heap/mutable-page-metadata.h"
+#include "src/heap/mutable-page.h"
 #include "src/heap/safepoint.h"
 #include "src/objects/descriptor-array.h"
 #include "src/objects/heap-object.h"
@@ -81,7 +81,6 @@ void MarkingBarrier::Write(Tagged<HeapObject> host, IndirectPointerSlot slot) {
   // We don't need to record a slot here because the entries in the pointer
   // tables are not compacted and because the pointers stored in the table
   // entries are updated after compacting GC.
-  static_assert(!CodePointerTable::kSupportsCompaction);
   static_assert(!TrustedPointerTable::kSupportsCompaction);
 #else
   UNREACHABLE();
@@ -146,8 +145,11 @@ void MarkingBarrier::Write(Tagged<DescriptorArray> descriptor_array,
   DCHECK(HeapLayout::InReadOnlySpace(descriptor_array->map()));
   DCHECK(MemoryChunk::FromHeapObject(descriptor_array)->IsMarking());
 
-  // Only major GC uses custom liveness.
-  if (is_minor() || IsStrongDescriptorArray(descriptor_array)) {
+  // Only major GC uses custom liveness, and only when DescriptorArrays can be
+  // trimmed.
+  if (!v8_flags.trim_descriptor_arrays_in_gc ||
+      !v8_flags.trim_descriptor_arrays_in_gc_with_stack || is_minor() ||
+      IsStrongDescriptorArray(descriptor_array)) {
     MarkValueLocal(descriptor_array);
     return;
   }
@@ -171,7 +173,7 @@ void MarkingBarrier::Write(Tagged<DescriptorArray> descriptor_array,
       DCHECK_EQ(target_worklist.value(),
                 MarkingHelper::WorklistTarget::kRegular);
     } else {
-      DCHECK(HeapLayout::InBlackAllocatedPage(descriptor_array));
+      DCHECK(TrustedHeapLayout::InBlackAllocatedPage(descriptor_array));
     }
 #endif  // DEBUG
     gc_epoch = major_collector_->epoch();
@@ -217,6 +219,7 @@ template <typename Space>
 void SetGenerationPageFlags(Space* space, MarkingMode marking_mode) {
   if constexpr (std::is_same_v<Space, OldSpace> ||
                 std::is_same_v<Space, SharedSpace> ||
+                std::is_same_v<Space, SharedTrustedSpace> ||
                 std::is_same_v<Space, TrustedSpace> ||
                 std::is_same_v<Space, CodeSpace>) {
     for (auto* p : *space) {
@@ -224,6 +227,7 @@ void SetGenerationPageFlags(Space* space, MarkingMode marking_mode) {
     }
   } else if constexpr (std::is_same_v<Space, OldLargeObjectSpace> ||
                        std::is_same_v<Space, SharedLargeObjectSpace> ||
+                       std::is_same_v<Space, SharedTrustedLargeObjectSpace> ||
                        std::is_same_v<Space, TrustedLargeObjectSpace> ||
                        std::is_same_v<Space, CodeLargeObjectSpace>) {
     for (auto* p : *space) {
@@ -274,6 +278,12 @@ void ActivateSpaces(Heap* heap, MarkingMode marking_mode) {
     if (heap->shared_lo_space()) {
       ActivateSpace(heap->shared_lo_space(), marking_mode);
     }
+    if (heap->shared_trusted_space()) {
+      ActivateSpace(heap->shared_trusted_space(), marking_mode);
+    }
+    if (heap->shared_trusted_lo_space()) {
+      ActivateSpace(heap->shared_trusted_lo_space(), marking_mode);
+    }
   }
 
   ActivateSpace(heap->trusted_space(), marking_mode);
@@ -300,6 +310,12 @@ void DeactivateSpaces(Heap* heap, MarkingMode marking_mode) {
     }
     if (heap->shared_lo_space()) {
       DeactivateSpace(heap->shared_lo_space());
+    }
+    if (heap->shared_trusted_space()) {
+      DeactivateSpace(heap->shared_trusted_space());
+    }
+    if (heap->shared_trusted_lo_space()) {
+      DeactivateSpace(heap->shared_trusted_lo_space());
     }
   }
 
@@ -440,7 +456,7 @@ void MarkingBarrier::PublishIfNeeded() {
   if (is_activated_) {
     current_worklists_->Publish();
     for (auto& it : typed_slots_map_) {
-      MutablePageMetadata* memory_chunk = it.first;
+      MutablePage* memory_chunk = it.first;
       // Access to TypeSlots need to be protected, since LocalHeaps might
       // publish code in the background thread.
       base::MutexGuard guard(memory_chunk->mutex());

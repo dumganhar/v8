@@ -30,7 +30,7 @@ class ThreadLocalTop {
   // TODO(all): This is not particularly beautiful. We should probably
   // refactor this to really consist of just Addresses and 32-bit
   // integer fields.
-  static constexpr uint32_t kSizeInBytes = 29 * kSystemPointerSize;
+  static constexpr uint32_t kSizeInBytes = 30 * kSystemPointerSize;
 
   // Does early low-level initialization that does not depend on the
   // isolate being present.
@@ -136,6 +136,10 @@ class ThreadLocalTop {
   // if the context dies.
   Tagged<Context> topmost_script_having_context_;
 
+  // We cache the last entered context of the HandleScopeImplementer here to
+  // have faster lookups in RunMicrotasks().
+  Tagged<NativeContext> last_entered_context_ = Tagged<NativeContext>();
+
   // This field is updated along with context_ on every operation triggered
   // via V8 Api.
   Address last_api_entry_;
@@ -143,10 +147,6 @@ class ThreadLocalTop {
   // ] CEntry/CallApiCallback/CallApiGetter fields.
 
   Tagged<Object> exception_ = Smi::zero();
-
-  static constexpr int exception_offset() {
-    return offsetof(ThreadLocalTop, exception_);
-  }
 
   // Communication channel between Isolate::FindHandler and the CEntry.
   Tagged<Context> pending_handler_context_;

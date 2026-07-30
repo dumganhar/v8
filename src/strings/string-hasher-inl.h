@@ -8,22 +8,16 @@
 #include "src/strings/string-hasher.h"
 // Include the non-inl header before the rest of the headers.
 
-#include "src/common/globals.h"
-#include "src/utils/utils.h"
-
-#ifdef __SSE2__
-#include <emmintrin.h>
-#elif defined(__ARM_NEON__)
-#include <arm_neon.h>
-#endif
-
 // Comment inserted to prevent header reordering.
 #include <type_traits>
 
+#include "src/common/globals.h"
+#include "src/numbers/hash-seed-inl.h"
 #include "src/objects/name-inl.h"
-#include "src/objects/string-inl.h"
+#include "src/objects/string.h"
 #include "src/strings/char-predicates-inl.h"
 #include "src/utils/utils-inl.h"
+#include "src/utils/utils.h"
 #include "third_party/rapidhash-v8/rapidhash.h"
 
 namespace v8 {
@@ -43,26 +37,37 @@ uint32_t ConvertRawHashToUsableHash(T raw_hash) {
 }
 
 V8_INLINE bool IsOnly8Bit(const uint16_t* chars, unsigned len) {
-  // TODO(leszeks): This could be SIMD for efficiency on large strings, if we
-  // need it.
-  for (unsigned i = 0; i < len; ++i) {
-    if (chars[i] > 255) {
-      return false;
+  // For small strings, use a simple scalar loop to avoid SIMD overhead.
+  // Threshold of 16 is chosen to balance setup cost vs benefit.
+  if (len <= 16) {
+    for (unsigned i = 0; i < len; i++) {
+      if (chars[i] > 0xFF) {
+        return false;
+      }
     }
+    return true;
   }
-  return true;
+  // For larger strings, use the non-inlined SIMD implementation.
+  return IsOnly8BitSIMD(chars, len);
 }
 
 V8_INLINE uint64_t GetRapidHash(const uint8_t* chars, uint32_t length,
-                                uint64_t seed, const uint64_t secret[3]) {
+                                uint64_t seed, const uint64_t secret[3],
+                                bool* out_one_byte_content = nullptr) {
+  if (out_one_byte_content) *out_one_byte_content = true;
   return rapidhash(chars, length, seed, secret);
 }
 
 V8_INLINE uint64_t GetRapidHash(const uint16_t* chars, uint32_t length,
-                                uint64_t seed, const uint64_t secret[3]) {
+                                uint64_t seed, const uint64_t secret[3],
+                                bool* out_one_byte_content = nullptr) {
   // For 2-byte strings we need to preserve the same hash for strings in just
-  // the latin-1 range.
-  if (V8_UNLIKELY(IsOnly8Bit(chars, length))) {
+  // the latin-1 range. Reuse the IsOnly8Bit pass to report whether the
+  // content fits in one byte; callers (e.g. internalization) use this to
+  // canonicalize without a second scan.
+  const bool one_byte = IsOnly8Bit(chars, length);
+  if (out_one_byte_content) *out_one_byte_content = one_byte;
+  if (V8_UNLIKELY(one_byte)) {
     return detail::HashConvertingTo8Bit(chars, length, seed, secret);
   }
   return rapidhash(reinterpret_cast<const uint8_t*>(chars), 2 * length, seed,
@@ -71,8 +76,10 @@ V8_INLINE uint64_t GetRapidHash(const uint16_t* chars, uint32_t length,
 
 template <typename uchar>
 V8_INLINE uint32_t GetUsableRapidHash(const uchar* chars, uint32_t length,
-                                      uint64_t seed, const uint64_t secret[3]) {
-  return ConvertRawHashToUsableHash(GetRapidHash(chars, length, seed, secret));
+                                      uint64_t seed, const uint64_t secret[3],
+                                      bool* out_one_byte_content = nullptr) {
+  return ConvertRawHashToUsableHash(
+      GetRapidHash(chars, length, seed, secret, out_one_byte_content));
 }
 
 }  // namespace detail
@@ -113,6 +120,70 @@ uint32_t StringHasher::MakeArrayIndexHash(uint32_t value, uint32_t length) {
   DCHECK(String::IsIntegerIndex(value));
   DCHECK_EQ(length <= String::kMaxCachedArrayIndexLength,
             Name::ContainsCachedArrayIndex(value));
+  return value;
+}
+
+uint32_t StringHasher::DecodeArrayIndexFromHashField(uint32_t raw_hash_field) {
+  DCHECK(String::ContainsCachedArrayIndex(raw_hash_field) ||
+         String::IsIntegerIndex(raw_hash_field));
+  return String::ArrayIndexValueBits::decode(raw_hash_field);
+}
+
+#ifdef V8_ENABLE_SEEDED_ARRAY_INDEX_HASH
+uint32_t StringHasher::SeedArrayIndexValue(uint32_t value,
+                                           const HashSeed seed) {
+  uint32_t m1 = seed.m1();
+  uint32_t m2 = seed.m2();
+  uint32_t m3 = seed.m3();
+  constexpr uint32_t kShift = Name::kArrayIndexHashShift;
+  constexpr uint32_t kMask = Name::kArrayIndexValueMask;
+  // 3-round xorshift-multiply.
+  uint32_t x = value;
+  x ^= x >> kShift;
+  x = (x * m1) & kMask;
+  x ^= x >> kShift;
+  x = (x * m2) & kMask;
+  x ^= x >> kShift;
+  x = (x * m3) & kMask;
+  x ^= x >> kShift;
+  return x;
+}
+
+uint32_t StringHasher::UnseedArrayIndexValue(uint32_t value,
+                                             const HashSeed seed) {
+  uint32_t m1_inv = seed.m1_inv();
+  uint32_t m2_inv = seed.m2_inv();
+  uint32_t m3_inv = seed.m3_inv();
+  uint32_t x = value;
+  constexpr uint32_t kShift = Name::kArrayIndexHashShift;
+  constexpr uint32_t kMask = Name::kArrayIndexValueMask;
+  // 3-round xorshift-multiply (inverse).
+  // Xorshift is an involution when kShift is at least half of the value width.
+  x ^= x >> kShift;
+  x = (x * m3_inv) & kMask;
+  x ^= x >> kShift;
+  x = (x * m2_inv) & kMask;
+  x ^= x >> kShift;
+  x = (x * m1_inv) & kMask;
+  x ^= x >> kShift;
+  return x;
+}
+#endif  // V8_ENABLE_SEEDED_ARRAY_INDEX_HASH
+
+uint32_t StringHasher::MakeArrayIndexHash(
+    uint32_t value, uint32_t length, [[maybe_unused]] const HashSeed seed) {
+#ifdef V8_ENABLE_SEEDED_ARRAY_INDEX_HASH
+  value = SeedArrayIndexValue(value, seed);
+#endif
+  return MakeArrayIndexHash(value, length);
+}
+
+uint32_t StringHasher::DecodeArrayIndexFromHashField(
+    uint32_t raw_hash_field, [[maybe_unused]] const HashSeed seed) {
+  uint32_t value = DecodeArrayIndexFromHashField(raw_hash_field);
+#ifdef V8_ENABLE_SEEDED_ARRAY_INDEX_HASH
+  value = UnseedArrayIndexValue(value, seed);
+#endif
   return value;
 }
 
@@ -225,7 +296,8 @@ static_assert(String::kMaxArrayIndexSize == String::kMaxIntegerIndexSize);
 template <typename char_t>
 uint32_t StringHasher::HashSequentialString(const char_t* chars_raw,
                                             uint32_t length,
-                                            const HashSeed seed) {
+                                            const HashSeed seed,
+                                            bool* out_one_byte_content) {
   static_assert(std::is_integral_v<char_t>);
   static_assert(sizeof(char_t) <= 2);
   using uchar = std::make_unsigned_t<char_t>;
@@ -239,9 +311,11 @@ uint32_t StringHasher::HashSequentialString(const char_t* chars_raw,
       detail::ArrayIndexT index;
       uint32_t i;
       switch (detail::TryParseArrayIndex(chars, length, i, index)) {
-        case detail::kSuccess:
+        case detail::kSuccess: {
           DCHECK_LE(index, String::kMaxArrayIndex);
-          return MakeArrayIndexHash(static_cast<uint32_t>(index), length);
+          return StringHasher::MakeArrayIndexHash(static_cast<uint32_t>(index),
+                                                  length, seed);
+        }
         case detail::kNonIndex:
           // A non-index result from TryParseArrayIndex means we don't need to
           // check for integer indices.
@@ -256,7 +330,8 @@ uint32_t StringHasher::HashSequentialString(const char_t* chars_raw,
             case detail::kSuccess: {
               uint32_t hash = String::CreateHashFieldValue(
                   detail::GetUsableRapidHash(chars, length, seed.seed(),
-                                             seed.secret()),
+                                             seed.secret(),
+                                             out_one_byte_content),
                   String::HashFieldType::kIntegerIndex);
               if (Name::ContainsCachedArrayIndex(hash)) {
                 // The hash accidentally looks like a cached index. Fix that by
@@ -291,7 +366,8 @@ uint32_t StringHasher::HashSequentialString(const char_t* chars_raw,
 
   // Non-index hash.
   return String::CreateHashFieldValue(
-      detail::GetUsableRapidHash(chars, length, seed.seed(), seed.secret()),
+      detail::GetUsableRapidHash(chars, length, seed.seed(), seed.secret(),
+                                 out_one_byte_content),
       String::HashFieldType::kHash);
 }
 

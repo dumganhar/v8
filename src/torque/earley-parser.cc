@@ -10,6 +10,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "absl/container/node_hash_map.h"
+#include "src/base/iterator.h"
 #include "src/torque/ast.h"
 #include "src/torque/utils.h"
 
@@ -81,8 +83,9 @@ std::vector<const Item*> Item::Children() const {
 
 std::string Item::SplitByChildren(const LexerResult& tokens) const {
   if (right().size() == 1) {
-    if (const Item* child = Children()[0])
+    if (const Item* child = Children()[0]) {
       return child->SplitByChildren(tokens);
+    }
   }
   std::stringstream s;
   bool first = true;
@@ -169,13 +172,12 @@ Symbol* Lexer::MatchToken(InputPosition* pos, InputPosition end) {
   // Now check for keywords. Prefer keywords over patterns unless the pattern is
   // longer. Iterate from the end to ensure that if one keyword is a prefix of
   // another, we first try to match the longer one.
-  for (auto it = keywords_.rbegin(); it != keywords_.rend(); ++it) {
-    const std::string& keyword = it->first;
+  for (auto& [keyword, keyword_symbol] : base::Reversed(keywords_)) {
     if (static_cast<size_t>(end - token_start) < keyword.size()) continue;
     if (keyword.size() >= pattern_size &&
         keyword == std::string(token_start, token_start + keyword.size())) {
       *pos = token_start + keyword.size();
-      return &it->second;
+      return &keyword_symbol;
     }
   }
   if (pattern_size > 0) return symbol;
@@ -186,7 +188,7 @@ Symbol* Lexer::MatchToken(InputPosition* pos, InputPosition end) {
 // (https://en.wikipedia.org/wiki/Earley_parser).
 const Item* RunEarleyAlgorithm(
     Symbol* start, const LexerResult& tokens,
-    std::unordered_set<Item, base::hash<Item>>* processed) {
+    absl::node_hash_set<Item, base::hash<Item>>* processed) {
   // Worklist for items at the current position.
   std::vector<Item> worklist;
   // Worklist for items at the next position.
@@ -195,8 +197,8 @@ const Item* RunEarleyAlgorithm(
       SourcePosition{CurrentSourceFile::Get(), LineAndColumn::Invalid(),
                      LineAndColumn::Invalid()});
   std::vector<const Item*> completed_items;
-  std::unordered_map<std::pair<size_t, Symbol*>, std::set<const Item*>,
-                     base::hash<std::pair<size_t, Symbol*>>>
+  absl::node_hash_map<std::pair<size_t, Symbol*>, std::set<const Item*>,
+                      base::hash<std::pair<size_t, Symbol*>>>
       waiting;
 
   std::vector<const Item*> debug_trace;

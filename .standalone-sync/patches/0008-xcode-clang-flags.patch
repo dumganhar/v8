@@ -1,0 +1,103 @@
+diff --git a/build/config/clang/clang.gni b/build/config/clang/clang.gni
+--- a/build/config/clang/clang.gni
++++ b/build/config/clang/clang.gni
+@@ -84,6 +84,10 @@ declare_args() {
+   # newer Chromium Clang used by host tools.
+   standalone_use_android_ndk_clang = false
+ 
++  # Standalone Apple builds use Xcode Clang rather than Chromium Clang.
++  # This gates only flags confirmed unsupported by the Xcode toolchain.
++  standalone_use_xcode_clang = false
++
+   clang_base_path = default_clang_base_path
+ 
+   # Specifies whether or not bitcode should be embedded during compilation. This
+diff --git a/build/config/compiler/BUILD.gn b/build/config/compiler/BUILD.gn
+--- a/build/config/compiler/BUILD.gn
++++ b/build/config/compiler/BUILD.gn
+@@ -576,7 +576,7 @@ config("compiler") {
+   if (is_clang) {
+     # Flags for diagnostics.
+     cflags += [ "-fcolor-diagnostics" ]
+-    if (!is_wasm) {
++    if (!is_wasm && !standalone_use_xcode_clang) {
+       if (!is_win) {
+         cflags += [ "-fdiagnostics-show-inlining-chain" ]
+       } else {
+@@ -617,7 +617,7 @@ config("compiler") {
+     # The performance improvement does not seem worth the risk. See
+     # https://crbug.com/484082200 for background and https://crrev.com/c/7593035
+     # for discussion.
+-    if (!is_wasm) {
++    if (!is_wasm && !standalone_use_xcode_clang) {
+       cflags += [ "-fno-lifetime-dse" ]
+     }
+ 
+@@ -1582,7 +1582,9 @@ ubsan_hardening("c_array_bounds") {
+   # the related warning about "unsafe-buffer-usage-in-static-sized-array",
+   # since we know that the array bounds sanitizing will catch any out-of-
+   # bounds accesses.
+-  cflags = [ "-Wno-unsafe-buffer-usage-in-static-sized-array" ]
++  if (!standalone_use_xcode_clang) {
++    cflags = [ "-Wno-unsafe-buffer-usage-in-static-sized-array" ]
++  }
+ }
+ 
+ # Enable UBSan subset to ensure we always hit `return` statement in non-void
+@@ -1938,6 +1940,10 @@ config("default_warnings") {
+       ]
+     }
+ 
++    if (standalone_use_xcode_clang) {
++      cflags -= [ "-Wno-unused-but-set-global" ]
++    }
++
+     if (is_android && standalone_use_android_ndk_clang) {
+       cflags -= [
+         "-Wno-nontrivial-memcall",
+diff --git a/BUILD.gn b/BUILD.gn
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1830,7 +1830,8 @@ config("strict_warnings") {
+     # don't block compiler updates in Chromium. We'll resolve these when
+     # rolling the compiler update into V8 instead.
+     if (!build_with_chromium && v8_current_cpu != "ppc64" &&
+-        v8_current_cpu != "s390x") {
++        v8_current_cpu != "s390x" &&
++        !standalone_use_xcode_clang) {
+       cflags += [ "-Wlifetime-safety-permissive" ]
+     }
+ 
+diff --git a/build/config/sanitizers/sanitizers.gni b/build/config/sanitizers/sanitizers.gni
+--- a/build/config/sanitizers/sanitizers.gni
++++ b/build/config/sanitizers/sanitizers.gni
+@@ -4,6 +4,7 @@
+ 
+ import("//build/config/cast.gni")
+ import("//build/config/chrome_build.gni")
++import("//build/config/clang/clang.gni")
+ import("//build/config/chromeos/args.gni")
+ import("//build/config/profiling/profiling.gni")
+ import("//build/toolchain/toolchain.gni")
+@@ -532,15 +533,18 @@ template("ubsan_hardening") {
+     if (_condition && !is_ubsan && is_clang) {
+       cflags = [
+         "-fsanitize=${invoker.sanitizer}",
+         "-fsanitize-trap=${invoker.sanitizer}",
+-
++      ]
++      if (!standalone_use_xcode_clang) {
+         # Prevents `__has_feature(undefined_behavior_sanitizer)`
+         # from evaluating true. Configs defined here are intended to
+         # be usable even in release builds, i.e. as widely as possible.
+         # It's important not to have full-on UBSan workarounds activate
+         # just because we built support for a specific sanitizer.
+-        "-fsanitize-ignore-for-ubsan-feature=${invoker.sanitizer}",
+-      ]
++        cflags += [
++          "-fsanitize-ignore-for-ubsan-feature=${invoker.sanitizer}",
++        ]
++      }
+       if (defined(invoker.cflags)) {
+         cflags += invoker.cflags
+       }

@@ -49,9 +49,9 @@ V8_NOINLINE V8_EXPORT_PRIVATE bool EquivalentTypes(ValueType type1,
 // For heap types, the following subtyping rules hold:
 // - The abstract heap types form the following type hierarchies:
 //
-//                   any               func         extern
-//               /        \             |             |
-//             eq          \          nofunc       noextern
+//                   any               func         extern      waitqueue
+//               /        \             |             |             |
+//             eq          \          nofunc       noextern    nowaitqueue
 //          /   |   \       \
 //       i31  array  struct  string
 //          \___|______|_____/
@@ -150,8 +150,7 @@ ValueType ToNullSentinel(TypeInModule type);
 ValueType ToTopType(ValueType type);
 
 // Returns if two types share the same type hierarchy (any, extern, funcref).
-bool IsSameTypeHierarchy(HeapType type1, HeapType type2,
-                         const WasmModule* module);
+V8_EXPORT_PRIVATE bool IsSameTypeHierarchy(HeapType type1, HeapType type2);
 
 }  // namespace v8::internal::wasm
 

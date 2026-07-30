@@ -237,6 +237,9 @@ struct V8_EXPORT_PRIVATE AssemblerOptions {
   // PC-relative calls may be used. So, we fall back to an indirect mode.
   // TODO(v8:11527): remove once kForMksnapshot is removed.
   bool use_pc_relative_calls_and_jumps_for_mksnapshot = false;
+  // Generating builtins with mksnapshot, this option can be used when the
+  // isolate isn't available.
+  bool generating_embedded_builtin = false;
 
   // On some platforms, all code is created within a certain address range in
   // the process, and the base of this code range is configured here.
@@ -332,6 +335,10 @@ std::unique_ptr<AssemblerBuffer> NewAssemblerBuffer(int size);
 
 class V8_EXPORT_PRIVATE AssemblerBase : public Malloced {
  public:
+  static constexpr int kMaximalBufferSize = 512 * MB;
+
+  enum class BufferGrowthStrategy { kDouble, kDoubleCapped1MB };
+
   AssemblerBase(const AssemblerOptions& options,
                 std::unique_ptr<AssemblerBuffer>);
   virtual ~AssemblerBase();
@@ -389,11 +396,12 @@ class V8_EXPORT_PRIVATE AssemblerBase : public Malloced {
 
   void skip_bytes(int num_bytes) { pc_ += num_bytes; }
 
-// MIPS, LOONG, and RISC-V need to use their own implementations to avoid the
-// influence of branch trampolines. They provide their implementations in the
-// architecture-specific assembler subclasses.
-#if !defined(V8_TARGET_ARCH_MIPS64) && !defined(V8_TARGET_ARCH_LOONG64) && \
-    !defined(V8_TARGET_ARCH_RISCV32) && !defined(V8_TARGET_ARCH_RISCV64)
+// MIPS, LOONG, RISC-V, and PPC64 need to use their own implementations to avoid
+// the influence of branch trampolines. They provide their implementations in
+// the architecture-specific assembler subclasses.
+#if !defined(V8_TARGET_ARCH_MIPS64) && !defined(V8_TARGET_ARCH_LOONG64) &&  \
+    !defined(V8_TARGET_ARCH_RISCV32) && !defined(V8_TARGET_ARCH_RISCV64) && \
+    !defined(V8_TARGET_ARCH_PPC64)
   int pc_offset_for_safepoint() const { return pc_offset(); }
 #endif
 
@@ -409,6 +417,8 @@ class V8_EXPORT_PRIVATE AssemblerBase : public Malloced {
     pc_ = nullptr;
     return buffer;
   }
+
+  int ComputeNewBufferSize(BufferGrowthStrategy strategy);
 
   // This function is called when code generation is aborted, so that
   // the assembler could clean up internal data structures.
@@ -426,11 +436,18 @@ class V8_EXPORT_PRIVATE AssemblerBase : public Malloced {
     if (V8_LIKELY(!v8_flags.code_comments)) return;
     if (options().emit_code_comments) {
       std::string comment_str(comment);
-      if (loc.FileName()) {
+      if (loc) {
         comment_str += " - " + loc.ToString();
       }
-      code_comments_writer_.Add(pc_offset(), comment_str);
+
+      code_comments_writer_.Add(pc_offset(), std::move(comment_str));
     }
+  }
+
+  V8_INLINE void RecordCfi(std::string_view comment) {
+    // TODO(olivf): Have a dedicated table for CFI instead of putting it into
+    // the code comments.
+    code_comments_writer_.Add(pc_offset(), "CFI:" + std::string(comment));
   }
 
 #ifdef V8_CODE_COMMENTS
@@ -475,6 +492,12 @@ class V8_EXPORT_PRIVATE AssemblerBase : public Malloced {
   // The default buffer size used if we do not know the final size of the
   // generated code.
   static constexpr int kDefaultBufferSize = 4 * KB;
+
+  void RecordJSDispatchHandle(JSDispatchHandle handle, uint16_t argument_count);
+  const std::vector<std::pair<JSDispatchHandle, uint16_t>>&
+  js_dispatch_handles() const {
+    return js_dispatch_handles_;
+  }
 
  protected:
   // Add 'target' to the {code_targets_} vector, if necessary, and return the
@@ -551,6 +574,8 @@ class V8_EXPORT_PRIVATE AssemblerBase : public Malloced {
                      IndirectHandle<HeapObject>::hash,
                      IndirectHandle<HeapObject>::equal_to>
       embedded_objects_map_;
+
+  std::vector<std::pair<JSDispatchHandle, uint16_t>> js_dispatch_handles_;
 
   const AssemblerOptions options_;
   uint64_t enabled_cpu_features_;

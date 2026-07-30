@@ -21,7 +21,6 @@ template("mac_toolchain") {
     toolchain_args = {
       forward_variables_from(invoker.toolchain_args, "*")
       current_os = "mac"
-
       if (target_os == "ios") {
         # Standalone builds use Xcode's libtool instead of Chromium's llvm-ar.
         use_lld = false

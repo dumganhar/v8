@@ -195,7 +195,7 @@ int InterruptBudgetFor(Isolate* isolate, std::optional<CodeKind> code_kind,
   }
 
   if (TiersUpToMaglev(code_kind) &&
-      !function->IsTieringRequestedOrInProgress()) {
+      !function->IsTieringRequestedOrInProgress(isolate)) {
     if (v8_flags.profile_guided_optimization) {
       switch (cached_tiering_decision) {
         case CachedTieringDecision::kDelayMaglev:
@@ -215,7 +215,7 @@ int InterruptBudgetFor(Isolate* isolate, std::optional<CodeKind> code_kind,
       // The enum value is coming from inside the sandbox and while the switch
       // is exhaustive, it's not guaranteed that value is one of the declared
       // values.
-      SBXCHECK(false);
+      UNREACHABLE();
     }
     return v8_flags.invocation_count_for_maglev * bytecode_length;
   }
@@ -450,7 +450,7 @@ bool ShouldResetInterruptBudgetByICChange(
   }
   // The enum value is coming from inside the sandbox and while the switch is
   // exhaustive, it's not guaranteed that value is one of the declared values.
-  SBXCHECK(false);
+  UNREACHABLE();
 }
 
 }  // namespace
@@ -535,8 +535,8 @@ void TieringManager::NotifyICChanged(Tagged<FeedbackVector> vector) {
 }
 
 TieringManager::OnInterruptTickScope::OnInterruptTickScope() {
-  TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.compile"),
-               "V8.MarkCandidatesForOptimization");
+  TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("v8.compile"),
+              "V8.MarkCandidatesForOptimization");
 }
 
 void TieringManager::OnInterruptTick(DirectHandle<JSFunction> function,

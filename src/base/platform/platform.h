@@ -157,6 +157,9 @@ class V8_BASE_EXPORT OS {
   // part of V8::Initialize, at which point this function can probably be
   // merged into OS::Initialize.
   static void EnsureWin32MemoryAPILoaded();
+
+  // Convert utf-8 encoded string to utf-16 encoded.
+  static std::wstring ConvertUtf8StringToUtf16(const char* str);
 #endif
 
   // Check whether CET shadow stack is enabled.
@@ -234,9 +237,9 @@ class V8_BASE_EXPORT OS {
   };
 
   // Helpers to create shared memory objects. Currently only used for testing.
-  static PlatformSharedMemoryHandle CreateSharedMemoryHandleForTesting(
+  static std::optional<SharedMemoryHandle> CreateSharedMemoryHandleForTesting(
       size_t size);
-  static void DestroySharedMemoryHandle(PlatformSharedMemoryHandle handle);
+  static void DestroySharedMemoryHandle(SharedMemoryHandle handle);
 
   static bool HasLazyCommits();
 
@@ -368,6 +371,13 @@ class V8_BASE_EXPORT OS {
   static void SetDataReadOnly(void* address, size_t size);
 
  private:
+  // Assign a name to a memory region.
+  //
+  // For example on Linux, if the kernel supports this, the name will
+  // afterwards show up in /proc/$pid/maps.
+  static bool SetMemoryRegionName(const void* address, size_t size,
+                                  const char* name);
+
   static int GetCurrentThreadIdInternal();
 
   // These classes use the private memory management API below.
@@ -389,7 +399,7 @@ class V8_BASE_EXPORT OS {
 
   V8_WARN_UNUSED_RESULT static void* Allocate(
       void* address, size_t size, size_t alignment, MemoryPermission access,
-      PlatformSharedMemoryHandle handle = kInvalidSharedMemoryHandle);
+      std::optional<SharedMemoryHandle> handle = std::nullopt);
 
   V8_WARN_UNUSED_RESULT static void* AllocateShared(size_t size,
                                                     MemoryPermission access);
@@ -400,9 +410,10 @@ class V8_BASE_EXPORT OS {
 
   static void Free(void* address, size_t size);
 
-  V8_WARN_UNUSED_RESULT static void* AllocateShared(
-      void* address, size_t size, OS::MemoryPermission access,
-      PlatformSharedMemoryHandle handle, uint64_t offset);
+  V8_WARN_UNUSED_RESULT static void* AllocateShared(void* address, size_t size,
+                                                    OS::MemoryPermission access,
+                                                    SharedMemoryHandle handle,
+                                                    uint64_t offset);
 
   static void FreeShared(void* address, size_t size);
 
@@ -427,7 +438,7 @@ class V8_BASE_EXPORT OS {
   CreateAddressSpaceReservation(
       void* hint, size_t size, size_t alignment,
       MemoryPermission max_permission,
-      PlatformSharedMemoryHandle handle = kInvalidSharedMemoryHandle);
+      std::optional<SharedMemoryHandle> handle = std::nullopt);
 
   static void FreeAddressSpaceReservation(AddressSpaceReservation reservation);
 
@@ -482,7 +493,7 @@ class V8_BASE_EXPORT AddressSpaceReservation {
 
   V8_WARN_UNUSED_RESULT bool AllocateShared(void* address, size_t size,
                                             OS::MemoryPermission access,
-                                            PlatformSharedMemoryHandle handle,
+                                            SharedMemoryHandle handle,
                                             uint64_t offset);
 
   V8_WARN_UNUSED_RESULT bool FreeShared(void* address, size_t size);
@@ -496,6 +507,10 @@ class V8_BASE_EXPORT AddressSpaceReservation {
   V8_WARN_UNUSED_RESULT bool DiscardSystemPages(void* address, size_t size);
 
   V8_WARN_UNUSED_RESULT bool DecommitPages(void* address, size_t size);
+
+  bool SetName(const char* name) {
+    return OS::SetMemoryRegionName(base_, size_, name);
+  }
 
   V8_WARN_UNUSED_RESULT std::optional<AddressSpaceReservation>
   CreateSubReservation(void* address, size_t size,
@@ -634,10 +649,15 @@ class V8_BASE_EXPORT Thread {
   PlatformData* data() { return data_; }
   Priority priority() const { return priority_; }
 
-  void NotifyStartedAndRun() {
+  virtual void NotifyStartedAndDispatch() {
     if (start_semaphore_) start_semaphore_->Signal();
-    Run();
+    Dispatch();
   }
+
+ protected:
+  // The default implementation simply calls Run().
+  // This can be overridden to perform initialization before Run() is called.
+  virtual void Dispatch() { Run(); }
 
  private:
   void set_name(const char* name);
@@ -671,6 +691,16 @@ class V8_BASE_EXPORT Stack {
 
   // Gets the start of the stack of the current thread.
   static StackSlot GetStackStart();
+
+  // On Windows, the TEB's StackLimit changes during execution as the stack
+  // grows. So do not cache it like we do for the stack start, but expose
+  // functions to explicitly save it and restore it as needed. Used by wasm JSPI
+  // / stack switching to switch to and from the central stack.
+  static void SaveStackLimit();
+  static StackSlot GetStackLimit();
+
+  // Sets the TEB's StackLimit and StackBase on Windows.
+  static void SetCurrentThreadStackBounds(uintptr_t limit, uintptr_t base);
 
   // Returns the current stack top. Works correctly with ASAN and SafeStack.
   //
@@ -718,6 +748,7 @@ class V8_BASE_EXPORT Stack {
   // Return the current thread stack start pointer.
   static StackSlot GetStackStartUnchecked();
   static Stack::StackSlot ObtainCurrentThreadStackStart();
+  static Stack::StackSlot ObtainCurrentThreadStackLimit();
 
   friend class heap::base::Stack;
 };

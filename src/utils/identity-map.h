@@ -7,8 +7,10 @@
 
 #include <type_traits>
 
+#include "include/v8config.h"
 #include "src/base/hashing.h"
 #include "src/handles/handles.h"
+#include "src/heap/gc-callbacks.h"
 #include "src/heap/heap.h"
 #include "src/objects/tagged.h"
 
@@ -17,6 +19,7 @@ namespace internal {
 
 // Forward declarations.
 class Heap;
+class Isolate;
 class StrongRootsEntry;
 
 template <typename T>
@@ -27,7 +30,7 @@ struct IdentityMapFindResult {
 
 // Base class of identity maps contains shared code for all template
 // instantiations.
-class V8_EXPORT_PRIVATE IdentityMapBase {
+class V8_EXPORT_PRIVATE IdentityMapBase : public GCRootsProvider {
  public:
   IdentityMapBase(const IdentityMapBase&) = delete;
   IdentityMapBase& operator=(const IdentityMapBase&) = delete;
@@ -35,6 +38,7 @@ class V8_EXPORT_PRIVATE IdentityMapBase {
   int size() const { return size_; }
   int capacity() const { return capacity_; }
   bool is_iterable() const { return is_iterable_; }
+  bool IsInvalidatedForTesting() const { return invalidated_; }
 
  protected:
   // Allow Tester to access internals, including changing the address of objects
@@ -45,12 +49,11 @@ class V8_EXPORT_PRIVATE IdentityMapBase {
 
   explicit IdentityMapBase(Heap* heap)
       : heap_(heap),
-        gc_counter_(-1),
+        invalidated_(false),
         size_(0),
         capacity_(0),
         mask_(0),
         keys_(nullptr),
-        strong_roots_entry_(nullptr),
         values_(nullptr),
         is_iterable_(false) {}
   virtual ~IdentityMapBase();
@@ -72,6 +75,10 @@ class V8_EXPORT_PRIVATE IdentityMapBase {
   virtual uintptr_t* NewPointerArray(size_t length, uintptr_t value) = 0;
   virtual void DeletePointerArray(uintptr_t* array, size_t length) = 0;
 
+  // GCRootsProvider implementation.
+  void Iterate(RootVisitor* v) override;
+  void GCEpilogueInSafepoint(GCType gc_type) override;
+
  private:
   // Internal implementation should not be called directly by subclasses.
   // The result is {index, found}. The index is either:
@@ -90,12 +97,12 @@ class V8_EXPORT_PRIVATE IdentityMapBase {
 
   base::hash<uintptr_t> hasher_;
   Heap* heap_;
-  GCEpoch gc_counter_;
+  // Set to true on GCs. We need to Rehash() once true.
+  bool invalidated_;
   int size_;
   int capacity_;
   int mask_;
   Address* keys_;
-  StrongRootsEntry* strong_roots_entry_;
   uintptr_t* values_;
   bool is_iterable_;
 };
@@ -172,7 +179,7 @@ class IdentityMap : public IdentityMapBase {
 
   // Iterator over IdentityMap. The IteratableScope used to create this Iterator
   // must be live for the duration of the iteration.
-  class Iterator {
+  class V8_GSL_POINTER Iterator {
    public:
     Iterator& operator++() {
       index_ = map_->NextIndex(index_);

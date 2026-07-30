@@ -4,6 +4,7 @@
 
 #include "src/codegen/reloc-info.h"
 
+#include "src/base/logging.h"
 #include "src/base/vlq.h"
 #include "src/codegen/assembler-inl.h"
 #include "src/codegen/code-reference.h"
@@ -386,6 +387,8 @@ const char* RelocInfo::RelocModeName(RelocInfo::Mode rmode) {
       return "wasm canonical signature id";
     case WASM_CODE_POINTER_TABLE_ENTRY:
       return "wasm code pointer table entry";
+    case WASM_CODE_POINTER:
+      return "wasm code pointer";
     case NUMBER_OF_MODES:
     case PC_JUMP:
       UNREACHABLE();
@@ -406,10 +409,10 @@ void RelocInfo::Print(Isolate* isolate, std::ostream& os) {
          << ")";
       break;
     case FULL_EMBEDDED_OBJECT:
-      os << "  (" << Brief(target_object(isolate)) << ")";
+      os << "  (" << Brief(target_object()) << ")";
       break;
     case COMPRESSED_EMBEDDED_OBJECT:
-      os << "  (" << Brief(target_object(isolate)) << " compressed)";
+      os << "  (" << Brief(target_object()) << " compressed)";
       break;
     case EXTERNAL_REFERENCE:
       if (isolate) {
@@ -424,8 +427,8 @@ void RelocInfo::Print(Isolate* isolate, std::ostream& os) {
     case JS_DISPATCH_HANDLE: {
       JSDispatchHandle handle = js_dispatch_handle();
       if (handle != kNullJSDispatchHandle) {
-        Tagged<Code> target_code =
-            IsolateGroup::current()->js_dispatch_table()->GetCode(handle);
+        CHECK_NOT_NULL(isolate);
+        Tagged<Code> target_code = isolate->js_dispatch_table().GetCode(handle);
         os << " (" << CodeKindToString(target_code->kind());
         if (Builtins::IsBuiltin(target_code)) {
           os << " " << Builtins::name(target_code->builtin_id());
@@ -468,10 +471,10 @@ void RelocInfo::Print(Isolate* isolate, std::ostream& os) {
 void RelocInfo::Verify(Isolate* isolate) {
   switch (rmode_) {
     case COMPRESSED_EMBEDDED_OBJECT:
-      Object::VerifyPointer(isolate, target_object(isolate));
+      Object::VerifyPointer(isolate, target_object());
       break;
     case FULL_EMBEDDED_OBJECT:
-      Object::VerifyAnyTagged(isolate, target_object(isolate));
+      Object::VerifyAnyTagged(isolate, target_object());
       break;
     case CODE_TARGET:
     case RELATIVE_CODE_TARGET: {
@@ -499,9 +502,9 @@ void RelocInfo::Verify(Isolate* isolate) {
       JSDispatchTable::Space* space =
           isolate->heap()->js_dispatch_table_space();
       JSDispatchTable::Space* ro_space =
-          isolate->read_only_heap()->js_dispatch_table_space();
-      IsolateGroup::current()->js_dispatch_table()->VerifyEntry(
-          js_dispatch_handle(), space, ro_space);
+          isolate->heap()->read_only_js_dispatch_table_space();
+      isolate->js_dispatch_table().VerifyEntry(js_dispatch_handle(), space,
+                                               ro_space);
       break;
     }
     case OFF_HEAP_TARGET: {
@@ -531,6 +534,7 @@ void RelocInfo::Verify(Isolate* isolate) {
     case NO_INFO:
     case WASM_CANONICAL_SIG_ID:
     case WASM_CODE_POINTER_TABLE_ENTRY:
+    case WASM_CODE_POINTER:
       break;
     case NUMBER_OF_MODES:
     case PC_JUMP:

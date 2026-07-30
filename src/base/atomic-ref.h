@@ -42,33 +42,37 @@ constexpr std::memory_order CompareExchangeFailureOrder(
 // type of the referenced object.
 template <typename T>
 class AtomicRef {
-  static_assert(std::is_integral_v<T>);
+  static_assert(std::is_trivially_copyable_v<T>);
 
  public:
   explicit AtomicRef(T& value) : ptr_(&value) {}
 
   void store(T value,
              std::memory_order order = std::memory_order_seq_cst) const {
-    __atomic_store_n(ptr_, value,
-                     atomic_ref_internal::ToBuiltinMemoryOrder(order));
+    __atomic_store(ptr_, &value,
+                   atomic_ref_internal::ToBuiltinMemoryOrder(order));
   }
 
   T load(std::memory_order order = std::memory_order_seq_cst) const {
-    return __atomic_load_n(ptr_,
-                           atomic_ref_internal::ToBuiltinMemoryOrder(order));
+    T value;
+    __atomic_load(ptr_, &value,
+                  atomic_ref_internal::ToBuiltinMemoryOrder(order));
+    return value;
   }
 
   T exchange(T value,
              std::memory_order order = std::memory_order_seq_cst) const {
-    return __atomic_exchange_n(
-        ptr_, value, atomic_ref_internal::ToBuiltinMemoryOrder(order));
+    T old_value;
+    __atomic_exchange(ptr_, &value, &old_value,
+                      atomic_ref_internal::ToBuiltinMemoryOrder(order));
+    return old_value;
   }
 
   bool compare_exchange_strong(T& expected, T desired,
                                std::memory_order success,
                                std::memory_order failure) const {
-    return __atomic_compare_exchange_n(
-        ptr_, &expected, desired, false,
+    return __atomic_compare_exchange(
+        ptr_, &expected, &desired, false,
         atomic_ref_internal::ToBuiltinMemoryOrder(success),
         atomic_ref_internal::ToBuiltinMemoryOrder(failure));
   }

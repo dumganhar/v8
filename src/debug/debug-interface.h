@@ -5,7 +5,11 @@
 #ifndef V8_DEBUG_DEBUG_INTERFACE_H_
 #define V8_DEBUG_DEBUG_INTERFACE_H_
 
+#include <stdint.h>
+
 #include <memory>
+#include <span>
+#include <vector>
 
 #include "include/v8-callbacks.h"
 #include "include/v8-date.h"
@@ -13,7 +17,6 @@
 #include "include/v8-embedder-heap.h"
 #include "include/v8-isolate.h"
 #include "include/v8-local-handle.h"
-#include "include/v8-memory-span.h"
 #include "include/v8-promise.h"
 #include "include/v8-script.h"
 #include "include/v8-util.h"
@@ -197,7 +200,8 @@ class V8_EXPORT_PRIVATE ScriptSource {
 
   MaybeLocal<String> JavaScriptCode() const;
 #if V8_ENABLE_WEBASSEMBLY
-  Maybe<MemorySpan<const uint8_t>> WasmBytecode() const;
+  // When the size is exceeded, returns `Just` of an empty vector.
+  Maybe<std::vector<uint8_t>> GetWasmBytecode(size_t max_size) const;
 #endif  // V8_ENABLE_WEBASSEMBLY
 };
 
@@ -259,7 +263,7 @@ class WasmScript : public Script {
   struct DebugSymbols {
     enum class Type { SourceMap, EmbeddedDWARF, ExternalDWARF };
     Type type;
-    v8::MemorySpan<const char> external_url;
+    std::span<const char> external_url;
   };
   std::vector<DebugSymbols> GetDebugSymbols() const;
 
@@ -274,7 +278,7 @@ class WasmScript : public Script {
 
   uint32_t GetFunctionHash(int function_index);
 
-  Maybe<v8::MemorySpan<const uint8_t>> GetModuleBuildId() const;
+  Maybe<std::span<const uint8_t>> GetModuleBuildId() const;
 
   int CodeOffset() const;
   int CodeLength() const;
@@ -592,6 +596,16 @@ class V8_NODISCARD PostponeInterruptsScope {
   std::unique_ptr<i::PostponeInterruptsScope> scope_;
 };
 
+class V8_NODISCARD DisallowGarbageCollectionScope {
+ public:
+  DisallowGarbageCollectionScope();
+  ~DisallowGarbageCollectionScope();
+
+ private:
+  alignas(internal::Internals::kDisallowGarbageCollectionAlign) char internal_
+      [internal::Internals::kDisallowGarbageCollectionSize];
+};
+
 class V8_NODISCARD DisableBreakScope {
  public:
   explicit DisableBreakScope(v8::Isolate* isolate);
@@ -703,8 +717,6 @@ AccessorPair* AccessorPair::Cast(v8::Value* value) {
 MaybeLocal<Message> GetMessageFromPromise(Local<Promise> promise);
 
 void RecordAsyncStackTaggingCreateTaskCall(v8::Isolate* isolate);
-
-void NotifyDebuggerPausedEventSent(v8::Isolate* isolate);
 
 uint64_t GetIsolateId(v8::Isolate* isolate);
 void SetIsolateId(v8::Isolate* isolate, uint64_t id);

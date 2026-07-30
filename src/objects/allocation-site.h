@@ -18,9 +18,7 @@ namespace internal {
 
 enum InstanceType : uint16_t;
 
-#include "torque-generated/src/objects/allocation-site-tq.inc"
-
-V8_OBJECT class AllocationSite : public HeapObjectLayout {
+V8_OBJECT class AllocationSite : public HeapObject {
  public:
   static const uint32_t kMaximumArrayBytesToPretransition = 8 * 1024;
 
@@ -30,8 +28,7 @@ V8_OBJECT class AllocationSite : public HeapObjectLayout {
     kDontTenure = 1,
     kMaybeTenure = 2,
     kTenure = 3,
-    kZombie = 4,  // See comment to IsZombie() for documentation.
-    kLastPretenureDecisionValue = kZombie
+    kLastPretenureDecisionValue = kTenure
   };
 
   const char* PretenureDecisionName(PretenureDecision decision);
@@ -104,21 +101,7 @@ V8_OBJECT class AllocationSite : public HeapObjectLayout {
   inline int memento_create_count() const;
   inline void set_memento_create_count(int count);
 
-  // A "zombie" AllocationSite is one which has no more strong roots to
-  // it, and yet must be maintained until the next GC. The reason is that
-  // it may be that in new space there are AllocationMementos hanging around
-  // which point to the AllocationSite. If we scavenge these AllocationSites
-  // too soon, those AllocationMementos will end up pointing to garbage
-  // addresses. The concrete case happens when evacuating new space in the full
-  // GC which happens after sweeping has been started already. To mitigate this
-  // problem the garbage collector marks such AllocationSites as zombies when it
-  // discovers there are no roots, allowing the subsequent collection pass to
-  // recognize zombies and discard them later.
-  inline bool IsZombie() const;
-
   inline bool IsMaybeTenure() const;
-
-  inline void MarkZombie();
 
   inline bool MakePretenureDecision(PretenureDecision current_decision,
                                     double ratio, bool maximum_size_scavenge);
@@ -189,12 +172,11 @@ V8_OBJECT class AllocationSiteWithWeakNext : public AllocationSite {
   TaggedMember<UnionOf<Undefined, AllocationSiteWithWeakNext>> weak_next_;
 } V8_OBJECT_END;
 
-V8_OBJECT class AllocationMemento : public StructLayout {
+V8_OBJECT class AllocationMemento : public Struct {
  public:
   inline void set_allocation_site(Tagged<AllocationSite> value,
                                   WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
-  inline bool IsValid() const;
   inline Tagged<AllocationSite> GetAllocationSite() const;
   inline Address GetAllocationSiteUnchecked() const;
 

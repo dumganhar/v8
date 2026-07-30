@@ -97,25 +97,21 @@ class KeyAccumulator final {
  private:
   enum IndexedOrNamed { kIndexed, kNamed };
 
-  V8_WARN_UNUSED_RESULT ExceptionStatus CollectPrivateNames(
-      DirectHandle<JSReceiver> receiver, DirectHandle<JSObject> object);
+  V8_WARN_UNUSED_RESULT ExceptionStatus
+  CollectPrivateNames(DirectHandle<JSObject> object);
   Maybe<bool> CollectAccessCheckInterceptorKeys(
       DirectHandle<AccessCheckInfo> access_check_info,
-      DirectHandle<JSReceiver> receiver, DirectHandle<JSObject> object);
+      DirectHandle<JSObject> object);
 
   Maybe<bool> CollectInterceptorKeysInternal(
-      DirectHandle<JSReceiver> receiver, DirectHandle<JSObject> object,
-      DirectHandle<InterceptorInfo> interceptor, IndexedOrNamed type);
-  Maybe<bool> CollectInterceptorKeys(DirectHandle<JSReceiver> receiver,
-                                     DirectHandle<JSObject> object,
+      DirectHandle<JSObject> object, DirectHandle<InterceptorInfo> interceptor,
+      IndexedOrNamed type);
+  Maybe<bool> CollectInterceptorKeys(DirectHandle<JSObject> object,
                                      IndexedOrNamed type);
 
-  Maybe<bool> CollectOwnElementIndices(DirectHandle<JSReceiver> receiver,
-                                       DirectHandle<JSObject> object);
-  Maybe<bool> CollectOwnPropertyNames(DirectHandle<JSReceiver> receiver,
-                                      DirectHandle<JSObject> object);
-  Maybe<bool> CollectOwnKeys(DirectHandle<JSReceiver> receiver,
-                             DirectHandle<JSObject> object);
+  Maybe<bool> CollectOwnElementIndices(DirectHandle<JSObject> object);
+  Maybe<bool> CollectOwnPropertyNames(DirectHandle<JSObject> object);
+  Maybe<bool> CollectOwnKeys(DirectHandle<JSObject> object);
   Maybe<bool> CollectOwnJSProxyKeys(DirectHandle<JSReceiver> receiver,
                                     DirectHandle<JSProxy> proxy);
   Maybe<bool> CollectOwnJSProxyTargetKeys(DirectHandle<JSProxy> proxy,
@@ -203,7 +199,7 @@ class FastKeyAccumulator {
   MaybeHandle<FixedArray> GetKeys(
       GetKeysConversion convert = GetKeysConversion::kKeepNumbers);
 
-  // Initialize the the enum cache for a map with all of the following:
+  // Initialize the enum cache for a map with all of the following:
   //   - uninitialized enum length
   //   - fast properties (i.e. !is_dictionary_map())
   //   - has >0 enumerable own properties

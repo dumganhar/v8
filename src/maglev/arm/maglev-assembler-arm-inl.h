@@ -5,6 +5,7 @@
 #ifndef V8_MAGLEV_ARM_MAGLEV_ASSEMBLER_ARM_INL_H_
 #define V8_MAGLEV_ARM_MAGLEV_ASSEMBLER_ARM_INL_H_
 
+#include "src/base/iterator.h"
 #include "src/base/numbers/double.h"
 #include "src/codegen/interface-descriptors-inl.h"
 #include "src/codegen/macro-assembler-inl.h"
@@ -160,8 +161,8 @@ template <typename T, typename... Args>
 inline void PushIteratorReverse(MaglevAssembler* masm,
                                 base::iterator_range<T> range, Args... args) {
   PushAllHelper<Args...>::PushReverse(masm, args...);
-  for (auto iter = range.rbegin(), end = range.rend(); iter != end; ++iter) {
-    masm->Push(*iter);
+  for (const auto& item : base::Reversed(range)) {
+    masm->Push(item);
   }
 }
 
@@ -299,11 +300,11 @@ inline void MaglevAssembler::BuildTypedArrayDataPointer(Register data_pointer,
                                                         Register object) {
   DCHECK_NE(data_pointer, object);
   ldr(data_pointer,
-      FieldMemOperand(object, JSTypedArray::kExternalPointerOffset));
+      FieldMemOperand(object, offsetof(JSTypedArray, external_pointer_)));
   if (JSTypedArray::kMaxSizeInHeap == 0) return;
   TemporaryRegisterScope temps(this);
   Register base = temps.AcquireScratch();
-  ldr(base, FieldMemOperand(object, JSTypedArray::kBasePointerOffset));
+  ldr(base, FieldMemOperand(object, offsetof(JSTypedArray, base_pointer_)));
   add(data_pointer, data_pointer, base);
 }
 
@@ -498,8 +499,20 @@ inline void MaglevAssembler::AddInt32(Register reg, int amount) {
   add(reg, reg, Operand(amount));
 }
 
+inline void MaglevAssembler::AddInt32(Register reg, Register other) {
+  add(reg, reg, other);
+}
+
+inline void MaglevAssembler::AddInt32(Register dst, Register src, int amount) {
+  add(dst, src, Operand(amount));
+}
+
 inline void MaglevAssembler::AndInt32(Register reg, int mask) {
   and_(reg, reg, Operand(mask));
+}
+
+inline void MaglevAssembler::AndInt32(Register dst, Register src, int mask) {
+  and_(dst, src, Operand(mask));
 }
 
 inline void MaglevAssembler::OrInt32(Register reg, int mask) {
@@ -518,6 +531,29 @@ inline void MaglevAssembler::ShiftLeft(Register reg, int amount) {
   lsl(reg, reg, Operand(amount));
 }
 
+inline void MaglevAssembler::ShiftRightLogical32(Register dst, int32_t value) {
+  lsr(dst, dst, Operand(value));
+}
+
+inline void MaglevAssembler::ShiftRightLogical32(Register dst, Register src,
+                                                 int32_t value) {
+  lsr(dst, src, Operand(value));
+}
+
+inline void MaglevAssembler::SubInt32(Register dst, Register src) {
+  sub(dst, dst, src);
+}
+
+inline void MaglevAssembler::SubInt32(Register dst, Register src1,
+                                      Register src2) {
+  sub(dst, src1, src2);
+}
+
+inline void MaglevAssembler::LoadBitsFromWord32(Register dst, Register src,
+                                                int width, int shift) {
+  ubfx(dst, src, shift, width);
+}
+
 inline void MaglevAssembler::IncrementAddress(Register reg, int32_t delta) {
   add(reg, reg, Operand(delta));
 }
@@ -527,9 +563,12 @@ inline void MaglevAssembler::LoadAddress(Register dst, MemOperand location) {
   add(dst, location.rn(), Operand(location.offset()));
 }
 
+inline void MaglevAssembler::MakeWeak(Register dst, Register src) {
+  orr(dst, src, Operand(kWeakHeapObjectTag));
+}
+
 inline void MaglevAssembler::EmitEnterExitFrame(int extra_slots,
                                                 StackFrame::Type frame_type,
-                                                Register c_function,
                                                 Register scratch) {
   EnterExitFrame(scratch, extra_slots, frame_type);
 }
@@ -703,26 +742,26 @@ inline void MaglevAssembler::ToUint8Clamped(Register result,
 }
 
 template <typename NodeT>
-inline void MaglevAssembler::DeoptIfBufferDetached(Register array,
+inline void MaglevAssembler::DeoptIfBufferNotValid(Register array,
                                                    Register scratch,
+                                                   TypedArrayAccessMode mode,
                                                    NodeT* node) {
-    // A detached buffer leads to megamorphic feedback, so we won't have a deopt
-    // loop if we deopt here.
-    LoadTaggedField(scratch,
-                    FieldMemOperand(array, JSArrayBufferView::kBufferOffset));
-    LoadTaggedField(scratch,
-                    FieldMemOperand(scratch, JSArrayBuffer::kBitFieldOffset));
-    tst(scratch, Operand(JSArrayBuffer::WasDetachedBit::kMask));
-    EmitEagerDeoptIf(ne, DeoptimizeReason::kArrayBufferWasDetached, node);
+  // A detached buffer leads to megamorphic feedback, so we won't have a deopt
+  // loop if we deopt here.
+  LoadTaggedField(scratch,
+                  FieldMemOperand(array, offsetof(JSArrayBufferView, buffer_)));
+  LoadTaggedField(
+      scratch, FieldMemOperand(scratch, offsetof(JSArrayBuffer, bit_field_)));
+  tst(scratch, Operand(JSArrayBuffer::NotValidMask(mode)));
+  EmitEagerDeoptIf(ne, DeoptimizeReason::kArrayBufferWasDetached, node);
 }
-
 inline void MaglevAssembler::LoadByte(Register dst, MemOperand src) {
   ldrb(dst, src);
 }
 
 inline Condition MaglevAssembler::IsCallableAndNotUndetectable(
     Register map, Register scratch) {
-  ldrb(scratch, FieldMemOperand(map, Map::kBitFieldOffset));
+  ldrb(scratch, FieldMemOperand(map, offsetof(Map, bit_field_)));
   and_(scratch, scratch,
        Operand(Map::Bits1::IsUndetectableBit::kMask |
                Map::Bits1::IsCallableBit::kMask));
@@ -732,7 +771,7 @@ inline Condition MaglevAssembler::IsCallableAndNotUndetectable(
 
 inline Condition MaglevAssembler::IsNotCallableNorUndetactable(
     Register map, Register scratch) {
-  ldrb(scratch, FieldMemOperand(map, Map::kBitFieldOffset));
+  ldrb(scratch, FieldMemOperand(map, offsetof(Map, bit_field_)));
   tst(scratch, Operand(Map::Bits1::IsUndetectableBit::kMask |
                        Map::Bits1::IsCallableBit::kMask));
   return kEqual;
@@ -741,7 +780,8 @@ inline Condition MaglevAssembler::IsNotCallableNorUndetactable(
 inline void MaglevAssembler::LoadInstanceType(Register instance_type,
                                               Register heap_object) {
   LoadMap(instance_type, heap_object);
-  ldrh(instance_type, FieldMemOperand(instance_type, Map::kInstanceTypeOffset));
+  ldrh(instance_type,
+       FieldMemOperand(instance_type, offsetof(Map, instance_type_)));
 }
 
 inline void MaglevAssembler::JumpIfObjectType(Register heap_object,
@@ -974,6 +1014,18 @@ void MaglevAssembler::JumpIfUndefinedNan(DoubleRegister value, Register scratch,
              value, scratch, is_undefined, is_not_undefined));
   bind(*is_not_undefined);
 }
+
+void MaglevAssembler::JumpIfUndefinedNan(MemOperand operand, Label* target,
+                                         Label::Distance distance) {
+  MaglevAssembler::TemporaryRegisterScope temps(this);
+  Register upper_bits = temps.AcquireScratch();
+  DCHECK(operand.IsImmediateOffset());
+  ldr(upper_bits, MemOperand(operand.rn(), operand.offset() + (kDoubleSize / 2),
+                             operand.am()));
+  CompareInt32AndJumpIf(upper_bits, kUndefinedNanUpper32, kEqual, target,
+                        distance);
+}
+
 void MaglevAssembler::JumpIfNotUndefinedNan(DoubleRegister value,
                                             Register scratch, Label* target,
                                             Label::Distance distance) {
@@ -1005,6 +1057,16 @@ void MaglevAssembler::JumpIfHoleNan(DoubleRegister value, Register scratch,
              },
              value, scratch, is_hole, is_not_hole));
   bind(*is_not_hole);
+}
+
+void MaglevAssembler::JumpIfHoleNan(MemOperand operand, Label* target,
+                                    Label::Distance distance) {
+  MaglevAssembler::TemporaryRegisterScope temps(this);
+  Register upper_bits = temps.AcquireScratch();
+  DCHECK(operand.IsImmediateOffset());
+  ldr(upper_bits, MemOperand(operand.rn(), operand.offset() + (kDoubleSize / 2),
+                             operand.am()));
+  CompareInt32AndJumpIf(upper_bits, kHoleNanUpper32, kEqual, target, distance);
 }
 
 void MaglevAssembler::JumpIfNotHoleNan(DoubleRegister value, Register scratch,

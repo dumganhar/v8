@@ -15,10 +15,12 @@
 #include <optional>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 
 #include "src/base/fpu.h"
 #include "src/base/hashing.h"
 #include "src/base/lazy-instance.h"
+#include "src/base/logging.h"
 #include "src/base/platform/platform.h"
 #include "src/codegen/cpu-features.h"
 #include "src/flags/flags-impl.h"
@@ -51,25 +53,7 @@ static_assert(sizeof(FlagValues) % kMinimumOSPageSize == 0);
 #include "src/flags/flag-definitions.h"  // NOLINT(build/include)
 #undef FLAG_MODE_DEFINE_DEFAULTS
 
-char FlagHelpers::NormalizeChar(char ch) { return ch == '_' ? '-' : ch; }
 
-int FlagHelpers::FlagNamesCmp(const char* a, const char* b) {
-  int i = 0;
-  char ac, bc;
-  do {
-    ac = NormalizeChar(a[i]);
-    bc = NormalizeChar(b[i]);
-    if (ac < bc) return -1;
-    if (ac > bc) return 1;
-    i++;
-  } while (ac != '\0');
-  DCHECK_EQ(bc, '\0');
-  return 0;
-}
-
-bool FlagHelpers::EqualNames(const char* a, const char* b) {
-  return FlagNamesCmp(a, b) == 0;
-}
 
 // Checks if two flag names are equal, allowing for the second name to have a
 // suffix starting with a white space character, e.g. "max_opt < 3". This is
@@ -113,15 +97,39 @@ void Flag::set_string_value(const char* new_value, bool owns_new_value,
   }
 }
 
-bool Flag::ShouldCheckFlagContradictions() {
-  if (v8_flags.allow_overwriting_for_next_flag) {
-    // Setting the flag manually to false before calling Reset() avoids this
-    // becoming re-entrant.
-    v8_flags.allow_overwriting_for_next_flag = false;
-    FindFlagByPointer(&v8_flags.allow_overwriting_for_next_flag)->Reset();
-    return false;
+FlagProcessingMode FlagList::GetFlagProcessingMode() {
+  // The default processing mode is "ignore-contradictions" (mostly for
+  // historical reasons). However, certain testing tools like d8 and
+  // inspector-test explicitly set it to "abort-on-error".
+  if (v8_flags.flag_processing_mode != nullptr) {
+    if (strcmp(v8_flags.flag_processing_mode, "exit-on-error") == 0) {
+      return FlagProcessingMode::kExitOnError;
+    } else if (strcmp(v8_flags.flag_processing_mode, "abort-on-error") == 0) {
+      // Legacy behavior: --fuzzing disables flag contradiction checking in the
+      // default configuration.
+      // TODO(500181840): avoid the need for this workaround by having fuzzers
+      // (that pass random flags) explicitly set the flag processing mode.
+      if (v8_flags.fuzzing) {
+        return FlagProcessingMode::kIgnoreContradictions;
+      } else {
+        return FlagProcessingMode::kAbortOnError;
+      }
+    } else if (strcmp(v8_flags.flag_processing_mode, "ignore-contradictions") ==
+               0) {
+      return FlagProcessingMode::kIgnoreContradictions;
+    } else {
+      base::FatalNoSecurityImpact(
+          "Invalid value for --flag-processing-mode: %s\n",
+          v8_flags.flag_processing_mode);
+    }
   }
-  return v8_flags.abort_on_contradictory_flags && !v8_flags.fuzzing;
+
+  return FlagProcessingMode::kIgnoreContradictions;
+}
+
+bool Flag::ShouldCheckFlagContradictions() {
+  return FlagList::GetFlagProcessingMode() !=
+         FlagProcessingMode::kIgnoreContradictions;
 }
 
 namespace {
@@ -133,16 +141,16 @@ struct FlagError : public std::ostringstream {
       "tools/testrunner/local/variants.py.";
   // MSVC complains about non-returning destructor; disable that.
   MSVC_SUPPRESS_WARNING(4722)
-  ~FlagError() {
+  [[noreturn]] ~FlagError() {
     base::OS::PrintError("Flag processing error: %s.\n", str().c_str());
     base::OS::PrintError("%s\n", kHint);
-    // TODO(457654443): consider merging exit_on_contradictory_flags and
-    // abort_on_contradictory_flags into a single, more generic flag specifying
-    // how to handle flag processing errors.
-    if (v8_flags.exit_on_contradictory_flags) {
+    base::PrintStackTraceIfAvailable();
+
+    FlagProcessingMode mode = FlagList::GetFlagProcessingMode();
+    if (mode == FlagProcessingMode::kExitOnError ||
+        base::FatalErrorsWithNoSecurityImpactShouldExit()) {
       base::OS::ExitProcess(-1);
     } else {
-      DCHECK(v8_flags.abort_on_contradictory_flags);
       base::OS::Abort();
     }
   }
@@ -322,11 +330,28 @@ constexpr size_t kNumFlags = arraysize(flags);
 
 base::Vector<Flag> Flags() { return base::ArrayVector(flags); }
 
-struct FlagLess {
-  bool operator()(const Flag* a, const Flag* b) const {
-    return FlagHelpers::FlagNamesCmp(a->name(), b->name()) < 0;
+consteval std::array<int, kNumFlags> GetSortedFlagIndices() {
+  constexpr const char* kFlagNames[] = {
+#define FLAG_MODE_APPLY_NAME(nam) #nam,
+#define FLAG_ALIAS(ftype, ctype, alias, nam) #alias,
+#define FLAG_ALIAS_WITH_COMMENT(ftype, ctype, alias, nam, cmt) #alias,
+#include "src/flags/flag-definitions.h"  // NOLINT(build/include)
+#undef FLAG_ALIAS
+#undef FLAG_ALIAS_WITH_COMMENT
+#undef FLAG_MODE_APPLY_NAME
+  };
+
+  static_assert(arraysize(kFlagNames) == kNumFlags);
+
+  std::array<int, kNumFlags> indices{};
+  for (size_t i = 0; i < kNumFlags; ++i) {
+    indices[i] = static_cast<int>(i);
   }
-};
+  std::sort(indices.begin(), indices.end(), [&](int i, int j) {
+    return FlagHelpers::FlagNamesCmp(kFlagNames[i], kFlagNames[j]) < 0;
+  });
+  return indices;
+}
 
 struct FlagNameGreater {
   bool operator()(const Flag* a, const char* b) const {
@@ -340,10 +365,11 @@ struct FlagNameGreater {
 class FlagMapByName {
  public:
   FlagMapByName() {
+    constexpr std::array<int, kNumFlags> sorted_indices =
+        GetSortedFlagIndices();
     for (size_t i = 0; i < kNumFlags; ++i) {
-      flags_[i] = &flags[i];
+      flags_[i] = &flags[sorted_indices[i]];
     }
-    std::sort(flags_.begin(), flags_.end(), FlagLess());
   }
 
   // Returns the greatest flag whose name is less than or equal to the given
@@ -415,6 +441,7 @@ static const char* Type2String(Flag::FlagType type) {
     case Flag::TYPE_STRING:
       return "string";
   }
+  UNREACHABLE();
 }
 
 // Helper for printing flag values.
@@ -527,7 +554,7 @@ uint32_t ComputeFlagListHash() {
         flag.PointsTo(&v8_flags.concurrent_sweeping) ||
         flag.PointsTo(&v8_flags.parallel_compaction) ||
         flag.PointsTo(&v8_flags.parallel_pointer_update) ||
-        flag.PointsTo(&v8_flags.parallel_weak_ref_clearing) ||
+        flag.PointsTo(&v8_flags.parallel_gc_clearing) ||
         flag.PointsTo(&v8_flags.memory_reducer) ||
         flag.PointsTo(&v8_flags.cppheap_concurrent_marking) ||
         flag.PointsTo(&v8_flags.cppheap_incremental_marking) ||
@@ -578,6 +605,7 @@ uint32_t ComputeFlagListHash() {
 static void SplitArgument(const char* arg, char* buffer, int buffer_size,
                           const char** name, const char** value,
                           bool* negated) {
+  const char* orig_arg = arg;
   *name = nullptr;
   *value = nullptr;
   *negated = false;
@@ -607,7 +635,7 @@ static void SplitArgument(const char* arg, char* buffer, int buffer_size,
     // Make a copy so we can NUL-terminate the flag name.
     size_t n = arg - *name;
     if (n >= static_cast<size_t>(buffer_size)) {
-      FlagError{} << "Flag name is too long: " << FlagName(*name);
+      FlagError{} << "Flag name is too long: " << orig_arg;
     }
     MemCopy(buffer, *name, n);
     buffer[n] = '\0';
@@ -838,7 +866,7 @@ int FlagList::SetFlagsFromString(const char* str, size_t len) {
   }
 
   // Allocate argument array.
-  base::ScopedVector<char*> argv(argc);
+  auto argv = base::OwnedVector<char*>::NewForOverwrite(argc);
 
   // Split the flags string into arguments.
   argc = 1;  // be compatible with SetFlagsFromCommandLine()
@@ -879,9 +907,7 @@ void FlagList::ReleaseDynamicAllocations() {
 
 // static
 void FlagList::PrintHelp() {
-  CpuFeatures::Probe(false);
-  CpuFeatures::PrintTarget();
-  CpuFeatures::PrintFeatures();
+  CpuFeatures::PrintInformation();
 
   StdoutStream os;
   os << "The following syntax for options is accepted (both '-' and '--' are "
@@ -898,6 +924,7 @@ void FlagList::PrintHelp() {
        << "        type: " << Type2String(f.type()) << "  default: " << f
        << "\n";
   }
+  os.flush();
 }
 
 // static
@@ -906,6 +933,7 @@ void FlagList::PrintValues() {
   for (const Flag& f : flags) {
     os << f << "\n";
   }
+  os.flush();
 }
 
 namespace {
@@ -996,11 +1024,11 @@ void FlagList::PrintFeatureFlagsJSON() {
     std::vector<const char*> shipping_flags;
 
 #define ADD_WASM_INPROGRESS_FLAG(name, desc, val) \
-  inprogress_flags.push_back("experimental_wasm_" #name);
+  inprogress_flags.push_back("wasm_" #name);
 #define ADD_WASM_STAGED_FLAG(name, desc, val) \
-  staged_flags.push_back("experimental_wasm_" #name);
+  staged_flags.push_back("wasm_" #name);
 #define ADD_WASM_SHIPPED_FLAG(name, desc, val) \
-  shipping_flags.push_back("experimental_wasm_" #name);
+  shipping_flags.push_back("wasm_" #name);
 
     FOREACH_WASM_EXPERIMENTAL_FEATURE_FLAG(ADD_WASM_INPROGRESS_FLAG)
     FOREACH_WASM_STAGING_FEATURE_FLAG(ADD_WASM_STAGED_FLAG)
@@ -1014,6 +1042,7 @@ void FlagList::PrintFeatureFlagsJSON() {
 #endif  // V8_ENABLE_WEBASSEMBLY
 
   os << "}\n";
+  os.flush();
 
 #undef ADD_JS_INPROGRESS_FLAG
 #undef ADD_JS_STAGED_FLAG
@@ -1036,7 +1065,7 @@ class ImplicationProcessor {
 #define FLAG_MODE_APPLY_NAME(name) \
   auto& name = v8_flags.name;      \
   USE(name);
-#include "src/flags/flag-definitions.h"
+#include "src/flags/flag-definitions.h"  // NOLINT(build/include)
 #undef FLAG_MODE_APPLY_NAME
 
 #define FLAG_MODE_DEFINE_IMPLICATIONS
@@ -1047,6 +1076,18 @@ class ImplicationProcessor {
   }
 
  private:
+  void ResetFlagsImpliedBy(const Flag* implier_flag) {
+    const char* implier_flag_name = FlagName{implier_flag->name()}.name;
+    for (Flag* flag : implied_by_map_[implier_flag_name]) {
+      if (flag->IsDefault()) {
+        continue;
+      }
+      flag->Reset();
+      ResetFlagsImpliedBy(flag);
+    }
+    implied_by_map_.erase(implier_flag_name);
+  }
+
   // Called from {DEFINE_*_IMPLICATION} in flag-definitions.h.
   template <class T>
   bool TriggerImplication(bool premise, const char* premise_name,
@@ -1055,10 +1096,11 @@ class ImplicationProcessor {
                           bool weak_implication) {
     if (!premise) return false;
     Flag* conclusion_flag = FindImplicationFlagByName(conclusion_name);
+    const bool is_conclusion_value_change = conclusion_value->value() != value;
     if (!conclusion_flag->CheckFlagChange(
             weak_implication ? Flag::SetBy::kWeakImplication
                              : Flag::SetBy::kImplication,
-            conclusion_value->value() != value, premise_name)) {
+            is_conclusion_value_change, premise_name)) {
       return false;
     }
     if (V8_UNLIKELY(num_iterations_ >= kMaxNumIterations)) {
@@ -1069,7 +1111,21 @@ class ImplicationProcessor {
         cycle_ << FlagName{conclusion_flag->name()} << " = " << value;
       }
     }
-    *conclusion_value = value;
+    if (is_conclusion_value_change) {
+      if constexpr (std::is_same_v<T, const char*>) {
+        if (conclusion_flag->owns_ptr_) {
+          DeleteArray(conclusion_value->value());
+          conclusion_flag->owns_ptr_ = false;
+        }
+      }
+      *conclusion_value = value;
+      // Any implications by the conclusion flag are now invalid. Reset the
+      // flags previously implied by the conclusion flag. If they were also
+      // implied by some other flag, they will be reimplied in the next
+      // implication iteration.
+      ResetFlagsImpliedBy(conclusion_flag);
+      implied_by_map_[FlagName{premise_name}.name].push_back(conclusion_flag);
+    }
     return true;
   }
 
@@ -1130,7 +1186,8 @@ class ImplicationProcessor {
     if (ComputeFlagListHash() == cycle_start_hash_) {
       DCHECK(!cycle_.str().empty());
       // {cycle_} starts with a newline.
-      FATAL("Cycle in flag implications:%s", cycle_.str().c_str());
+      base::FatalNoSecurityImpact("Cycle in flag implications:%s",
+                                  cycle_.str().c_str());
     }
     // We must have found a cycle within another {kMaxNumIterations}.
     DCHECK_GE(2 * kMaxNumIterations, num_iterations_);
@@ -1142,6 +1199,8 @@ class ImplicationProcessor {
   // cycles in flags.
   uint32_t cycle_start_hash_;
   std::ostringstream cycle_;
+
+  std::unordered_map<std::string, std::vector<Flag*>> implied_by_map_;
 };
 
 }  // namespace
@@ -1179,20 +1238,34 @@ void FlagList::ResolveContradictionsWhenFuzzing() {
       CONTRADICTION(disable_optimizing_compilers,
                     stress_concurrent_inlining_attach_code),
       CONTRADICTION(disable_optimizing_compilers, stress_maglev),
-      CONTRADICTION(disable_optimizing_compilers,
-                    turboshaft_wasm_in_js_inlining),
+      CONTRADICTION(disable_optimizing_compilers, wasm_in_js_inlining_body),
+      CONTRADICTION(disable_optimizing_compilers, turbolev_future),
+      CONTRADICTION(disable_optimizing_compilers, wasm_in_js_inlining_wrapper),
       CONTRADICTION(jit_fuzzing, max_lazy),
       CONTRADICTION(jitless, maglev_as_top_tier),
       CONTRADICTION(jitless, maglev_future),
-      CONTRADICTION(jitless, turbolev_future),
       CONTRADICTION(jitless, stress_concurrent_inlining),
       CONTRADICTION(jitless, stress_concurrent_inlining_attach_code),
       CONTRADICTION(jitless, stress_maglev),
+      CONTRADICTION(jitless, turbolev_future),
+      CONTRADICTION(jitless, wasm_in_js_inlining_wrapper),
+      CONTRADICTION(jitless, wasm_in_js_inlining_body),
+      CONTRADICTION(jitless, verify_turboshaft),
+#if V8_ENABLE_WEBASSEMBLY
+      CONTRADICTION(wasm_jitless_if_available_for_testing, turbolev),
+      CONTRADICTION(wasm_jitless_if_available_for_testing, turbolev_future),
+      CONTRADICTION(wasm_jitless_if_available_for_testing,
+                    wasm_in_js_inlining_wrapper),
+#endif  // V8_ENABLE_WEBASSEMBLY
+      CONTRADICTION(lite_mode, maglev_as_top_tier),
       CONTRADICTION(lite_mode, maglev_future),
       CONTRADICTION(lite_mode, predictable_gc_schedule),
       CONTRADICTION(lite_mode, stress_concurrent_inlining),
       CONTRADICTION(lite_mode, stress_concurrent_inlining_attach_code),
       CONTRADICTION(lite_mode, stress_maglev),
+      CONTRADICTION(lite_mode, turbolev_future),
+      CONTRADICTION(lite_mode, wasm_in_js_inlining_body),
+      CONTRADICTION(lite_mode, verify_turboshaft),
       CONTRADICTION(maglev_as_top_tier, stress_concurrent_inlining),
       CONTRADICTION(maglev_as_top_tier, stress_concurrent_inlining_attach_code),
       CONTRADICTION(maglev_as_top_tier, turbolev_future),
@@ -1200,12 +1273,25 @@ void FlagList::ResolveContradictionsWhenFuzzing() {
       CONTRADICTION(predictable, stress_concurrent_inlining_attach_code),
       CONTRADICTION(predictable_gc_schedule, stress_compaction),
       CONTRADICTION(single_threaded, stress_concurrent_inlining_attach_code),
+#if V8_ENABLE_WEBASSEMBLY
+      CONTRADICTION(single_threaded, wasm_pgo_to_file),
+      CONTRADICTION(single_threaded, wasm_generate_compilation_hints),
+      CONTRADICTION(single_threaded, trace_wasm_generate_compilation_hints),
+#endif  // V8_ENABLE_WEBASSEMBLY
       CONTRADICTION(stress_concurrent_inlining, turboshaft_assert_types),
       CONTRADICTION(stress_concurrent_inlining_attach_code,
                     turboshaft_assert_types),
       CONTRADICTION(turboshaft, stress_concurrent_inlining),
       CONTRADICTION(turboshaft, stress_concurrent_inlining_attach_code),
       CONTRADICTION(minor_ms, handle_weak_ref_weakly_in_minor_gc),
+
+      // These stresses enable additional CHECKs that are classified as
+      // non-issues by the sandbox fuzzer crash filters, and hence may result in
+      // masking real issues from the fuzzer.
+      CONTRADICTION(stress_lazy_source_positions, sandbox_fuzzing),
+      CONTRADICTION(stress_lazy_source_positions, sandbox_testing),
+      CONTRADICTION(stress_lazy, sandbox_fuzzing),
+      CONTRADICTION(stress_lazy, sandbox_testing),
 
       // List of flags that shouldn't be used when --fuzzing or
       // --correctness-fuzzer-suppressions is passed. These flags will be reset
@@ -1225,6 +1311,21 @@ void FlagList::ResolveContradictionsWhenFuzzing() {
       RESET_WHEN_CORRECTNESS_FUZZING(turbo_stats_nvp),
       RESET_WHEN_CORRECTNESS_FUZZING(turbo_stats_wasm),
 
+      // Don't use any asserting modes with differential fuzzing as it ignores
+      // crashes anyways and sometimes can't digest the output from these
+      // flags.
+      RESET_WHEN_CORRECTNESS_FUZZING(assert_types),
+      RESET_WHEN_CORRECTNESS_FUZZING(maglev_assert_types),
+      RESET_WHEN_CORRECTNESS_FUZZING(turboshaft_assert_types),
+      RESET_WHEN_CORRECTNESS_FUZZING(verify_bytecode_full),
+      RESET_WHEN_CORRECTNESS_FUZZING(verify_bytecode_light),
+#if V8_ENABLE_WEBASSEMBLY
+      RESET_WHEN_CORRECTNESS_FUZZING(wasm_assert_types),
+#endif  // V8_ENABLE_WEBASSEMBLY
+
+      // Not useful for differential fuzzing: https://crbug.com/496356383
+      RESET_WHEN_CORRECTNESS_FUZZING(heap_snapshot_on_gc),
+
       // https://crbug.com/369974230
       RESET_WHEN_FUZZING(expose_async_hooks),
 
@@ -1239,25 +1340,29 @@ void FlagList::ResolveContradictionsWhenFuzzing() {
 
       // OOBs are expected when using --mock-arraybuffer-allocator.
       RESET_WHEN_FUZZING(mock_arraybuffer_allocator),
-
-#if V8_ENABLE_WEBASSEMBLY
-      // https://crbug.com/448681081
-      // Lazy validation does change whether or when exceptions are thrown for
-      // invalid function bodies.
-      RESET_WHEN_CORRECTNESS_FUZZING(wasm_lazy_validation),
-#endif  // V8_ENABLE_WEBASSEMBLY
   };
   for (auto [flag1, flag2] : contradictions) {
     if (!flag1 || !flag2) continue;
     if (flag1->IsDefault() || flag2->IsDefault()) continue;
 
-    // Ensure we never reset the fuzzing flags.
+    // Ensure we never reset the fuzzing or POC verification flags.
     CHECK(!flag1->PointsTo(&v8_flags.fuzzing));
     CHECK(!flag1->PointsTo(&v8_flags.correctness_fuzzer_suppressions));
+    CHECK(!flag1->PointsTo(&v8_flags.sandbox_fuzzing));
+    CHECK(!flag1->PointsTo(&v8_flags.sandbox_testing));
+    CHECK(!flag1->PointsTo(&v8_flags.run_as_security_poc));
+    CHECK(!flag1->PointsTo(&v8_flags.run_as_sandbox_security_poc));
 
     std::cerr << "Warning: resetting flag --" << flag1->name()
               << " due to conflicting flags" << std::endl;
     flag1->Reset();
+  }
+  if (!base::bits::IsPowerOfTwo(v8_flags.homomorphic_ic_count.value())) {
+    if (Flag* f = FindFlagByPointer(&v8_flags.homomorphic_ic_count)) {
+      std::cerr << "Warning: resetting flag --homomorphic-ic-count due to "
+                   "invalid value\n";
+      f->Reset();
+    }
   }
   if ((v8_flags.trace_turbo || v8_flags.trace_turbo_graph) &&
       v8_flags.fuzzing_and_concurrent_recompilation) {

@@ -59,9 +59,9 @@ class V8_EXPORT_PRIVATE CallDescriptor final
     kCallBuiltinPointer,     // target is a builtin pointer
   };
 
-  // NOTE: The lowest 10 bits of the Flags field are encoded in InstructionCode
+  // NOTE: The lowest 9 bits of the Flags field are encoded in InstructionCode
   // (for use in the code generator). All higher bits are lost.
-  static constexpr int kFlagsBitsEncodedInInstructionCode = 10;
+  static constexpr int kFlagsBitsEncodedInInstructionCode = 9;
   enum Flag {
     kNoFlags = 0u,
     kNeedsFrameState = 1u << 0,
@@ -98,13 +98,13 @@ class V8_EXPORT_PRIVATE CallDescriptor final
     // frame construction.
     kIsTailCallForTierUp = 1u << 8,
 
-    // AIX has a function descriptor by default but it can be disabled for a
-    // certain CFunction call (only used for Kind::kCallAddress).
-    kNoFunctionDescriptor = 1u << 9,
-
     // Flags past here are *not* encoded in InstructionCode and are thus not
     // accessible from the code generator. See also
     // kFlagsBitsEncodedInInstructionCode.
+
+    // AIX has a function descriptor by default but it can be disabled for a
+    // certain CFunction call (only used for Kind::kCallAddress).
+    kNoFunctionDescriptor = 1u << 9,
   };
   using Flags = base::Flags<Flag>;
 
@@ -114,7 +114,6 @@ class V8_EXPORT_PRIVATE CallDescriptor final
                  RegList callee_saved_registers,
                  DoubleRegList callee_saved_fp_registers, Flags flags,
                  const char* debug_name = "",
-                 StackArgumentOrder stack_order = StackArgumentOrder::kDefault,
                  const RegList allocatable_registers = {},
                  size_t return_slot_count = 0,
                  uint64_t signature_hash = kInvalidWasmSignatureHash)
@@ -130,7 +129,6 @@ class V8_EXPORT_PRIVATE CallDescriptor final
         callee_saved_fp_registers_(callee_saved_fp_registers),
         allocatable_registers_(allocatable_registers),
         flags_(flags),
-        stack_order_(stack_order),
         debug_name_(debug_name),
         signature_hash_(signature_hash) {
 #ifdef V8_ENABLE_WEBASSEMBLY
@@ -189,6 +187,11 @@ class V8_EXPORT_PRIVATE CallDescriptor final
 
   // Returns {true} if this descriptor is a call to a Wasm C API function.
   bool IsWasmCapiFunction() const { return kind_ == kCallWasmCapiFunction; }
+
+  // Returns {true} if this descriptor is a call to a Wasm continuation.
+  bool IsResumeWasmContinuation() const {
+    return kind_ == kResumeWasmContinuation;
+  }
 #endif  // V8_ENABLE_WEBASSEMBLY
 
   bool IsBuiltinPointerCall() const { return kind_ == kCallBuiltinPointer; }
@@ -240,15 +243,6 @@ class V8_EXPORT_PRIVATE CallDescriptor final
     return param_slot_count_;
   }
 
-  int GetStackIndexFromSlot(int slot_index) const {
-    switch (GetStackArgumentOrder()) {
-      case StackArgumentOrder::kDefault:
-        return -slot_index - 1;
-      case StackArgumentOrder::kJS:
-        return slot_index + static_cast<int>(ParameterSlotCount());
-    }
-  }
-
   // The total number of inputs to this call, which includes the target,
   // receiver, context, etc.
   // TODO(titzer): this should input the framestate input too.
@@ -294,8 +288,6 @@ class V8_EXPORT_PRIVATE CallDescriptor final
   MachineType GetParameterType(size_t index) const {
     return location_sig_->GetParam(index).GetType();
   }
-
-  StackArgumentOrder GetStackArgumentOrder() const { return stack_order_; }
 
   // Operator properties describe how this call can be optimized, if at all.
   Operator::Properties properties() const { return properties_; }
@@ -363,7 +355,6 @@ class V8_EXPORT_PRIVATE CallDescriptor final
   // register allocator to use.
   const RegList allocatable_registers_;
   const Flags flags_;
-  const StackArgumentOrder stack_order_;
   const char* const debug_name_;
 
   uint64_t signature_hash_;
@@ -523,11 +514,11 @@ class V8_EXPORT_PRIVATE Linkage : public NON_EXPORTED_BASE(ZoneObject) {
   static const int kOsrAccumulatorRegisterIndex = -1;
 
  private:
+  template <StackArgumentOrder kStackArgumentOrder>
   static CallDescriptor* GetCEntryStubCallDescriptor(
       Zone* zone, int return_count, int stack_parameter_count,
       const char* debug_name, Operator::Properties properties,
-      CallDescriptor::Flags flags, StackArgumentOrder stack_order,
-      CodeEntrypointTag entrypoint_tag);
+      CallDescriptor::Flags flags, CodeEntrypointTag entrypoint_tag);
 
   CallDescriptor* const incoming_;
 };

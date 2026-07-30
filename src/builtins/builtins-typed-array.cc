@@ -41,6 +41,7 @@ int64_t CapRelativeIndex(double relative, int64_t minimum, int64_t maximum) {
 
 }  // namespace
 
+// https://tc39.es/ecma262/#sec-%typedarray%.prototype.copywithin
 BUILTIN(TypedArrayPrototypeCopyWithin) {
   HandleScope scope(isolate);
 
@@ -48,7 +49,8 @@ BUILTIN(TypedArrayPrototypeCopyWithin) {
   const char* method_name = "%TypedArray%.prototype.copyWithin";
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, array,
-      JSTypedArray::Validate(isolate, args.receiver(), method_name));
+      JSTypedArray::Validate(isolate, args.receiver(), method_name,
+                             TypedArrayAccessMode::kWrite));
 
   int64_t len = array->GetLength();
   int64_t to = 0;
@@ -67,7 +69,7 @@ BUILTIN(TypedArrayPrototypeCopyWithin) {
       from = CapRelativeIndex(num, 0, len);
 
       DirectHandle<Object> end = args.atOrUndefined(isolate, 3);
-      if (!IsUndefined(*end, isolate)) {
+      if (!IsUndefined(*end)) {
         ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, num,
                                            Object::IntegerValue(isolate, end));
         final = CapRelativeIndex(num, 0, len);
@@ -82,16 +84,18 @@ BUILTIN(TypedArrayPrototypeCopyWithin) {
   // processing above.
   if (V8_UNLIKELY(array->WasDetached())) {
     THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kDetachedOperation,
-                              isolate->factory()->NewStringFromAsciiChecked(
-                                  method_name)));
+        isolate,
+        NewTypeError(
+            MessageTemplate::kTypedArrayDetachedErrorOperation,
+            isolate->factory()->NewStringFromAsciiChecked(method_name)));
   }
 
   if (V8_UNLIKELY(array->is_backed_by_rab())) {
     bool out_of_bounds = false;
     int64_t new_len = array->GetLengthOrOutOfBounds(out_of_bounds);
     if (out_of_bounds) {
-      const MessageTemplate message = MessageTemplate::kDetachedOperation;
+      const MessageTemplate message =
+          MessageTemplate::kTypedArrayOOBErrorOperation;
       DirectHandle<String> operation =
           isolate->factory()->NewStringFromAsciiChecked(method_name);
       THROW_NEW_ERROR_RETURN_FAILURE(isolate, NewTypeError(message, operation));
@@ -119,6 +123,11 @@ BUILTIN(TypedArrayPrototypeCopyWithin) {
   DCHECK_GE(len - count, 0);
 
   size_t element_size = array->element_size();
+  // To prevent `to` and `from` making it out of the guard region by changing
+  // element size after capping, it suffices to check that the current element
+  // size using the original length is still within the max byte length.
+  // As, both `to` and `from` were already capped based on the original length.
+  SBXCHECK_LE(element_size * len, ArrayBuffer::kMaxByteLength);
   to = to * element_size;
   from = from * element_size;
   count = count * element_size;
@@ -134,7 +143,7 @@ BUILTIN(TypedArrayPrototypeCopyWithin) {
   return *array;
 }
 
-// ES#sec-%typedarray%.prototype.fill
+// https://tc39.es/ecma262/#sec-%typedarray%.prototype.fill
 BUILTIN(TypedArrayPrototypeFill) {
   HandleScope scope(isolate);
 
@@ -144,7 +153,8 @@ BUILTIN(TypedArrayPrototypeFill) {
   const char* method_name = "%TypedArray%.prototype.fill";
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, array,
-      JSTypedArray::Validate(isolate, args.receiver(), method_name));
+      JSTypedArray::Validate(isolate, args.receiver(), method_name,
+                             TypedArrayAccessMode::kWrite));
   ElementsKind kind = array->GetElementsKind();
 
   // 3. Let len be TypedArrayLength(taRecord).
@@ -180,7 +190,7 @@ BUILTIN(TypedArrayPrototypeFill) {
     // 10. If end is undefined, let relativeEnd be len; else let relativeEnd be
     //     ? ToIntegerOrInfinity(end).
     num = args.atOrUndefined(isolate, 3);
-    if (!IsUndefined(*num, isolate)) {
+    if (!IsUndefined(*num)) {
       // 11. If relativeEnd = -∞, let endIndex be 0.
       // 12. Else if relativeEnd < 0, let endIndex be max(len + relativeEnd, 0).
       // 13. Else, let endIndex be min(relativeEnd, len).
@@ -195,14 +205,16 @@ BUILTIN(TypedArrayPrototypeFill) {
   // exception.
   if (V8_UNLIKELY(array->WasDetached())) {
     THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kDetachedOperation,
-                              isolate->factory()->NewStringFromAsciiChecked(
-                                  method_name)));
+        isolate,
+        NewTypeError(
+            MessageTemplate::kTypedArrayDetachedErrorOperation,
+            isolate->factory()->NewStringFromAsciiChecked(method_name)));
   }
 
   if (V8_UNLIKELY(array->IsVariableLength())) {
     if (array->IsOutOfBounds()) {
-      const MessageTemplate message = MessageTemplate::kDetachedOperation;
+      const MessageTemplate message =
+          MessageTemplate::kTypedArrayOOBErrorOperation;
       DirectHandle<String> operation =
           isolate->factory()->NewStringFromAsciiChecked(method_name);
       THROW_NEW_ERROR_RETURN_FAILURE(isolate, NewTypeError(message, operation));
@@ -231,6 +243,7 @@ BUILTIN(TypedArrayPrototypeFill) {
                                         isolate, array, obj_value, start, end));
 }
 
+// https://tc39.es/ecma262/#sec-%typedarray%.prototype.includes
 BUILTIN(TypedArrayPrototypeIncludes) {
   HandleScope scope(isolate);
 
@@ -238,7 +251,8 @@ BUILTIN(TypedArrayPrototypeIncludes) {
   const char* method_name = "%TypedArray%.prototype.includes";
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, array,
-      JSTypedArray::Validate(isolate, args.receiver(), method_name));
+      JSTypedArray::Validate(isolate, args.receiver(), method_name,
+                             TypedArrayAccessMode::kRead));
 
   if (args.length() < 2) return ReadOnlyRoots(isolate).false_value();
 
@@ -261,6 +275,7 @@ BUILTIN(TypedArrayPrototypeIncludes) {
   return *isolate->factory()->ToBoolean(result.FromJust());
 }
 
+// https://tc39.es/ecma262/#sec-%typedarray%.prototype.indexof
 BUILTIN(TypedArrayPrototypeIndexOf) {
   HandleScope scope(isolate);
 
@@ -268,7 +283,8 @@ BUILTIN(TypedArrayPrototypeIndexOf) {
   const char* method_name = "%TypedArray%.prototype.indexOf";
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, array,
-      JSTypedArray::Validate(isolate, args.receiver(), method_name));
+      JSTypedArray::Validate(isolate, args.receiver(), method_name,
+                             TypedArrayAccessMode::kRead));
 
   int64_t len = array->GetLength();
   if (len == 0) return Smi::FromInt(-1);
@@ -295,6 +311,7 @@ BUILTIN(TypedArrayPrototypeIndexOf) {
   return *isolate->factory()->NewNumberFromInt64(result.FromJust());
 }
 
+// https://tc39.es/ecma262/#sec-%typedarray%.prototype.lastindexof
 BUILTIN(TypedArrayPrototypeLastIndexOf) {
   HandleScope scope(isolate);
 
@@ -302,7 +319,8 @@ BUILTIN(TypedArrayPrototypeLastIndexOf) {
   const char* method_name = "%TypedArray%.prototype.lastIndexOf";
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, array,
-      JSTypedArray::Validate(isolate, args.receiver(), method_name));
+      JSTypedArray::Validate(isolate, args.receiver(), method_name,
+                             TypedArrayAccessMode::kRead));
 
   int64_t len = array->GetLength();
   if (len == 0) return Smi::FromInt(-1);
@@ -332,6 +350,7 @@ BUILTIN(TypedArrayPrototypeLastIndexOf) {
   return *isolate->factory()->NewNumberFromInt64(result.FromJust());
 }
 
+// https://tc39.es/ecma262/#sec-%typedarray%.prototype.reverse
 BUILTIN(TypedArrayPrototypeReverse) {
   HandleScope scope(isolate);
 
@@ -339,7 +358,8 @@ BUILTIN(TypedArrayPrototypeReverse) {
   const char* method_name = "%TypedArray%.prototype.reverse";
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, array,
-      JSTypedArray::Validate(isolate, args.receiver(), method_name));
+      JSTypedArray::Validate(isolate, args.receiver(), method_name,
+                             TypedArrayAccessMode::kWrite));
 
   ElementsAccessor* elements = array->GetElementsAccessor();
   elements->Reverse(*array);
@@ -616,8 +636,12 @@ BUILTIN(Uint8ArrayPrototypeSetFromBase64) {
   isolate->CountUsage(v8::Isolate::kUint8ArrayToFromBase64AndHex);
 
   // 1. Let into be the this value.
-  // 2. Perform ? ValidateUint8Array(into).
-  CHECK_RECEIVER(JSTypedArray, uint8array, method_name);
+  // 2. Perform ? ValidateUint8Array(into, write).
+  DirectHandle<JSTypedArray> uint8array;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, uint8array,
+      JSTypedArray::Validate(isolate, args.receiver(), method_name,
+                             TypedArrayAccessMode::kWrite));
   ElementsKind elements_kind = uint8array->GetElementsKind();
   if (elements_kind != ElementsKind::UINT8_ELEMENTS &&
       elements_kind != ElementsKind::RAB_GSAB_UINT8_ELEMENTS) {
@@ -659,9 +683,10 @@ BUILTIN(Uint8ArrayPrototypeSetFromBase64) {
 
   if (out_of_bounds || uint8array->WasDetached()) {
     THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kDetachedOperation,
-                              isolate->factory()->NewStringFromAsciiChecked(
-                                  method_name)));
+        isolate,
+        NewTypeError(
+            MessageTemplate::kTypedArrayValidateErrorOperation,
+            isolate->factory()->NewStringFromAsciiChecked(method_name)));
   }
 
   // If the receiver has length of 0, we should return early
@@ -795,9 +820,10 @@ BUILTIN(Uint8ArrayPrototypeToBase64) {
 
   if (out_of_bounds || uint8array->WasDetached()) {
     THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kDetachedOperation,
-                              isolate->factory()->NewStringFromAsciiChecked(
-                                  method_name)));
+        isolate,
+        NewTypeError(
+            MessageTemplate::kTypedArrayValidateErrorOperation,
+            isolate->factory()->NewStringFromAsciiChecked(method_name)));
   }
 
   if (alphabet == simdutf::base64_options::base64_default &&
@@ -944,8 +970,12 @@ BUILTIN(Uint8ArrayPrototypeSetFromHex) {
   isolate->CountUsage(v8::Isolate::kUint8ArrayToFromBase64AndHex);
 
   // 1. Let into be the this value.
-  // 2. Perform ? ValidateUint8Array(into).
-  CHECK_RECEIVER(JSTypedArray, uint8array, method_name);
+  // 2. Perform ? ValidateUint8Array(into, write).
+  DirectHandle<JSTypedArray> uint8array;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, uint8array,
+      JSTypedArray::Validate(isolate, args.receiver(), method_name,
+                             TypedArrayAccessMode::kWrite));
   ElementsKind elements_kind = uint8array->GetElementsKind();
   if (elements_kind != ElementsKind::UINT8_ELEMENTS &&
       elements_kind != ElementsKind::RAB_GSAB_UINT8_ELEMENTS) {
@@ -975,9 +1005,10 @@ BUILTIN(Uint8ArrayPrototypeSetFromHex) {
 
   if (out_of_bounds || uint8array->WasDetached()) {
     THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kDetachedOperation,
-                              isolate->factory()->NewStringFromAsciiChecked(
-                                  method_name)));
+        isolate,
+        NewTypeError(
+            MessageTemplate::kTypedArrayValidateErrorOperation,
+            isolate->factory()->NewStringFromAsciiChecked(method_name)));
   }
 
   size_t input_length = input_string->length();
@@ -1065,9 +1096,10 @@ BUILTIN(Uint8ArrayPrototypeToHex) {
 
   if (out_of_bounds || uint8array->WasDetached()) {
     THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kDetachedOperation,
-                              isolate->factory()->NewStringFromAsciiChecked(
-                                  method_name)));
+        isolate,
+        NewTypeError(
+            MessageTemplate::kTypedArrayValidateErrorOperation,
+            isolate->factory()->NewStringFromAsciiChecked(method_name)));
   }
 
   if (length > String::kMaxLength / 2) {

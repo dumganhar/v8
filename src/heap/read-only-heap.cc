@@ -9,15 +9,20 @@
 
 #include "src/common/globals.h"
 #include "src/common/ptr-compr-inl.h"
+#include "src/heap/base-page.h"
 #include "src/heap/heap-write-barrier-inl.h"
-#include "src/heap/memory-chunk-metadata.h"
-#include "src/heap/mutable-page-metadata.h"
+#include "src/heap/mutable-page.h"
 #include "src/heap/read-only-spaces.h"
 #include "src/init/isolate-group.h"
+#if V8_ENABLE_WEBASSEMBLY
+#include "src/trap-handler/trap-handler.h"
+#include "src/wasm/wasm-objects-inl.h"
+#endif  // V8_ENABLE_WEBASSEMBLY
 #include "src/objects/heap-object-inl.h"
 #include "src/objects/objects-inl.h"
 #include "src/objects/smi.h"
 #include "src/sandbox/js-dispatch-table-inl.h"
+#include "src/sandbox/trusted-pointer-table.h"
 #include "src/snapshot/read-only-deserializer.h"
 #include "src/utils/allocation.h"
 
@@ -25,15 +30,12 @@ namespace v8 {
 namespace internal {
 
 ReadOnlyHeap::~ReadOnlyHeap() {
-#ifdef V8_ENABLE_SANDBOX
-  IsolateGroup::current()->code_pointer_table()->TearDownSpace(
-      &code_pointer_space_);
-#endif
-  JSDispatchTable* jdt = IsolateGroup::current()->js_dispatch_table();
-#if V8_STATIC_DISPATCH_HANDLES_BOOL
-  jdt->DetachSpaceFromReadOnlySegments(&js_dispatch_table_space_);
-#endif  // V8_STATIC_DISPATCH_HANDLES_BOOL
-  jdt->TearDownSpace(&js_dispatch_table_space_);
+#if V8_ENABLE_WEBASSEMBLY && V8_STATIC_ROOTS_BOOL
+  if (wasm_null_payload_ != kNullAddress) {
+    trap_handler::UnregisterCoveredMemory(wasm_null_payload_,
+                                          WasmNull::kPayloadSize);
+  }
+#endif  // V8_ENABLE_WEBASSEMBLY && V8_STATIC_ROOTS_BOOL
 }
 
 // static
@@ -60,6 +62,10 @@ void ReadOnlyHeap::SetUp(Isolate* isolate,
       isolate->external_pointer_table().SetUpFromReadOnlyArtifacts(
           isolate->heap()->read_only_external_pointer_space(), artifacts);
 #endif  // V8_COMPRESS_POINTERS
+#ifdef V8_ENABLE_SANDBOX
+      isolate->trusted_pointer_table().SetUpFromReadOnlyArtifacts(
+          isolate->heap()->read_only_trusted_pointer_space(), artifacts);
+#endif  // V8_ENABLE_SANDBOX
       artifacts->read_only_heap()->InitializeIsolateRoots(isolate);
     }
     artifacts->VerifyChecksum(read_only_snapshot_data, read_only_heap_created);
@@ -116,6 +122,10 @@ void ReadOnlyHeap::OnCreateHeapObjectsComplete(Isolate* isolate) {
       Heap::SweepingForcedFinalizationMode::kV8Only,
       CompleteSweepingReason::kReadOnly);
 
+  // Fix the free space maps, for free spaces that were created before the map
+  // existed.
+  read_only_space()->RepairFreeSpacesBeforeSerialization();
+
   InitFromIsolate(isolate);
 
 #ifdef VERIFY_HEAP
@@ -153,6 +163,16 @@ void ReadOnlyHeap::InitializeFromIsolateRoots(Isolate* isolate) {
 void ReadOnlyHeap::InitFromIsolate(Isolate* isolate) {
   DCHECK(roots_init_complete_);
   read_only_space_->ShrinkPages();
+
+#if V8_ENABLE_WEBASSEMBLY && V8_STATIC_ROOTS_BOOL
+  if (trap_handler::IsTrapHandlerEnabled()) {
+    CHECK_EQ(wasm_null_payload_, kNullAddress);
+    wasm_null_payload_ = isolate->factory()->wasm_null()->payload();
+    CHECK(trap_handler::RegisterCoveredMemory(wasm_null_payload_,
+                                              WasmNull::kPayloadSize));
+  }
+#endif  // V8_ENABLE_WEBASSEMBLY && V8_STATIC_ROOTS_BOOL
+
   ReadOnlyArtifacts* artifacts =
       isolate->isolate_group()->read_only_artifacts();
   read_only_space()->DetachPagesAndAddToArtifacts(artifacts);
@@ -167,21 +187,7 @@ void ReadOnlyHeap::InitFromIsolate(Isolate* isolate) {
 
 ReadOnlyHeap::ReadOnlyHeap(ReadOnlySpace* ro_space)
     : read_only_space_(ro_space) {
-#ifdef V8_ENABLE_SANDBOX
-  IsolateGroup::current()->code_pointer_table()->InitializeSpace(
-      &code_pointer_space_);
-#endif  // V8_ENABLE_SANDBOX
-  JSDispatchTable* jdt = IsolateGroup::current()->js_dispatch_table();
-  jdt->InitializeSpace(&js_dispatch_table_space_);
-  // To avoid marking trying to write to these read-only cells they are
-  // allocated black. Target code objects in the read-only dispatch table are
-  // read-only code objects.
-  js_dispatch_table_space_.set_allocate_black(true);
-#if V8_STATIC_DISPATCH_HANDLES_BOOL
-  jdt->AttachSpaceToReadOnlySegments(&js_dispatch_table_space_);
-  jdt->PreAllocateEntries(&js_dispatch_table_space_,
-                          JSBuiltinDispatchHandleRoot::kCount);
-#endif  // V8_STATIC_DISPATCH_HANDLES_BOOL
+
 }
 
 // static
@@ -246,14 +252,13 @@ Tagged<HeapObject> ReadOnlyHeapObjectIterator::Next() {
 }
 
 ReadOnlyPageObjectIterator::ReadOnlyPageObjectIterator(
-    const ReadOnlyPageMetadata* page,
-    SkipFreeSpaceOrFiller skip_free_space_or_filler)
+    const ReadOnlyPage* page, SkipFreeSpaceOrFiller skip_free_space_or_filler)
     : ReadOnlyPageObjectIterator(
           page, page == nullptr ? kNullAddress : page->GetAreaStart(),
           skip_free_space_or_filler) {}
 
 ReadOnlyPageObjectIterator::ReadOnlyPageObjectIterator(
-    const ReadOnlyPageMetadata* page, Address current_addr,
+    const ReadOnlyPage* page, Address current_addr,
     SkipFreeSpaceOrFiller skip_free_space_or_filler)
     : page_(page),
       current_addr_(current_addr),
@@ -263,15 +268,15 @@ ReadOnlyPageObjectIterator::ReadOnlyPageObjectIterator(
 }
 
 Tagged<HeapObject> ReadOnlyPageObjectIterator::Next() {
-  if (page_ == nullptr) return HeapObject();
+  if (page_ == nullptr) return {};
 
   Address end = page_->GetAreaStart() + page_->area_size();
   for (;;) {
     DCHECK_LE(current_addr_, end);
-    if (current_addr_ == end) return HeapObject();
+    if (current_addr_ == end) return {};
 
     Tagged<HeapObject> object = HeapObject::FromAddress(current_addr_);
-    const int object_size = object->Size();
+    const uint32_t object_size = object->SafeSize().value();
     current_addr_ += ALIGN_TO_ALLOCATION_ALIGNMENT(object_size);
 
     if (skip_free_space_or_filler_ == SkipFreeSpaceOrFiller::kYes &&
@@ -284,7 +289,7 @@ Tagged<HeapObject> ReadOnlyPageObjectIterator::Next() {
   }
 }
 
-void ReadOnlyPageObjectIterator::Reset(const ReadOnlyPageMetadata* page) {
+void ReadOnlyPageObjectIterator::Reset(const ReadOnlyPage* page) {
   page_ = page;
   current_addr_ = page->GetAreaStart();
 }

@@ -13,6 +13,8 @@
 #include <memory>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "src/base/platform/time.h"
 #include "src/base/platform/wrappers.h"
 #include "src/base/small-vector.h"
@@ -144,9 +146,9 @@ class WasmEHData {
  protected:
   BlockIndex GetTryBranchOf(BlockIndex catch_block_index) const;
 
-  std::unordered_map<CodeOffset, BlockIndex> code_trycatch_map_;
-  std::unordered_map<BlockIndex, TryBlock> try_blocks_;
-  std::unordered_map<BlockIndex, CatchBlock> catch_blocks_;
+  absl::flat_hash_map<CodeOffset, BlockIndex> code_trycatch_map_;
+  absl::flat_hash_map<BlockIndex, TryBlock> try_blocks_;
+  absl::flat_hash_map<BlockIndex, CatchBlock> catch_blocks_;
 };
 
 class WasmEHDataGenerator : public WasmEHData {
@@ -395,7 +397,7 @@ class V8_EXPORT_PRIVATE WasmInterpreterThreadMap {
   void NotifyIsolateDisposal(Isolate* isolate);
 
  private:
-  typedef std::unordered_map<int, std::unique_ptr<WasmInterpreterThread>>
+  typedef absl::flat_hash_map<int, std::unique_ptr<WasmInterpreterThread>>
       ThreadInterpreterMap;
   ThreadInterpreterMap map_;
   base::Mutex mutex_;
@@ -518,6 +520,12 @@ class V8_EXPORT_PRIVATE WasmInterpreterThread {
 
     void SetCurrentFrame(const FrameState& frame_state) {
       current_frame_state_ = frame_state;
+      // The thread's copy is a non-owning bookmark used for stack traces and
+      // frame restoration on reentrant calls.  It must never hold a
+      // caught_exceptions_ GlobalHandle because the caller's live
+      // current_frame_ is the sole owner; a stale copy here would lead to a
+      // double-free if the frame is restored and then unwound.
+      current_frame_state_.caught_exceptions_ = Handle<FixedArray>::null();
     }
     const FrameState& GetCurrentFrame() const { return current_frame_state_; }
 
@@ -868,7 +876,6 @@ class V8_EXPORT_PRIVATE WasmInterpreter {
   // {InterpreterCode} vector in the {CodeMap}. It is also passed to
   // {WasmDecoder} used to parse the 'locals' in a Wasm function.
   Zone zone_;
-  IndirectHandle<WasmInstanceObject> instance_object_;
 
   // Create a copy of the module bytes for the interpreter, since the passed
   // pointer might be invalidated after constructing the interpreter.
@@ -1274,15 +1281,35 @@ enum ExternalCallResult {
 
 constexpr uint32_t kBranchOnCastDataTargetTypeBitSize = 30;
 struct BranchOnCastData {
-  uint32_t label_depth;
-  uint32_t src_is_null : 1;  //  BrOnCastFlags
-  uint32_t res_is_null : 1;  //  BrOnCastFlags
-  uint32_t target_type_bit_fields
-      : kBranchOnCastDataTargetTypeBitSize;  //  HeapType bit_fields
+  BranchOnCastData(uint32_t label_depth, bool src_is_null, bool res_is_null,
+                   uint32_t target_type_bit_fields)
+      : label_depth_(label_depth),
+        flags_(SrcIsNullField::encode(src_is_null) |
+               ResIsNullField::encode(res_is_null) |
+               TargetTypeField::encode(target_type_bit_fields)) {}
+  BranchOnCastData() : label_depth_(0), flags_(0) {}
+
+  uint32_t label_depth() const { return label_depth_; }
+  bool src_is_null() const { return SrcIsNullField::decode(flags_); }
+  bool res_is_null() const { return ResIsNullField::decode(flags_); }
+  uint32_t target_type_bit_fields() const {
+    return TargetTypeField::decode(flags_);
+  }
+
+ private:
+  uint32_t label_depth_;
+  uint32_t flags_;
+
+  using SrcIsNullField = base::BitField<bool, 0, 1>;
+  using ResIsNullField = SrcIsNullField::Next<bool, 1>;
+  using TargetTypeField =
+      ResIsNullField::Next<uint32_t, kBranchOnCastDataTargetTypeBitSize>;
 };
 
 struct WasmInstruction {
   union Optional {
+    Optional() : index(0) {}
+
     uint32_t index;  // global/local/label/memory/table index
     int32_t i32;
     int64_t i64;
@@ -1315,12 +1342,52 @@ struct WasmInstruction {
       uint32_t dst_table_index;
       uint32_t src_table_index;
     } table_copy;
-    uint8_t simd_lane : 4;
+    struct SimdLane {
+      using LaneField = base::BitField<uint8_t, 0, 4, uint8_t>;
+
+      SimdLane() : value_(0) {}
+
+      uint8_t lane() const { return LaneField::decode(value_); }
+      void set_lane(uint8_t v) { value_ = LaneField::encode(v); }
+
+      uint8_t value_;
+    } simd_lane;
     struct SimdLaneLoad {
-      uint8_t lane : 4;
-      uint8_t : 0;
-      uint64_t offset : 48;
+      using LaneField = base::BitField<uint8_t, 0, 4, uint32_t>;
+      using MemoryIndexField = LaneField::Next<uint32_t, 28>;
+      using OffsetField = base::BitField64<uint64_t, 0, 48>;
+
+      SimdLaneLoad() : lane_and_memory_index_(0), offset_field_(0) {}
+
+      uint8_t lane() const { return LaneField::decode(lane_and_memory_index_); }
+      uint32_t memory_index() const {
+        return MemoryIndexField::decode(lane_and_memory_index_);
+      }
+      uint64_t offset() const { return OffsetField::decode(offset_field_); }
+      void set_lane(uint8_t v) {
+        lane_and_memory_index_ = LaneField::update(lane_and_memory_index_, v);
+      }
+      void set_memory_index(uint32_t v) {
+        lane_and_memory_index_ =
+            MemoryIndexField::update(lane_and_memory_index_, v);
+      }
+      void set_offset(uint64_t v) { offset_field_ = OffsetField::encode(v); }
+
+      uint32_t lane_and_memory_index_;
+      uint64_t offset_field_;
     } simd_loadstore_lane;
+    struct MemoryInit {
+      uint32_t memory_index;
+      uint32_t data_segment_index;
+    } memory_init;
+    struct MemoryCopy {
+      uint32_t dst_memory_index;
+      uint32_t src_memory_index;
+    } memory_copy;
+    struct MemoryAccess {
+      uint64_t offset;
+      uint32_t memory_index;
+    } memory_access;
     struct GC_FieldImmediate {
       uint32_t struct_index;
       uint32_t field_index;
@@ -1330,7 +1397,6 @@ struct WasmInstruction {
       uint32_t length;
     } gc_memory_immediate;
     struct GC_HeapTypeImmediate {
-      uint32_t length;
       uint32_t heap_type_bit_field;
       constexpr HeapType type() const {
         return HeapType::FromBits(heap_type_bit_field);
@@ -1568,7 +1634,7 @@ class WasmBytecodeGenerator {
                                 const WasmInstruction& curr_instr,
                                 const WasmInstruction& next_instr);
 
-  uint32_t ScanConstInstructions() const;
+  uint32_t ScanConstInstructions();
 
   void Emit(const void* buff, size_t len) {
     code_.insert(code_.end(), static_cast<const uint8_t*>(buff),
@@ -1577,7 +1643,7 @@ class WasmBytecodeGenerator {
 
   inline void I32Push(bool emit = true);
   inline void I64Push(bool emit = true);
-  inline void MemIndexPush(bool emit = true) { (this->*int_mem_push_)(emit); }
+  inline void MemIndexPush(bool is_memory64, bool emit = true);
   inline void ITableIndexPush(bool is_table64, bool emit = true);
   inline void F32Push(bool emit = true);
   inline void F64Push(bool emit = true);
@@ -1587,7 +1653,13 @@ class WasmBytecodeGenerator {
 
   inline void I32Pop(bool emit = true) { Pop(kI32, emit); }
   inline void I64Pop(bool emit = true) { Pop(kI64, emit); }
-  inline void MemIndexPop(bool emit = true) { (this->*int_mem_pop_)(emit); }
+  inline void MemIndexPop(bool is_memory64, bool emit = true) {
+    if (V8_UNLIKELY(is_memory64)) {
+      I64Pop(emit);
+    } else {
+      I32Pop(emit);
+    }
+  }
   inline void F32Pop(bool emit = true) { Pop(kF32, emit); }
   inline void F64Pop(bool emit = true) { Pop(kF64, emit); }
   inline void S128Pop(bool emit = true) { Pop(kS128, emit); }
@@ -1596,7 +1668,7 @@ class WasmBytecodeGenerator {
     DCHECK(wasm::is_reference(slots_[stack_.back()].kind()));
     uint32_t ref_index = slots_[stack_.back()].ref_stack_index;
     ValueType value_type = slots_[stack_.back()].value_type;
-    DCHECK(value_type.is_object_reference());
+    DCHECK(value_type.is_ref());
     PopSlot();
     if (emit) EmitRefStackIndex(ref_index);
     return value_type;
@@ -1667,6 +1739,13 @@ class WasmBytecodeGenerator {
     } else {
       DCHECK_EQ(handler_size_, InstrHandlerSize::Large);
       Emit(&value, sizeof(value));
+    }
+  }
+  inline void EmitMemoryIndex(int32_t value) {
+    if (V8_UNLIKELY(is_multi_memory_)) {
+      EmitI32Const(value);
+    } else {
+      DCHECK_EQ(value, 0);
     }
   }
 
@@ -1805,58 +1884,63 @@ class WasmBytecodeGenerator {
   }
 
   template <typename T>
-  inline uint32_t GetConstSlot(T value) {
-    if constexpr (std::is_same_v<T, int32_t>) {
-      return GetI32ConstSlot(value);
-    }
-    if constexpr (std::is_same_v<T, int64_t>) {
-      return GetI64ConstSlot(value);
-    }
-    if constexpr (std::is_same_v<T, float>) {
-      return GetF32ConstSlot(value);
-    }
-    if constexpr (std::is_same_v<T, double>) {
-      return GetF64ConstSlot(value);
-    }
-    if constexpr (std::is_same_v<T, Simd128>) {
-      return GetS128ConstSlot(value);
-    }
+  inline std::optional<uint32_t> GetConstSlot(T value) {
     UNREACHABLE();
   }
-  inline uint32_t GetI32ConstSlot(int32_t value) {
+  template <>
+  inline std::optional<uint32_t> GetConstSlot<int32_t>(int32_t value) {
     auto it = i32_const_cache_.find(value);
     if (it != i32_const_cache_.end()) {
-      return it->second;
+      return std::optional<uint32_t>(it->second);
     }
-    return UINT_MAX;
+    return std::nullopt;
   }
-  inline uint32_t GetI64ConstSlot(int64_t value) {
+  template <>
+  inline std::optional<uint32_t> GetConstSlot<int64_t>(int64_t value) {
     auto it = i64_const_cache_.find(value);
     if (it != i64_const_cache_.end()) {
-      return it->second;
+      return std::optional<uint32_t>(it->second);
     }
-    return UINT_MAX;
+    return std::nullopt;
   }
-  inline uint32_t GetF32ConstSlot(float value) {
-    auto it = f32_const_cache_.find(value);
+  template <>
+  inline std::optional<uint32_t> GetConstSlot<float>(float value) {
+    auto it = f32_const_cache_.find(base::bit_cast<uint32_t>(value));
     if (it != f32_const_cache_.end()) {
-      return it->second;
+      return std::optional<uint32_t>(it->second);
     }
-    return UINT_MAX;
+    return std::nullopt;
   }
-  inline uint32_t GetF64ConstSlot(double value) {
-    auto it = f64_const_cache_.find(value);
+  template <>
+  inline std::optional<uint32_t> GetConstSlot<double>(double value) {
+    auto it = f64_const_cache_.find(base::bit_cast<uint64_t>(value));
     if (it != f64_const_cache_.end()) {
-      return it->second;
+      return std::optional<uint32_t>(it->second);
     }
-    return UINT_MAX;
+    return std::nullopt;
   }
-  inline uint32_t GetS128ConstSlot(Simd128 value) {
+  template <>
+  inline std::optional<uint32_t> GetConstSlot<Simd128>(Simd128 value) {
     auto it = s128_const_cache_.find(reinterpret_cast<Simd128&>(value));
     if (it != s128_const_cache_.end()) {
-      return it->second;
+      return std::optional<uint32_t>(it->second);
     }
-    return UINT_MAX;
+    return std::nullopt;
+  }
+
+  template <typename T>
+  inline void InsertConstSlotInCache(T value, uint32_t slot_index) {
+    if constexpr (std::is_same_v<T, int32_t>) {
+      i32_const_cache_[value] = slot_index;
+    } else if constexpr (std::is_same_v<T, int64_t>) {
+      i64_const_cache_[value] = slot_index;
+    } else if constexpr (std::is_same_v<T, float>) {
+      f32_const_cache_[base::bit_cast<uint32_t>(value)] = slot_index;
+    } else if constexpr (std::is_same_v<T, double>) {
+      f64_const_cache_[base::bit_cast<uint64_t>(value)] = slot_index;
+    } else if constexpr (std::is_same_v<T, Simd128>) {
+      s128_const_cache_[value] = slot_index;
+    }
   }
 
   template <typename T>
@@ -1864,8 +1948,8 @@ class WasmBytecodeGenerator {
     if constexpr (std::is_same_v<T, WasmRef>) {
       UNREACHABLE();
     }
-    uint32_t slot_index = GetConstSlot(value);
-    if (slot_index == UINT_MAX) {
+    std::optional<uint32_t> slot_index = GetConstSlot(value);
+    if (!slot_index.has_value()) {
       uint32_t offset = const_slot_offset_ * sizeof(uint32_t);
       DCHECK_LE(offset + sizeof(T), const_slots_values_.size());
 
@@ -1876,8 +1960,11 @@ class WasmBytecodeGenerator {
           reinterpret_cast<Address>(const_slots_values_.data() + offset),
           value);
       const_slot_offset_ += sizeof(T) / kSlotSize;
+
+      // Insert into cache for deduplication of subsequent uses
+      InsertConstSlotInCache(value, slot_index.value());
     }
-    return slot_index;
+    return slot_index.value();
   }
 
   template <typename T>
@@ -1991,21 +2078,19 @@ class WasmBytecodeGenerator {
   static bool HasSideEffects(WasmOpcode opcode);
 #endif  // DEBUG
 
-  MemIndexPushFunc int_mem_push_;
-  MemIndexPopFunc int_mem_pop_;
-  bool is_memory64_;
-
   std::vector<uint8_t> const_slots_values_;
   uint32_t const_slot_offset_;
-  std::unordered_map<int32_t, uint32_t> i32_const_cache_;
-  std::unordered_map<int64_t, uint32_t> i64_const_cache_;
-  std::unordered_map<float, uint32_t> f32_const_cache_;
-  std::unordered_map<double, uint32_t> f64_const_cache_;
+  absl::flat_hash_map<int32_t, uint32_t> i32_const_cache_;
+  absl::flat_hash_map<int64_t, uint32_t> i64_const_cache_;
+  // Use binary representation as keys to correctly handle NaN values
+  // which have multiple bit patterns but compare equal as floats.
+  absl::flat_hash_map<uint32_t, uint32_t> f32_const_cache_;
+  absl::flat_hash_map<uint64_t, uint32_t> f64_const_cache_;
 
   struct Simd128Hash {
     size_t operator()(const Simd128& s128) const;
   };
-  std::unordered_map<Simd128, uint32_t, Simd128Hash> s128_const_cache_;
+  absl::flat_hash_map<Simd128, uint32_t, Simd128Hash> s128_const_cache_;
 
   std::vector<Simd128> simd_immediates_;
   uint32_t slot_offset_;  // TODO(paolosev@microsoft.com): manage holes
@@ -2071,6 +2156,8 @@ class WasmBytecodeGenerator {
 
   std::vector<BlockData> blocks_;
   int32_t current_block_index_;
+
+  const bool is_multi_memory_;
 
   bool is_instruction_reachable_;
   uint32_t unreachable_block_count_;
@@ -2195,7 +2282,7 @@ class InterpreterTracer final : public Malloced {
   int isolate_id_;
   base::EmbeddedVector<char, 128> filename_;
   FILE* file_;
-  std::unordered_set<int> traced_functions_;
+  absl::flat_hash_set<int> traced_functions_;
   int current_chunk_index_;
   int64_t write_count_;
 

@@ -32,7 +32,7 @@ V8_INLINE Address ReadCppHeapPointerField(
   CppHeapPointerHandle handle = slot.Relaxed_LoadHandle();
   return isolate.GetCppHeapPointerTable().Get(handle, tag_range);
 #else   // !V8_COMPRESS_POINTERS
-  return slot.try_load(isolate, tag_range);
+  return slot.load();
 #endif  // !V8_COMPRESS_POINTERS
 }
 
@@ -49,7 +49,7 @@ V8_INLINE Address ReadCppHeapPointerField(Address field_address,
   CppHeapPointerHandle handle = slot.Relaxed_LoadHandle();
   return isolate.GetCppHeapPointerTable().Get(handle, tag_range);
 #else   // !V8_COMPRESS_POINTERS
-  return slot.try_load(isolate, tag_range);
+  return slot.load();
 #endif  // !V8_COMPRESS_POINTERS
 }
 
@@ -71,8 +71,29 @@ V8_INLINE void WriteLazilyInitializedCppHeapPointerField(
     table.Set(handle, value, tag);
   }
 #else   // !V8_COMPRESS_POINTERS
-  slot.store(isolate, value, tag);
+  slot.store(value);
 #endif  // !V8_COMPRESS_POINTERS
+}
+
+void CppHeapPointerMember::SetupLazilyInitialized() {
+  CppHeapPointerSlot(storage_address()).init();
+}
+
+void CppHeapPointerMember::StoreLazy(IsolateForPointerCompression isolate,
+                                     Address value, CppHeapPointerTag tag) {
+  WriteLazilyInitializedCppHeapPointerField(storage_address(), isolate, value,
+                                            tag);
+}
+
+template <CppHeapPointerTag lower_bound, CppHeapPointerTag upper_bound>
+Address CppHeapPointerMember::load(IsolateForPointerCompression isolate) const {
+  return ReadCppHeapPointerField<lower_bound, upper_bound>(storage_address(),
+                                                           isolate);
+}
+
+Address CppHeapPointerMember::load(IsolateForPointerCompression isolate,
+                                   CppHeapPointerTagRange tag_range) const {
+  return ReadCppHeapPointerField(storage_address(), isolate, tag_range);
 }
 
 }  // namespace v8::internal

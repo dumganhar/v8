@@ -22,7 +22,7 @@
 #include "src/debug/debug.h"
 #include "src/deoptimizer/deoptimizer.h"
 #include "src/execution/frames-inl.h"
-#include "src/heap/mutable-page-metadata.h"
+#include "src/heap/mutable-page.h"
 #include "src/init/bootstrapper.h"
 #include "src/logging/counters.h"
 #include "src/objects/objects-inl.h"
@@ -157,13 +157,18 @@ MemOperand MacroAssembler::ExternalReferenceAsOperand(
 }
 
 void MacroAssembler::GetLabelAddress(Register dest, Label* target) {
+  // It's important that we don't emit the constant pool in between the
+  // `mov_label_offset` and the following `add`.
+  BlockConstPoolScope block_const_pool_scope(this);
+
   // This should be just a
   //    add(dest, pc, branch_offset(target));
   // but current implementation of Assembler::bind_to()/target_at_put() add
   // (InstructionStream::kHeaderSize - kHeapObjectTag) to a position of a label
   // in a "linked" state and thus making it usable only for mov_label_offset().
   // TODO(ishell): fix branch_offset() and re-implement
-  // RegExpMacroAssemblerARM::PushBacktrack() without mov_label_offset().
+  // regexp::RegExpMacroAssemblerARM::PushBacktrack() without
+  // mov_label_offset().
   mov_label_offset(dest, target);
   // mov_label_offset computes offset of the |target| relative to the "current
   // InstructionStream object pointer" which is essentially pc_offset() of the
@@ -410,7 +415,7 @@ void MacroAssembler::CallJSFunction(Register function_object,
   Register dispatch_handle = r8;
   Register scratch = r9;
   ldr(dispatch_handle,
-      FieldMemOperand(function_object, JSFunction::kDispatchHandleOffset));
+      FieldMemOperand(function_object, offsetof(JSFunction, dispatch_handle_)));
   LoadEntrypointFromJSDispatchTable(code, dispatch_handle, scratch);
   Call(code);
 }
@@ -431,8 +436,7 @@ void MacroAssembler::CallJSDispatchEntry(JSDispatchHandle dispatch_handle,
   static_assert(!JSDispatchTable::kSupportsCompaction);
   LoadEntrypointFromJSDispatchTable(code, dispatch_handle_reg, scratch);
   CHECK_EQ(argument_count,
-           IsolateGroup::current()->js_dispatch_table()->GetParameterCount(
-               dispatch_handle));
+           isolate()->js_dispatch_table().GetParameterCount(dispatch_handle));
   Call(code);
 }
 
@@ -442,7 +446,7 @@ void MacroAssembler::JumpJSFunction(Register function_object,
   Register dispatch_handle = r8;
   Register scratch = r9;
   ldr(dispatch_handle,
-      FieldMemOperand(function_object, JSFunction::kDispatchHandleOffset));
+      FieldMemOperand(function_object, offsetof(JSFunction, dispatch_handle_)));
   LoadEntrypointFromJSDispatchTable(code, dispatch_handle, scratch);
   Jump(code);
 }
@@ -1570,10 +1574,8 @@ void MacroAssembler::EnterExitFrame(Register scratch, int stack_space,
   ASM_CODE_COMMENT(this);
   DCHECK(frame_type == StackFrame::EXIT ||
          frame_type == StackFrame::BUILTIN_EXIT ||
-         frame_type == StackFrame::API_ACCESSOR_EXIT ||
+         frame_type == StackFrame::API_NAMED_ACCESSOR_EXIT ||
          frame_type == StackFrame::API_CALLBACK_EXIT);
-
-  using ER = ExternalReference;
 
   // Set up the frame structure on the stack.
   DCHECK_EQ(2 * kPointerSize, ExitFrameConstants::kCallerSPDisplacement);
@@ -1589,12 +1591,8 @@ void MacroAssembler::EnterExitFrame(Register scratch, int stack_space,
   }
 
   // Save the frame pointer and the context in top.
-  ER c_entry_fp_address =
-      ER::Create(IsolateAddressId::kCEntryFPAddress, isolate());
-  str(fp, ExternalReferenceAsOperand(c_entry_fp_address, no_reg));
-
-  ER context_address = ER::Create(IsolateAddressId::kContextAddress, isolate());
-  str(cp, ExternalReferenceAsOperand(context_address, no_reg));
+  str(fp, AsMemOperand(IsolateFieldId::kCEntryFP));
+  str(cp, AsMemOperand(IsolateFieldId::kContext));
 
   // Reserve place for the return address and stack space and align the frame
   // preparing for calling the runtime function.
@@ -1627,21 +1625,16 @@ void MacroAssembler::LeaveExitFrame(Register scratch) {
   ASM_CODE_COMMENT(this);
   ConstantPoolUnavailableScope constant_pool_unavailable(this);
 
-  using ER = ExternalReference;
-
   // Restore current context from top and clear it in debug mode.
-  ER context_address = ER::Create(IsolateAddressId::kContextAddress, isolate());
-  ldr(cp, ExternalReferenceAsOperand(context_address, no_reg));
+  ldr(cp, AsMemOperand(IsolateFieldId::kContext));
 #ifdef DEBUG
   mov(scratch, Operand(Context::kNoContext));
-  str(scratch, ExternalReferenceAsOperand(context_address, no_reg));
+  str(scratch, AsMemOperand(IsolateFieldId::kContext));
 #endif
 
   // Clear the top frame.
-  ER c_entry_fp_address =
-      ER::Create(IsolateAddressId::kCEntryFPAddress, isolate());
   mov(scratch, Operand::Zero());
-  str(scratch, ExternalReferenceAsOperand(c_entry_fp_address, no_reg));
+  str(scratch, AsMemOperand(IsolateFieldId::kCEntryFP));
 
   // Tear down the exit frame, pop the arguments, and return.
   mov(sp, Operand(fp));
@@ -1850,11 +1843,12 @@ void MacroAssembler::InvokeFunctionWithNewTarget(
   Register expected_reg = r2;
   Register temp_reg = r4;
 
-  ldr(temp_reg, FieldMemOperand(r1, JSFunction::kSharedFunctionInfoOffset));
-  ldr(cp, FieldMemOperand(r1, JSFunction::kContextOffset));
+  ldr(temp_reg,
+      FieldMemOperand(r1, offsetof(JSFunction, shared_function_info_)));
+  ldr(cp, FieldMemOperand(r1, offsetof(JSFunction, context_)));
   ldrh(expected_reg,
        FieldMemOperand(temp_reg,
-                       SharedFunctionInfo::kFormalParameterCountOffset));
+                       offsetof(SharedFunctionInfo, formal_parameter_count_)));
 
   InvokeFunctionCode(fun, new_target, expected_reg, actual_parameter_count,
                      type);
@@ -1872,7 +1866,7 @@ void MacroAssembler::InvokeFunction(Register function,
   DCHECK_EQ(function, r1);
 
   // Get the function and setup the context.
-  ldr(cp, FieldMemOperand(r1, JSFunction::kContextOffset));
+  ldr(cp, FieldMemOperand(r1, offsetof(JSFunction, context_)));
 
   InvokeFunctionCode(r1, no_reg, expected_parameter_count,
                      actual_parameter_count, type);
@@ -1886,23 +1880,17 @@ void MacroAssembler::PushStackHandler() {
 
   Push(Smi::zero());  // Padding.
   // Link the current handler as the next handler.
-  Move(r6,
-       ExternalReference::Create(IsolateAddressId::kHandlerAddress, isolate()));
-  ldr(r5, MemOperand(r6));
+  ldr(r5, AsMemOperand(IsolateFieldId::kHandler));
   push(r5);
   // Set this new handler as the current one.
-  str(sp, MemOperand(r6));
+  str(sp, AsMemOperand(IsolateFieldId::kHandler));
 }
 
 void MacroAssembler::PopStackHandler() {
   ASM_CODE_COMMENT(this);
-  UseScratchRegisterScope temps(this);
-  Register scratch = temps.Acquire();
   static_assert(StackHandlerConstants::kNextOffset == 0);
   pop(r1);
-  Move(scratch,
-       ExternalReference::Create(IsolateAddressId::kHandlerAddress, isolate()));
-  str(r1, MemOperand(scratch));
+  str(r1, AsMemOperand(IsolateFieldId::kHandler));
   add(sp, sp, Operand(StackHandlerConstants::kSize - kPointerSize));
 }
 
@@ -1927,7 +1915,7 @@ void MacroAssembler::CompareObjectTypeRange(Register object, Register map,
 
 void MacroAssembler::CompareInstanceType(Register map, Register type_reg,
                                          InstanceType type) {
-  ldrh(type_reg, FieldMemOperand(map, Map::kInstanceTypeOffset));
+  ldrh(type_reg, FieldMemOperand(map, offsetof(Map, instance_type_)));
   cmp(type_reg, Operand(type));
 }
 
@@ -1948,7 +1936,7 @@ void MacroAssembler::CompareInstanceTypeRange(Register map, Register type_reg,
                                               InstanceType higher_limit) {
   ASM_CODE_COMMENT(this);
   DCHECK_LT(lower_limit, higher_limit);
-  ldrh(type_reg, FieldMemOperand(map, Map::kInstanceTypeOffset));
+  ldrh(type_reg, FieldMemOperand(map, offsetof(Map, instance_type_)));
   CompareRange(type_reg, scratch, lower_limit, higher_limit);
 }
 
@@ -2197,7 +2185,7 @@ void MacroAssembler::AssertConstructor(Register object) {
   Check(ne, AbortReason::kOperandIsASmiAndNotAConstructor);
   push(object);
   LoadMap(object, object);
-  ldrb(object, FieldMemOperand(object, Map::kBitFieldOffset));
+  ldrb(object, FieldMemOperand(object, offsetof(Map, bit_field_)));
   tst(object, Operand(Map::Bits1::IsConstructorBit::kMask));
   pop(object);
   Check(ne, AbortReason::kOperandIsNotAConstructor);
@@ -2375,20 +2363,23 @@ void MacroAssembler::Abort(AbortReason reason) {
 }
 
 void MacroAssembler::LoadMap(Register destination, Register object) {
-  ldr(destination, FieldMemOperand(object, HeapObject::kMapOffset));
+  ldr(destination, FieldMemOperand(object, offsetof(HeapObject, map_)));
 }
 
-void MacroAssembler::LoadFeedbackVector(Register dst, Register closure,
-                                        Register scratch, Label* fbv_undef) {
-  Label done;
+void MacroAssembler::LoadFeedbackCell(Register dst, Register closure) {
+  ldr(dst, FieldMemOperand(closure, offsetof(JSFunction, feedback_cell_)));
+}
 
-  // Load the feedback vector from the closure.
-  ldr(dst, FieldMemOperand(closure, JSFunction::kFeedbackCellOffset));
-  ldr(dst, FieldMemOperand(dst, FeedbackCell::kValueOffset));
+void MacroAssembler::LoadFeedbackVectorFromCell(Register dst,
+                                                Register feedback_cell,
+                                                Register scratch,
+                                                Label* fbv_undef) {
+  Label done;
+  ldr(dst, FieldMemOperand(feedback_cell, offsetof(FeedbackCell, value_)));
 
   // Check if feedback vector is valid.
-  ldr(scratch, FieldMemOperand(dst, HeapObject::kMapOffset));
-  ldrh(scratch, FieldMemOperand(scratch, Map::kInstanceTypeOffset));
+  ldr(scratch, FieldMemOperand(dst, offsetof(HeapObject, map_)));
+  ldrh(scratch, FieldMemOperand(scratch, offsetof(Map, instance_type_)));
   cmp(scratch, Operand(FEEDBACK_VECTOR_TYPE));
   b(eq, &done);
 
@@ -2397,6 +2388,12 @@ void MacroAssembler::LoadFeedbackVector(Register dst, Register closure,
   b(fbv_undef);
 
   bind(&done);
+}
+
+void MacroAssembler::LoadFeedbackVector(Register dst, Register closure,
+                                        Register scratch, Label* fbv_undef) {
+  LoadFeedbackCell(dst, closure);
+  LoadFeedbackVectorFromCell(dst, dst, scratch, fbv_undef);
 }
 
 void MacroAssembler::LoadInterpreterDataBytecodeArray(
@@ -2420,8 +2417,9 @@ void MacroAssembler::LoadGlobalProxy(Register dst) {
 void MacroAssembler::LoadNativeContextSlot(Register dst, int index) {
   ASM_CODE_COMMENT(this);
   LoadMap(dst, cp);
-  ldr(dst, FieldMemOperand(
-               dst, Map::kConstructorOrBackPointerOrNativeContextOffset));
+  ldr(dst,
+      FieldMemOperand(
+          dst, offsetof(Map, constructor_or_back_pointer_or_native_context_)));
   ldr(dst, MemOperand(dst, Context::SlotOffset(index)));
 }
 
@@ -3109,7 +3107,7 @@ void MacroAssembler::TryLoadOptimizedOsrCode(Register scratch_and_result,
 
     // The entry references a CodeWrapper object. Unwrap it now.
     ldr(scratch_and_result,
-        FieldMemOperand(scratch_and_result, CodeWrapper::kCodeOffset));
+        FieldMemOperand(scratch_and_result, offsetof(CodeWrapper, code_)));
 
     Register temp = temps.Acquire();
     JumpIfCodeIsMarkedForDeoptimization(scratch_and_result, temp, &clear_slot);
@@ -3143,7 +3141,8 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
                               ExternalReference thunk_ref, Register thunk_arg,
                               int slots_to_drop_on_return,
                               MemOperand* argc_operand,
-                              MemOperand return_value_operand) {
+                              MemOperand return_value_operand,
+                              bool handle_interceptor_result) {
   ASM_CODE_COMMENT(masm);
 
   using ER = ExternalReference;
@@ -3167,11 +3166,11 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
   Register prev_limit_reg = r5;
   Register prev_level_reg = r6;
 
-  // C arguments (kCArgRegs[0/1]) are expected to be initialized outside, so
+  // C arguments (kCArgRegs[0/1/2]) are expected to be initialized outside, so
   // this function must not corrupt them (return_value overlaps with
   // kCArgRegs[0] but that's ok because we start using it only after the C
   // call).
-  DCHECK(!AreAliased(kCArgRegs[0], kCArgRegs[1],  // C args
+  DCHECK(!AreAliased(kCArgRegs[0], kCArgRegs[1], kCArgRegs[2],  // C args
                      scratch, scratch2, prev_next_address_reg, prev_limit_reg));
   // function_address and thunk_arg might overlap but this function must not
   // corrupted them until the call is made (i.e. overlap with return_value is
@@ -3190,7 +3189,8 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
     __ str(scratch, level_mem_op);
   }
 
-  Label profiler_or_side_effects_check_enabled, done_api_call;
+  Label profiler_or_side_effects_check_enabled, done_api_call,
+      done_reading_result;
   if (with_profiling) {
     __ RecordComment("Check if profiler or side effects check is enabled");
     __ ldrb(scratch,
@@ -3210,12 +3210,25 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
   __ StoreReturnAddressAndCall(function_address);
   __ bind(&done_api_call);
 
+  if (handle_interceptor_result) {
+    // Skip reading return value if the callback returned kInterceptedNo,
+    // this would make the builtin return kNotInterceptedSentinel value.
+    // Size is important here, otherwise the C++ function could have returned
+    // one- or two-byte value with junk in the upper part.
+    static_assert(kInterceptedNo == 1 && kInterceptedSize == 4);
+    static_assert(kInterceptedNo == kNotInterceptedSentinel);
+    static_assert(kInterceptedYes == 0);
+    __ tst(return_value, Operand(1));
+    __ b(kNotZero, &done_reading_result);
+  }
+
   Label propagate_exception;
   Label delete_allocated_handles;
   Label leave_exit_frame;
 
   __ RecordComment("Load the value from ReturnValue");
   __ ldr(return_value, return_value_operand);
+  __ bind(&done_reading_result);
 
   {
     ASM_CODE_COMMENT_STRING(
@@ -3255,8 +3268,16 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
     __ b(ne, &propagate_exception);
   }
 
-  __ AssertJSAny(return_value, scratch, scratch2,
-                 AbortReason::kAPICallReturnedInvalidObject);
+  if (v8_flags.debug_code) {
+    Label ok;
+    if (handle_interceptor_result) {
+      __ Cmp(return_value, kNotInterceptedSentinel);
+      __ b(eq, &ok);
+    }
+    __ AssertJSAny(return_value, scratch, scratch2,
+                   AbortReason::kAPICallReturnedInvalidObject);
+    __ bind(&ok);
+  }
 
   if (argc_operand == nullptr) {
     DCHECK_NE(slots_to_drop_on_return, 0);
@@ -3273,7 +3294,7 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
   if (with_profiling) {
     ASM_CODE_COMMENT_STRING(masm, "Call the api function via thunk wrapper.");
     __ bind(&profiler_or_side_effects_check_enabled);
-    // Additional parameter is the address of the actual callback function.
+    // Additional parameter if provided.
     if (thunk_arg.is_valid()) {
       MemOperand thunk_arg_mem_op = __ ExternalReferenceAsOperand(
           IsolateFieldId::kApiCallbackThunkArgument);

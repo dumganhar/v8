@@ -4,8 +4,8 @@
 
 #include "src/execution/arguments-inl.h"
 #include "src/execution/isolate-inl.h"
-#include "src/heap/heap-inl.h"  // For ToBoolean. TODO(jkummerow): Drop.
 #include "src/objects/objects-inl.h"
+#include "src/roots/roots-inl.h"
 #include "src/strings/string-builder-inl.h"
 
 namespace v8 {
@@ -17,9 +17,10 @@ RUNTIME_FUNCTION(Runtime_CreatePrivateSymbol) {
   DirectHandle<Symbol> symbol = isolate->factory()->NewPrivateSymbol();
   if (args.length() == 1) {
     DirectHandle<Object> description = args.at(0);
-    CHECK(IsString(*description) || IsUndefined(*description, isolate));
-    if (IsString(*description))
+    CHECK(IsString(*description) || IsUndefined(*description));
+    if (IsString(*description)) {
       symbol->set_description(Cast<String>(*description));
+    }
   }
   return *symbol;
 }
@@ -28,8 +29,7 @@ RUNTIME_FUNCTION(Runtime_CreatePrivateBrandSymbol) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
   DirectHandle<String> name = args.at<String>(0);
-  DirectHandle<Symbol> symbol = isolate->factory()->NewPrivateNameSymbol(name);
-  symbol->set_is_private_brand();
+  DirectHandle<Symbol> symbol = isolate->factory()->NewPrivateBrandSymbol(name);
   return *symbol;
 }
 
@@ -59,7 +59,7 @@ RUNTIME_FUNCTION(Runtime_SymbolIsPrivate) {
   SealHandleScope shs(isolate);
   DCHECK_EQ(1, args.length());
   auto symbol = Cast<Symbol>(args[0]);
-  return isolate->heap()->ToBoolean(symbol->is_private());
+  return ReadOnlyRoots(isolate).boolean_value(symbol->is_any_private());
 }
 }  // namespace internal
 }  // namespace v8

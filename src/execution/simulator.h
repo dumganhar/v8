@@ -181,7 +181,7 @@ class GeneratedCode {
   }
 #else
 
-  DISABLE_CFI_ICALL Return Call(Args... args) {
+  __attribute__((nodebug)) DISABLE_CFI_ICALL Return Call(Args... args) {
     // When running without a simulator we call the entry directly.
 // Starboard is a platform abstraction interface that also include Windows
 // platforms like UWP.
@@ -193,19 +193,30 @@ class GeneratedCode {
 #if V8_OS_ZOS
     // z/OS ABI requires function descriptors (FD). Artificially create a pseudo
     // FD to ensure correct dispatch to generated code.
-    void* function_desc[2] = {0, reinterpret_cast<void*>(fn_ptr_)};
-    asm volatile(" stg 5,%0 " : "=m"(function_desc[0])::"r5");
-    Signature* fn = reinterpret_cast<Signature*>(function_desc);
+    extern void ZosFuncForJSEnv();
+    typedef struct {
+      void* env;
+      void* addr;
+    } FuncDesc;
+    volatile FuncDesc func_desc;
+    func_desc.env = (reinterpret_cast<FuncDesc*>(&ZosFuncForJSEnv))->env;
+    func_desc.addr = reinterpret_cast<void*>(fn_ptr_);
+    Signature* fn;
+    asm volatile(" " : "=a"(fn) : "0"(&func_desc) : "memory");
     return fn(args...);
 #else
     // AIX ABI requires function descriptors (FD).  Artificially create a pseudo
-    // FD to ensure correct dispatch to generated code.  The 'volatile'
-    // declaration is required to avoid the compiler from not observing the
-    // alias of the pseudo FD to the function pointer, and hence, optimizing the
-    // pseudo FD declaration/initialization away.
-    volatile Address function_desc[] = {reinterpret_cast<Address>(fn_ptr_), 0,
-                                        0};
-    Signature* fn = reinterpret_cast<Signature*>(function_desc);
+    // FD to ensure correct dispatch to generated code.
+    void* function_desc[3];
+    Signature* fn;
+    asm("std %1, 0(%2)\n\t"
+        "li 0, 0\n\t"
+        "std 0, 8(%2)\n\t"
+        "std 0, 16(%2)\n\t"
+        "mr %0, %2\n\t"
+        : "=r"(fn)
+        : "r"(fn_ptr_), "r"(function_desc)
+        : "memory", "0");
     return fn(args...);
 #endif  // V8_OS_ZOS
 #else
@@ -214,7 +225,8 @@ class GeneratedCode {
   }
 #endif  // USE_SIMULATOR
 
-  DISABLE_CFI_ICALL Return CallSandboxed(Args... args) {
+  __attribute__((nodebug)) DISABLE_CFI_ICALL Return
+  CallSandboxed(Args... args) {
     EnterSandboxScope sandboxed;
     return Call(args...);
   }

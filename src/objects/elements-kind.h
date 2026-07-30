@@ -200,6 +200,14 @@ static_assert((1 << (kFastElementsKindBits - 1)) <= LAST_FAST_ELEMENTS_KIND);
 
 V8_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os, ElementsKind kind);
 
+constexpr size_t TypedArrayAndRabGsabTypedArrayElementsKindTableSize() {
+  size_t ta_count = LAST_FIXED_TYPED_ARRAY_ELEMENTS_KIND -
+                    FIRST_FIXED_TYPED_ARRAY_ELEMENTS_KIND + 1;
+  size_t rab_gsab_count = LAST_RAB_GSAB_FIXED_TYPED_ARRAY_ELEMENTS_KIND -
+                          FIRST_RAB_GSAB_FIXED_TYPED_ARRAY_ELEMENTS_KIND + 1;
+  return base::bits::RoundUpToPowerOfTwo(ta_count + rab_gsab_count);
+}
+
 const uint8_t* TypedArrayAndRabGsabTypedArrayElementsKindShifts();
 const uint8_t* TypedArrayAndRabGsabTypedArrayElementsKindSizes();
 inline constexpr int ElementsKindToShiftSize(ElementsKind elements_kind) {
@@ -419,7 +427,7 @@ constexpr bool IsObjectElementsKind(ElementsKind kind) {
   return base::IsInRange(kind, PACKED_ELEMENTS, HOLEY_ELEMENTS);
 }
 
-inline bool IsAnyHoleyNonextensibleElementsKind(ElementsKind kind) {
+constexpr inline bool IsAnyHoleyNonextensibleElementsKind(ElementsKind kind) {
   return kind == HOLEY_NONEXTENSIBLE_ELEMENTS ||
          kind == HOLEY_SEALED_ELEMENTS || kind == HOLEY_FROZEN_ELEMENTS;
 }
@@ -428,19 +436,19 @@ constexpr bool IsHoleyElementsKind(ElementsKind kind) {
   return kind % 2 == 1 && kind <= HOLEY_DOUBLE_ELEMENTS;
 }
 
-inline bool IsHoleyElementsKindForRead(ElementsKind kind) {
+constexpr inline bool IsHoleyElementsKindForRead(ElementsKind kind) {
   return kind % 2 == 1 && kind <= HOLEY_FROZEN_ELEMENTS;
 }
 
-inline bool IsHoleyOrDictionaryElementsKind(ElementsKind kind) {
+constexpr inline bool IsHoleyOrDictionaryElementsKind(ElementsKind kind) {
   return IsHoleyElementsKindForRead(kind) || kind == DICTIONARY_ELEMENTS;
 }
 
-inline bool IsFastPackedElementsKind(ElementsKind kind) {
+constexpr inline bool IsFastPackedElementsKind(ElementsKind kind) {
   return kind % 2 == 0 && kind <= PACKED_DOUBLE_ELEMENTS;
 }
 
-inline ElementsKind GetPackedElementsKind(ElementsKind holey_kind) {
+constexpr inline ElementsKind GetPackedElementsKind(ElementsKind holey_kind) {
   if (holey_kind == HOLEY_SMI_ELEMENTS) {
     return PACKED_SMI_ELEMENTS;
   }
@@ -453,7 +461,7 @@ inline ElementsKind GetPackedElementsKind(ElementsKind holey_kind) {
   return holey_kind;
 }
 
-inline ElementsKind GetHoleyElementsKind(ElementsKind packed_kind) {
+constexpr inline ElementsKind GetHoleyElementsKind(ElementsKind packed_kind) {
   if (packed_kind == PACKED_SMI_ELEMENTS) {
     return HOLEY_SMI_ELEMENTS;
   }

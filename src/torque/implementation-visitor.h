@@ -450,13 +450,9 @@ class ImplementationVisitor {
  public:
   void GenerateBuiltinDefinitionsAndInterfaceDescriptors(
       const std::string& output_directory);
-  void GenerateVisitorLists(const std::string& output_directory);
   void GenerateBitFields(const std::string& output_directory);
-  void GeneratePrintDefinitions(const std::string& output_directory);
   void GenerateClassDefinitions(const std::string& output_directory);
-  void GenerateBodyDescriptors(const std::string& output_directory);
   void GenerateInstanceTypes(const std::string& output_directory);
-  void GenerateClassVerifiers(const std::string& output_directory);
   void GenerateEnumVerifiers(const std::string& output_directory);
   void GenerateClassDebugReaders(const std::string& output_directory);
   void GenerateExportedMacrosAssembler(const std::string& output_directory);
@@ -541,7 +537,7 @@ class ImplementationVisitor {
   VisitResult InlineMacro(Macro* macro,
                           std::optional<LocationReference> this_reference,
                           const std::vector<VisitResult>& arguments,
-                          const std::vector<Block*> label_blocks);
+                          const std::vector<Block*>& label_blocks);
   void VisitMacroCommon(Macro* macro);
   void Visit(ExternMacro* macro) {}
   void Visit(TorqueMacro* macro);
@@ -584,6 +580,10 @@ class ImplementationVisitor {
   const Type* Visit(ExpressionStatement* stmt);
   const Type* Visit(DebugStatement* stmt);
   const Type* Visit(AssertStatement* stmt);
+  const Type* Visit(TypeswitchStatement* stmt) {
+    // This should have been desugared before.
+    UNREACHABLE();
+  }
 
   void BeginGeneratedFiles();
   void EndGeneratedFiles();
@@ -799,8 +799,6 @@ class ImplementationVisitor {
       switch (output_type_) {
         case OutputType::kCSA:
           return streams->csa_ccfile;
-        case OutputType::kCC:
-          return streams->class_definition_inline_headerfile_macro_definitions;
         case OutputType::kCCDebug:
           return debug_macros_cc_;
         default:
@@ -814,8 +812,6 @@ class ImplementationVisitor {
       switch (output_type_) {
         case OutputType::kCSA:
           return streams->csa_headerfile;
-        case OutputType::kCC:
-          return streams->class_definition_inline_headerfile_macro_declarations;
         case OutputType::kCCDebug:
           return debug_macros_h_;
         default:

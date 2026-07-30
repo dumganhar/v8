@@ -280,11 +280,19 @@ using kChangeInt32ToInt64 = ChangeOpMask::For<
 using kChangeUint32ToUint64 = ChangeOpMask::For<
     ChangeOp::Kind::kZeroExtend, ChangeOp::Assumption::kNoAssumption,
     RegisterRepresentation::Word32(), RegisterRepresentation::Word64()>;
+using kChangeFloat32ToUint32 = ChangeOpMask::For<
+    ChangeOp::Kind::kBitcast, ChangeOp::Assumption::kNoAssumption,
+    RegisterRepresentation::Float32(), RegisterRepresentation::Word32()>;
 using kFloat64ExtractHighWord32 = ChangeOpMask::For<
     ChangeOp::Kind::kExtractHighHalf, ChangeOp::Assumption::kNoAssumption,
     RegisterRepresentation::Float64(), RegisterRepresentation::Word32()>;
 using kTruncateFloat64ToInt64OverflowToMin =
     ChangeOpMask::For<ChangeOp::Kind::kSignedFloatTruncateOverflowToMin,
+                      ChangeOp::Assumption::kNoAssumption,
+                      RegisterRepresentation::Float64(),
+                      RegisterRepresentation::Word64()>;
+using kTruncateFloat64ToUint64OverflowToMin =
+    ChangeOpMask::For<ChangeOp::Kind::kUnsignedFloatTruncateOverflowToMin,
                       ChangeOp::Assumption::kNoAssumption,
                       RegisterRepresentation::Float64(),
                       RegisterRepresentation::Word64()>;
@@ -329,7 +337,7 @@ using kTaggedBitcastSmi =
 using kTaggedBitcastHeapObject =
     TaggedBitcastKindMask::For<TaggedBitcastOp::Kind::kHeapObject>;
 
-#if V8_ENABLE_WEBASSEMBLY
+#if V8_ENABLE_SIMD128
 
 using Simd128BinopMask =
     MaskBuilder<Simd128BinopOp, FIELD(Simd128BinopOp, kind)>;
@@ -338,10 +346,10 @@ using kSimd128I16x8Mul = Simd128BinopMask::For<Simd128BinopOp::Kind::kI16x8Mul>;
 using kSimd128AndNot = Simd128BinopMask::For<Simd128BinopOp::Kind::kS128AndNot>;
 using kSimd128Xor = Simd128BinopMask::For<Simd128BinopOp::Kind::kS128Xor>;
 
-#define SIMD_SIGN_EXTENSION_BINOP_MASK(kind) \
+#define SIMD_EXTENSION_BINOP_MASK(kind) \
   using kSimd128##kind = Simd128BinopMask::For<Simd128BinopOp::Kind::k##kind>;
-FOREACH_SIMD_128_BINARY_SIGN_EXTENSION_OPCODE(SIMD_SIGN_EXTENSION_BINOP_MASK)
-#undef SIMD_SIGN_EXTENSION_BINOP_MASK
+FOREACH_SIMD_128_BINARY_EXTENSION_OPCODE(SIMD_EXTENSION_BINOP_MASK)
+#undef SIMD_EXTENSION_BINOP_MASK
 
 using Simd128UnaryMask =
     MaskBuilder<Simd128UnaryOp, FIELD(Simd128UnaryOp, kind)>;
@@ -371,7 +379,7 @@ using Simd128ReplaceLaneMask =
 using kSimd128ReplaceLaneF32x4 =
     Simd128ReplaceLaneMask::For<Simd128ReplaceLaneOp::Kind::kF32x4>;
 
-#if V8_ENABLE_WASM_SIMD256_REVEC
+#if V8_ENABLE_SIMD256
 using Simd256UnaryMask =
     MaskBuilder<Simd256UnaryOp, FIELD(Simd256UnaryOp, kind)>;
 #define SIMD256_UNARY_MASK(kind) \
@@ -379,9 +387,9 @@ using Simd256UnaryMask =
 FOREACH_SIMD_256_UNARY_OPCODE(SIMD256_UNARY_MASK)
 #undef SIMD256_UNARY_MASK
 
-#endif  // V8_ENABLE_WASM_SIMD256_REVEC
+#endif  // V8_ENABLE_SIMD256
 
-#endif  // V8_ENABLE_WEBASSEMBLY
+#endif  // V8_ENABLE_SIMD128
 
 #undef FIELD
 

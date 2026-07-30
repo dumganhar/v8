@@ -4,24 +4,40 @@
 
 #include "src/sandbox/testing.h"
 
+#include <vector>
+
 #include "src/api/api-inl.h"
 #include "src/api/api-natives.h"
+#include "src/base/platform/mutex.h"
 #include "src/base/virtual-address-space.h"
 #include "src/builtins/builtins.h"
 #include "src/common/globals.h"
 #include "src/execution/isolate-inl.h"
 #include "src/heap/factory.h"
+#include "src/heap/heap.h"
+#include "src/heap/read-only-spaces.h"
 #include "src/objects/backing-store.h"
+#include "src/objects/feedback-vector.h"
+#include "src/objects/fixed-array.h"
+#include "src/objects/fixed-primitive-array-inl.h"
 #include "src/objects/instance-type.h"
 #include "src/objects/js-objects.h"
+#include "src/objects/tagged-field-inl.h"
 #include "src/objects/templates.h"
 #include "src/sandbox/sandbox.h"
+#include "src/sandbox/trusted-pointer-table-inl.h"
+
+#ifdef V8_INTL_SUPPORT
+#include "src/objects/js-segments.h"
+#endif  // V8_INTL_SUPPORT
 
 #ifdef V8_OS_LINUX
 #include <signal.h>
 #include <sys/mman.h>
 #include <sys/ucontext.h>
 #include <unistd.h>
+
+#include "src/base/platform/platform-linux.h"
 #endif  // V8_OS_LINUX
 
 #if defined(V8_USE_ADDRESS_SANITIZER)
@@ -34,6 +50,10 @@
 #include <sanitizer/common_interface_defs.h>
 #endif
 
+#if defined(V8_ENABLE_SANDBOX) && defined(V8_ENABLE_MEMORY_CORRUPTION_API)
+#include "src/sandbox/external-strings-cage.h"
+#endif  // V8_ENABLE_SANDBOX && V8_ENABLE_MEMORY_CORRUPTION_API
+
 namespace v8 {
 namespace internal {
 
@@ -41,9 +61,47 @@ namespace internal {
 
 SandboxTesting::Mode SandboxTesting::mode_ = SandboxTesting::Mode::kDisabled;
 
+namespace {
+void ThrowTypeError(v8::Isolate* isolate, std::string_view message) {
+  isolate->ThrowException(v8::Exception::TypeError(
+      v8::String::NewFromUtf8(isolate, message.data(), NewStringType::kNormal,
+                              static_cast<int>(message.size()))
+          .ToLocalChecked()));
+}
+}  // namespace
+
 #ifdef V8_ENABLE_MEMORY_CORRUPTION_API
 
 namespace {
+bool IsLocatedInMappedMemory(Address address, Heap* heap) {
+  if (heap->memory_allocator()->LookupChunkContainingAddress(address) !=
+      nullptr) {
+    return true;
+  }
+  return heap->read_only_space()->ContainsSlow(address);
+}
+
+bool IsValidHeapObject(Address addr, Heap* heap) {
+  Sandbox* sandbox = Sandbox::current();
+  Address current = addr;
+  // Simple heuristic: follow the Map chain three times until we find a MetaMap
+  // (where the map pointer points to itself), or give up.
+  for (int j = 0; j < 3; j++) {
+    if (!IsLocatedInMappedMemory(current, heap)) {
+      return false;
+    }
+    uint32_t map_word = *reinterpret_cast<uint32_t*>(current);
+    if ((map_word & kHeapObjectTag) != kHeapObjectTag) {
+      return false;
+    }
+    Address map_address = sandbox->base() + (map_word & ~kHeapObjectTagMask);
+    if (map_address == current) {
+      return true;
+    }
+    current = map_address;
+  }
+  return false;
+}
 
 // Sandbox.base
 void SandboxGetBase(const v8::FunctionCallbackInfo<v8::Value>& info) {
@@ -93,7 +151,7 @@ void SandboxMemoryView(const v8::FunctionCallbackInfo<v8::Value>& info) {
   Factory* factory = reinterpret_cast<Isolate*>(isolate)->factory();
   std::unique_ptr<BackingStore> memory = BackingStore::WrapAllocation(
       reinterpret_cast<void*>(sandbox->base() + offset), size,
-      v8::BackingStore::EmptyDeleter, nullptr, SharedFlag::kNotShared);
+      v8::BackingStore::EmptyDeleter, nullptr, SharedFlag::kNo);
   if (!memory) {
     isolate->ThrowError("Out of memory: MemoryView backing store");
     return;
@@ -181,6 +239,7 @@ void SandboxGetObjectAt(const v8::FunctionCallbackInfo<v8::Value>& info) {
   }
 
   Isolate* i_isolate = reinterpret_cast<Isolate*>(isolate);
+  if (!IsValidHeapObject(obj.address(), i_isolate->heap())) return;
   Handle<Object> handle(obj, i_isolate);
   info.GetReturnValue().Set(ToApiHandle<v8::Value>(handle));
 }
@@ -189,55 +248,26 @@ void SandboxGetObjectAt(const v8::FunctionCallbackInfo<v8::Value>& info) {
 void SandboxIsValidObjectAt(const v8::FunctionCallbackInfo<v8::Value>& info) {
   DCHECK(ValidateCallbackInfo(info));
   v8::Isolate* isolate = info.GetIsolate();
-  Sandbox* sandbox = Sandbox::current();
   Heap* heap = reinterpret_cast<Isolate*>(isolate)->heap();
-  auto IsLocatedInMappedMemory = [&](Address address) {
-    if (heap->memory_allocator()->LookupChunkContainingAddress(address) !=
-        nullptr) {
-      return true;
-    }
-    return heap->read_only_space()->ContainsSlow(address);
-  };
 
   Tagged<HeapObject> obj;
   if (!GetArgumentObjectPassedAsAddress(info, &obj)) {
     return;
   }
 
-  // Simple heuristic: follow the Map chain three times until we find a MetaMap
-  // (where the map pointer points to itself), or give up.
-  info.GetReturnValue().Set(false);
-  Address current = obj.address();
-  for (int i = 0; i < 3; i++) {
-    if (!IsLocatedInMappedMemory(current)) {
-      return;
-    }
-    uint32_t map_word = *reinterpret_cast<uint32_t*>(current);
-    if ((map_word & kHeapObjectTag) != kHeapObjectTag) {
-      return;
-    }
-    Address map_address = sandbox->base() + map_word - kHeapObjectTag;
-    if (map_address == current) {
-      info.GetReturnValue().Set(true);
-      return;
-    }
-    current = map_address;
-  }
+  info.GetReturnValue().Set(IsValidHeapObject(obj.address(), heap));
 }
-
 static void SandboxIsWritableImpl(
     const v8::FunctionCallbackInfo<v8::Value>& info,
     ArgumentObjectExtractorFunction getArgumentObject) {
   DCHECK(ValidateCallbackInfo(info));
 
   Tagged<HeapObject> obj;
-  if (!getArgumentObject(info, &obj)) {
-    return;
-  }
+  if (!getArgumentObject(info, &obj)) return;
 
-  MemoryChunkMetadata* chunk = MemoryChunkMetadata::FromHeapObject(
-      reinterpret_cast<Isolate*>(info.GetIsolate()), obj);
-  bool is_writable = chunk->IsWritable();
+  Isolate* i_isolate = reinterpret_cast<Isolate*>(info.GetIsolate());
+  bool is_writable = IsValidHeapObject(obj.address(), i_isolate->heap()) &&
+                     BasePage::FromHeapObject(i_isolate, obj)->IsWritable();
   info.GetReturnValue().Set(is_writable);
 }
 
@@ -261,6 +291,10 @@ static void SandboxGetSizeOfImpl(
   if (!getArgumentObject(info, &obj)) {
     return;
   }
+
+  if (!IsValidHeapObject(obj.address(),
+                         reinterpret_cast<Isolate*>(info.GetIsolate())->heap()))
+    return;
 
   int size = obj->Size();
   info.GetReturnValue().Set(size);
@@ -286,6 +320,10 @@ static void SandboxGetInstanceTypeOfImpl(
   if (!getArgumentObject(info, &obj)) {
     return;
   }
+
+  if (!IsValidHeapObject(obj.address(),
+                         reinterpret_cast<Isolate*>(info.GetIsolate())->heap()))
+    return;
 
   InstanceType type = obj->map()->instance_type();
   std::stringstream out;
@@ -315,6 +353,10 @@ static void SandboxGetInstanceTypeIdOfImpl(
   if (!getArgumentObject(info, &obj)) {
     return;
   }
+
+  if (!IsValidHeapObject(obj.address(),
+                         reinterpret_cast<Isolate*>(info.GetIsolate())->heap()))
+    return;
 
   InstanceType type = obj->map()->instance_type();
   static_assert(std::is_same_v<std::underlying_type_t<InstanceType>, uint16_t>);
@@ -403,24 +445,34 @@ void SandboxGetFieldOffset(const v8::FunctionCallbackInfo<v8::Value>& info) {
     return;
   }
 
-  auto& all_fields = SandboxTesting::GetFieldOffsetMap();
-  if (all_fields.find(instance_type) == all_fields.end()) {
-    isolate->ThrowError(
-        "Unknown object type. If needed, add it in "
-        "SandboxTesting::GetFieldOffsetMap");
+  if (std::optional<int> offset =
+          SandboxTesting::GetFieldOffset(isolate, instance_type, *field_name)) {
+    info.GetReturnValue().Set(offset.value());
+  } else {
+    DCHECK(isolate->HasPendingException());
+  }
+}
+
+// Sandbox.unpublishTrustedHandle(Number) -> Void
+void SandboxUnpublishTrustedHandle(
+    const v8::FunctionCallbackInfo<v8::Value>& info) {
+  DCHECK(ValidateCallbackInfo(info));
+  v8::Isolate* isolate = info.GetIsolate();
+  Isolate* i_isolate = reinterpret_cast<Isolate*>(isolate);
+
+  if (info.Length() < 1) {
+    ThrowTypeError(isolate, "First argument must be a handle");
+    return;
+  }
+  uint32_t handle_value;
+  if (!info[0]->Uint32Value(isolate->GetCurrentContext()).To(&handle_value)) {
+    ThrowTypeError(isolate, "First argument must be a handle");
     return;
   }
 
-  auto& obj_fields = all_fields[instance_type];
-  if (obj_fields.find(*field_name) == obj_fields.end()) {
-    isolate->ThrowError(
-        "Unknown field. If needed, add it in "
-        "SandboxTesting::GetFieldOffsetMap");
-    return;
-  }
-
-  int offset = obj_fields[*field_name];
-  info.GetReturnValue().Set(offset);
+  IndirectPointerHandle handle =
+      static_cast<IndirectPointerHandle>(handle_value);
+  i_isolate->trusted_pointer_table().Unpublish(handle);
 }
 
 // Returns an array of all builtin names, index of the name is the builtin id.
@@ -432,18 +484,50 @@ void SandboxGetFieldOffset(const v8::FunctionCallbackInfo<v8::Value>& info) {
 void SandboxGetBuiltinNames(const v8::FunctionCallbackInfo<v8::Value>& info) {
   DCHECK(ValidateCallbackInfo(info));
   v8::Isolate* isolate = info.GetIsolate();
-  Local<v8::Context> context = isolate->GetCurrentContext();
 
-  Local<v8::Array> result = v8::Array::New(isolate, Builtins::kBuiltinCount);
-
-  // Find a builtin with matching name.
+  v8::LocalVector<v8::Value> names(isolate, Builtins::kBuiltinCount);
   for (Builtin i = Builtins::kFirst; i <= Builtins::kLast; ++i) {
-    Local<v8::String> name =
+    names[static_cast<uint32_t>(i)] =
         v8::String::NewFromUtf8(isolate, Builtins::name(i)).ToLocalChecked();
-    CHECK(result->Set(context, static_cast<uint32_t>(i), name).FromJust());
   }
 
+  Local<v8::Array> result = v8::Array::New(isolate, names.data(), names.size());
+
   info.GetReturnValue().Set(result);
+}
+
+// Returns compressed Code object by a given builtin id.
+//
+// This can be useful for manipulating IC handlers represented by Code objects.
+//
+// Sandbox.getBuiltinCode(Number) -> Number
+void SandboxGetBuiltinCode(const v8::FunctionCallbackInfo<v8::Value>& info) {
+  DCHECK(ValidateCallbackInfo(info));
+  v8::Isolate* isolate = info.GetIsolate();
+  Local<v8::Context> context = isolate->GetCurrentContext();
+
+  if (!info[0]->IsInt32()) {
+    isolate->ThrowError("First argument must be an integer");
+    return;
+  }
+
+  int raw_builtin_id = info[0]->Int32Value(context).FromMaybe(-1);
+  if (!Builtins::IsBuiltinId(raw_builtin_id)) {
+    isolate->ThrowError("Invalid builtin id");
+    return;
+  }
+  Builtin builtin = static_cast<Builtin>(raw_builtin_id);
+
+  Isolate* i_isolate = reinterpret_cast<Isolate*>(isolate);
+  Tagged<Code> code = i_isolate->builtins()->code(builtin);
+  // Update this code once we move builtins' Code objects from the main cage.
+  // The Sandbox Api must not leak addresses outside of the main cage, so this
+  // function should probably return a CodeWrapper or whatever we'll be using
+  // as IC handlers representing builtins. If we decide to encode those
+  // builtins into Smi handlers, then this function should probably be removed.
+  CHECK(code.IsInMainCageBase());
+
+  info.GetReturnValue().Set(V8HeapCompressionScheme::CompressAny(code.ptr()));
 }
 
 // Sets given function's code value to a given builtin's code object.
@@ -480,6 +564,234 @@ void SandboxSetFunctionCodeToBuiltin(
   function->UpdateCode(i_isolate, i_isolate->builtins()->code(builtin));
 
   info.GetReturnValue().Set(true);
+}
+
+namespace {
+struct ResolvedField {
+  Tagged<HeapObject> holder;
+  int offset = -1;
+  int bit_size = 32;
+};
+
+bool ResolveObjectField(const v8::FunctionCallbackInfo<v8::Value>& info,
+                        int bit_size_arg_index, ResolvedField* out) {
+  v8::Isolate* isolate = info.GetIsolate();
+  Local<v8::Context> context = isolate->GetCurrentContext();
+
+  Tagged<HeapObject> obj;
+  if (!GetArgumentObjectPassedAsReference(info, &obj)) return false;
+
+  if (!IsValidHeapObject(obj.address(),
+                         reinterpret_cast<Isolate*>(isolate)->heap()))
+    return false;
+
+  int offset;
+  if (!info[1]->IsInt32() || !info[1]->Int32Value(context).To(&offset)) {
+    v8::String::Utf8Value field_name(isolate, info[1]);
+    if (!*field_name) {
+      isolate->ThrowError("Second argument must be an integer or a string");
+      return false;
+    }
+
+    InstanceType instance_type = obj->map()->instance_type();
+    if (std::optional<int> offset_from_name = SandboxTesting::GetFieldOffset(
+            isolate, instance_type, *field_name)) {
+      offset = offset_from_name.value();
+    } else {
+      DCHECK(isolate->HasPendingException());
+      return false;
+    }
+  }
+
+  int bit_size = 32;
+  if (info.Length() > bit_size_arg_index) {
+    if (!info[bit_size_arg_index]->IsInt32() ||
+        !info[bit_size_arg_index]->Int32Value(context).To(&bit_size)) {
+      if (bit_size_arg_index == 2) {
+        isolate->ThrowError("Third argument (bit size) must be an integer");
+      } else {
+        isolate->ThrowError("Fourth argument (bit size) must be an integer");
+      }
+      return false;
+    }
+    if (bit_size != 8 && bit_size != 16 && bit_size != 32 && bit_size != 64) {
+      if (bit_size_arg_index == 2) {
+        isolate->ThrowError(
+            "Third argument (bit size) must be 8, 16, 32, or 64");
+      } else {
+        isolate->ThrowError(
+            "Fourth argument (bit size) must be 8, 16, 32, or 64");
+      }
+      return false;
+    }
+  }
+
+  int object_size = obj->Size();
+  DCHECK_EQ(0, object_size % kTaggedSize);
+  int byte_size = bit_size / 8;
+  if (offset < 0 || offset > object_size - byte_size) {
+    std::ostringstream error;
+    error << "Second argument (offset=" << offset << ", size=" << byte_size
+          << ") is out of bounds of the given object of size " << object_size;
+    ThrowTypeError(isolate, error.view());
+    return false;
+  }
+  // Enforce natural alignment up to kTaggedSize.
+  int required_alignment = std::min(byte_size, kTaggedSize);
+  if ((offset % required_alignment) != 0) {
+    std::ostringstream error;
+    error << "Second argument (offset=" << offset << ") is not "
+          << required_alignment << "-byte-aligned";
+    ThrowTypeError(isolate, error.view());
+    return false;
+  }
+
+  out->holder = obj;
+  out->offset = offset;
+  out->bit_size = bit_size;
+  return true;
+}
+}  // namespace
+
+// Read one field of an object without setting up a memory view first.
+//
+//   let value = Sandbox.readObjectField(obj, offset, bit_size);
+// emits a raw memory read, identical to
+//   (new DataView(new Sandbox.MemoryView(0, 0x100000000))).getUint32(
+//      Sandbox.getAddressOf(obj) + offset, true);
+// (adjusted for the requested bit size)
+//
+// Alternatively, a field name can be passed as the second argument; the effect
+// is identical to calling
+// `Sandbox.getFieldOffset(Sandbox.getInstanceTypeIdOf(obj), field_name)` to
+// resolve the offset first.
+//
+// Sandbox.readObjectField(Object, Number|String, [Number]) -> Number|BigInt
+void SandboxReadObjectField(const v8::FunctionCallbackInfo<v8::Value>& info) {
+  DCHECK(ValidateCallbackInfo(info));
+  v8::Isolate* isolate = info.GetIsolate();
+
+  ResolvedField field;
+  if (!ResolveObjectField(info, 2, &field)) return;
+
+  if (field.bit_size == 8) {
+    uint8_t value = field.holder->ReadField<uint8_t>(field.offset);
+    info.GetReturnValue().Set(value);
+  } else if (field.bit_size == 16) {
+    uint16_t value = field.holder->ReadField<uint16_t>(field.offset);
+    info.GetReturnValue().Set(value);
+  } else if (field.bit_size == 32) {
+    uint32_t value = field.holder->ReadField<uint32_t>(field.offset);
+    info.GetReturnValue().Set(v8::Integer::NewFromUnsigned(isolate, value));
+  } else if (field.bit_size == 64) {
+    uint64_t value = field.holder->ReadField<uint64_t>(field.offset);
+    info.GetReturnValue().Set(v8::BigInt::NewFromUnsigned(isolate, value));
+  }
+}
+
+// Sandbox.dereferenceTaggedPointerField(Object, Number|String) -> Object
+//
+// Reads a tagged pointer field from an object and returns the pointed-to
+// object. The second argument is the field offset (Number) or field name
+// (String). This is a convenience method that combines reading the compressed
+// pointer, decompressing it, and wrapping the result in a V8 handle.
+// Note: this method specifically handles standard tagged (compressed) pointers.
+// If used on fields containing ExternalPointers or TrustedPointerHandles, it
+// will return incorrect results or null.
+void SandboxDereferenceTaggedPointerField(
+    const v8::FunctionCallbackInfo<v8::Value>& info) {
+  DCHECK(ValidateCallbackInfo(info));
+  v8::Isolate* isolate = info.GetIsolate();
+
+  ResolvedField field;
+  if (!ResolveObjectField(info, 2, &field)) return;
+
+  Isolate* i_isolate = reinterpret_cast<Isolate*>(isolate);
+  Tagged<Object> value = TaggedField<Object>::load(field.holder, field.offset);
+
+  if (IsHeapObject(value)) {
+    Handle<HeapObject> handle(Cast<HeapObject>(value), i_isolate);
+    info.GetReturnValue().Set(ToApiHandle<v8::Value>(handle));
+  } else {
+    info.GetReturnValue().Set(v8::Null(isolate));
+  }
+}
+
+// Corrupt one field of an object without setting up a memory view first.
+//
+//   Sandbox.corruptObjectField(obj, offset, value, bit_size);
+// emits a raw memory write, identical to
+//   (new DataView(new Sandbox.MemoryView(0, 0x100000000))).setUint32(
+//      Sandbox.getAddressOf(obj) + offset, value, true);
+// (adjusted for the requested bit size)
+//
+// Note that values are written directly as raw bytes without Smi tagging.
+// Alternatively, a field name can be passed as the second argument; the effect
+// is identical to calling
+// `Sandbox.getFieldOffset(Sandbox.getInstanceTypeIdOf(obj), field_name)` to
+// resolve the offset first.
+//
+// Sandbox.corruptObjectField(Object, Number|String, Number|BigInt, [Number]) ->
+// undefined
+void SandboxCorruptObjectField(
+    const v8::FunctionCallbackInfo<v8::Value>& info) {
+  DCHECK(ValidateCallbackInfo(info));
+  v8::Isolate* isolate = info.GetIsolate();
+  Local<v8::Context> context = isolate->GetCurrentContext();
+
+  ResolvedField field;
+  if (!ResolveObjectField(info, 3, &field)) return;
+
+  uint64_t value = 0;
+  if (field.bit_size != 64) {
+    if (!info[2]->IsInt32() && !info[2]->IsUint32()) {
+      isolate->ThrowError("Third argument must be an integer");
+      return;
+    }
+    int64_t val64;
+    CHECK(info[2]->IntegerValue(context).To(&val64));
+    if (field.bit_size == 8) {
+      if (val64 < -128 || val64 > 255) {
+        isolate->ThrowError("Third argument must fit in 8-bit integer range");
+        return;
+      }
+    } else if (field.bit_size == 16) {
+      if (val64 < -32768 || val64 > 65535) {
+        isolate->ThrowError("Third argument must fit in 16-bit integer range");
+        return;
+      }
+    }
+    value = static_cast<uint64_t>(val64);
+  } else {
+    if (info[2]->IsBigInt()) {
+      value = info[2].As<v8::BigInt>()->Uint64Value();
+    } else if (info[2]->IsNumber()) {
+      int64_t val64;
+      if (info[2]->IntegerValue(context).To(&val64)) {
+        value = static_cast<uint64_t>(val64);
+      } else {
+        isolate->ThrowError(
+            "Third argument must be a 64-bit integer or BigInt");
+        return;
+      }
+    } else {
+      isolate->ThrowError("Third argument must be a 64-bit integer or BigInt");
+      return;
+    }
+  }
+
+  if (field.bit_size == 8) {
+    field.holder->WriteField<uint8_t>(field.offset,
+                                      static_cast<uint8_t>(value));
+  } else if (field.bit_size == 16) {
+    field.holder->WriteField<uint16_t>(field.offset,
+                                       static_cast<uint16_t>(value));
+  } else if (field.bit_size == 32) {
+    field.holder->WriteField<uint32_t>(field.offset,
+                                       static_cast<uint32_t>(value));
+  } else if (field.bit_size == 64) {
+    field.holder->WriteField<uint64_t>(field.offset, value);
+  }
 }
 
 Handle<FunctionTemplateInfo> NewFunctionTemplate(
@@ -575,17 +887,55 @@ void SandboxTesting::InstallMemoryCorruptionApi(Isolate* isolate) {
   InstallFunction(isolate, sandbox, SandboxGetInstanceTypeIdFor,
                   "getInstanceTypeIdFor", 1);
   InstallFunction(isolate, sandbox, SandboxGetFieldOffset, "getFieldOffset", 2);
+  InstallFunction(isolate, sandbox, SandboxUnpublishTrustedHandle,
+                  "unpublishTrustedHandle", 1);
 
   InstallFunction(isolate, sandbox, SandboxGetBuiltinNames, "getBuiltinNames",
                   0);
+  InstallFunction(isolate, sandbox, SandboxGetBuiltinCode, "getBuiltinCode", 1);
   InstallFunction(isolate, sandbox, SandboxSetFunctionCodeToBuiltin,
                   "setFunctionCodeToBuiltin", 2);
+  InstallFunction(isolate, sandbox, SandboxReadObjectField, "readObjectField",
+                  2);
+  InstallFunction(isolate, sandbox, SandboxDereferenceTaggedPointerField,
+                  "dereferenceTaggedPointerField", 2);
+  InstallFunction(isolate, sandbox, SandboxCorruptObjectField,
+                  "corruptObjectField", 3);
 
   // Install the Sandbox object as property on the global object.
   Handle<JSGlobalObject> global = isolate->global_object();
   Handle<String> name =
       isolate->factory()->NewStringFromAsciiChecked("Sandbox");
   JSObject::AddProperty(isolate, global, name, sandbox, DONT_ENUM);
+}
+
+namespace {
+struct SafeRegion {
+  base::AddressRegion region;
+  SandboxTesting::MemoryAccessTypes safe_access_types;
+};
+
+base::LazyMutex g_safe_region_mutex = LAZY_MUTEX_INITIALIZER;
+
+std::vector<SafeRegion>& GetSafeRegions() {
+  g_safe_region_mutex.Pointer()->AssertHeld();
+  static base::LeakyObject<std::vector<SafeRegion>> g_safe_regions;
+  return *g_safe_regions.get();
+}
+}  // namespace
+
+void SandboxTesting::RegisterSafeMemoryRegion(
+    Address start, size_t size, MemoryAccessTypes safe_access_types) {
+  base::MutexGuard guard(g_safe_region_mutex.Pointer());
+  GetSafeRegions().push_back({{start, size}, safe_access_types});
+}
+
+void SandboxTesting::UnregisterSafeMemoryRegion(Address start) {
+  base::MutexGuard guard(g_safe_region_mutex.Pointer());
+  size_t num_removed = std::erase_if(
+      GetSafeRegions(),
+      [start](const auto& entry) { return entry.region.begin() == start; });
+  CHECK_EQ(num_removed, 1);
 }
 
 #endif  // V8_ENABLE_MEMORY_CORRUPTION_API
@@ -600,10 +950,85 @@ void PrintToStderr(const char* output) {
   USE(return_val);
 }
 
-[[noreturn]] void FilterCrash(const char* reason) {
+using MemoryAccessType = SandboxTesting::MemoryAccessType;
+
+MemoryAccessType GetAccessType(void* context) {
+#ifdef V8_HOST_ARCH_X64
+  ucontext_t* ctx = reinterpret_cast<ucontext_t*>(context);
+  // See the X86-64 architecture manual for the error code bits.
+  static constexpr greg_t kWriteAccessBit = 1;
+  static constexpr greg_t kInstructionFetchBit = 4;
+  const greg_t err = ctx->uc_mcontext.gregs[REG_ERR];
+  if (err & (1 << kWriteAccessBit)) return MemoryAccessType::kWrite;
+  if (err & (1 << kInstructionFetchBit)) return MemoryAccessType::kExecute;
+  return MemoryAccessType::kRead;
+#else   // V8_HOST_ARCH_X64
+  // Conservatively assume it's a write.
+  return MemoryAccessType::kWrite;
+#endif  // V8_HOST_ARCH_X64
+}
+
+bool IsCrashInSafeMemoryRegion(Address faultaddr,
+                               MemoryAccessType access_type) {
+#ifdef V8_ENABLE_MEMORY_CORRUPTION_API
+  if (g_safe_region_mutex.Pointer()->TryLock()) {
+    bool is_safe = false;
+    for (const auto& entry : GetSafeRegions()) {
+      if (entry.region.contains(faultaddr)) {
+        is_safe = entry.safe_access_types.contains(access_type);
+        break;
+      }
+    }
+    g_safe_region_mutex.Pointer()->Unlock();
+    return is_safe;
+  }
+#endif
+
+  // If we don't have the known-safe memory regions (or cannot access them,
+  // which is very unlikely), we need to rely on data from /proc/self/maps,
+  // which is much less accurate.
+  PrintToStderr(
+      "Cannot check if faulting address lies inside a know-safe memory region. "
+      "Falling back to generic checks. Results will be inaccurate\n");
+
+  // We never expect to fault on an instruction fetch.
+  if (access_type == MemoryAccessType::kExecute) return false;
+
+  base::SignalSafeMapsParser parser;
+  if (!parser.IsValid()) {
+    PrintToStderr(
+        "Could not access /proc/self/maps so cannot determine if access "
+        "violation is safe.\n");
+    return false;
+  }
+
+  while (auto entry = parser.Next()) {
+    if (faultaddr >= entry->start && faultaddr < entry->end) {
+      // With in-sandbox corruption it is possible to cause (safe) access
+      // violations inside the pointer table memory mappings. Unfortunately,
+      // these can be both PROT_NONE and PROT_READ mappings (as some table have
+      // RO segments), so we need to treat both of these as safe. However, we
+      // should never see access violations on non-anonymous mappings, so we
+      // can check for that here. Anonymous mappings will either not have a
+      // name/path at all, or it will be something like [anon:foo-bar].
+      if (entry->pathname[0] != '\0' && entry->pathname[0] != '[') return false;
+      return entry->permissions == PagePermissions::kNoAccess ||
+             entry->permissions == PagePermissions::kRead;
+    }
+  }
+
+  PrintToStderr(
+      "Could not find faulting address in /proc/self/maps so cannot "
+      "determine if access violation is safe.\n");
+  return false;
+}
+
+[[noreturn]]
+void FilterCrash(const char* reason) {
   // NOTE: This code MUST be async-signal safe.
   // NO malloc or stdio is allowed here.
   PrintToStderr(reason);
+  PrintToStderr(" Exiting process...\n");
   // In sandbox fuzzing mode, we want to exit with a non-zero status to
   // indicate to the fuzzer that the sample "failed" (ran into an unrecoverable
   // error) and should probably not be mutated further. Otherwise, we exit with
@@ -614,12 +1039,8 @@ void PrintToStderr(const char* output) {
   _exit(status);
 }
 
-// Signal handler checking whether a memory access violation happened inside or
-// outside of the sandbox address space. If inside, the signal is ignored and
-// the process terminated normally, in the latter case the original signal
-// handler is restored and the signal delivered again.
-struct sigaction g_old_sigabrt_handler, g_old_sigtrap_handler,
-    g_old_sigbus_handler, g_old_sigsegv_handler;
+struct sigaction g_old_handlers[NSIG];
+constexpr int kSignalsToHandle[] = {SIGABRT, SIGTRAP, SIGBUS, SIGILL, SIGSEGV};
 
 void UninstallCrashFilter() {
   // NOTE: This code MUST be async-signal safe.
@@ -632,10 +1053,9 @@ void UninstallCrashFilter() {
   // Should any of the sigaction calls below ever fail, the default signal
   // handler will be invoked (due to SA_RESETHAND) and will terminate the
   // process, so there's no need to attempt to handle that condition.
-  sigaction(SIGABRT, &g_old_sigabrt_handler, nullptr);
-  sigaction(SIGTRAP, &g_old_sigtrap_handler, nullptr);
-  sigaction(SIGBUS, &g_old_sigbus_handler, nullptr);
-  sigaction(SIGSEGV, &g_old_sigsegv_handler, nullptr);
+  for (int signal : kSignalsToHandle) {
+    sigaction(signal, &g_old_handlers[signal], nullptr);
+  }
 
   // We should also uninstall the sanitizer death callback as our crash filter
   // may hand a crash over to sanitizers, which should then not enter our crash
@@ -645,151 +1065,236 @@ void UninstallCrashFilter() {
 #endif  // V8_USE_ANY_SANITIZER
 }
 
+void ForwardToOldHandler(int signal, siginfo_t* info, void* context) {
+  if (g_old_handlers[signal].sa_flags & SA_SIGINFO) {
+    g_old_handlers[signal].sa_sigaction(signal, info, context);
+  } else {
+    auto handler = g_old_handlers[signal].sa_handler;
+    if (handler != SIG_DFL && handler != SIG_IGN) {
+      handler(signal);
+    } else {
+      // In this case we simply return, let the faulting instruction re-trigger
+      // the crash, and then let the kernel handle the signal appropriately.
+      return;
+    }
+  }
+}
+
+// Signal handler to check if a crash represents a sandbox violation or is a
+// safe crash (e.g. because an access violation happened inside the sandbox).
 void CrashFilter(int signal, siginfo_t* info, void* context) {
   // NOTE: This code MUST be async-signal safe.
   // NO malloc or stdio is allowed here.
 
-  if (signal == SIGABRT) {
-    // SIGABRT typically indicates a failed CHECK or similar, which is harmless.
-    FilterCrash("Caught harmless signal (SIGABRT). Exiting process...\n");
-  }
-
-  if (signal == SIGTRAP) {
-    // Similarly, SIGTRAP may for example indicate UNREACHABLE code.
-    FilterCrash("Caught harmless signal (SIGTRAP). Exiting process...\n");
-  }
+#if V8_HAS_PKU_SUPPORT
+  base::MemoryProtectionKey::SetDefaultPermissionsForAllKeysInSignalHandler();
+#endif  // V8_HAS_PKU_SUPPORT
 
   Address faultaddr = reinterpret_cast<Address>(info->si_addr);
+  // Conservatively assume we're dealing with a write access. We'll determine
+  // the actual access type when we know the type of signal we caught.
+  MemoryAccessType access_type = MemoryAccessType::kWrite;
 
-  if (Sandbox::current()->Contains(faultaddr)) {
-    FilterCrash(
-        "Caught harmless memory access violation (inside sandbox address "
-        "space). Exiting process...\n");
-  }
-
-  if (info->si_code == SI_KERNEL && faultaddr == 0) {
-    // This combination appears to indicate a crash at a non-canonical address
-    // on Linux. Crashes at non-canonical addresses are for example caused by
-    // failed external pointer type checks. Memory accesses that _always_ land
-    // at a non-canonical address are not exploitable and so these are filtered
-    // out here. However, testcases need to be written with this in mind and
-    // must cause crashes at valid addresses.
-    FilterCrash(
-        "Caught harmless memory access violation (non-canonical address). "
-        "Exiting process...\n");
-  }
-
-  if (faultaddr >= 0x8000'0000'0000'0000ULL) {
-    // On Linux, it appears that the kernel will still report valid (i.e.
-    // canonical) kernel space addresses via the si_addr field, so we need to
-    // handle these separately. We've already filtered out non-canonical
-    // addresses above, so here we can just test if the most-significant bit of
-    // the address is set, and if so assume that it's a kernel address.
-    FilterCrash(
-        "Caught harmless memory access violation (kernel space address). "
-        "Exiting process...\n");
-  }
-
-  if (faultaddr < 0x1000) {
-    // Nullptr dereferences are harmless as nothing can be mapped there. We use
-    // the typical page size (which is also the default value of mmap_min_addr
-    // on Linux) to determine what counts as a nullptr dereference here.
-    FilterCrash(
-        "Caught harmless memory access violation (nullptr dereference). "
-        "Exiting process...\n");
-  }
-
-  if (faultaddr < 4ULL * GB) {
-    // Currently we also ignore access violations in the first 4GB of the
-    // virtual address space. See crbug.com/1470641 for more details.
-    FilterCrash(
-        "Caught harmless memory access violation (first 4GB of virtual address "
-        "space). Exiting process...\n");
-  }
-
-  // Stack overflow detection.
-  //
-  // On Linux, we generally have two types of stacks:
-  //  1. The main thread's stack, allocated by the kernel, and
-  //  2. The stacks of any other thread, allocated by the application
-  //
-  // These stacks differ in some ways, and that affects the way stack overflows
-  // (caused e.g. by unbounded recursion) materialize: for (1) the kernel will
-  // use a "gap" region below the stack segment, i.e. an unmapped area into
-  // which the kernel itself will not place any mappings and into which the
-  // stack cannot grow. A stack overflow therefore crashes with a SEGV_MAPERR.
-  // On the other hand, for (2) the application is responsible for allocating
-  // the stack and therefore also for allocating any guard regions around it.
-  // As these guard regions must be regular mappings (with PROT_NONE), a stack
-  // overflow will crash with a SEGV_ACCERR.
-  //
-  // It's relatively hard to reliably and accurately detect stack overflow, so
-  // here we use a simple heuristic: did we crash on any kind of access
-  // violation on an address just below the current thread's stack region. This
-  // may cause both false positives (e.g. an access not through the stack
-  // pointer register that happens to also land just below the stack) and false
-  // negatives (e.g. a stack overflow on the main thread that "jumps over" the
-  // first page of the gap region), but is probably good enough in practice.
-  pthread_attr_t attr;
-  int pthread_error = pthread_getattr_np(pthread_self(), &attr);
-  if (!pthread_error) {
-    uintptr_t stack_base;
-    size_t stack_size;
-    pthread_error = pthread_attr_getstack(
-        &attr, reinterpret_cast<void**>(&stack_base), &stack_size);
-    // The main thread's stack on Linux typically has a fairly large gap region
-    // (1MB by default), but other thread's stacks usually have smaller guard
-    // regions so here we're conservative and assume that the guard region
-    // consists only of a single page.
-    const size_t kMinStackGuardRegionSize = sysconf(_SC_PAGESIZE);
-    uintptr_t stack_guard_region_start = stack_base - kMinStackGuardRegionSize;
-    uintptr_t stack_guard_region_end = stack_base;
-    if (!pthread_error && stack_guard_region_start <= faultaddr &&
-        faultaddr < stack_guard_region_end) {
-      FilterCrash("Caught harmless stack overflow. Exiting process...\n");
+  switch (signal) {
+    case SIGABRT:
+      // SIGABRT often indicates a failed CHECK or similar, which is harmless.
+      FilterCrash("Caught harmless signal (SIGABRT).");
+    case SIGTRAP:
+      // Similarly, SIGTRAP may for example indicate UNREACHABLE code.
+      FilterCrash("Caught harmless signal (SIGTRAP).");
+    case SIGILL: {
+      access_type = MemoryAccessType::kExecute;
+      // In the case of SIGILL, faultaddr will point to the faulting
+      // instruction.
+      //
+      // In general, SIGILL can be caused by either:
+      // * A release-mode assertion fail (e.g. __builtin_unreachable()) for
+      //   which the compiler generates a `udX` instruction. This is harmless.
+      // * A bug causing us to execute random invalid machine code. This is bad.
+      //
+      // Here we try to detect which of these cases happened by looking at the
+      // faulting instruction. This is a little sketchy as the read could fail.
+      // However, the CPU has just attempted to execute the instruction, so it
+      // _should_ be readable. If we ever see segfaults here, we could change it
+      // to a "safe" read by e.g. using pipes and the read/write syscalls.
+#ifdef V8_HOST_ARCH_X64
+      uint8_t* code = reinterpret_cast<uint8_t*>(faultaddr);
+      // "ud1" is 0x0f 0xb9 [...].
+      if (code[0] == 0x0f && code[1] == 0xb9) {
+        FilterCrash("Caught harmless signal (SIGILL caused by ud1).");
+      }
+      // "ud1" with any prefix (e.g. 0x67) is [Prefix] 0x0f 0xb9 [...].
+      if (code[1] == 0x0f && code[2] == 0xb9) {
+        FilterCrash("Caught harmless signal (SIGILL caused by ud1).");
+      }
+      // "ud2" is 0x0f 0x0b.
+      if (code[0] == 0x0f && code[1] == 0x0b) {
+        FilterCrash("Caught harmless signal (SIGILL caused by ud2).");
+      }
+#else
+      PrintToStderr(
+          "Cannot check for harmless SIGILL on this architecture. Please "
+          "implement support for it.\n");
+#endif  // V8_HOST_ARCH_X64
+      break;
     }
+    case SIGBUS:
+    case SIGSEGV: {
+      access_type = GetAccessType(context);
+
+      // If we want to, we could merge most of the checks below (apart from the
+      // check for non-canonical addresses) into the safe-region check.
+      // However, the way they currently are is a bit more explicit and makes
+      // it very clear what we consider to be "safe" crashes.
+
+      if (Sandbox::current()->Contains(faultaddr)) {
+        FilterCrash(
+            "Caught harmless memory access violation (inside sandbox).");
+      }
+
+      if (info->si_code == SI_KERNEL && faultaddr == 0) {
+        // This combination indicates a crash at a non-canonical address on some
+        // architectures on Linux (e.g., x64). Crashes at non-canonical
+        // addresses are for example caused by failed external pointer type
+        // checks. Memory accesses that _always_ land at a non-canonical address
+        // are not exploitable and so these are filtered out here. However,
+        // testcases need to be written with this in mind and must cause crashes
+        // at valid addresses.
+        FilterCrash(
+            "Caught harmless memory access violation (non-canonical address).");
+      }
+
+      if (faultaddr >= 0x8000'0000'0000'0000ULL) {
+        // On Linux, it appears that the kernel will still report valid (i.e.
+        // canonical) kernel space addresses via the si_addr field, so we need
+        // to handle these separately. We've already filtered out non-canonical
+        // addresses above, so here we can just test if the most-significant bit
+        // of the address is set, and if so assume that it's a kernel address.
+        FilterCrash(
+            "Caught harmless memory access violation (kernel space address).");
+      }
+
+      if ((faultaddr >> Sandbox::kMaxVirtualAddressBitsForCrashFilter) != 0) {
+        // On some architectures (e.g., ARM64) unaddressable dereferences
+        // trigger SEGV_MAPERR and the actual faultaddr (instead of SI_KERNEL
+        // with nullptr). Filter out similarly to the non-canonical case above.
+        FilterCrash(
+            "Caught harmless memory access violation (unaddressable access).");
+      }
+
+      if (faultaddr < 0x1000) {
+        // Nullptr dereferences are harmless as nothing can be mapped there. We
+        // use the typical page size (which is also the default value of
+        // mmap_min_addr on Linux) to determine what counts as a nullptr
+        // dereference here.
+        FilterCrash(
+            "Caught harmless memory access violation (nullptr dereference).");
+      }
+
+      if (faultaddr <
+          (Sandbox::kSmiAddressRange + Sandbox::kSmiAddressRangePadding)) {
+        // Currently we also ignore access violations in the first 4GB of the
+        // virtual address space. See crbug.com/1470641 for more details.
+        // We need to add some "padding" to the 4GB since we might access a
+        // pointer that's < 4GB at an offset that makes the final address go
+        // slightly above 4GB.
+        FilterCrash(
+            "Caught harmless memory access violation (first 4GB of virtual "
+            "address space).");
+      }
+
+      if (IsCrashInSafeMemoryRegion(faultaddr, access_type)) {
+        // There are a number of other memory regions where crashes are safe
+        // (and can be caused with in-sandbox corruption). Examples include the
+        // various pointer tables, where a (safe) OOB crash can be triggered by
+        // corrupting an in-sandbox table handle. These regions are registered
+        // with the crash filter and if we get here, we crashed in one of them.
+        // TODO(42202821): consider printing more information here, for example
+        // the address range and the name of the safe mapping.
+        FilterCrash("Caught harmless memory access violation (safe region).");
+      }
+
+      // Stack overflow detection.
+      //
+      // On Linux, we generally have two types of stacks:
+      //  1. The main thread's stack, allocated by the kernel, and
+      //  2. The stacks of any other thread, allocated by the application
+      //
+      // These stacks differ in some ways, and that affects the way stack
+      // overflows (caused e.g. by unbounded recursion) materialize: for (1) the
+      // kernel will use a "gap" region below the stack segment, i.e. an
+      // unmapped area into which the kernel itself will not place any mappings
+      // and into which the stack cannot grow. A stack overflow therefore
+      // crashes with a SEGV_MAPERR. On the other hand, for (2) the application
+      // is responsible for allocating the stack and therefore also for
+      // allocating any guard regions around it. As these guard regions must be
+      // regular mappings (with PROT_NONE), a stack overflow will crash with a
+      // SEGV_ACCERR.
+      //
+      // It's relatively hard to reliably and accurately detect stack overflow,
+      // so here we use a simple heuristic: did we crash on any kind of access
+      // violation on an address just below the current thread's stack region.
+      // This may cause both false positives (e.g. an access not through the
+      // stack pointer register that happens to also land just below the stack)
+      // and false negatives (e.g. a stack overflow on the main thread that
+      // "jumps over" the first page of the gap region), but is probably good
+      // enough in practice.
+      pthread_attr_t attr;
+      int pthread_error = pthread_getattr_np(pthread_self(), &attr);
+      if (!pthread_error) {
+        uintptr_t stack_base;
+        size_t stack_size;
+        pthread_error = pthread_attr_getstack(
+            &attr, reinterpret_cast<void**>(&stack_base), &stack_size);
+        // The main thread's stack on Linux typically has a fairly large gap
+        // region (1MB by default), but other thread's stacks usually have
+        // smaller guard regions so here we're conservative and assume that the
+        // guard region consists only of a single page.
+        const size_t kMinStackGuardRegionSize = sysconf(_SC_PAGESIZE);
+        uintptr_t stack_guard_region_start =
+            stack_base - kMinStackGuardRegionSize;
+        uintptr_t stack_guard_region_end = stack_base;
+        if (!pthread_error && stack_guard_region_start <= faultaddr &&
+            faultaddr < stack_guard_region_end) {
+          FilterCrash("Caught harmless stack overflow.");
+        }
+      }
+
+      break;
+    }
+    default:
+      // This might happen if we add support for more signals, so report this
+      // as a sandbox violation so it gets looked into.
+      PrintToStderr("Unhandled signal");
+      break;
   }
 
-  if (info->si_code == SEGV_ACCERR) {
-    // This indicates an access to a valid mapping but with insufficient
-    // permissions, for example accessing a region mapped with PROT_NONE, or
-    // writing to a read-only mapping.
-    //
-    // The sandbox relies on such accesses crashing in a safe way in some
-    // cases. For example, the accesses into the various pointer tables are not
-    // bounds checked, but instead it is guaranteed that an out-of-bounds
-    // access will hit a PROT_NONE mapping.
-    //
-    // Memory accesses that _always_ cause such a permission violation are not
-    // exploitable and the crashes are therefore filtered out here. However,
-    // testcases need to be written with this behavior in mind and should
-    // typically try to access non-existing memory to demonstrate the ability
-    // to escape from the sandbox.
-    FilterCrash(
-        "Caught harmless memory access violation (memory permission "
-        "violation). Exiting process...\n");
-  }
-
-  // Otherwise it's a sandbox violation, so restore the original signal
-  // handlers, then return from this handler. The faulting instruction will be
-  // re-executed and will again trigger the access violation, but now the
-  // signal will be handled by the original signal handler.
-  UninstallCrashFilter();
-
+  // If we get here, we've detected a sandbox violation.
   PrintToStderr("\n## V8 sandbox violation detected!\n\n");
 
-#ifdef V8_HOST_ARCH_X64
-  ucontext_t* ctx = reinterpret_cast<ucontext_t*>(context);
-  // Matches X86_PF_WRITE in x86_pf_error_code.
-  static constexpr greg_t kWriteAccessBit = 1;
-  const bool write_access =
-      ctx->uc_mcontext.gregs[REG_ERR] & (1 << kWriteAccessBit);
-  if (!write_access) {
+  if (access_type == MemoryAccessType::kRead) {
     PrintToStderr(
         "The sandbox violation was a *read* access which is technically not a "
         "sandbox violation. This requires manual investigation.\n");
   }
-#endif  // V8_HOST_ARCH_X64
+
+  // Restore the original signal handlers now so we don't get invoked again.
+  // For example, the next signal handler in the chain (e.g. the ASAN handler)
+  // might decide to terminate the process with abort() and so we must not be
+  // catching (and ignoring) SIGABRT from now on.
+  UninstallCrashFilter();
+
+  // Forward to the previous handler. We could also just return now and let the
+  // application crash again (assuming we return to the same, crashing
+  // instruction). However, that doesn't work in combination with sandbox
+  // hardware support: ASAN's crash handler will not know about the PKEY
+  // permissions and that it must be doing something equivalent to
+  // SetDefaultPermissionsForAllKeysInSignalHandler() so it would quickly crash
+  // when e.g. trying to unwind the crashing thread's stack.
+  ForwardToOldHandler(signal, info, context);
+
+  // The old handler might itself decide to return to the faulting instruction
+  // (after uninstalling itself), so we need to allow for that.
 }
 
 #ifdef V8_USE_ANY_SANITIZER
@@ -801,13 +1306,14 @@ void SanitizerFaultHandler() {
     if (faultaddr == kNullAddress) {
       FilterCrash(
           "Caught ASan fault without a fault address. Ignoring it as we cannot "
-          "check if it is a sandbox violation. Exiting process...\n");
+          "check if it is a sandbox violation.");
     }
 
-    if (Sandbox::current()->Contains(faultaddr)) {
-      FilterCrash(
-          "Caught harmless ASan fault (inside sandbox address space). Exiting "
-          "process...\n");
+    MemoryAccessType access_type = __asan_get_report_access_type() == 0
+                                       ? MemoryAccessType::kRead
+                                       : MemoryAccessType::kWrite;
+    if (IsCrashInSafeMemoryRegion(faultaddr, access_type)) {
+      FilterCrash("Caught harmless ASan fault (inside safe region).");
     }
   }
 #endif  // V8_USE_ADDRESS_SANITIZER
@@ -838,10 +1344,9 @@ void InstallCrashFilter() {
   sigemptyset(&action.sa_mask);
 
   bool success = true;
-  success &= (sigaction(SIGABRT, &action, &g_old_sigabrt_handler) == 0);
-  success &= (sigaction(SIGTRAP, &action, &g_old_sigtrap_handler) == 0);
-  success &= (sigaction(SIGBUS, &action, &g_old_sigbus_handler) == 0);
-  success &= (sigaction(SIGSEGV, &action, &g_old_sigsegv_handler) == 0);
+  for (int signal : kSignalsToHandle) {
+    success &= (sigaction(signal, &action, &g_old_handlers[signal]) == 0);
+  }
   CHECK(success);
 
 #ifdef V8_USE_ANY_SANITIZER
@@ -900,8 +1405,10 @@ SandboxTesting::InstanceTypeMap& SandboxTesting::GetInstanceTypeMap() {
   if (!is_initialized) {
     types["JS_OBJECT_TYPE"] = JS_OBJECT_TYPE;
     types["JS_FUNCTION_TYPE"] = JS_FUNCTION_TYPE;
+    types["JS_BOUND_FUNCTION_TYPE"] = JS_BOUND_FUNCTION_TYPE;
     types["JS_ARRAY_TYPE"] = JS_ARRAY_TYPE;
     types["JS_ARRAY_BUFFER_TYPE"] = JS_ARRAY_BUFFER_TYPE;
+    types["JS_REG_EXP_TYPE"] = JS_REG_EXP_TYPE;
     types["JS_TYPED_ARRAY_TYPE"] = JS_TYPED_ARRAY_TYPE;
     types["SEQ_ONE_BYTE_STRING_TYPE"] = SEQ_ONE_BYTE_STRING_TYPE;
     types["SEQ_TWO_BYTE_STRING_TYPE"] = SEQ_TWO_BYTE_STRING_TYPE;
@@ -915,12 +1422,20 @@ SandboxTesting::InstanceTypeMap& SandboxTesting::GetInstanceTypeMap() {
     types["PROMISE_REACTION"] = PROMISE_REACTION_TYPE;
     types["JS_FUNCTION"] = JS_FUNCTION_TYPE;
     types["SHARED_FUNCTION_INFO"] = SHARED_FUNCTION_INFO_TYPE;
+    types["FEEDBACK_CELL_TYPE"] = FEEDBACK_CELL_TYPE;
+    types["FEEDBACK_VECTOR_TYPE"] = FEEDBACK_VECTOR_TYPE;
+    types["FIXED_ARRAY_TYPE"] = FIXED_ARRAY_TYPE;
+    types["FIXED_DOUBLE_ARRAY_TYPE"] = FIXED_DOUBLE_ARRAY_TYPE;
+    types["WEAK_HOMOMORPHIC_FIXED_ARRAY_TYPE"] =
+        WEAK_HOMOMORPHIC_FIXED_ARRAY_TYPE;
 #ifdef V8_ENABLE_WEBASSEMBLY
     types["WASM_MODULE_OBJECT_TYPE"] = WASM_MODULE_OBJECT_TYPE;
     types["WASM_INSTANCE_OBJECT_TYPE"] = WASM_INSTANCE_OBJECT_TYPE;
     types["WASM_FUNC_REF_TYPE"] = WASM_FUNC_REF_TYPE;
     types["WASM_TABLE_OBJECT_TYPE"] = WASM_TABLE_OBJECT_TYPE;
     types["WASM_RESUME_DATA"] = WASM_RESUME_DATA_TYPE;
+    types["WASM_TAG_OBJECT_TYPE"] = WASM_TAG_OBJECT_TYPE;
+    types["WASM_GLOBAL_OBJECT_TYPE"] = WASM_GLOBAL_OBJECT_TYPE;
 #endif  // V8_ENABLE_WEBASSEMBLY
   }
   return types;
@@ -935,71 +1450,130 @@ SandboxTesting::FieldOffsetMap& SandboxTesting::GetFieldOffsetMap() {
   auto& fields = *g_known_fields.get();
   bool is_initialized = fields.size() != 0;
   if (!is_initialized) {
+    fields[FIXED_DOUBLE_ARRAY_TYPE]["length"] =
+        offsetof(FixedDoubleArray, length_);
+    fields[FIXED_DOUBLE_ARRAY_TYPE]["data"] =
+        FixedDoubleArray::OffsetOfElementAt(0);
     fields[JS_FUNCTION_TYPE]["dispatch_handle"] =
-        JSFunction::kDispatchHandleOffset;
+        offsetof(JSFunction, dispatch_handle_);
     fields[JS_FUNCTION_TYPE]["shared_function_info"] =
-        JSFunction::kSharedFunctionInfoOffset;
-    fields[JS_ARRAY_TYPE]["elements"] = JSArray::kElementsOffset;
-    fields[JS_ARRAY_TYPE]["length"] = JSArray::kLengthOffset;
+        offsetof(JSFunction, shared_function_info_);
+    fields[JS_FUNCTION_TYPE]["feedback_cell"] =
+        offsetof(JSFunction, feedback_cell_);
+    fields[JS_BOUND_FUNCTION_TYPE]["bound_arguments"] =
+        offsetof(JSBoundFunction, bound_arguments_);
+    fields[JS_ARRAY_TYPE]["elements"] = offsetof(JSObject, elements_);
+    fields[JS_ARRAY_TYPE]["length"] = offsetof(JSArray, length_);
+    fields[JS_REG_EXP_TYPE]["data"] = offsetof(JSRegExp, data_);
     fields[JS_TYPED_ARRAY_TYPE]["byte_length"] =
-        JSTypedArray::kRawByteLengthOffset;
+        offsetof(JSArrayBufferView, raw_byte_length_);
     fields[JS_TYPED_ARRAY_TYPE]["byte_offset"] =
-        JSTypedArray::kRawByteOffsetOffset;
+        offsetof(JSArrayBufferView, raw_byte_offset_);
     fields[JS_TYPED_ARRAY_TYPE]["external_pointer"] =
-        JSTypedArray::kExternalPointerOffset;
+        offsetof(JSTypedArray, external_pointer_);
     fields[JS_TYPED_ARRAY_TYPE]["base_pointer"] =
-        JSTypedArray::kBasePointerOffset;
-    fields[SEQ_ONE_BYTE_STRING_TYPE]["length"] =
-        offsetof(SeqOneByteString, length_);
-    fields[SEQ_TWO_BYTE_STRING_TYPE]["hash"] =
-        offsetof(SeqTwoByteString, raw_hash_field_);
-    fields[SEQ_TWO_BYTE_STRING_TYPE]["length"] =
-        offsetof(SeqTwoByteString, length_);
-    fields[INTERNALIZED_ONE_BYTE_STRING_TYPE]["length"] =
-        offsetof(InternalizedString, length_);
+        offsetof(JSTypedArray, base_pointer_);
+    for (std::underlying_type_t<InstanceType> string_type = FIRST_STRING_TYPE;
+         string_type <= LAST_STRING_TYPE; ++string_type) {
+      InstanceType instance_type = static_cast<InstanceType>(string_type);
+      fields[instance_type]["length"] = offsetof(String, length_);
+      fields[instance_type]["hash"] = offsetof(String, raw_hash_field_);
+    }
     fields[SLICED_ONE_BYTE_STRING_TYPE]["parent"] =
         offsetof(SlicedString, parent_);
-    fields[CONS_ONE_BYTE_STRING_TYPE]["length"] = offsetof(ConsString, length_);
+    fields[SLICED_ONE_BYTE_STRING_TYPE]["offset"] =
+        offsetof(SlicedString, offset_);
     fields[CONS_ONE_BYTE_STRING_TYPE]["first"] = offsetof(ConsString, first_);
     fields[CONS_ONE_BYTE_STRING_TYPE]["second"] = offsetof(ConsString, second_);
     fields[SHARED_FUNCTION_INFO_TYPE]["trusted_function_data"] =
-        SharedFunctionInfo::kTrustedFunctionDataOffset;
+        offsetof(SharedFunctionInfo, trusted_function_data_);
     fields[SHARED_FUNCTION_INFO_TYPE]["length"] =
-        SharedFunctionInfo::kLengthOffset;
+        offsetof(SharedFunctionInfo, length_);
     fields[SHARED_FUNCTION_INFO_TYPE]["formal_parameter_count"] =
-        SharedFunctionInfo::kFormalParameterCountOffset;
+        offsetof(SharedFunctionInfo, formal_parameter_count_);
     fields[SHARED_FUNCTION_INFO_TYPE]["function_data"] =
-        SharedFunctionInfo::kUntrustedFunctionDataOffset;
+        offsetof(SharedFunctionInfo, untrusted_function_data_);
     fields[SHARED_FUNCTION_INFO_TYPE]["script"] =
-        SharedFunctionInfo::kScriptOffset;
+        offsetof(SharedFunctionInfo, script_);
     fields[SCRIPT_TYPE]["wasm_managed_native_module"] =
-        Script::kEvalFromPositionOffset;
+        offsetof(Script, eval_from_position_);
     fields[JS_PROMISE_TYPE]["reactions_or_result"] =
-        JSPromise::kReactionsOrResultOffset;
+        offsetof(JSPromise, reactions_or_result_);
     fields[PROMISE_REACTION_TYPE]["fulfill_handler"] =
         offsetof(PromiseReaction, fulfill_handler_);
-    fields[JS_FUNCTION_TYPE]["shared_function_info"] =
-        JSFunction::kSharedFunctionInfoOffset;
+    fields[FEEDBACK_CELL_TYPE]["value"] = offsetof(FeedbackCell, value_);
+    fields[FEEDBACK_VECTOR_TYPE]["length"] = offsetof(FeedbackVector, length_);
+    fields[FEEDBACK_VECTOR_TYPE]["data"] =
+        FeedbackVector::kRawFeedbackSlotsOffset;
+    fields[FIXED_ARRAY_TYPE]["length"] = offsetof(FixedArray, length_);
+    fields[FIXED_ARRAY_TYPE]["data"] = FixedArray::kHeaderSize;
+    fields[WEAK_HOMOMORPHIC_FIXED_ARRAY_TYPE]["length"] =
+        offsetof(WeakFixedArray, length_);
+#ifdef V8_INTL_SUPPORT
+    fields[JS_SEGMENTS_TYPE]["icu_iterator_with_text"] =
+        offsetof(JSSegments, icu_iterator_with_text_);
+#endif  // V8_INTL_SUPPORT
 #ifdef V8_ENABLE_WEBASSEMBLY
     fields[WASM_MODULE_OBJECT_TYPE]["managed_native_module"] =
-        WasmModuleObject::kManagedNativeModuleOffset;
-    fields[WASM_MODULE_OBJECT_TYPE]["script"] = WasmModuleObject::kScriptOffset;
+        offsetof(WasmModuleObject, managed_native_module_);
+    fields[WASM_MODULE_OBJECT_TYPE]["script"] =
+        offsetof(WasmModuleObject, script_);
     fields[WASM_INSTANCE_OBJECT_TYPE]["module_object"] =
-        WasmInstanceObject::kModuleObjectOffset;
+        offsetof(WasmInstanceObject, module_object_);
+    fields[WASM_INSTANCE_OBJECT_TYPE]["trusted_data"] =
+        offsetof(WasmInstanceObject, trusted_data_);
     fields[WASM_FUNC_REF_TYPE]["trusted_internal"] =
-        WasmFuncRef::kTrustedInternalOffset;
-    fields[WASM_TABLE_OBJECT_TYPE]["entries"] = WasmTableObject::kEntriesOffset;
+        offsetof(WasmFuncRef, trusted_internal_);
+    fields[WASM_TABLE_OBJECT_TYPE]["entries"] =
+        offsetof(WasmTableObject, entries_);
     fields[WASM_TABLE_OBJECT_TYPE]["current_length"] =
-        WasmTableObject::kCurrentLengthOffset;
+        offsetof(WasmTableObject, current_length_);
     fields[WASM_TABLE_OBJECT_TYPE]["maximum_length"] =
-        WasmTableObject::kMaximumLengthOffset;
+        offsetof(WasmTableObject, maximum_length_);
     fields[WASM_TABLE_OBJECT_TYPE]["raw_type"] =
-        WasmTableObject::kRawTypeOffset;
+        offsetof(WasmTableObject, raw_type_);
+    fields[WASM_TABLE_OBJECT_TYPE]["trusted_dispatch_table"] =
+        offsetof(WasmTableObject, trusted_dispatch_table_);
+    fields[WASM_TABLE_OBJECT_TYPE]["trusted_data"] =
+        offsetof(WasmTableObject, trusted_data_);
+    fields[WASM_TAG_OBJECT_TYPE]["tag"] = offsetof(WasmTagObject, tag_);
+    fields[WASM_GLOBAL_OBJECT_TYPE]["buffer"] =
+        offsetof(WasmGlobalObject, buffer_);
+    fields[WASM_GLOBAL_OBJECT_TYPE]["raw_type"] =
+        offsetof(WasmGlobalObject, raw_type_);
     fields[WASM_RESUME_DATA_TYPE]["trusted_suspender"] =
-        WasmResumeData::kTrustedSuspenderOffset;
+        offsetof(WasmResumeData, trusted_suspender_);
 #endif  // V8_ENABLE_WEBASSEMBLY
   }
   return fields;
+}
+
+std::optional<int> SandboxTesting::GetFieldOffset(
+    v8::Isolate* isolate_for_errors, InstanceType instance_type,
+    const std::string& field_name) {
+  SandboxTesting::FieldOffsetMap& all_fields =
+      SandboxTesting::GetFieldOffsetMap();
+  auto fields_it = all_fields.find(instance_type);
+  if (fields_it == all_fields.end()) {
+    std::ostringstream error;
+    error << "Unknown object type \"" << ToString(instance_type)
+          << "\". If needed, add it in SandboxTesting::GetFieldOffsetMap";
+    ThrowTypeError(isolate_for_errors, error.view());
+    return std::nullopt;
+  }
+
+  SandboxTesting::FieldOffsets& obj_fields = fields_it->second;
+  auto offset_it = obj_fields.find(field_name);
+  if (offset_it == obj_fields.end()) {
+    std::ostringstream error;
+    error << "Unknown field \"" << field_name << "\" of instance type "
+          << ToString(instance_type)
+          << ". If needed, add it in SandboxTesting::GetFieldOffsetMap";
+    ThrowTypeError(isolate_for_errors, error.view());
+    return std::nullopt;
+  }
+
+  return offset_it->second;
 }
 
 #endif  // V8_ENABLE_SANDBOX

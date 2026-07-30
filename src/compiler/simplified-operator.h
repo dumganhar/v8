@@ -45,6 +45,8 @@ class CallDescriptor;
 class Operator;
 struct SimplifiedOperatorGlobalCache;
 struct WasmTypeCheckConfig;
+class NameRef;
+class WeakHomomorphicFixedArrayRef;
 
 size_t hash_value(BaseTaggedness);
 
@@ -114,7 +116,12 @@ struct FieldAccess {
   ConstFieldInfo const_field_info;// the constness of this access, and the
                                   // field owner map, if the access is const
   bool is_store_in_literal;       // originates from a kStoreInLiteral access
-  ExternalPointerTag external_pointer_tag = kExternalPointerNullTag;
+  ExternalPointerTag external_pointer_tag =
+      kExternalPointerNullTag;  // the external pointer tag if this is an
+                                // external pointer field
+  IndirectPointerTag indirect_pointer_tag =
+      kIndirectPointerNullTag;  // the indirect pointer tag if this is an
+                                // indirect pointer field
   bool maybe_initializing_or_transitioning_store;  // store is potentially
                                                    // initializing a newly
                                                    // allocated object or part
@@ -127,7 +134,6 @@ struct FieldAccess {
                                         // decoding.
   bool is_immutable = false;  // Whether this field is known to be immutable for
                               // the purpose of loads.
-  IndirectPointerTag indirect_pointer_tag = kIndirectPointerNullTag;
 
   FieldAccess()
       : base_is_tagged(kTaggedBase),
@@ -147,9 +153,9 @@ struct FieldAccess {
               ConstFieldInfo const_field_info = ConstFieldInfo::None(),
               bool is_store_in_literal = false,
               ExternalPointerTag external_pointer_tag = kExternalPointerNullTag,
+              IndirectPointerTag indirect_pointer_tag = kIndirectPointerNullTag,
               bool maybe_initializing_or_transitioning_store = false,
-              bool is_immutable = false,
-              IndirectPointerTag indirect_pointer_tag = kIndirectPointerNullTag)
+              bool is_immutable = false)
       : base_is_tagged(base_is_tagged),
         offset(offset),
         name(name),
@@ -160,14 +166,14 @@ struct FieldAccess {
         const_field_info(const_field_info),
         is_store_in_literal(is_store_in_literal),
         external_pointer_tag(external_pointer_tag),
+        indirect_pointer_tag(indirect_pointer_tag),
         maybe_initializing_or_transitioning_store(
             maybe_initializing_or_transitioning_store),
-        is_immutable(is_immutable),
-        indirect_pointer_tag(indirect_pointer_tag) {
+        is_immutable(is_immutable) {
     DCHECK_GE(offset, 0);
-    DCHECK_IMPLIES(
-        machine_type.IsMapWord(),
-        offset == HeapObject::kMapOffset && base_is_tagged != kUntaggedBase);
+    DCHECK_IMPLIES(machine_type.IsMapWord(),
+                   offset == offsetof(HeapObject, map_) &&
+                       base_is_tagged != kUntaggedBase);
     DCHECK_IMPLIES(machine_type.IsMapWord(),
                    (write_barrier_kind == kMapWriteBarrier ||
                     write_barrier_kind == kNoWriteBarrier ||
@@ -480,6 +486,68 @@ CheckMapsParameters const& CheckMapsParametersOf(Operator const*)
     V8_WARN_UNUSED_RESULT;
 
 ZoneRefSet<Map> const& MapGuardMapsOf(Operator const*) V8_WARN_UNUSED_RESULT;
+
+class LoadDictionaryFieldParameters final {
+ public:
+  LoadDictionaryFieldParameters(InternalIndex dictionary_index, NameRef name,
+                                const FeedbackSource& feedback)
+      : dictionary_index_(dictionary_index), name_(name), feedback_(feedback) {}
+
+  InternalIndex dictionary_index() const { return dictionary_index_; }
+  NameRef name() const { return name_; }
+  FeedbackSource const& feedback() const { return feedback_; }
+
+ private:
+  InternalIndex const dictionary_index_;
+  NameRef const name_;
+  FeedbackSource const feedback_;
+};
+
+bool operator==(LoadDictionaryFieldParameters const&,
+                LoadDictionaryFieldParameters const&);
+
+size_t hash_value(LoadDictionaryFieldParameters const&);
+
+std::ostream& operator<<(std::ostream&, LoadDictionaryFieldParameters const&);
+
+LoadDictionaryFieldParameters const& LoadDictionaryFieldParametersOf(
+    Operator const*) V8_WARN_UNUSED_RESULT;
+
+class CheckHomomorphicParameters final {
+ public:
+  CheckHomomorphicParameters(NameRef name,
+                             WeakHomomorphicFixedArrayRef homomorphic_array,
+                             int handler_value, bool check_heap_object,
+                             const FeedbackSource& feedback)
+      : name_(name),
+        homomorphic_array_(homomorphic_array),
+        handler_value_(handler_value),
+        check_heap_object_(check_heap_object),
+        feedback_(feedback) {}
+
+  NameRef name() const { return name_; }
+  WeakHomomorphicFixedArrayRef homomorphic_array() const {
+    return homomorphic_array_;
+  }
+  int handler_value() const { return handler_value_; }
+  bool check_heap_object() const { return check_heap_object_; }
+  FeedbackSource const& feedback() const { return feedback_; }
+
+ private:
+  NameRef const name_;
+  WeakHomomorphicFixedArrayRef const homomorphic_array_;
+  int const handler_value_;
+  bool const check_heap_object_;
+  FeedbackSource const feedback_;
+};
+
+bool operator==(CheckHomomorphicParameters const&,
+                CheckHomomorphicParameters const&);
+size_t hash_value(CheckHomomorphicParameters const&);
+std::ostream& operator<<(std::ostream&, CheckHomomorphicParameters const&);
+
+CheckHomomorphicParameters const& CheckHomomorphicParametersOf(Operator const*)
+    V8_WARN_UNUSED_RESULT;
 
 // Parameters for CompareMaps operator.
 ZoneRefSet<Map> const& CompareMapsParametersOf(Operator const*)
@@ -968,12 +1036,16 @@ class V8_EXPORT_PRIVATE SimplifiedOperatorBuilder final
   const Operator* StringWrapperLength();
   const Operator* StringToLowerCaseIntl();
   const Operator* StringToUpperCaseIntl();
+  const Operator* StringLocaleCompareIntl();
   const Operator* StringSubstring();
 
   const Operator* TypedArrayLength(ElementsKind elements_kind);
 
   const Operator* FindOrderedHashMapEntryForInt32Key();
   const Operator* FindOrderedCollectionEntry(CollectionKind collection_kind);
+
+  // WeakMap.prototype.get lowering. Inputs: receiver (JSWeakCollection), key.
+  const Operator* WeakCollectionGet();
 
   const Operator* SpeculativeToNumber(NumberOperationHint hint,
                                       const FeedbackSource& feedback);
@@ -993,6 +1065,7 @@ class V8_EXPORT_PRIVATE SimplifiedOperatorBuilder final
   const Operator* ChangeTaggedToUint32();
   const Operator* ChangeTaggedToFloat64();
   const Operator* ChangeTaggedToTaggedSigned();
+  const Operator* ChangeSmiOrHoleToFloat64();
   const Operator* ChangeNumberOrHoleToFloat64();
   const Operator* ChangeInt31ToTaggedSigned();
   const Operator* ChangeInt32ToTagged();
@@ -1010,6 +1083,7 @@ class V8_EXPORT_PRIVATE SimplifiedOperatorBuilder final
   const Operator* ChangeInt64ToBigInt();
   const Operator* ChangeUint64ToBigInt();
   const Operator* TruncateNumberOrOddballToWord32();
+  const Operator* TruncateSmiOrHoleToWord32();
   const Operator* TruncateNumberOrOddballOrHoleToWord32();
   const Operator* TruncateTaggedToFloat64();
   const Operator* TruncateTaggedToFloat64PreserveUndefined();
@@ -1036,6 +1110,10 @@ class V8_EXPORT_PRIVATE SimplifiedOperatorBuilder final
   const Operator* CheckInternalizedString();
   const Operator* CheckMaps(CheckMapsFlags, ZoneRefSet<Map>,
                             const FeedbackSource& = FeedbackSource());
+  const Operator* CheckHomomorphic(
+      NameRef name, WeakHomomorphicFixedArrayRef homomorphic_array,
+      int handler_value, bool check_heap_object,
+      const FeedbackSource& = FeedbackSource());
   const Operator* CheckNotTaggedHole();
   const Operator* CheckNumber(const FeedbackSource& feedback);
   const Operator* CheckNumberOrUndefined(const FeedbackSource& feedback);
@@ -1054,6 +1132,9 @@ class V8_EXPORT_PRIVATE SimplifiedOperatorBuilder final
       CheckForMinusZeroMode, const FeedbackSource& feedback);
   const Operator* CheckedFloat64ToInt64(CheckForMinusZeroMode,
                                         const FeedbackSource& feedback);
+  const Operator* CheckedFloat64ToUint64(CheckForMinusZeroMode,
+                                         const FeedbackSource& feedback);
+  const Operator* CheckedInt32ToUint64(const FeedbackSource& feedback);
   const Operator* CheckedInt32Add();
   const Operator* CheckedInt32Div();
   const Operator* CheckedInt32Mod();
@@ -1071,6 +1152,7 @@ class V8_EXPORT_PRIVATE SimplifiedOperatorBuilder final
   const Operator* CheckedInt64ToAdditiveSafeInteger(
       const FeedbackSource& feedback);
   const Operator* CheckedInt64ToTaggedSigned(const FeedbackSource& feedback);
+  const Operator* CheckedInt64ToUint64(const FeedbackSource& feedback);
   const Operator* CheckedTaggedSignedToInt32(const FeedbackSource& feedback);
   const Operator* CheckedTaggedToFloat64(CheckTaggedInputMode,
                                          const FeedbackSource& feedback);
@@ -1081,6 +1163,8 @@ class V8_EXPORT_PRIVATE SimplifiedOperatorBuilder final
       CheckForMinusZeroMode, const FeedbackSource& feedback);
   const Operator* CheckedTaggedToInt64(CheckForMinusZeroMode,
                                        const FeedbackSource& feedback);
+  const Operator* CheckedTaggedToUint64(CheckForMinusZeroMode,
+                                        const FeedbackSource& feedback);
   const Operator* CheckedTaggedToTaggedPointer(const FeedbackSource& feedback);
   const Operator* CheckedTaggedToTaggedSigned(const FeedbackSource& feedback);
   const Operator* CheckBigInt(const FeedbackSource& feedback);
@@ -1158,6 +1242,9 @@ class V8_EXPORT_PRIVATE SimplifiedOperatorBuilder final
   const Operator* StoreMessage();
 
   const Operator* LoadFieldByIndex();
+  const Operator* LoadDictionaryField(InternalIndex dictionary_index,
+                                      NameRef name,
+                                      const FeedbackSource& feedback);
   const Operator* LoadField(FieldAccess const&);
   const Operator* StoreField(FieldAccess const&,
                              bool maybe_initializing_or_transitioning = true);

@@ -44,6 +44,10 @@
 #include "src/diagnostics/etw-jit-win.h"
 #endif  // V8_ENABLE_ETW_STACK_WALKING
 
+#if defined(V8_ENABLE_SANDBOX) && defined(V8_ENABLE_MEMORY_CORRUPTION_API)
+#include "src/sandbox/external-strings-cage.h"
+#endif  // V8_ENABLE_SANDBOX && V8_ENABLE_MEMORY_CORRUPTION_API
+
 namespace v8 {
 namespace internal {
 
@@ -107,6 +111,12 @@ void V8::InitializePlatform(v8::Platform* platform) {
   CHECK_NOT_NULL(platform);
   platform_ = platform;
   v8::base::SetPrintStackTrace(platform_->GetStackTracePrinter());
+#if defined(V8_USE_PERFETTO)
+  // TrackEvent must be registered before TracingCategoryObserver::SetUp().
+  if (perfetto::Tracing::IsInitialized()) {
+    TrackEvent::Register();
+  }
+#endif
   v8::tracing::TracingCategoryObserver::SetUp();
 #if defined(V8_ENABLE_ETW_STACK_WALKING)
   if (v8_flags.enable_etw_stack_walking ||
@@ -141,14 +151,15 @@ base::AbortMode ChooseAbortMode() {
     // they may otherwise hide issues.
     return base::AbortMode::kExitWithFailureAndIgnoreDcheckFailures;
   }
-  if (v8_flags.sandbox_testing) {
+  if (v8_flags.sandbox_testing && !v8_flags.run_as_sandbox_security_poc) {
     // Similar to the above case, but here we want to exit with a status
     // indicating success (e.g. zero on unix). This is useful for example for
     // sandbox regression tests, which should "pass" if they crash in a
     // controlled fashion (e.g. in a SBXCHECK).
     return base::AbortMode::kExitWithSuccessAndIgnoreDcheckFailures;
   }
-  if (v8_flags.fuzzing || v8_flags.allow_natives_for_differential_fuzzing) {
+  if (v8_flags.fuzzing || v8_flags.allow_natives_for_differential_fuzzing ||
+      v8_flags.run_as_security_poc || v8_flags.run_as_sandbox_security_poc) {
     // For fuzzing, we want to ignore certain types of crashes that are known
     // to be safe (no security impact), such as OOMs and similar issues.
     return base::AbortMode::kExitIfNoSecurityImpact;
@@ -208,8 +219,13 @@ void V8::Initialize() {
 
 #ifdef V8_ENABLE_SANDBOX
   // If enabled, the sandbox must be initialized first.
-  Sandbox::InitializeDefaultOncePerProcess(GetPlatformVirtualAddressSpace());
+  Sandbox::InitializeDefaultOncePerProcess(GetCurrentPlatform(),
+                                           GetPlatformVirtualAddressSpace());
   CHECK_EQ(kSandboxSize, Sandbox::current()->size());
+
+#ifdef V8_ENABLE_MEMORY_CORRUPTION_API
+  ExternalStringsCage::InitializeOncePerProcess();
+#endif  // V8_ENABLE_MEMORY_CORRUPTION_API
 
   // Enable sandbox testing mode if requested.
   //
@@ -228,11 +244,8 @@ void V8::Initialize() {
 #endif  // V8_ENABLE_SANDBOX
 
 #if defined(V8_USE_PERFETTO)
-  if (perfetto::Tracing::IsInitialized()) {
-    TrackEvent::Register();
-    if (v8_flags.perfetto_code_logger) {
-      v8::internal::CodeDataSource::Register();
-    }
+  if (perfetto::Tracing::IsInitialized() && v8_flags.perfetto_code_logger) {
+    v8::internal::CodeDataSource::Register();
   }
 #endif
   IsolateGroup::InitializeOncePerProcess();
@@ -269,6 +282,9 @@ void V8::Dispose() {
   RegisteredExtension::UnregisterAll();
   FlagList::ReleaseDynamicAllocations();
   IsolateGroup::TearDownOncePerProcess();
+#if defined(V8_ENABLE_SANDBOX) && defined(V8_ENABLE_MEMORY_CORRUPTION_API)
+  ExternalStringsCage::TearDown();
+#endif  // V8_ENABLE_SANDBOX && V8_ENABLE_MEMORY_CORRUPTION_API
   AdvanceStartupState(V8StartupState::kV8Disposed);
 }
 
@@ -290,9 +306,7 @@ void V8::DisposePlatform() {
 
   platform_ = nullptr;
 
-#if DEBUG
-  internal::ThreadIsolation::CheckTrackedMemoryEmpty();
-#endif
+  ThreadIsolation::TearDown();
 
   AdvanceStartupState(V8StartupState::kPlatformDisposed);
 }
@@ -327,13 +341,6 @@ double Platform::SystemClockTimeMillis() {
 void SandboxHardwareSupport::InitializeBeforeThreadCreation() {
 #ifdef V8_ENABLE_SANDBOX_HARDWARE_SUPPORT
   internal::SandboxHardwareSupport::TryActivateBeforeThreadCreation();
-#endif  // V8_ENABLE_SANDBOX_HARDWARE_SUPPORT
-}
-
-// static
-void SandboxHardwareSupport::PrepareCurrentThreadForHardwareSandboxing() {
-#ifdef V8_ENABLE_SANDBOX_HARDWARE_SUPPORT
-  internal::SandboxHardwareSupport::EnableForCurrentThread();
 #endif  // V8_ENABLE_SANDBOX_HARDWARE_SUPPORT
 }
 

@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "src/base/enum-set.h"
-#include "src/base/platform/elapsed-timer.h"
 #include "src/codegen/source-position-table.h"
 #include "src/common/globals.h"
 #include "src/debug/debug-interface.h"
@@ -32,6 +31,7 @@ class InterpretedFrame;
 class JavaScriptFrame;
 class JSGeneratorObject;
 class StackFrame;
+class ProtectedFixedArray;
 
 // Step actions.
 enum StepAction : int8_t {
@@ -257,7 +257,8 @@ class V8_EXPORT_PRIVATE Debug {
                     debug::BreakReasons break_reasons = {});
   debug::DebugDelegate::ActionAfterInstrumentation OnInstrumentationBreak();
 
-  std::optional<Tagged<Object>> OnThrow(DirectHandle<Object> exception)
+  std::optional<Tagged<Object>> OnThrow(DirectHandle<Object> exception,
+                                        bool is_stack_overflow = false)
       V8_WARN_UNUSED_RESULT;
   void OnPromiseReject(DirectHandle<Object> promise,
                        DirectHandle<Object> value);
@@ -417,7 +418,7 @@ class V8_EXPORT_PRIVATE Debug {
   void PrepareBuiltinForSideEffectCheck(Isolate* isolate, Builtin id);
 
   bool PerformSideEffectCheckForAccessor(
-      DirectHandle<AccessorInfo> accessor_info, DirectHandle<Object> receiver,
+      DirectHandle<AccessorInfo> accessor_info, DirectHandle<Object> holder,
       AccessorComponent component);
   bool PerformSideEffectCheckForCallback(Handle<FunctionTemplateInfo> function);
   bool PerformSideEffectCheckForInterceptor(
@@ -491,9 +492,6 @@ class V8_EXPORT_PRIVATE Debug {
 
   void RemoveBreakInfoAndMaybeFree(DirectHandle<DebugInfo> debug_info);
 
-  // Stops the timer for the top-most `DebugScope` and records a UMA event.
-  void NotifyDebuggerPausedEventSent();
-
   static char* Iterate(RootVisitor* v, char* thread_storage);
 
   // Clear information pertaining to break location muting.
@@ -533,7 +531,8 @@ class V8_EXPORT_PRIVATE Debug {
 
   void OnException(DirectHandle<Object> exception,
                    MaybeDirectHandle<JSPromise> promise,
-                   v8::debug::ExceptionType exception_type);
+                   v8::debug::ExceptionType exception_type,
+                   bool is_stack_overflow = false);
 
   void ProcessCompileEvent(bool has_compile_error, DirectHandle<Script> script);
 
@@ -730,7 +729,8 @@ class V8_EXPORT_PRIVATE Debug {
   friend class LiveEdit;
   friend class SuppressDebug;
 
-  friend DirectHandle<FixedArray> GetDebuggedFunctions();  // In test-debug.cc
+  friend DirectHandle<ProtectedFixedArray>
+  GetDebuggedFunctions();                            // In test-debug.cc
   friend void CheckDebuggerUnloaded();               // In test-debug.cc
 };
 
@@ -743,8 +743,6 @@ class V8_NODISCARD DebugScope {
 
   void set_terminate_on_resume();
 
-  base::TimeDelta ElapsedTimeSinceCreation();
-
  private:
   Isolate* isolate() { return debug_->isolate_; }
 
@@ -754,10 +752,6 @@ class V8_NODISCARD DebugScope {
   PostponeInterruptsScope no_interrupts_;
   // This is used as a boolean.
   bool terminate_on_resume_ = false;
-
-  // Measures (for UMA) the duration beginning when we enter this `DebugScope`
-  // until we potentially send a "Debugger.paused" response in the inspector.
-  base::ElapsedTimer timer_;
 };
 
 // This scope is used to handle return values in nested debug break points.

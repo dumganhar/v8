@@ -159,10 +159,13 @@ config("compiler") {
 
     # Don't look for libpaths in %LIB%, similar to /X in cflags above.
     ldflags += [ "/lldignoreenv" ]
+
+    # Enable /prefetch-inputs to improve linking performance.
+    ldflags += [ "/prefetch-inputs" ]
   }
 
-  # Some binaries create PDBs larger than 4 GiB. Increasing the PDB page size
-  # to 8 KiB allows 8 GiB PDBs. The larger page size also allows larger block maps
+  # Some binaries create PDBs larger than 4 GiB. Increasing the PDB page size to
+  # 8 KiB allows 8 GiB PDBs. The larger page size also allows larger block maps
   # which is a PDB limit that was hit in https://crbug.com/1406510. The page size
   # can easily be increased in the future to allow even larger PDBs or larger
   # block maps.
@@ -405,6 +408,7 @@ config("delayloads_except_dbghelp") {
     "/DELAYLOAD:api-ms-win-core-winrt-l1-1-0.dll",
     "/DELAYLOAD:api-ms-win-core-winrt-string-l1-1-0.dll",
     "/DELAYLOAD:advapi32.dll",
+    "/DELAYLOAD:bcrypt.dll",
     "/DELAYLOAD:bcryptprimitives.dll",
     "/DELAYLOAD:comctl32.dll",
     "/DELAYLOAD:comdlg32.dll",
@@ -437,17 +441,22 @@ config("delayloads_except_dbghelp") {
     "/DELAYLOAD:psapi.dll",
     "/DELAYLOAD:rpcrt4.dll",
     "/DELAYLOAD:rstrtmgr.dll",
+    "/DELAYLOAD:secur32.dll",
     "/DELAYLOAD:setupapi.dll",
     "/DELAYLOAD:shell32.dll",
     "/DELAYLOAD:shlwapi.dll",
     "/DELAYLOAD:uiautomationcore.dll",
     "/DELAYLOAD:urlmon.dll",
     "/DELAYLOAD:user32.dll",
+    "/DELAYLOAD:userenv.dll",
     "/DELAYLOAD:usp10.dll",
     "/DELAYLOAD:uxtheme.dll",
     "/DELAYLOAD:wer.dll",
     "/DELAYLOAD:wevtapi.dll",
+    "/DELAYLOAD:winhttp.dll",
     "/DELAYLOAD:wininet.dll",
+    "/DELAYLOAD:winspool.drv",
+    "/DELAYLOAD:wintrust.dll",
     "/DELAYLOAD:winusb.dll",
     "/DELAYLOAD:wsock32.dll",
     "/DELAYLOAD:wtsapi32.dll",
@@ -472,12 +481,7 @@ config("delayloads_not_for_child_dll") {
   ldflags = [
     "/DELAYLOAD:crypt32.dll",
     "/DELAYLOAD:dwrite.dll",
-    "/DELAYLOAD:secur32.dll",
-    "/DELAYLOAD:userenv.dll",
-    "/DELAYLOAD:winhttp.dll",
     "/DELAYLOAD:winmm.dll",
-    "/DELAYLOAD:winspool.drv",
-    "/DELAYLOAD:wintrust.dll",
     "/DELAYLOAD:ws2_32.dll",
   ]
 }
@@ -485,7 +489,8 @@ config("delayloads_not_for_child_dll") {
 # ACLs are placed on the filesystem in order to allow chrome to launch
 # sandboxed processes in an app container when run from the out directory.
 group("maybe_set_appcontainer_acls") {
-  # Exclude setting ACLs when build is not happening on chromium, or with a different toolchain.
+  # Exclude setting ACLs when build is not happening on chromium, or with a
+  # different toolchain.
   if (build_with_chromium && current_cpu == target_cpu && host_os == "win") {
     deps = [ ":set_appcontainer_acls" ]
   }
@@ -499,8 +504,8 @@ if (build_with_chromium && current_cpu == target_cpu && host_os == "win") {
     outputs = [ stamp_file ]
 
     args = [
-      "--stamp=" + rebase_path(stamp_file, root_out_dir),
-      "--dir=" + rebase_path(root_out_dir, root_out_dir),
+      "--stamp=" + rebase_path(stamp_file, root_build_dir),
+      "--dir=" + rebase_path(root_out_dir, root_build_dir),
     ]
   }
 }
@@ -690,4 +695,15 @@ config("lean_and_mean") {
 
 config("nominmax") {
   defines = [ "NOMINMAX" ]
+}
+
+# Wincrypt use symbol prefix ---------------------------------------------------
+
+# Some third party code might not compile with WINCRYPT_USE_SYMBOL_PREFIX so we
+# have to have a separate config for it. Remove this config from your target to
+# get the unprefixed versions of the wincrypt.h symbols. Note this will mean
+# your target cannot include wincrypt.h and OpenSSL/BoringSSL headers at the
+# same time.
+config("wincrypt_use_symbol_prefix") {
+  defines = [ "WINCRYPT_USE_SYMBOL_PREFIX" ]
 }

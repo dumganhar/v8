@@ -49,7 +49,8 @@ if (cros_sdk_version != "") {
       # Tast harness & test data.
       rebase_path("${_cache_path_prefix}+autotest_server_package.tar.bz2"),
 
-      # Binutils (and other toolchain tools) used to deploy Chrome to the device.
+      # Binutils (and other toolchain tools) used to deploy Chrome to the
+      # device.
       rebase_path(
           "${_cache_path_prefix}+environment_chromeos-base_chromeos-chrome.tar.xz"),
       rebase_path("${_cache_path_prefix}+target_toolchain"),
@@ -526,7 +527,7 @@ template("tast_test") {
   }
 
   _data_deps = [
-    "//:chromiumos_preflight",  # Builds the browser.
+    "//:chromiumos_preflight_minimal",  # Builds the browser.
     "//chromeos:cros_chrome_deploy",  # Adds additional browser run-time deps.
 
     # Tools used to symbolize Chrome crash dumps.
@@ -536,7 +537,12 @@ template("tast_test") {
     "//third_party/breakpad:minidump_dump",
     "//third_party/breakpad:minidump_stackwalk",
   ]
-  _data = [ "//components/crash/content/tools/generate_breakpad_symbols.py" ]
+  _data = [
+    "//components/crash/content/tools/generate_breakpad_symbols.py",
+    "//chromeos/tast_control_disabled_tests_public_builders.txt",
+    "//chromeos/tast_control_disabled_tests.txt",
+    "//chromeos/tast_control_flaky_tests.txt",
+  ]
 
   if (is_skylab) {
     generate_skylab_tast_filter(target_name) {

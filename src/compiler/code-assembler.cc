@@ -36,7 +36,6 @@ namespace internal {
 
 constexpr MachineType MachineTypeOf<Smi>::value;
 constexpr MachineType MachineTypeOf<Object>::value;
-constexpr MachineType MachineTypeOf<MaybeObject>::value;
 
 namespace compiler {
 
@@ -262,6 +261,13 @@ bool CodeAssembler::IsTruncateFloat64ToFloat16RawBitsSupported() const {
       .IsSupported();
 }
 
+bool CodeAssembler::IsChangeFloat16RawBitsToFloat64Supported() const {
+  return raw_assembler()
+      ->machine()
+      ->ChangeFloat16RawBitsToFloat64()
+      .IsSupported();
+}
+
 bool CodeAssembler::IsInt32AbsWithOverflowSupported() const {
   return raw_assembler()->machine()->Int32AbsWithOverflow().IsSupported();
 }
@@ -410,6 +416,10 @@ TNode<Float32T> CodeAssembler::Float32Constant(double value) {
 }
 
 TNode<Float64T> CodeAssembler::Float64Constant(double value) {
+  return UncheckedCast<Float64T>(jsgraph()->Float64Constant(value));
+}
+
+TNode<Float64T> CodeAssembler::Float64Constant(Float64 value) {
   return UncheckedCast<Float64T>(jsgraph()->Float64Constant(value));
 }
 
@@ -652,6 +662,13 @@ void CodeAssembler::ReturnIf(TNode<BoolT> condition, TNode<Object> value) {
 }
 
 void CodeAssembler::AbortCSADcheck(Node* message) {
+#if V8_ENABLE_WEBASSEMBLY
+  if (wasm::BuiltinLookup::IsWasmBuiltinId(builtin())) {
+    // We switch to the central stack for AbortCSADcheck because it requires a
+    // large amount of stack space to push the stack trace.
+    SwitchToTheCentralStackIfNeeded();
+  }
+#endif
   raw_assembler()->AbortCSADcheck(message);
 }
 
@@ -825,15 +842,18 @@ TNode<UintPtrT> CodeAssembler::ChangeFloat64ToUintPtr(TNode<Float64T> value) {
   }
   return UncheckedCast<UintPtrT>(raw_assembler()->ChangeFloat64ToUint32(value));
 }
-
 TNode<Float64T> CodeAssembler::ChangeUintPtrToFloat64(TNode<UintPtrT> value) {
   if (raw_assembler()->machine()->Is64()) {
-    // TODO(turbofan): Maybe we should introduce a ChangeUint64ToFloat64
-    // machine operator to TurboFan here?
-    return UncheckedCast<Float64T>(
-        raw_assembler()->RoundUint64ToFloat64(value));
+    return ChangeUint64ToFloat64(ReinterpretCast<Uint64T>(value));
   }
   return UncheckedCast<Float64T>(raw_assembler()->ChangeUint32ToFloat64(value));
+}
+
+TNode<Float64T> CodeAssembler::ChangeUint64ToFloat64(TNode<Uint64T> value) {
+  DCHECK(raw_assembler()->machine()->Is64());
+  // TODO(turbofan): Maybe we should introduce a ChangeUint64ToFloat64
+  // machine operator to TurboFan here?
+  return UncheckedCast<Float64T>(raw_assembler()->RoundUint64ToFloat64(value));
 }
 
 TNode<Float64T> CodeAssembler::RoundIntPtrToFloat64(Node* value) {
@@ -1383,6 +1403,7 @@ void CodeAssembler::TailCallRuntimeImpl(
   raw_assembler()->TailCallN(call_descriptor, inputs.size(), inputs.data());
 }
 
+// LINT.IfChange
 Node* CodeAssembler::CallStubN(StubCallMode call_mode,
                                const CallInterfaceDescriptor& descriptor,
                                int input_count, Node* const* inputs) {
@@ -1409,6 +1430,7 @@ Node* CodeAssembler::CallStubN(StubCallMode call_mode,
   CallEpilogue();
   return return_value;
 }
+// LINT.ThenChange(/src/codegen/turboshaft-builtins-assembler-inl.h)
 
 void CodeAssembler::TailCallStubImpl(const CallInterfaceDescriptor& descriptor,
                                      TNode<Code> target, TNode<Object> context,
@@ -1451,6 +1473,7 @@ Node* CodeAssembler::CallStubRImpl(StubCallMode call_mode,
   return CallStubN(call_mode, descriptor, inputs.size(), inputs.data());
 }
 
+// LINT.IfChange
 Node* CodeAssembler::CallJSStubImpl(
     const CallInterfaceDescriptor& descriptor, TNode<Object> target,
     TNode<Object> context, TNode<Object> function,
@@ -1482,6 +1505,7 @@ Node* CodeAssembler::CallJSStubImpl(
   return CallStubN(StubCallMode::kCallCodeObject, descriptor, inputs.size(),
                    inputs.data());
 }
+// LINT.ThenChange(/src/codegen/turboshaft-builtins-assembler-inl.h)
 
 void CodeAssembler::TailCallStubThenBytecodeDispatchImpl(
     const CallInterfaceDescriptor& descriptor, Node* target, Node* context,

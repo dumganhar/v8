@@ -33,19 +33,37 @@ class Loong64OperandGenerator final : public OperandGenerator {
     return UseRegister(node);
   }
 
+  bool IsImmediateZero(OpIndex node) {
+    if (const ConstantOp* constant =
+            selector()->Get(node).TryCast<ConstantOp>()) {
+      if (constant->IsRelocatable()) return false;
+      if (constant->IsIntegral()) {
+        return constant->integral() == 0;
+      }
+      if (constant->kind == ConstantOp::Kind::kFloat32) {
+        return constant->float32().get_bits() == 0;
+      }
+      if (constant->kind == ConstantOp::Kind::kFloat64) {
+        return constant->float64().get_bits() == 0;
+      }
+    }
+    return false;
+  }
+
   // Use the zero register if the node has the immediate value zero, otherwise
   // assign a register.
   InstructionOperand UseRegisterOrImmediateZero(OpIndex node) {
-    if (const ConstantOp* constant =
-            selector()->Get(node).TryCast<ConstantOp>()) {
-      if ((constant->IsIntegral() && constant->integral() == 0) ||
-          (constant->kind == ConstantOp::Kind::kFloat32 &&
-           constant->float32().get_bits() == 0) ||
-          (constant->kind == ConstantOp::Kind::kFloat64 &&
-           constant->float64().get_bits() == 0))
-        return UseImmediate(node);
+    if (IsImmediateZero(node)) {
+      return UseImmediate(node);
     }
     return UseRegister(node);
+  }
+
+  InstructionOperand UseRegisterAtEndOrImmediateZero(OpIndex node) {
+    if (IsImmediateZero(node)) {
+      return UseImmediate(node);
+    }
+    return UseRegisterAtEnd(node);
   }
 
   bool IsIntegerConstant(OpIndex node) {
@@ -140,10 +158,13 @@ static void VisitRR(InstructionSelector* selector, ArchOpcode opcode,
   selector->Emit(opcode, g.DefineAsRegister(node), g.UseRegister(op.input(0)));
 }
 
-#if V8_ENABLE_WEBASSEMBLY
+#if V8_ENABLE_SIMD128
 static void VisitRRI(InstructionSelector* selector, ArchOpcode opcode,
                      OpIndex node) {
-  UNIMPLEMENTED();
+  Loong64OperandGenerator g(selector);
+  const Simd128ExtractLaneOp& op = selector->Cast<Simd128ExtractLaneOp>(node);
+  selector->Emit(opcode, g.DefineAsRegister(node), g.UseRegister(op.input()),
+                 g.UseImmediate(op.lane));
 }
 
 static void VisitSimdShift(InstructionSelector* selector, ArchOpcode opcode,
@@ -163,7 +184,11 @@ static void VisitSimdShift(InstructionSelector* selector, ArchOpcode opcode,
 
 static void VisitRRIR(InstructionSelector* selector, ArchOpcode opcode,
                       OpIndex node) {
-  UNIMPLEMENTED();
+  Loong64OperandGenerator g(selector);
+  const turboshaft::Simd128ReplaceLaneOp& op =
+      selector->Get(node).template Cast<turboshaft::Simd128ReplaceLaneOp>();
+  selector->Emit(opcode, g.DefineAsRegister(node), g.UseRegister(op.input(0)),
+                 g.UseImmediate(op.lane), g.UseUniqueRegister(op.input(1)));
 }
 
 static void VisitUniqueRRR(InstructionSelector* selector, ArchOpcode opcode,
@@ -175,7 +200,14 @@ static void VisitUniqueRRR(InstructionSelector* selector, ArchOpcode opcode,
                  g.UseUniqueRegister(op.input(0)),
                  g.UseUniqueRegister(op.input(1)));
 }
-#endif  // V8_ENABLE_WEBASSEMBLY
+
+void VisitRRRR(InstructionSelector* selector, ArchOpcode opcode, OpIndex node) {
+  Loong64OperandGenerator g(selector);
+  const Simd128TernaryOp& op = selector->Cast<Simd128TernaryOp>(node);
+  selector->Emit(opcode, g.DefineAsRegister(node), g.UseRegister(op.first()),
+                 g.UseRegister(op.second()), g.UseRegister(op.third()));
+}
+#endif  // V8_ENABLE_SIMD128
 
 void VisitRRR(InstructionSelector* selector, ArchOpcode opcode, OpIndex node) {
   Loong64OperandGenerator g(selector);
@@ -183,10 +215,6 @@ void VisitRRR(InstructionSelector* selector, ArchOpcode opcode, OpIndex node) {
   DCHECK_EQ(op.input_count, 2);
   selector->Emit(opcode, g.DefineAsRegister(node), g.UseRegister(op.input(0)),
                  g.UseRegister(op.input(1)));
-}
-
-void VisitRRRR(InstructionSelector* selector, ArchOpcode opcode, OpIndex node) {
-  UNIMPLEMENTED();
 }
 
 static void VisitRRO(InstructionSelector* selector, ArchOpcode opcode,
@@ -297,7 +325,7 @@ static void VisitBinop(InstructionSelector* selector, turboshaft::OpIndex node,
                        InstructionCode reverse_opcode,
                        FlagsContinuation* cont) {
   Loong64OperandGenerator g(selector);
-  InstructionOperand inputs[2];
+  InstructionOperand inputs[4];
   size_t input_count = 0;
   InstructionOperand outputs[1];
   size_t output_count = 0;
@@ -319,6 +347,13 @@ static void VisitBinop(InstructionSelector* selector, turboshaft::OpIndex node,
   } else {
     inputs[input_count++] = g.UseRegister(left_node);
     inputs[input_count++] = g.UseOperand(right_node, opcode);
+  }
+
+  if (cont->IsSelect()) {
+    inputs[input_count++] =
+        g.UseRegisterAtEndOrImmediateZero(cont->true_value());
+    inputs[input_count++] =
+        g.UseRegisterAtEndOrImmediateZero(cont->false_value());
   }
 
   outputs[output_count++] = g.DefineAsRegister(node);
@@ -429,13 +464,133 @@ void EmitLoad(InstructionSelector* selector, turboshaft::OpIndex node,
   }
 }
 
-#if V8_ENABLE_WEBASSEMBLY
-void InstructionSelector::VisitStoreLane(OpIndex node) { UNREACHABLE(); }
+#if V8_ENABLE_SIMD128
+namespace {
+InstructionOperand EmitAddBeforeS128LoadStore(InstructionSelector* selector,
+                                              OpIndex node,
+                                              InstructionCode* opcode) {
+  Loong64OperandGenerator g(selector);
+  const Operation& op = selector->Get(node);
+  DCHECK_LE(2, op.input_count);
+  // TODO(nicohartmann): This seems brittle, we should use proper named
+  // accessors here.
+  OpIndex input0 = op.input(0);
+  OpIndex input1 = op.input(1);
+  InstructionOperand addr_reg = g.TempRegister();
+  selector->Emit(kLoong64Add_d | AddressingModeField::encode(kMode_None),
+                 addr_reg, g.UseRegister(input0), g.UseRegister(input1));
+  *opcode |= AddressingModeField::encode(kMode_MRI);
+  return addr_reg;
+}
+}  // namespace
 
-void InstructionSelector::VisitLoadLane(OpIndex node) { UNREACHABLE(); }
+void InstructionSelector::VisitStoreLane(OpIndex node) {
+  const Simd128LaneMemoryOp& store = Cast<Simd128LaneMemoryOp>(node);
+  InstructionCode opcode = kLoong64S128StoreLane;
+  opcode |= LaneSizeField::encode(
+      LaneSizeFromBits(static_cast<uint8_t>(store.lane_size() * kBitsPerByte)));
+  if (store.kind.with_trap_handler) {
+    opcode |= AccessModeField::encode(kMemoryAccessTrappingMemOutOfBounds);
+  }
 
-void InstructionSelector::VisitLoadTransform(OpIndex node) { UNIMPLEMENTED(); }
-#endif  // V8_ENABLE_WEBASSEMBLY
+  Loong64OperandGenerator g(this);
+  InstructionOperand addr = EmitAddBeforeS128LoadStore(this, node, &opcode);
+  InstructionOperand inputs[4] = {
+      g.UseRegister(store.value()),
+      g.UseImmediate(store.lane),
+      addr,
+      g.TempImmediate(0),
+  };
+  Emit(opcode, 0, nullptr, 4, inputs);
+}
+
+void InstructionSelector::VisitLoadLane(OpIndex node) {
+  const Simd128LaneMemoryOp& load = Cast<Simd128LaneMemoryOp>(node);
+  InstructionCode opcode = kLoong64S128LoadLane;
+  opcode |= LaneSizeField::encode(
+      LaneSizeFromBits(static_cast<uint8_t>(load.lane_size() * kBitsPerByte)));
+  if (load.kind.with_trap_handler) {
+    opcode |= AccessModeField::encode(kMemoryAccessTrappingMemOutOfBounds);
+  }
+
+  Loong64OperandGenerator g(this);
+  InstructionOperand addr = EmitAddBeforeS128LoadStore(this, node, &opcode);
+  Emit(opcode, g.DefineSameAsFirst(node), g.UseRegister(load.value()),
+       g.UseImmediate(load.lane), addr, g.TempImmediate(0));
+}
+
+void InstructionSelector::VisitLoadTransform(OpIndex node) {
+  const Simd128LoadTransformOp& op = Cast<Simd128LoadTransformOp>(node);
+
+  InstructionCode opcode = kArchNop;
+  switch (op.transform_kind) {
+      // TODO(LOONG_dev): LOONG64 S128 LoadSplat
+    case Simd128LoadTransformOp::TransformKind::k8Splat:
+      opcode = kLoong64S128LoadSplat;
+      opcode |= LaneSizeField::encode(LaneSize::kL8);
+      break;
+    case Simd128LoadTransformOp::TransformKind::k16Splat:
+      opcode = kLoong64S128LoadSplat;
+      opcode |= LaneSizeField::encode(LaneSize::kL16);
+      break;
+    case Simd128LoadTransformOp::TransformKind::k32Splat:
+      opcode = kLoong64S128LoadSplat;
+      opcode |= LaneSizeField::encode(LaneSize::kL32);
+      break;
+    case Simd128LoadTransformOp::TransformKind::k64Splat:
+      opcode = kLoong64S128LoadSplat;
+      opcode |= LaneSizeField::encode(LaneSize::kL64);
+      break;
+    case Simd128LoadTransformOp::TransformKind::k8x8S:
+      opcode = kLoong64S128Load8x8S;
+      break;
+    case Simd128LoadTransformOp::TransformKind::k8x8U:
+      opcode = kLoong64S128Load8x8U;
+      break;
+    case Simd128LoadTransformOp::TransformKind::k16x4S:
+      opcode = kLoong64S128Load16x4S;
+      break;
+    case Simd128LoadTransformOp::TransformKind::k16x4U:
+      opcode = kLoong64S128Load16x4U;
+      break;
+    case Simd128LoadTransformOp::TransformKind::k32x2S:
+      opcode = kLoong64S128Load32x2S;
+      break;
+    case Simd128LoadTransformOp::TransformKind::k32x2U:
+      opcode = kLoong64S128Load32x2U;
+      break;
+    case Simd128LoadTransformOp::TransformKind::k32Zero:
+      opcode = kLoong64S128Load32Zero;
+      break;
+    case Simd128LoadTransformOp::TransformKind::k64Zero:
+      opcode = kLoong64S128Load64Zero;
+      break;
+    default:
+      UNIMPLEMENTED();
+  }
+
+  DCHECK(!op.load_kind.maybe_unaligned);
+
+  Loong64OperandGenerator g(this);
+  InstructionOperand inputs[2];
+  InstructionOperand outputs[1];
+
+  inputs[0] = g.UseRegister(op.base());
+  if (g.CanBeImmediate(op.index(), kLoong64Ld_d)) {
+    inputs[1] = g.UseImmediate(op.index());
+    opcode |= AddressingModeField::encode(kMode_MRI);
+  } else {
+    inputs[1] = g.UseRegister(op.index());
+    opcode |= AddressingModeField::encode(kMode_MRR);
+  }
+  outputs[0] = g.DefineAsRegister(node);
+
+  if (op.load_kind.with_trap_handler) {
+    opcode |= AccessModeField::encode(kMemoryAccessTrappingMemOutOfBounds);
+  }
+  Emit(opcode, 1, outputs, 2, inputs);
+}
+#endif  // V8_ENABLE_SIMD128
 
 namespace {
 
@@ -504,15 +659,18 @@ ArchOpcode GetLoadOpcode(turboshaft::MemoryRepresentation loaded_rep,
       return kLoong64LoadDecompressProtected;
     case MemoryRepresentation::IndirectPointer():
       UNREACHABLE();
+    case MemoryRepresentation::TrustedPointer():
+      UNREACHABLE();
     case MemoryRepresentation::SandboxedPointer():
       return kLoong64LoadDecodeSandboxedPointer;
-    case MemoryRepresentation::Simd128():  // Fall through.
+    case MemoryRepresentation::Simd128():
+      return kLoong64S128Ld;
     case MemoryRepresentation::Simd256():
       UNREACHABLE();
   }
 }
 
-ArchOpcode GetStoreOpcode(turboshaft::MemoryRepresentation stored_rep) {
+ArchOpcode GetStoreOpcode(MemoryRepresentation stored_rep) {
   switch (stored_rep) {
     case MemoryRepresentation::Int8():
     case MemoryRepresentation::Uint8():
@@ -543,16 +701,19 @@ ArchOpcode GetStoreOpcode(turboshaft::MemoryRepresentation stored_rep) {
     case MemoryRepresentation::ProtectedPointer():
       // We never store directly to protected pointers from generated code.
       UNREACHABLE();
+    case MemoryRepresentation::TrustedPointer():
+      // Only LoadTrustedPointer uses this representation.
+      UNREACHABLE();
     case MemoryRepresentation::IndirectPointer():
       return kLoong64StoreIndirectPointer;
     case MemoryRepresentation::SandboxedPointer():
       return kLoong64StoreEncodeSandboxedPointer;
     case MemoryRepresentation::Simd128():
+      return kLoong64S128St;
     case MemoryRepresentation::Simd256():
       UNREACHABLE();
   }
 }
-
 }  // namespace
 
 void InstructionSelector::VisitLoad(OpIndex node) {
@@ -562,18 +723,18 @@ void InstructionSelector::VisitLoad(OpIndex node) {
   opcode = GetLoadOpcode(load.ts_loaded_rep(), load.ts_result_rep());
 
   bool traps_on_null;
-  if (load.is_protected(&traps_on_null)) {
+  if (load.is_trapping(&traps_on_null)) {
     if (traps_on_null) {
-      opcode |= AccessModeField::encode(kMemoryAccessProtectedNullDereference);
+      opcode |= AccessModeField::encode(kMemoryAccessTrappingNullDereference);
     } else {
-      opcode |= AccessModeField::encode(kMemoryAccessProtectedMemOutOfBounds);
+      opcode |= AccessModeField::encode(kMemoryAccessTrappingMemOutOfBounds);
     }
   }
 
   EmitLoad(this, node, opcode);
 }
 
-void InstructionSelector::VisitProtectedLoad(OpIndex node) { VisitLoad(node); }
+void InstructionSelector::VisitTrappingLoad(OpIndex node) { VisitLoad(node); }
 
 void InstructionSelector::VisitStorePair(OpIndex node) { UNREACHABLE(); }
 
@@ -637,7 +798,7 @@ void InstructionSelector::VisitStore(OpIndex node) {
     }
     code |= AddressingModeField::encode(addressing_mode);
     if (store_view.is_store_trap_on_null()) {
-      code |= AccessModeField::encode(kMemoryAccessProtectedNullDereference);
+      code |= AccessModeField::encode(kMemoryAccessTrappingNullDereference);
     }
 
     InstructionOperand temps[1];
@@ -689,10 +850,9 @@ void InstructionSelector::VisitStore(OpIndex node) {
   }
 
   if (store_view.is_store_trap_on_null()) {
-    code |= AccessModeField::encode(kMemoryAccessProtectedNullDereference);
-  } else if (store_view.access_kind() ==
-             MemoryAccessKind::kProtectedByTrapHandler) {
-    code |= AccessModeField::encode(kMemoryAccessProtectedMemOutOfBounds);
+    code |= AccessModeField::encode(kMemoryAccessTrappingNullDereference);
+  } else if (store_view.access_kind() == MemoryAccessKind::kTrapping) {
+    code |= AccessModeField::encode(kMemoryAccessTrappingMemOutOfBounds);
   }
 
   if (g.CanBeImmediate(index, code)) {
@@ -706,17 +866,120 @@ void InstructionSelector::VisitStore(OpIndex node) {
   }
 }
 
-void InstructionSelector::VisitProtectedStore(OpIndex node) {
-  VisitStore(node);
-}
+void InstructionSelector::VisitTrappingStore(OpIndex node) { VisitStore(node); }
 
 void InstructionSelector::VisitWord32And(turboshaft::OpIndex node) {
-  // TODO(LOONG_dev): May could be optimized like in Turbofan.
+  Loong64OperandGenerator g(this);
+  const WordBinopOp& bitwise_and =
+      this->Get(node).Cast<Opmask::kWord32BitwiseAnd>();
+  const Operation& lhs = this->Get(bitwise_and.left());
+  int64_t constant_rhs;
+  const bool rhs_is_constant =
+      MatchSignedIntegralConstant(bitwise_and.right(), &constant_rhs);
+  if (lhs.Is<Opmask::kWord32ShiftRightLogical>() &&
+      CanCover(node, bitwise_and.left()) && rhs_is_constant) {
+    DCHECK(base::IsInRange(constant_rhs, std::numeric_limits<int32_t>::min(),
+                           std::numeric_limits<int32_t>::max()));
+    uint32_t mask = static_cast<uint32_t>(constant_rhs);
+    uint32_t mask_width = base::bits::CountPopulation(mask);
+    uint32_t mask_msb = base::bits::CountLeadingZeros32(mask);
+    if ((mask_width != 0) && (mask_msb + mask_width == 32)) {
+      // The mask must be contiguous, and occupy the least-significant bits.
+      DCHECK_EQ(0u, base::bits::CountTrailingZeros32(mask));
+
+      // Select Bstrpick_w for And(Shr(x, imm), mask) where the mask is in the
+      // least significant bits.
+      const ShiftOp& lhs_shift = lhs.Cast<Opmask::kWord32ShiftRightLogical>();
+      if (int64_t constant;
+          MatchSignedIntegralConstant(lhs_shift.right(), &constant)) {
+        // Any shift value can match; int32 shifts use `value % 32`.
+        uint32_t lsb = constant & 0x1F;
+
+        // Bstrpick_w cannot extract bits past the register size, however since
+        // shifting the original value would have introduced some zeros we can
+        // still use Bstrpick_w with a smaller mask and the remaining bits will
+        // be zeros.
+        if (lsb + mask_width > 32) mask_width = 32 - lsb;
+
+        Emit(kLoong64Bstrpick_w, g.DefineAsRegister(node),
+             g.UseRegister(lhs_shift.left()), g.TempImmediate(lsb),
+             g.TempImmediate(mask_width));
+        return;
+      }
+      // Other cases fall through to the normal And operation.
+    }
+  }
+  if (rhs_is_constant) {
+    uint32_t mask = static_cast<uint32_t>(constant_rhs);
+    uint32_t shift = base::bits::CountPopulation(~mask);
+    uint32_t msb = base::bits::CountLeadingZeros32(~mask);
+    if (shift != 0 && shift != 32 && msb + shift == 32) {
+      // Insert zeros for (x >> K) << K => x & ~(2^K - 1) expression reduction
+      // and remove constant loading of inverted mask.
+      Emit(kLoong64Bstrins_w, g.DefineSameAsFirst(node),
+           g.UseRegister(bitwise_and.left()), g.TempImmediate(0),
+           g.TempImmediate(shift));
+      return;
+    }
+  }
   VisitBinop(this, node, kLoong64And32, true, kLoong64And32);
 }
 
 void InstructionSelector::VisitWord64And(OpIndex node) {
-  // TODO(LOONG_dev): May could be optimized like in Turbofan.
+  Loong64OperandGenerator g(this);
+  const WordBinopOp& bitwise_and = Get(node).Cast<Opmask::kWord64BitwiseAnd>();
+  const Operation& lhs = Get(bitwise_and.left());
+
+  if (uint64_t mask;
+      lhs.Is<Opmask::kWord64ShiftRightLogical>() &&
+      CanCover(node, bitwise_and.left()) &&
+      MatchUnsignedIntegralConstant(bitwise_and.right(), &mask)) {
+    uint64_t mask_width = base::bits::CountPopulation(mask);
+    uint64_t mask_msb = base::bits::CountLeadingZeros64(mask);
+    if ((mask_width != 0) && (mask_msb + mask_width == 64)) {
+      // The mask must be contiguous, and occupy the least-significant bits.
+      DCHECK_EQ(0u, base::bits::CountTrailingZeros64(mask));
+
+      // Select Bstrpick_d for And(Shr(x, imm), mask) where the mask is in the
+      // least significant bits.
+      const ShiftOp& shift = lhs.Cast<ShiftOp>();
+      if (int64_t shift_by;
+          MatchSignedIntegralConstant(shift.right(), &shift_by)) {
+        // Any shift value can match; int64 shifts use `value % 64`.
+        uint32_t lsb = static_cast<uint32_t>(shift_by & 0x3F);
+
+        // Bstrpick_d cannot extract bits past the register size, however since
+        // shifting the original value would have introduced some zeros we can
+        // still use Bstrpick_d with a smaller mask and the remaining bits will
+        // be zeros.
+        if (lsb + mask_width > 64) mask_width = 64 - lsb;
+
+        if (lsb == 0 && mask_width == 64) {
+          Emit(kArchNop, g.DefineSameAsFirst(node), g.Use(shift.left()));
+        } else {
+          Emit(kLoong64Bstrpick_d, g.DefineAsRegister(node),
+               g.UseRegister(shift.left()), g.TempImmediate(lsb),
+               g.TempImmediate(static_cast<int32_t>(mask_width)));
+        }
+        return;
+      }
+      // Other cases fall through to the normal And operation.
+    }
+  }
+  if (uint64_t constant_rhs;
+      MatchUnsignedIntegralConstant(bitwise_and.right(), &constant_rhs)) {
+    uint64_t shift = base::bits::CountPopulation(~constant_rhs);
+    uint64_t msb = base::bits::CountLeadingZeros64(~constant_rhs);
+    if (shift != 0 && shift < 32 && msb + shift == 64) {
+      // Insert zeros for (x >> K) << K => x & ~(2^K - 1) expression reduction
+      // and remove constant loading of inverted mask. Dins cannot insert bits
+      // past word size, so shifts smaller than 32 are covered.
+      Emit(kLoong64Bstrins_d, g.DefineSameAsFirst(node),
+           g.UseRegister(bitwise_and.left()), g.TempImmediate(0),
+           g.TempImmediate(shift));
+      return;
+    }
+  }
   VisitBinop(this, node, kLoong64And, true, kLoong64And);
 }
 
@@ -729,37 +992,169 @@ void InstructionSelector::VisitWord64Or(OpIndex node) {
 }
 
 void InstructionSelector::VisitWord32Xor(OpIndex node) {
-  // TODO(LOONG_dev): May could be optimized like in Turbofan.
+  const WordBinopOp& bitwise_xor =
+      this->Get(node).Cast<Opmask::kWord32BitwiseXor>();
+  const Operation& lhs = this->Get(bitwise_xor.left());
+  if (int64_t constant_rhs;
+      lhs.Is<Opmask::kWord32BitwiseOr>() &&
+      CanCover(node, bitwise_xor.left()) &&
+      MatchSignedIntegralConstant(bitwise_xor.right(), &constant_rhs) &&
+      constant_rhs == -1) {
+    const WordBinopOp& lhs_or = lhs.Cast<Opmask::kWord32BitwiseOr>();
+    if (int64_t constant;
+        !MatchSignedIntegralConstant(lhs_or.right(), &constant)) {
+      Loong64OperandGenerator g(this);
+      Emit(kLoong64Nor32, g.DefineAsRegister(node),
+           g.UseRegister(lhs_or.left()), g.UseRegister(lhs_or.right()));
+      return;
+    }
+  }
+  if (int64_t constant_rhs;
+      MatchSignedIntegralConstant(bitwise_xor.right(), &constant_rhs) &&
+      constant_rhs == -1) {
+    // Use Nor for bit negation and eliminate constant loading for xori.
+    Loong64OperandGenerator g(this);
+    Emit(kLoong64Nor32, g.DefineAsRegister(node),
+         g.UseRegister(bitwise_xor.left()), g.TempImmediate(0));
+    return;
+  }
   VisitBinop(this, node, kLoong64Xor32, true, kLoong64Xor32);
 }
 
 void InstructionSelector::VisitWord64Xor(OpIndex node) {
-  // TODO(LOONG_dev): May could be optimized like in Turbofan.
+  const WordBinopOp& bitwise_xor =
+      this->Get(node).Cast<Opmask::kWord64BitwiseXor>();
+  const Operation& lhs = this->Get(bitwise_xor.left());
+  if (int64_t constant_rhs;
+      lhs.Is<Opmask::kWord64BitwiseOr>() &&
+      CanCover(node, bitwise_xor.left()) &&
+      MatchSignedIntegralConstant(bitwise_xor.right(), &constant_rhs) &&
+      constant_rhs == -1) {
+    const WordBinopOp& lhs_or = lhs.Cast<Opmask::kWord64BitwiseOr>();
+    if (int64_t constant;
+        !MatchSignedIntegralConstant(lhs_or.right(), &constant)) {
+      Loong64OperandGenerator g(this);
+      Emit(kLoong64Nor, g.DefineAsRegister(node), g.UseRegister(lhs_or.left()),
+           g.UseRegister(lhs_or.right()));
+      return;
+    }
+  }
+  if (int64_t constant_rhs;
+      MatchSignedIntegralConstant(bitwise_xor.right(), &constant_rhs) &&
+      constant_rhs == -1) {
+    // Use Nor for bit negation and eliminate constant loading for xori.
+    Loong64OperandGenerator g(this);
+    Emit(kLoong64Nor, g.DefineAsRegister(node),
+         g.UseRegister(bitwise_xor.left()), g.TempImmediate(0));
+    return;
+  }
   VisitBinop(this, node, kLoong64Xor, true, kLoong64Xor);
 }
 
 void InstructionSelector::VisitWord32Shl(OpIndex node) {
-  // TODO(LOONG_dev): May could be optimized like in Turbofan.
+  const ShiftOp& shift_op = Get(node).Cast<ShiftOp>();
+  const Operation& lhs = Get(shift_op.left());
+  if (uint64_t constant_left;
+      lhs.Is<Opmask::kWord32BitwiseAnd>() && CanCover(node, shift_op.left()) &&
+      MatchUnsignedIntegralConstant(shift_op.right(), &constant_left)) {
+    uint32_t shift_by = static_cast<uint32_t>(constant_left);
+    if (base::IsInRange(shift_by, 1, 31)) {
+      const WordBinopOp& bitwise_and = lhs.Cast<WordBinopOp>();
+      // Match Word32Shl(Word32And(x, mask), imm) to Sll_w where the mask is
+      // contiguous, and the shift immediate non-zero.
+      if (uint64_t constant_right;
+          MatchUnsignedIntegralConstant(bitwise_and.right(), &constant_right)) {
+        uint32_t mask = static_cast<uint32_t>(constant_right);
+        uint32_t mask_width = base::bits::CountPopulation(mask);
+        uint32_t mask_msb = base::bits::CountLeadingZeros32(mask);
+        if ((mask_width != 0) && (mask_msb + mask_width == 32)) {
+          DCHECK_EQ(0u, base::bits::CountTrailingZeros32(mask));
+          DCHECK_NE(0u, shift_by);
+          Loong64OperandGenerator g(this);
+          if ((shift_by + mask_width) >= 32) {
+            // If the mask is contiguous and reaches or extends beyond the top
+            // bit, only the shift is needed.
+            Emit(kLoong64Sll_w, g.DefineAsRegister(node),
+                 g.UseRegister(bitwise_and.left()), g.UseImmediate(shift_by));
+            return;
+          }
+        }
+      }
+    }
+  }
   VisitRRO(this, kLoong64Sll_w, node);
 }
 
 void InstructionSelector::VisitWord32Shr(OpIndex node) {
+  const ShiftOp& shift_op = Get(node).Cast<ShiftOp>();
+  const Operation& lhs = Get(shift_op.left());
+  if (uint64_t constant_right;
+      lhs.Is<Opmask::kWord32BitwiseAnd>() && CanCover(node, shift_op.left()) &&
+      MatchUnsignedIntegralConstant(shift_op.right(), &constant_right)) {
+    uint32_t lsb = constant_right & 0x1F;
+    const WordBinopOp& bitwise_and = lhs.Cast<WordBinopOp>();
+    uint32_t constant_bitmask;
+    if (MatchIntegralWord32Constant(bitwise_and.right(), &constant_bitmask) &&
+        constant_bitmask != 0) {
+      // Select Bstrpick_w for Shr(And(x, mask), imm) where the result of the
+      // mask is shifted into the least-significant bits.
+      uint32_t mask = (constant_bitmask >> lsb) << lsb;
+      unsigned mask_width = base::bits::CountPopulation(mask);
+      unsigned mask_msb = base::bits::CountLeadingZeros32(mask);
+      if ((mask_msb + mask_width + lsb) == 32) {
+        Loong64OperandGenerator g(this);
+        DCHECK_EQ(lsb, base::bits::CountTrailingZeros32(mask));
+        Emit(kLoong64Bstrpick_w, g.DefineAsRegister(node),
+             g.UseRegister(bitwise_and.left()), g.TempImmediate(lsb),
+             g.TempImmediate(mask_width));
+        return;
+      }
+    }
+  }
   VisitRRO(this, kLoong64Srl_w, node);
 }
 
 void InstructionSelector::VisitWord32Sar(turboshaft::OpIndex node) {
-  // TODO(LOONG_dev): May could be optimized like in Turbofan.
+  const ShiftOp& shift = Get(node).Cast<ShiftOp>();
+  const Operation& lhs = Get(shift.left());
+  if (CanCover(node, shift.left())) {
+    Loong64OperandGenerator g(this);
+    if (lhs.Is<Opmask::kWord32ShiftLeft>()) {
+      const ShiftOp& bitwise_shl = lhs.Cast<ShiftOp>();
+      if (int64_t constant_right, right;
+          MatchSignedIntegralConstant(shift.right(), &constant_right) &&
+          MatchSignedIntegralConstant(bitwise_shl.right(), &right)) {
+        uint32_t sar = static_cast<uint32_t>(constant_right);
+        uint32_t shl = static_cast<uint32_t>(right);
+        if ((sar == shl) && (sar == 16)) {
+          Emit(kLoong64Ext_w_h, g.DefineAsRegister(node),
+               g.UseRegister(bitwise_shl.left()));
+          return;
+        } else if ((sar == shl) && (sar == 24)) {
+          Emit(kLoong64Ext_w_b, g.DefineAsRegister(node),
+               g.UseRegister(bitwise_shl.left()));
+          return;
+        }
+      }
+    } else if (lhs.Is<Opmask::kTruncateWord64ToWord32>()) {
+      Emit(kLoong64Sra_w, g.DefineAsRegister(node),
+           g.UseRegister(lhs.Cast<ChangeOp>().input()),
+           g.UseOperand(shift.right(), kLoong64Sra_w));
+      return;
+    }
+  }
   VisitRRO(this, kLoong64Sra_w, node);
 }
 
 void InstructionSelector::VisitWord64Shl(OpIndex node) {
   const ShiftOp& shift_op = this->Get(node).template Cast<ShiftOp>();
   const Operation& lhs = this->Get(shift_op.left());
-  const Operation& rhs = this->Get(shift_op.right());
+  uint64_t shift_by;
+  const bool right_is_constant =
+      MatchUnsignedIntegralConstant(shift_op.right(), &shift_by);
   if ((lhs.Is<Opmask::kChangeInt32ToInt64>() ||
        lhs.Is<Opmask::kChangeUint32ToUint64>()) &&
-      rhs.Is<Opmask::kWord32Constant>()) {
-    int64_t shift_by = rhs.Cast<ConstantOp>().signed_integral();
+      right_is_constant) {
     if (base::IsInRange(shift_by, 32, 63) && CanCover(node, shift_op.left())) {
       Loong64OperandGenerator g(this);
       // There's no need to sign/zero-extend to 64-bit if we shift out the
@@ -770,11 +1165,60 @@ void InstructionSelector::VisitWord64Shl(OpIndex node) {
       return;
     }
   }
+  if (lhs.Is<Opmask::kWord64BitwiseAnd>() && right_is_constant) {
+    // Match Word64Shl(Word64And(x, mask), imm) to Sll_d where the mask is
+    // contiguous, and the shift immediate non-zero.
+    if (base::IsInRange(shift_by, 1, 63) && CanCover(node, shift_op.left())) {
+      const WordBinopOp& bitwise_and = lhs.Cast<WordBinopOp>();
+      if (uint64_t mask;
+          MatchUnsignedIntegralConstant(bitwise_and.right(), &mask)) {
+        uint32_t mask_width = base::bits::CountPopulation(mask);
+        uint32_t mask_msb = base::bits::CountLeadingZeros64(mask);
+        if ((mask_width != 0) && (mask_msb + mask_width == 64)) {
+          DCHECK_EQ(0u, base::bits::CountTrailingZeros64(mask));
+          DCHECK_NE(0u, shift_by);
+
+          if ((shift_by + mask_width) >= 64) {
+            Loong64OperandGenerator g(this);
+            // If the mask is contiguous and reaches or extends beyond the top
+            // bit, only the shift is needed.
+            Emit(kLoong64Sll_d, g.DefineAsRegister(node),
+                 g.UseRegister(bitwise_and.left()), g.UseImmediate(shift_by));
+            return;
+          }
+        }
+      }
+    }
+  }
   VisitRRO(this, kLoong64Sll_d, node);
 }
 
 void InstructionSelector::VisitWord64Shr(OpIndex node) {
-  // TODO(LOONG_dev): May could be optimized like in Turbofan.
+  const ShiftOp& shift_op = Get(node).Cast<ShiftOp>();
+  const Operation& lhs = Get(shift_op.left());
+  if (uint64_t constant;
+      lhs.Is<Opmask::kWord64BitwiseAnd>() && CanCover(node, shift_op.left()) &&
+      MatchUnsignedIntegralConstant(shift_op.right(), &constant)) {
+    uint32_t lsb = constant & 0x3F;
+    const WordBinopOp& bitwise_and = lhs.Cast<WordBinopOp>();
+    uint64_t constant_and_rhs;
+    if (MatchIntegralWord64Constant(bitwise_and.right(), &constant_and_rhs) &&
+        constant_and_rhs != 0) {
+      // Select Bstrpick_d for Shr(And(x, mask), imm) where the result of the
+      // mask is shifted into the least-significant bits.
+      uint64_t mask = static_cast<uint64_t>(constant_and_rhs >> lsb) << lsb;
+      unsigned mask_width = base::bits::CountPopulation(mask);
+      unsigned mask_msb = base::bits::CountLeadingZeros64(mask);
+      if ((mask_msb + mask_width + lsb) == 64) {
+        Loong64OperandGenerator g(this);
+        DCHECK_EQ(lsb, base::bits::CountTrailingZeros64(mask));
+        Emit(kLoong64Bstrpick_d, g.DefineAsRegister(node),
+             g.UseRegister(bitwise_and.left()), g.TempImmediate(lsb),
+             g.TempImmediate(mask_width));
+        return;
+      }
+    }
+  }
   VisitRRO(this, kLoong64Srl_d, node);
 }
 
@@ -895,6 +1339,77 @@ void InstructionSelector::VisitInt64Mul(OpIndex node) {
   VisitBinop(this, node, kLoong64Mul_d, true, kLoong64Mul_d);
 }
 
+void InstructionSelector::VisitWord64MulWide(OpIndex node, bool is_signed) {
+  Loong64OperandGenerator g(this);
+
+  // Loong64 doesn't have a dedicated single instruction to return the 128-bit
+  // product of two 64 bit operands but we can use two multiply instructions
+  // (Mul_d and either Mulh_d or Mulh_du).
+  const turboshaft::Word64MulWideOp& op =
+      this->Get(node).Cast<turboshaft::Word64MulWideOp>();
+
+  InstructionOperand left = g.UseRegister(op.left());
+  InstructionOperand right = g.UseRegister(op.right());
+
+  OptionalOpIndex out_low = FindProjection(node, 0);
+  Emit(kLoong64Mul_d,
+       g.DefineAsRegister(out_low.valid() ? out_low.value() : node), left,
+       right);
+
+  OptionalOpIndex out_high = FindProjection(node, 1);
+  if (out_high.valid() && IsUsed(out_high.value())) {
+    InstructionCode high_opcode = is_signed ? kLoong64Mulh_d : kLoong64Mulh_du;
+    Emit(high_opcode, g.DefineAsRegister(out_high.value()), left, right);
+  }
+}
+
+namespace {
+
+void VisitWideAddSub(InstructionSelector* selector, OpIndex node, bool is_add) {
+  Loong64OperandGenerator g(selector);
+  const auto& op = selector->Get(node).Cast<Word64AddSub128BinopOp>();
+
+  OptionalV<Word64> out_low = selector->FindProjection(node, 0);
+  OptionalV<Word64> out_high = selector->FindProjection(node, 1);
+
+  InstructionCode opcode = is_add ? kLoong64Add128 : kLoong64Sub128;
+  InstructionCode opcode_no_high = is_add ? kLoong64Add_d : kLoong64Sub_d;
+
+  if (!out_high.valid() || !selector->IsUsed(out_high.value())) {
+    InstructionOperand b_low_op = g.UseOperand(op.right_low(), opcode_no_high);
+    selector->Emit(opcode_no_high, g.DefineAsRegister(out_low.value()),
+                   g.UseRegister(op.left_low()), b_low_op);
+    return;
+  }
+
+  InstructionOperand inputs[4];
+  size_t input_count = 0;
+  InstructionOperand outputs[2];
+  size_t output_count = 0;
+
+  inputs[input_count++] = is_add ? g.UseUniqueRegister(op.left_low())
+                                 : g.UseRegister(op.left_low());
+  inputs[input_count++] = g.UseOperand(op.right_low(), kLoong64Add_d);
+
+  inputs[input_count++] = g.UseUniqueRegister(op.left_high());
+  inputs[input_count++] = g.UseUniqueRegister(op.right_high());
+
+  outputs[output_count++] =
+      g.DefineAsRegister(out_low.valid() ? out_low.value() : node);
+  outputs[output_count++] = g.DefineAsRegister(out_high.value());
+
+  selector->Emit(opcode, output_count, outputs, input_count, inputs);
+}
+}  // namespace
+
+void InstructionSelector::VisitUint64Add128(OpIndex node) {
+  VisitWideAddSub(this, node, true);
+}
+
+void InstructionSelector::VisitUint64Sub128(OpIndex node) {
+  VisitWideAddSub(this, node, false);
+}
+
 void InstructionSelector::VisitInt32Div(OpIndex node) {
   Loong64OperandGenerator g(this);
 
@@ -1006,7 +1521,15 @@ void InstructionSelector::VisitChangeFloat64ToUint32(OpIndex node) {
 }
 
 void InstructionSelector::VisitChangeFloat64ToUint64(OpIndex node) {
-  VisitRR(this, kLoong64Float64ToUint64, node);
+  Loong64OperandGenerator g(this);
+  const ChangeOp& op = Cast<ChangeOp>(node);
+  InstructionCode opcode = kLoong64Float64ToUint64;
+
+  if (op.Is<Opmask::kTruncateFloat64ToUint64OverflowToMin>()) {
+    opcode |= MiscField::encode(true);
+  }
+
+  Emit(opcode, g.DefineAsRegister(node), g.UseRegister(op.input()));
 }
 
 void InstructionSelector::VisitTruncateFloat64ToUint32(OpIndex node) {
@@ -1185,10 +1708,9 @@ bool InstructionSelector::ZeroExtendsWord32ToWord64NoPhis(OpIndex node) {
   switch (op.opcode) {
     // Comparisons only emit 0/1, so the upper 32 bits must be zero.
     case Opcode::kComparison:
-      return op.Cast<ComparisonOp>().rep == RegisterRepresentation::Word32();
-    case Opcode::kOverflowCheckedBinop:
-      return op.Cast<OverflowCheckedBinopOp>().rep ==
-             WordRepresentation::Word32();
+      return true;
+    case Opcode::kProjection:
+      return ZeroExtendsWord32ToWord64NoPhis(op.Cast<ProjectionOp>().input());
     case Opcode::kLoad: {
       auto load = this->load_view(node);
       LoadRepresentation load_rep = load.loaded_rep();
@@ -1467,9 +1989,9 @@ void InstructionSelector::EmitPrepareArguments(
   if (call_descriptor->IsCFunctionCall()) {
     int gp_param_count = static_cast<int>(call_descriptor->GPParameterCount());
     int fp_param_count = static_cast<int>(call_descriptor->FPParameterCount());
-    Emit(kArchPrepareCallCFunction | ParamField::encode(gp_param_count) |
-             FPParamField::encode(fp_param_count),
-         0, nullptr, 0, nullptr);
+    uint32_t param_count = ParamField::encode(gp_param_count) |
+                           FPParamField::encode(fp_param_count);
+    Emit(kArchPrepareCallCFunction, g.NoOutput(), g.TempImmediate(param_count));
 
     // Poke any stack arguments.
     int slot = 0;
@@ -1516,7 +2038,7 @@ void InstructionSelector::EmitPrepareResults(
       } else if (output.location.GetType() == MachineType::Float64()) {
         MarkAsFloat64(output.node);
       } else if (output.location.GetType() == MachineType::Simd128()) {
-        abort();
+        MarkAsSimd128(output.node);
       }
       int offset = call_descriptor->GetOffsetToReturns();
       int reverse_slot = -output.location.GetLocation() - offset;
@@ -1540,24 +2062,32 @@ static Instruction* VisitCompare(InstructionSelector* selector,
                                  InstructionOperand left,
                                  InstructionOperand right,
                                  FlagsContinuation* cont) {
+  Loong64OperandGenerator g(selector);
+  InstructionOperand inputs[4];
+  size_t input_count = 0;
+  inputs[input_count++] = left;
+  inputs[input_count++] = right;
+  if (cont->IsSelect()) {
+    inputs[input_count++] = g.UseRegisterOrImmediateZero(cont->true_value());
+    inputs[input_count++] = g.UseRegisterOrImmediateZero(cont->false_value());
+  }
 #ifdef V8_COMPRESS_POINTERS
   if (opcode == kLoong64Cmp32) {
-    Loong64OperandGenerator g(selector);
-    InstructionOperand inputs[] = {left, right};
     if (right.IsImmediate()) {
       InstructionOperand temps[1] = {g.TempRegister()};
-      return selector->EmitWithContinuation(opcode, 0, nullptr,
-                                            arraysize(inputs), inputs,
-                                            arraysize(temps), temps, cont);
+      return selector->EmitWithContinuation(opcode, 0, nullptr, input_count,
+                                            inputs, arraysize(temps), temps,
+                                            cont);
     } else {
       InstructionOperand temps[2] = {g.TempRegister(), g.TempRegister()};
-      return selector->EmitWithContinuation(opcode, 0, nullptr,
-                                            arraysize(inputs), inputs,
-                                            arraysize(temps), temps, cont);
+      return selector->EmitWithContinuation(opcode, 0, nullptr, input_count,
+                                            inputs, arraysize(temps), temps,
+                                            cont);
     }
   }
 #endif
-  return selector->EmitWithContinuation(opcode, left, right, cont);
+  return selector->EmitWithContinuation(opcode, 0, nullptr, input_count, inputs,
+                                        cont);
 }
 
 // Shared routine for multiple float32 compare operations.
@@ -1755,10 +2285,10 @@ void VisitAtomicLoad(InstructionSelector* selector, OpIndex node,
   }
 
   bool traps_on_null;
-  if (load.is_protected(&traps_on_null)) {
+  if (load.is_trapping(&traps_on_null)) {
     code |= AccessModeField::encode(traps_on_null
-                                        ? kMemoryAccessProtectedNullDereference
-                                        : kMemoryAccessProtectedMemOutOfBounds);
+                                        ? kMemoryAccessTrappingNullDereference
+                                        : kMemoryAccessTrappingMemOutOfBounds);
   }
 
   if (g.CanBeImmediate(index, code)) {
@@ -1858,9 +2388,9 @@ void VisitAtomicStore(InstructionSelector* selector, OpIndex node,
   }
 
   if (store.is_store_trap_on_null()) {
-    code |= AccessModeField::encode(kMemoryAccessProtectedNullDereference);
-  } else if (store_params.kind() == MemoryAccessKind::kProtectedByTrapHandler) {
-    code |= AccessModeField::encode(kMemoryAccessProtectedMemOutOfBounds);
+    code |= AccessModeField::encode(kMemoryAccessTrappingNullDereference);
+  } else if (store_params.kind() == MemoryAccessKind::kTrapping) {
+    code |= AccessModeField::encode(kMemoryAccessTrappingMemOutOfBounds);
   }
 
   if (g.CanBeImmediate(index, code)) {
@@ -1899,15 +2429,15 @@ void VisitAtomicExchange(InstructionSelector* selector, OpIndex node,
     inputs[2] = g.UseUniqueRegister(value);
   }
   InstructionOperand outputs[1];
-  outputs[0] = g.UseUniqueRegister(node);
+  outputs[0] = g.DefineAsRegister(node);
   InstructionOperand temps[3];
   temps[0] = g.TempRegister();
   temps[1] = g.TempRegister();
   temps[2] = g.TempRegister();
   InstructionCode code = opcode | AddressingModeField::encode(addressing_mode) |
                          AtomicWidthField::encode(width);
-  if (access_kind == MemoryAccessKind::kProtectedByTrapHandler) {
-    code |= AccessModeField::encode(kMemoryAccessProtectedMemOutOfBounds);
+  if (access_kind == MemoryAccessKind::kTrapping) {
+    code |= AccessModeField::encode(kMemoryAccessTrappingMemOutOfBounds);
   }
   selector->Emit(code, arraysize(outputs), outputs, arraysize(inputs), inputs,
                  arraysize(temps), temps);
@@ -1931,15 +2461,15 @@ void VisitAtomicCompareExchange(InstructionSelector* selector, OpIndex node,
       has_write_barrier ? g.UseUniqueRegister(index) : g.UseRegister(index),
       g.UseUniqueRegister(old_value), g.UseUniqueRegister(new_value)};
   InstructionOperand outputs[1];
-  outputs[0] = g.UseUniqueRegister(node);
+  outputs[0] = g.DefineAsRegister(node);
   InstructionOperand temps[3];
   temps[0] = g.TempRegister();
   temps[1] = g.TempRegister();
   temps[2] = g.TempRegister();
   InstructionCode code = opcode | AddressingModeField::encode(addressing_mode) |
                          AtomicWidthField::encode(width);
-  if (access_kind == MemoryAccessKind::kProtectedByTrapHandler) {
-    code |= AccessModeField::encode(kMemoryAccessProtectedMemOutOfBounds);
+  if (access_kind == MemoryAccessKind::kTrapping) {
+    code |= AccessModeField::encode(kMemoryAccessTrappingMemOutOfBounds);
   }
   selector->Emit(code, arraysize(outputs), outputs, arraysize(inputs), inputs,
                  arraysize(temps), temps);
@@ -1958,11 +2488,11 @@ void VisitAtomicBinop(InstructionSelector* selector, OpIndex node,
   AddressingMode addressing_mode = kMode_MRI;
   InstructionOperand inputs[3];
   size_t input_count = 0;
-  inputs[input_count++] = g.UseUniqueRegister(base);
-  inputs[input_count++] = g.UseUniqueRegister(index);
+  inputs[input_count++] = g.UseRegister(base);
+  inputs[input_count++] = g.UseRegister(index);
   inputs[input_count++] = g.UseUniqueRegister(value);
   InstructionOperand outputs[1];
-  outputs[0] = g.UseUniqueRegister(node);
+  outputs[0] = g.DefineAsRegister(node);
   InstructionOperand temps[4];
   temps[0] = g.TempRegister();
   temps[1] = g.TempRegister();
@@ -1970,8 +2500,8 @@ void VisitAtomicBinop(InstructionSelector* selector, OpIndex node,
   temps[3] = g.TempRegister();
   InstructionCode code = opcode | AddressingModeField::encode(addressing_mode) |
                          AtomicWidthField::encode(width);
-  if (access_kind == MemoryAccessKind::kProtectedByTrapHandler) {
-    code |= AccessModeField::encode(kMemoryAccessProtectedMemOutOfBounds);
+  if (access_kind == MemoryAccessKind::kTrapping) {
+    code |= AccessModeField::encode(kMemoryAccessTrappingMemOutOfBounds);
   }
   selector->Emit(code, 1, outputs, input_count, inputs, 4, temps);
 }
@@ -2007,9 +2537,14 @@ void InstructionSelector::VisitStackPointerGreaterThan(
                                  ? OperandGenerator::kUniqueRegister
                                  : OperandGenerator::kRegister;
 
-  InstructionOperand inputs[] = {g.UseRegisterWithMode(value, register_mode)};
-  static constexpr int input_count = arraysize(inputs);
+  InstructionOperand inputs[3];
+  int input_count = 0;
+  inputs[input_count++] = g.UseRegisterWithMode(value, register_mode);
 
+  if (cont->IsSelect()) {
+    inputs[input_count++] = g.UseRegisterOrImmediateZero(cont->true_value());
+    inputs[input_count++] = g.UseRegisterOrImmediateZero(cont->false_value());
+  }
   EmitWithContinuation(opcode, output_count, outputs, input_count, inputs,
                        temp_count, temps, cont);
 }
@@ -2563,7 +3098,7 @@ void InstructionSelector::VisitInt64AbsWithOverflow(OpIndex node) {
   UNREACHABLE();
 }
 
-#if V8_ENABLE_WEBASSEMBLY
+#if V8_ENABLE_SIMD128
 
 #define SIMD_TYPE_LIST(V) \
   V(F64x2)                \
@@ -2573,65 +3108,65 @@ void InstructionSelector::VisitInt64AbsWithOverflow(OpIndex node) {
   V(I16x8)                \
   V(I8x16)
 
-#define SIMD_UNOP_LIST(V)                                             \
-  V(F64x2Abs, kLoong64F64x2Abs)                                       \
-  V(F64x2Neg, kLoong64F64x2Neg)                                       \
-  V(F64x2Sqrt, kLoong64F64x2Sqrt)                                     \
-  V(F64x2Ceil, kLoong64F64x2Ceil)                                     \
-  V(F64x2Floor, kLoong64F64x2Floor)                                   \
-  V(F64x2Trunc, kLoong64F64x2Trunc)                                   \
-  V(F64x2NearestInt, kLoong64F64x2NearestInt)                         \
-  V(I64x2Neg, kLoong64I64x2Neg)                                       \
-  V(I64x2BitMask, kLoong64I64x2BitMask)                               \
-  V(F64x2ConvertLowI32x4S, kLoong64F64x2ConvertLowI32x4S)             \
-  V(F64x2ConvertLowI32x4U, kLoong64F64x2ConvertLowI32x4U)             \
-  V(F64x2PromoteLowF32x4, kLoong64F64x2PromoteLowF32x4)               \
-  V(F32x4SConvertI32x4, kLoong64F32x4SConvertI32x4)                   \
-  V(F32x4UConvertI32x4, kLoong64F32x4UConvertI32x4)                   \
-  V(F32x4Abs, kLoong64F32x4Abs)                                       \
-  V(F32x4Neg, kLoong64F32x4Neg)                                       \
-  V(F32x4Sqrt, kLoong64F32x4Sqrt)                                     \
-  V(F32x4Ceil, kLoong64F32x4Ceil)                                     \
-  V(F32x4Floor, kLoong64F32x4Floor)                                   \
-  V(F32x4Trunc, kLoong64F32x4Trunc)                                   \
-  V(F32x4NearestInt, kLoong64F32x4NearestInt)                         \
-  V(F32x4DemoteF64x2Zero, kLoong64F32x4DemoteF64x2Zero)               \
-  V(I64x2Abs, kLoong64I64x2Abs)                                       \
-  V(I64x2SConvertI32x4Low, kLoong64I64x2SConvertI32x4Low)             \
-  V(I64x2SConvertI32x4High, kLoong64I64x2SConvertI32x4High)           \
-  V(I64x2UConvertI32x4Low, kLoong64I64x2UConvertI32x4Low)             \
-  V(I64x2UConvertI32x4High, kLoong64I64x2UConvertI32x4High)           \
-  V(I32x4SConvertF32x4, kLoong64I32x4SConvertF32x4)                   \
-  V(I32x4UConvertF32x4, kLoong64I32x4UConvertF32x4)                   \
-  V(I32x4Neg, kLoong64I32x4Neg)                                       \
-  V(I32x4SConvertI16x8Low, kLoong64I32x4SConvertI16x8Low)             \
-  V(I32x4SConvertI16x8High, kLoong64I32x4SConvertI16x8High)           \
-  V(I32x4UConvertI16x8Low, kLoong64I32x4UConvertI16x8Low)             \
-  V(I32x4UConvertI16x8High, kLoong64I32x4UConvertI16x8High)           \
-  V(I32x4Abs, kLoong64I32x4Abs)                                       \
-  V(I32x4BitMask, kLoong64I32x4BitMask)                               \
-  V(I32x4TruncSatF64x2SZero, kLoong64I32x4TruncSatF64x2SZero)         \
-  V(I32x4TruncSatF64x2UZero, kLoong64I32x4TruncSatF64x2UZero)         \
-  V(I32x4RelaxedTruncF32x4S, kLoong64I32x4RelaxedTruncF32x4S)         \
-  V(I32x4RelaxedTruncF32x4U, kLoong64I32x4RelaxedTruncF32x4U)         \
-  V(I32x4RelaxedTruncF64x2SZero, kLoong64I32x4RelaxedTruncF64x2SZero) \
-  V(I32x4RelaxedTruncF64x2UZero, kLoong64I32x4RelaxedTruncF64x2UZero) \
-  V(I16x8Neg, kLoong64I16x8Neg)                                       \
-  V(I16x8SConvertI8x16Low, kLoong64I16x8SConvertI8x16Low)             \
-  V(I16x8SConvertI8x16High, kLoong64I16x8SConvertI8x16High)           \
-  V(I16x8UConvertI8x16Low, kLoong64I16x8UConvertI8x16Low)             \
-  V(I16x8UConvertI8x16High, kLoong64I16x8UConvertI8x16High)           \
-  V(I16x8Abs, kLoong64I16x8Abs)                                       \
-  V(I16x8BitMask, kLoong64I16x8BitMask)                               \
-  V(I8x16Neg, kLoong64I8x16Neg)                                       \
-  V(I8x16Abs, kLoong64I8x16Abs)                                       \
-  V(I8x16Popcnt, kLoong64I8x16Popcnt)                                 \
-  V(I8x16BitMask, kLoong64I8x16BitMask)                               \
-  V(S128Not, kLoong64S128Not)                                         \
-  V(I64x2AllTrue, kLoong64I64x2AllTrue)                               \
-  V(I32x4AllTrue, kLoong64I32x4AllTrue)                               \
-  V(I16x8AllTrue, kLoong64I16x8AllTrue)                               \
-  V(I8x16AllTrue, kLoong64I8x16AllTrue)                               \
+#define SIMD_UNOP_LIST(V)                                         \
+  V(F64x2Abs, kLoong64F64x2Abs)                                   \
+  V(F64x2Neg, kLoong64F64x2Neg)                                   \
+  V(F64x2Sqrt, kLoong64F64x2Sqrt)                                 \
+  V(F64x2Ceil, kLoong64F64x2Ceil)                                 \
+  V(F64x2Floor, kLoong64F64x2Floor)                               \
+  V(F64x2Trunc, kLoong64F64x2Trunc)                               \
+  V(F64x2NearestInt, kLoong64F64x2NearestInt)                     \
+  V(I64x2Neg, kLoong64I64x2Neg)                                   \
+  V(I64x2BitMask, kLoong64I64x2BitMask)                           \
+  V(F64x2ConvertLowI32x4S, kLoong64F64x2ConvertLowI32x4S)         \
+  V(F64x2ConvertLowI32x4U, kLoong64F64x2ConvertLowI32x4U)         \
+  V(F64x2PromoteLowF32x4, kLoong64F64x2PromoteLowF32x4)           \
+  V(F32x4SConvertI32x4, kLoong64F32x4SConvertI32x4)               \
+  V(F32x4UConvertI32x4, kLoong64F32x4UConvertI32x4)               \
+  V(F32x4Abs, kLoong64F32x4Abs)                                   \
+  V(F32x4Neg, kLoong64F32x4Neg)                                   \
+  V(F32x4Sqrt, kLoong64F32x4Sqrt)                                 \
+  V(F32x4Ceil, kLoong64F32x4Ceil)                                 \
+  V(F32x4Floor, kLoong64F32x4Floor)                               \
+  V(F32x4Trunc, kLoong64F32x4Trunc)                               \
+  V(F32x4NearestInt, kLoong64F32x4NearestInt)                     \
+  V(F32x4DemoteF64x2Zero, kLoong64F32x4DemoteF64x2Zero)           \
+  V(I64x2Abs, kLoong64I64x2Abs)                                   \
+  V(I64x2SConvertI32x4Low, kLoong64I64x2SConvertI32x4Low)         \
+  V(I64x2SConvertI32x4High, kLoong64I64x2SConvertI32x4High)       \
+  V(I64x2UConvertI32x4Low, kLoong64I64x2UConvertI32x4Low)         \
+  V(I64x2UConvertI32x4High, kLoong64I64x2UConvertI32x4High)       \
+  V(I32x4SConvertF32x4, kLoong64I32x4SConvertF32x4)               \
+  V(I32x4UConvertF32x4, kLoong64I32x4UConvertF32x4)               \
+  V(I32x4Neg, kLoong64I32x4Neg)                                   \
+  V(I32x4SConvertI16x8Low, kLoong64I32x4SConvertI16x8Low)         \
+  V(I32x4SConvertI16x8High, kLoong64I32x4SConvertI16x8High)       \
+  V(I32x4UConvertI16x8Low, kLoong64I32x4UConvertI16x8Low)         \
+  V(I32x4UConvertI16x8High, kLoong64I32x4UConvertI16x8High)       \
+  V(I32x4Abs, kLoong64I32x4Abs)                                   \
+  V(I32x4BitMask, kLoong64I32x4BitMask)                           \
+  V(I32x4TruncSatF64x2SZero, kLoong64I32x4TruncSatF64x2SZero)     \
+  V(I32x4TruncSatF64x2UZero, kLoong64I32x4TruncSatF64x2UZero)     \
+  V(I32x4RelaxedTruncF32x4S, kLoong64I32x4SConvertF32x4)          \
+  V(I32x4RelaxedTruncF32x4U, kLoong64I32x4UConvertF32x4)          \
+  V(I32x4RelaxedTruncF64x2SZero, kLoong64I32x4TruncSatF64x2SZero) \
+  V(I32x4RelaxedTruncF64x2UZero, kLoong64I32x4TruncSatF64x2UZero) \
+  V(I16x8Neg, kLoong64I16x8Neg)                                   \
+  V(I16x8SConvertI8x16Low, kLoong64I16x8SConvertI8x16Low)         \
+  V(I16x8SConvertI8x16High, kLoong64I16x8SConvertI8x16High)       \
+  V(I16x8UConvertI8x16Low, kLoong64I16x8UConvertI8x16Low)         \
+  V(I16x8UConvertI8x16High, kLoong64I16x8UConvertI8x16High)       \
+  V(I16x8Abs, kLoong64I16x8Abs)                                   \
+  V(I16x8BitMask, kLoong64I16x8BitMask)                           \
+  V(I8x16Neg, kLoong64I8x16Neg)                                   \
+  V(I8x16Abs, kLoong64I8x16Abs)                                   \
+  V(I8x16Popcnt, kLoong64I8x16Popcnt)                             \
+  V(I8x16BitMask, kLoong64I8x16BitMask)                           \
+  V(S128Not, kLoong64S128Not)                                     \
+  V(I64x2AllTrue, kLoong64I64x2AllTrue)                           \
+  V(I32x4AllTrue, kLoong64I32x4AllTrue)                           \
+  V(I16x8AllTrue, kLoong64I16x8AllTrue)                           \
+  V(I8x16AllTrue, kLoong64I8x16AllTrue)                           \
   V(V128AnyTrue, kLoong64V128AnyTrue)
 
 #define SIMD_SHIFT_OP_LIST(V) \
@@ -2659,8 +3194,8 @@ void InstructionSelector::VisitInt64AbsWithOverflow(OpIndex node) {
   V(F64x2Ne, kLoong64F64x2Ne)                             \
   V(F64x2Lt, kLoong64F64x2Lt)                             \
   V(F64x2Le, kLoong64F64x2Le)                             \
-  V(F64x2RelaxedMin, kLoong64F64x2RelaxedMin)             \
-  V(F64x2RelaxedMax, kLoong64F64x2RelaxedMax)             \
+  V(F64x2RelaxedMin, kLoong64F64x2Min)                    \
+  V(F64x2RelaxedMax, kLoong64F64x2Max)                    \
   V(I64x2Eq, kLoong64I64x2Eq)                             \
   V(I64x2Ne, kLoong64I64x2Ne)                             \
   V(I64x2Add, kLoong64I64x2Add)                           \
@@ -2678,8 +3213,8 @@ void InstructionSelector::VisitInt64AbsWithOverflow(OpIndex node) {
   V(F32x4Ne, kLoong64F32x4Ne)                             \
   V(F32x4Lt, kLoong64F32x4Lt)                             \
   V(F32x4Le, kLoong64F32x4Le)                             \
-  V(F32x4RelaxedMin, kLoong64F32x4RelaxedMin)             \
-  V(F32x4RelaxedMax, kLoong64F32x4RelaxedMax)             \
+  V(F32x4RelaxedMin, kLoong64F32x4Min)                    \
+  V(F32x4RelaxedMax, kLoong64F32x4Max)                    \
   V(I32x4Add, kLoong64I32x4Add)                           \
   V(I32x4Sub, kLoong64I32x4Sub)                           \
   V(I32x4Mul, kLoong64I32x4Mul)                           \
@@ -2715,7 +3250,8 @@ void InstructionSelector::VisitInt64AbsWithOverflow(OpIndex node) {
   V(I16x8SConvertI32x4, kLoong64I16x8SConvertI32x4)       \
   V(I16x8UConvertI32x4, kLoong64I16x8UConvertI32x4)       \
   V(I16x8Q15MulRSatS, kLoong64I16x8Q15MulRSatS)           \
-  V(I16x8RelaxedQ15MulRS, kLoong64I16x8RelaxedQ15MulRS)   \
+  V(I16x8RelaxedQ15MulRS, kLoong64I16x8Q15MulRSatS)       \
+  V(I16x8DotI8x16I7x16S, kLoong64I16x8DotI8x16S)          \
   V(I8x16Add, kLoong64I8x16Add)                           \
   V(I8x16AddSatS, kLoong64I8x16AddSatS)                   \
   V(I8x16AddSatU, kLoong64I8x16AddSatU)                   \
@@ -2736,13 +3272,74 @@ void InstructionSelector::VisitInt64AbsWithOverflow(OpIndex node) {
   V(I8x16SConvertI16x8, kLoong64I8x16SConvertI16x8)       \
   V(I8x16UConvertI16x8, kLoong64I8x16UConvertI16x8)       \
   V(S128And, kLoong64S128And)                             \
-  V(S128Or, kLoong64S128Or)                               \
   V(S128Xor, kLoong64S128Xor)                             \
   V(S128AndNot, kLoong64S128AndNot)
 
-void InstructionSelector::VisitS128Const(OpIndex node) { UNIMPLEMENTED(); }
+void InstructionSelector::VisitS128Const(OpIndex node) {
+  Loong64OperandGenerator g(this);
+  static const int kUint32Immediates = kSimd128Size / sizeof(uint32_t);
+  uint32_t val[kUint32Immediates];
+  const Simd128ConstantOp& constant =
+      this->Get(node).template Cast<Simd128ConstantOp>();
+  memcpy(val, constant.value, kSimd128Size);
+  // If all bytes are zeros or ones, avoid emitting code for generic constants
+  bool all_zeros = !(val[0] || val[1] || val[2] || val[3]);
+  bool all_ones = val[0] == UINT32_MAX && val[1] == UINT32_MAX &&
+                  val[2] == UINT32_MAX && val[3] == UINT32_MAX;
+  InstructionOperand dst = g.DefineAsRegister(node);
+  if (all_zeros) {
+    Emit(kLoong64S128Zero, dst);
+  } else if (all_ones) {
+    Emit(kLoong64S128AllOnes, dst);
+  } else {
+    Emit(kLoong64S128Const, dst, g.UseImmediate(val[0]), g.UseImmediate(val[1]),
+         g.UseImmediate(val[2]), g.UseImmediate(val[3]));
+  }
+}
 
-void InstructionSelector::VisitS128Zero(OpIndex node) { UNIMPLEMENTED(); }
+void InstructionSelector::VisitS128Zero(OpIndex node) {
+  Loong64OperandGenerator g(this);
+  Emit(kLoong64S128Zero, g.DefineAsRegister(node));
+}
+
+namespace {
+
+bool TryEmitS128OrNot(InstructionSelector* selector, OpIndex node) {
+  Loong64OperandGenerator g(selector);
+
+  const Simd128BinopOp& or_op = selector->Get(node).Cast<Simd128BinopOp>();
+
+  // If the RHS is unary, check if it's a NOT op.
+  if (const Simd128UnaryOp* rhs =
+          selector->TryCast<Opmask::kSimd128S128Not>(or_op.right())) {
+    if (selector->CanCover(node, or_op.right())) {  // (LHS OR (NOT RHS)) found.
+      selector->Emit(kLoong64S128OrNot, g.DefineAsRegister(node),
+                     g.UseRegister(or_op.left()), g.UseRegister(rhs->input()));
+      return true;
+    }
+  }
+
+  // If the LHS is unary, check if it's a NOT op.
+  if (const Simd128UnaryOp* lhs =
+          selector->TryCast<Opmask::kSimd128S128Not>(or_op.left())) {
+    if (selector->CanCover(node, or_op.left())) {  // ((NOT LHS) OR RHS) found.
+      selector->Emit(kLoong64S128OrNot, g.DefineAsRegister(node),
+                     g.UseRegister(or_op.right()), g.UseRegister(lhs->input()));
+      return true;
+    }
+  }
+
+  // Else: Emit regular OR instruction.
+  return false;
+}
+
+}  // namespace
+
+void InstructionSelector::VisitS128Or(OpIndex node) {
+  if (!TryEmitS128OrNot(this, node)) {
+    VisitRRR(this, kLoong64S128Or, node);
+  }
+}
 
 #define SIMD_VISIT_SPLAT(Type)                                 \
   void InstructionSelector::Visit##Type##Splat(OpIndex node) { \
@@ -2797,6 +3394,14 @@ void InstructionSelector::VisitS128Select(OpIndex node) {
   VisitRRRR(this, kLoong64S128Select, node);
 }
 
+void InstructionSelector::VisitI32x4DotI8x16I7x16AddS(OpIndex node) {
+  Loong64OperandGenerator g(this);
+  const Simd128TernaryOp& op = Cast<Simd128TernaryOp>(node);
+  Emit(kLoong64I32x4DotI8x16AddS, g.DefineAsRegister(node),
+       g.UseUniqueRegister(op.first()), g.UseUniqueRegister(op.second()),
+       g.UseUniqueRegister(op.third()));
+}
+
 void InstructionSelector::VisitI8x16RelaxedLaneSelect(OpIndex node) {
   VisitS128Select(node);
 }
@@ -2821,12 +3426,19 @@ void InstructionSelector::VisitI64x2RelaxedLaneSelect(OpIndex node) {
   V(I16x8DotI8x16I7x16S)      \
   V(I32x4DotI8x16I7x16AddS)
 
-#define SIMD_VISIT_UNIMP_OP(Name) \
-  void InstructionSelector::Visit##Name(OpIndex node) { UNIMPLEMENTED(); }
-SIMD_UNIMP_OP_LIST(SIMD_VISIT_UNIMP_OP)
+#define SIMD_VISIT_QFMOP(Name)                                                \
+  void InstructionSelector::Visit##Name(OpIndex node) {                       \
+    Loong64OperandGenerator g(this);                                          \
+    const Simd128TernaryOp& op = Cast<Simd128TernaryOp>(node);                \
+    Emit(kLoong64##Name, g.DefineAsRegister(node), g.UseRegister(op.first()), \
+         g.UseRegister(op.second()), g.UseRegister(op.third()));              \
+  }  // namespace compiler
 
-#undef SIMD_VISIT_UNIMP_OP
-#undef SIMD_UNIMP_OP_LIST
+SIMD_VISIT_QFMOP(F64x2Qfma)
+SIMD_VISIT_QFMOP(F64x2Qfms)
+SIMD_VISIT_QFMOP(F32x4Qfma)
+SIMD_VISIT_QFMOP(F32x4Qfms)
+#undef SIMD_VISIT_QFMOP
 
 #define UNIMPLEMENTED_SIMD_FP16_OP_LIST(V) \
   V(F16x8Splat)                            \
@@ -2868,15 +3480,134 @@ UNIMPLEMENTED_SIMD_FP16_OP_LIST(SIMD_VISIT_UNIMPL_FP16_OP)
 #undef SIMD_VISIT_UNIMPL_FP16_OP
 #undef UNIMPLEMENTED_SIMD_FP16_OP_LIST
 
-void InstructionSelector::VisitI8x16Shuffle(OpIndex node) { UNIMPLEMENTED(); }
+namespace {
 
-void InstructionSelector::VisitI8x16Swizzle(OpIndex node) { UNIMPLEMENTED(); }
+struct ShuffleEntry {
+  uint8_t shuffle[kSimd128Size];
+  ArchOpcode opcode;
+};
 
-void InstructionSelector::VisitSetStackPointer(OpIndex node) {
-  OperandGenerator g(this);
-  const SetStackPointerOp& op = Cast<SetStackPointerOp>(node);
-  auto input = g.UseRegister(op.value());
-  Emit(kArchSetStackPointer, 0, nullptr, 1, &input);
+static const ShuffleEntry arch_shuffles[] = {
+    {{0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23},
+     kLoong64S32x4InterleaveRight},
+    {{8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31},
+     kLoong64S32x4InterleaveLeft},
+    {{0, 1, 2, 3, 8, 9, 10, 11, 16, 17, 18, 19, 24, 25, 26, 27},
+     kLoong64S32x4PackEven},
+    {{4, 5, 6, 7, 12, 13, 14, 15, 20, 21, 22, 23, 28, 29, 30, 31},
+     kLoong64S32x4PackOdd},
+    {{0, 1, 2, 3, 16, 17, 18, 19, 8, 9, 10, 11, 24, 25, 26, 27},
+     kLoong64S32x4InterleaveEven},
+    {{4, 5, 6, 7, 20, 21, 22, 23, 12, 13, 14, 15, 28, 29, 30, 31},
+     kLoong64S32x4InterleaveOdd},
+
+    {{0, 1, 16, 17, 2, 3, 18, 19, 4, 5, 20, 21, 6, 7, 22, 23},
+     kLoong64S16x8InterleaveRight},
+    {{8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31},
+     kLoong64S16x8InterleaveLeft},
+    {{0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29},
+     kLoong64S16x8PackEven},
+    {{2, 3, 6, 7, 10, 11, 14, 15, 18, 19, 22, 23, 26, 27, 30, 31},
+     kLoong64S16x8PackOdd},
+    {{0, 1, 16, 17, 4, 5, 20, 21, 8, 9, 24, 25, 12, 13, 28, 29},
+     kLoong64S16x8InterleaveEven},
+    {{2, 3, 18, 19, 6, 7, 22, 23, 10, 11, 26, 27, 14, 15, 30, 31},
+     kLoong64S16x8InterleaveOdd},
+    {{6, 7, 4, 5, 2, 3, 0, 1, 14, 15, 12, 13, 10, 11, 8, 9},
+     kLoong64S16x4Reverse},
+    {{2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13},
+     kLoong64S16x2Reverse},
+
+    {{0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23},
+     kLoong64S8x16InterleaveRight},
+    {{8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31},
+     kLoong64S8x16InterleaveLeft},
+    {{0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30},
+     kLoong64S8x16PackEven},
+    {{1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31},
+     kLoong64S8x16PackOdd},
+    {{0, 16, 2, 18, 4, 20, 6, 22, 8, 24, 10, 26, 12, 28, 14, 30},
+     kLoong64S8x16InterleaveEven},
+    {{1, 17, 3, 19, 5, 21, 7, 23, 9, 25, 11, 27, 13, 29, 15, 31},
+     kLoong64S8x16InterleaveOdd},
+    {{7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8},
+     kLoong64S8x8Reverse},
+    {{3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12},
+     kLoong64S8x4Reverse},
+    {{1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14},
+     kLoong64S8x2Reverse}};
+
+bool TryMatchArchShuffle(const uint8_t* shuffle, const ShuffleEntry* table,
+                         size_t num_entries, bool is_swizzle,
+                         ArchOpcode* opcode) {
+  uint8_t mask = is_swizzle ? kSimd128Size - 1 : 2 * kSimd128Size - 1;
+  for (size_t i = 0; i < num_entries; ++i) {
+    const ShuffleEntry& entry = table[i];
+    int j = 0;
+    for (; j < kSimd128Size; ++j) {
+      if ((entry.shuffle[j] & mask) != (shuffle[j] & mask)) {
+        break;
+      }
+    }
+    if (j == kSimd128Size) {
+      *opcode = entry.opcode;
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+void InstructionSelector::VisitI8x16Shuffle(OpIndex node) {
+  uint8_t shuffle[kSimd128Size];
+  bool is_swizzle;
+  // TODO(LOONG_dev): Properly use view here once Turboshaft support is
+  // implemented.
+  auto view = this->simd_shuffle_view(node);
+  CanonicalizeShuffle(view, shuffle, &is_swizzle);
+  OpIndex input0 = view.input(0);
+  OpIndex input1 = view.input(1);
+  Loong64OperandGenerator g(this);
+  InstructionOperand temps[] = {g.TempSimd128Register()};
+  uint8_t shuffle32x4[4];
+  ArchOpcode opcode;
+  if (TryMatchArchShuffle(shuffle, arch_shuffles, arraysize(arch_shuffles),
+                          is_swizzle, &opcode)) {
+    Emit(opcode, g.DefineAsRegister(node), g.UseRegister(input0),
+         g.UseRegister(input1));
+    return;
+  }
+
+  if (SimdShuffle::TryMatch32x4Shuffle(shuffle, shuffle32x4)) {
+    InstructionOperand temps2[] = {g.TempSimd128Register(),
+                                   g.TempSimd128Register()};
+    Emit(kLoong64S32x4Shuffle, g.DefineAsRegister(node),
+         g.UseUniqueRegister(input0), g.UseUniqueRegister(input1),
+         g.UseImmediate(SimdShuffle::Pack4Lanes(shuffle32x4)),
+         arraysize(temps2), temps2);
+    return;
+  }
+  Emit(kLoong64I8x16Shuffle, g.DefineAsRegister(node),
+       g.UseUniqueRegister(input0), g.UseUniqueRegister(input1),
+       g.UseImmediate(SimdShuffle::Pack4Lanes(shuffle)),
+       g.UseImmediate(SimdShuffle::Pack4Lanes(shuffle + 4)),
+       g.UseImmediate(SimdShuffle::Pack4Lanes(shuffle + 8)),
+       g.UseImmediate(SimdShuffle::Pack4Lanes(shuffle + 12)), arraysize(temps),
+       temps);
+}
+
+void InstructionSelector::VisitI8x16Swizzle(OpIndex node) {
+  Loong64OperandGenerator g(this);
+  const Operation& op = Get(node);
+  DCHECK_EQ(op.input_count, 2);
+  InstructionOperand temps[] = {g.TempSimd128Register(),
+                                g.TempSimd128Register()};
+  // We don't want input 0 or input 1 to be the same as output, since we will
+  // modify output before do the calculation.
+  Emit(kLoong64I8x16Swizzle, g.DefineAsRegister(node),
+       g.UseUniqueRegister(op.input(0)), g.UseUniqueRegister(op.input(1)),
+       arraysize(temps), temps);
 }
 
 void InstructionSelector::VisitF32x4Pmin(OpIndex node) {
@@ -2895,27 +3626,58 @@ void InstructionSelector::VisitF64x2Pmax(OpIndex node) {
   VisitUniqueRRR(this, kLoong64F64x2Pmax, node);
 }
 
-#define VISIT_EXT_MUL(OPCODE1, OPCODE2)                                        \
+#define VISIT_EXT_MUL(OPCODE1, OPCODE2, TYPE)                                  \
   void InstructionSelector::Visit##OPCODE1##ExtMulLow##OPCODE2(OpIndex node) { \
+    Loong64OperandGenerator g(this);                                           \
+    const Operation& op = this->Get(node);                                     \
+    DCHECK_EQ(op.input_count, 2);                                              \
+    InstructionOperand temps[] = {g.TempSimd128Register()};                    \
+    Emit(kLoong64ExtMulLow | MiscField::encode(TYPE),                          \
+         g.DefineAsRegister(node), g.UseRegister(op.input(0)),                 \
+         g.UseRegister(op.input(1)), arraysize(temps), temps);                 \
   }                                                                            \
-  void InstructionSelector::Visit##OPCODE1##ExtMulHigh##OPCODE2(OpIndex node) {}
+  void InstructionSelector::Visit##OPCODE1##ExtMulHigh##OPCODE2(               \
+      OpIndex node) {                                                          \
+    Loong64OperandGenerator g(this);                                           \
+    const Operation& op = this->Get(node);                                     \
+    DCHECK_EQ(op.input_count, 2);                                              \
+    InstructionOperand temps[] = {g.TempSimd128Register()};                    \
+    Emit(kLoong64ExtMulHigh | MiscField::encode(TYPE),                         \
+         g.DefineAsRegister(node), g.UseRegister(op.input(0)),                 \
+         g.UseRegister(op.input(1)), arraysize(temps), temps);                 \
+  }
 
-VISIT_EXT_MUL(I64x2, I32x4S)
-VISIT_EXT_MUL(I64x2, I32x4U)
-VISIT_EXT_MUL(I32x4, I16x8S)
-VISIT_EXT_MUL(I32x4, I16x8U)
-VISIT_EXT_MUL(I16x8, I8x16S)
-VISIT_EXT_MUL(I16x8, I8x16U)
+VISIT_EXT_MUL(I64x2, I32x4S, LSXS32)
+VISIT_EXT_MUL(I64x2, I32x4U, LSXU32)
+VISIT_EXT_MUL(I32x4, I16x8S, LSXS16)
+VISIT_EXT_MUL(I32x4, I16x8U, LSXU16)
+VISIT_EXT_MUL(I16x8, I8x16S, LSXS8)
+VISIT_EXT_MUL(I16x8, I8x16U, LSXU8)
 #undef VISIT_EXT_MUL
 
-#define VISIT_EXTADD_PAIRWISE(OPCODE) \
-  void InstructionSelector::Visit##OPCODE(OpIndex node) { UNIMPLEMENTED(); }
-VISIT_EXTADD_PAIRWISE(I16x8ExtAddPairwiseI8x16S)
-VISIT_EXTADD_PAIRWISE(I16x8ExtAddPairwiseI8x16U)
-VISIT_EXTADD_PAIRWISE(I32x4ExtAddPairwiseI16x8S)
-VISIT_EXTADD_PAIRWISE(I32x4ExtAddPairwiseI16x8U)
+#define VISIT_EXTADD_PAIRWISE(OPCODE, TYPE)                     \
+  void InstructionSelector::Visit##OPCODE(OpIndex node) {       \
+    Loong64OperandGenerator g(this);                            \
+    const Operation& op = this->Get(node);                      \
+    DCHECK_EQ(op.input_count, 1);                               \
+    Emit(kLoong64ExtAddPairwise | MiscField::encode(TYPE),      \
+         g.DefineAsRegister(node), g.UseRegister(op.input(0))); \
+  }
+VISIT_EXTADD_PAIRWISE(I16x8ExtAddPairwiseI8x16S, LSXS8)
+VISIT_EXTADD_PAIRWISE(I16x8ExtAddPairwiseI8x16U, LSXU8)
+VISIT_EXTADD_PAIRWISE(I32x4ExtAddPairwiseI16x8S, LSXS16)
+VISIT_EXTADD_PAIRWISE(I32x4ExtAddPairwiseI16x8U, LSXU16)
 #undef VISIT_EXTADD_PAIRWISE
 
+#endif  // V8_ENABLE_SIMD128
+
+#if V8_ENABLE_WEBASSEMBLY
+void InstructionSelector::VisitSetStackPointer(OpIndex node) {
+  OperandGenerator g(this);
+  const SetStackPointerOp& op = Cast<SetStackPointerOp>(node);
+  auto input = g.UseRegister(op.value());
+  Emit(kArchSetStackPointer, 0, nullptr, 1, &input);
+}
 #endif  // V8_ENABLE_WEBASSEMBLY
 
 void InstructionSelector::VisitSignExtendWord8ToInt32(OpIndex node) {
@@ -2941,7 +3703,7 @@ void InstructionSelector::VisitSignExtendWord32ToInt64(OpIndex node) {
 void InstructionSelector::AddOutputToSelectContinuation(OperandGenerator* g,
                                                         int first_input_index,
                                                         OpIndex node) {
-  UNREACHABLE();
+  continuation_outputs_.push_back(g->DefineAsRegister(node));
 }
 
 // static
@@ -2958,7 +3720,8 @@ InstructionSelector::SupportedMachineOperatorFlags() {
          MachineOperatorBuilder::kFloat64RoundTruncate |
          MachineOperatorBuilder::kFloat32RoundTruncate |
          MachineOperatorBuilder::kFloat64RoundTiesEven |
-         MachineOperatorBuilder::kFloat32RoundTiesEven;
+         MachineOperatorBuilder::kFloat32RoundTiesEven |
+         MachineOperatorBuilder::kWord64Select;
 }
 
 // static

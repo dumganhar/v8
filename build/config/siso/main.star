@@ -11,14 +11,17 @@ load("@builtin//struct.star", "module")
 load("./backend_config/backend.star", "backend")
 load("./blink_all.star", "blink_all")
 load("./config.star", "config")
+load("./denylist.star", "denylist")
 load("./gn_logs.star", "gn_logs")
+load("./grit.star", "grit")
 load("./linux.star", chromium_linux = "chromium")
 load("./mac.star", chromium_mac = "chromium")
 load("./mojo.star", "mojo")
 load("./platform.star", "platform")
-load("./reproxy.star", "reproxy")
+load("./reclient.star", "reclient")
 load("./rust.star", "rust")
 load("./simple.star", "simple")
+load("./typescript_all.star", "typescript_all")
 load("./windows.star", chromium_windows = "chromium")
 
 def __disable_remote(ctx, step_config):
@@ -57,35 +60,33 @@ def init(ctx):
         "properties": properties,
         "platforms": backend.platform_properties(ctx),
         "input_deps": {},
+        "scandeps": {
+            "step_inputs": {
+                "excludes": [
+                    "*.json",
+                    "*.proto",
+                    "*.xml",
+                ],
+            },
+        },
         "rules": [],
+        # Executables sent from Windows host to Linux workers need to set executable bit explicitly.
+        # This is necessary for cross platform build actions. e.g. node binary for typescript
+        "executables": [
+            "third_party/node/linux/node-linux-x64/bin/node",
+        ],
     }
     step_config = blink_all.step_config(ctx, step_config)
+    step_config = grit.step_config(ctx, step_config)
     step_config = host.step_config(ctx, step_config)
     step_config = mojo.step_config(ctx, step_config)
     step_config = rust.step_config(ctx, step_config)
     step_config = simple.step_config(ctx, step_config)
-    if reproxy.enabled(ctx):
-        step_config = reproxy.step_config(ctx, step_config)
+    step_config = typescript_all.step_config(ctx, step_config)
+    if reclient.enabled(ctx):
+        step_config = reclient.step_config(ctx, step_config)
 
-    #  Python actions may use an absolute path at the first argument.
-    #  e.g. C:/src/depot_tools/bootstrap-2@3_8_10_chromium_26_bin/python3/bin/python3.exe
-    #  It needs to set `pyhton3` or `python3.exe` to remote_command.
-    for rule in step_config["rules"]:
-        if rule["name"].startswith("clang-coverage"):
-            # clang_code_coverage_wrapper.run() strips the python wrapper.
-            # So it shouldn't set `remote_command: python3`.
-            continue
-
-        # On Linux worker, it needs to be `python3` instead of `python3.exe`.
-        arg0 = rule.get("command_prefix", "").split(" ")[0].strip("\"")
-        if arg0 != platform.python_bin:
-            continue
-        p = rule.get("reproxy_config", {}).get("platform") or step_config["platforms"].get(rule.get("platform_ref", "default"))
-        if not p:
-            continue
-        if p.get("OSFamily") == "Linux":
-            arg0 = arg0.removesuffix(".exe")
-        rule["remote_command"] = arg0
+    step_config = denylist.step_config(ctx, step_config)
 
     step_config = __disable_remote(ctx, step_config)
     step_config = __unset_timeout(ctx, step_config)
@@ -95,13 +96,15 @@ def init(ctx):
     filegroups.update(host.filegroups(ctx))
     filegroups.update(rust.filegroups(ctx))
     filegroups.update(simple.filegroups(ctx))
+    filegroups.update(typescript_all.filegroups(ctx))
 
     handlers = {}
     handlers.update(blink_all.handlers)
     handlers.update(host.handlers)
     handlers.update(rust.handlers)
     handlers.update(simple.handlers)
-    handlers.update(reproxy.handlers)
+    handlers.update(reclient.handlers)
+    handlers.update(typescript_all.handlers)
 
     return module(
         "config",

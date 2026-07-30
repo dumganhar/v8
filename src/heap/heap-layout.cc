@@ -30,7 +30,7 @@ void HeapLayout::CheckYoungGenerationConsistency(const MemoryChunk* chunk) {
   // If the object is in the young generation, then it is safe to get to the
   // containing Heap.
 #ifdef DEBUG
-  const MemoryChunkMetadata* metadata = chunk->Metadata();
+  const BasePage* metadata = chunk->Metadata();
   SLOW_DCHECK(metadata->IsWritable());
   Heap* heap = metadata->heap();
   SLOW_DCHECK(heap != nullptr);
@@ -40,13 +40,7 @@ void HeapLayout::CheckYoungGenerationConsistency(const MemoryChunk* chunk) {
 
 // static
 bool HeapLayout::IsSelfForwarded(Tagged<HeapObject> object) {
-  return IsSelfForwarded(object, GetPtrComprCageBase(object));
-}
-
-// static
-bool HeapLayout::IsSelfForwarded(Tagged<HeapObject> object,
-                                 PtrComprCageBase cage_base) {
-  return IsSelfForwarded(object, object->map_word(cage_base, kRelaxedLoad));
+  return IsSelfForwarded(object, object->map_word(kRelaxedLoad));
 }
 
 // static

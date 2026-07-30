@@ -50,6 +50,11 @@
 #include <stdarg.h>
 #include <stdlib.h>
 
+//<cfenv> is banned in Google style due to inconsistent compiler
+// support and potential interference with floating-point optimizations.
+// However, RISC-V only uses fenv.h in simulator on x64.
+#include <cfenv>  // NOLINT(build/c++11)
+
 #include "src/base/bits.h"
 #include "src/base/overflowing-math.h"
 #include "src/base/vector.h"
@@ -59,6 +64,7 @@
 #include "src/diagnostics/disasm.h"
 #include "src/heap/base/stack.h"
 #include "src/heap/combined-heap.h"
+#include "src/numbers/conversions-inl.h"
 #include "src/runtime/runtime-utils.h"
 #include "src/utils/ostreams.h"
 #include "src/utils/utils.h"
@@ -496,13 +502,13 @@ struct type_sew_t<128> {
 
 #define VI_WIDE_CHECK_COMMON                     \
   CHECK_LE(rvv_vflmul(), 4);                     \
-  CHECK_LE(rvv_vsew() * 2, kRvvELEN);            \
+  CHECK_LE(rvv_sew() * 2, kRvvELEN);             \
   require_align(rvv_vd_reg(), rvv_vflmul() * 2); \
   require_vm;
 
 #define VI_NARROW_CHECK_COMMON                    \
   CHECK_LE(rvv_vflmul(), 4);                      \
-  CHECK_LE(rvv_vsew() * 2, kRvvELEN);             \
+  CHECK_LE(rvv_sew() * 2, kRvvELEN);              \
   require_align(rvv_vs2_reg(), rvv_vflmul() * 2); \
   require_align(rvv_vd_reg(), rvv_vflmul());      \
   require_vm;
@@ -717,6 +723,7 @@ struct type_sew_t<128> {
   type_usew_t<x>::type uimm5 = (type_usew_t<x>::type)instr_.RvvUimm5(); \
   type_usew_t<x>::type vs2 = Rvvelt<type_usew_t<x>::type>(rvv_vs2_reg(), i);
 
+#define float16_t uint16_t
 #define float32_t float
 #define float64_t double
 
@@ -843,33 +850,37 @@ struct type_sew_t<128> {
   set_rvv_vstart(0);             \
   }
 
-#define RVV_VI_VF_MERGE_LOOP(BODY16, BODY32, BODY64)        \
-  RVV_VI_VF_MERGE_LOOP_BASE                                 \
-  switch (rvv_vsew()) {                                     \
-    case E16: {                                             \
-      UNIMPLEMENTED();                                      \
-    }                                                       \
-    case E32: {                                             \
-      int32_t& vd = Rvvelt<int32_t>(rvv_vd_reg(), i, true); \
-      int32_t fs1 = base::bit_cast<int32_t>(                \
-          get_fpu_register_Float32(rs1_reg()).get_bits());  \
-      int32_t vs2 = Rvvelt<int32_t>(rvv_vs2_reg(), i);      \
-      BODY32;                                               \
-      break;                                                \
-    }                                                       \
-    case E64: {                                             \
-      int64_t& vd = Rvvelt<int64_t>(rvv_vd_reg(), i, true); \
-      int64_t fs1 = base::bit_cast<int64_t>(                \
-          get_fpu_register_Float64(rs1_reg()).get_bits());  \
-      int64_t vs2 = Rvvelt<int64_t>(rvv_vs2_reg(), i);      \
-      BODY64;                                               \
-      break;                                                \
-    }                                                       \
-    default:                                                \
-      UNREACHABLE();                                        \
-      break;                                                \
-  }                                                         \
-  RVV_VI_VF_MERGE_LOOP_END                                  \
+#define RVV_VI_VF_MERGE_LOOP(BODY16, BODY32, BODY64)          \
+  RVV_VI_VF_MERGE_LOOP_BASE                                   \
+  switch (rvv_vsew()) {                                       \
+    case E16: {                                               \
+      uint16_t& vd = Rvvelt<uint16_t>(rvv_vd_reg(), i, true); \
+      uint16_t hs1 = get_fpu_register_Float16(rs1_reg());     \
+      uint16_t vs2 = Rvvelt<uint16_t>(rvv_vs2_reg(), i);      \
+      BODY16;                                                 \
+      break;                                                  \
+    }                                                         \
+    case E32: {                                               \
+      int32_t& vd = Rvvelt<int32_t>(rvv_vd_reg(), i, true);   \
+      int32_t fs1 = base::bit_cast<int32_t>(                  \
+          get_fpu_register_Float32(rs1_reg()).get_bits());    \
+      int32_t vs2 = Rvvelt<int32_t>(rvv_vs2_reg(), i);        \
+      BODY32;                                                 \
+      break;                                                  \
+    }                                                         \
+    case E64: {                                               \
+      int64_t& vd = Rvvelt<int64_t>(rvv_vd_reg(), i, true);   \
+      int64_t fs1 = base::bit_cast<int64_t>(                  \
+          get_fpu_register_Float64(rs1_reg()).get_bits());    \
+      int64_t vs2 = Rvvelt<int64_t>(rvv_vs2_reg(), i);        \
+      BODY64;                                                 \
+      break;                                                  \
+    }                                                         \
+    default:                                                  \
+      UNREACHABLE();                                          \
+      break;                                                  \
+  }                                                           \
+  RVV_VI_VF_MERGE_LOOP_END                                    \
   rvv_trace_vd();
 
 #define RVV_VI_VFP_LOOP_BASE                           \
@@ -880,89 +891,100 @@ struct type_sew_t<128> {
   }                         \
   set_rvv_vstart(0);
 
-#define RVV_VI_VFP_VF_LOOP(BODY16, BODY32, BODY64)        \
-  RVV_VI_VFP_LOOP_BASE                                    \
-  switch (rvv_vsew()) {                                   \
-    case E16: {                                           \
-      UNIMPLEMENTED();                                    \
-    }                                                     \
-    case E32: {                                           \
-      float& vd = Rvvelt<float>(rvv_vd_reg(), i, true);   \
-      float fs1 = get_fpu_register_float(rs1_reg());      \
-      float vs2 = Rvvelt<float>(rvv_vs2_reg(), i);        \
-      BODY32;                                             \
-      break;                                              \
-    }                                                     \
-    case E64: {                                           \
-      double& vd = Rvvelt<double>(rvv_vd_reg(), i, true); \
-      double fs1 = get_fpu_register_double(rs1_reg());    \
-      double vs2 = Rvvelt<double>(rvv_vs2_reg(), i);      \
-      BODY64;                                             \
-      break;                                              \
-    }                                                     \
-    default:                                              \
-      UNREACHABLE();                                      \
-      break;                                              \
-  }                                                       \
-  RVV_VI_VFP_LOOP_END                                     \
+#define RVV_VI_VFP_VF_LOOP(BODY16, BODY32, BODY64)                         \
+  RVV_VI_VFP_LOOP_BASE                                                     \
+  switch (rvv_vsew()) {                                                    \
+    case E16: {                                                            \
+      uint16_t& vd = Rvvelt<uint16_t>(rvv_vd_reg(), i, true);              \
+      Float16 hs1 = Float16::FromBits(hrs1());                             \
+      Float16 vs2 = Float16::FromBits(Rvvelt<uint16_t>(rvv_vs2_reg(), i)); \
+      BODY16;                                                              \
+      break;                                                               \
+    }                                                                      \
+    case E32: {                                                            \
+      float& vd = Rvvelt<float>(rvv_vd_reg(), i, true);                    \
+      float fs1 = get_fpu_register_float(rs1_reg());                       \
+      float vs2 = Rvvelt<float>(rvv_vs2_reg(), i);                         \
+      BODY32;                                                              \
+      break;                                                               \
+    }                                                                      \
+    case E64: {                                                            \
+      double& vd = Rvvelt<double>(rvv_vd_reg(), i, true);                  \
+      double fs1 = get_fpu_register_double(rs1_reg());                     \
+      double vs2 = Rvvelt<double>(rvv_vs2_reg(), i);                       \
+      BODY64;                                                              \
+      break;                                                               \
+    }                                                                      \
+    default:                                                               \
+      UNREACHABLE();                                                       \
+      break;                                                               \
+  }                                                                        \
+  RVV_VI_VFP_LOOP_END                                                      \
   rvv_trace_vd();
 
-#define RVV_VI_VFP_VV_LOOP(BODY16, BODY32, BODY64)        \
-  RVV_VI_VFP_LOOP_BASE                                    \
-  switch (rvv_vsew()) {                                   \
-    case E16: {                                           \
-      UNIMPLEMENTED();                                    \
-      break;                                              \
-    }                                                     \
-    case E32: {                                           \
-      float& vd = Rvvelt<float>(rvv_vd_reg(), i, true);   \
-      float vs1 = Rvvelt<float>(rvv_vs1_reg(), i);        \
-      float vs2 = Rvvelt<float>(rvv_vs2_reg(), i);        \
-      BODY32;                                             \
-      break;                                              \
-    }                                                     \
-    case E64: {                                           \
-      double& vd = Rvvelt<double>(rvv_vd_reg(), i, true); \
-      double vs1 = Rvvelt<double>(rvv_vs1_reg(), i);      \
-      double vs2 = Rvvelt<double>(rvv_vs2_reg(), i);      \
-      BODY64;                                             \
-      break;                                              \
-    }                                                     \
-    default:                                              \
-      require(0);                                         \
-      break;                                              \
-  }                                                       \
-  RVV_VI_VFP_LOOP_END                                     \
+#define RVV_VI_VFP_VV_LOOP(BODY16, BODY32, BODY64)                         \
+  RVV_VI_VFP_LOOP_BASE                                                     \
+  switch (rvv_vsew()) {                                                    \
+    case E16: {                                                            \
+      uint16_t& vd = Rvvelt<uint16_t>(rvv_vd_reg(), i, true);              \
+      Float16 vs1 = Float16::FromBits(Rvvelt<uint16_t>(rvv_vs1_reg(), i)); \
+      Float16 vs2 = Float16::FromBits(Rvvelt<uint16_t>(rvv_vs2_reg(), i)); \
+      BODY16;                                                              \
+      break;                                                               \
+    }                                                                      \
+    case E32: {                                                            \
+      float& vd = Rvvelt<float>(rvv_vd_reg(), i, true);                    \
+      float vs1 = Rvvelt<float>(rvv_vs1_reg(), i);                         \
+      float vs2 = Rvvelt<float>(rvv_vs2_reg(), i);                         \
+      BODY32;                                                              \
+      break;                                                               \
+    }                                                                      \
+    case E64: {                                                            \
+      double& vd = Rvvelt<double>(rvv_vd_reg(), i, true);                  \
+      double vs1 = Rvvelt<double>(rvv_vs1_reg(), i);                       \
+      double vs2 = Rvvelt<double>(rvv_vs2_reg(), i);                       \
+      BODY64;                                                              \
+      break;                                                               \
+    }                                                                      \
+    default:                                                               \
+      require(0);                                                          \
+      break;                                                               \
+  }                                                                        \
+  RVV_VI_VFP_LOOP_END                                                      \
   rvv_trace_vd();
 
-#define RVV_VFSGNJ_VV_VF_LOOP(BODY16, BODY32, BODY64)         \
-  RVV_VI_VFP_LOOP_BASE                                        \
-  switch (rvv_vsew()) {                                       \
-    case E16: {                                               \
-      UNIMPLEMENTED();                                        \
-      break;                                                  \
-    }                                                         \
-    case E32: {                                               \
-      uint32_t& vd = Rvvelt<uint32_t>(rvv_vd_reg(), i, true); \
-      uint32_t vs1 = Rvvelt<uint32_t>(rvv_vs1_reg(), i);      \
-      uint32_t vs2 = Rvvelt<uint32_t>(rvv_vs2_reg(), i);      \
-      Float32 fs1 = get_fpu_register_Float32(rs1_reg());      \
-      BODY32;                                                 \
-      break;                                                  \
-    }                                                         \
-    case E64: {                                               \
-      uint64_t& vd = Rvvelt<uint64_t>(rvv_vd_reg(), i, true); \
-      uint64_t vs1 = Rvvelt<uint64_t>(rvv_vs1_reg(), i);      \
-      uint64_t vs2 = Rvvelt<uint64_t>(rvv_vs2_reg(), i);      \
-      Float64 fs1 = get_fpu_register_Float64(rs1_reg());      \
-      BODY64;                                                 \
-      break;                                                  \
-    }                                                         \
-    default:                                                  \
-      require(0);                                             \
-      break;                                                  \
-  }                                                           \
-  RVV_VI_VFP_LOOP_END                                         \
+#define RVV_VFSGNJ_VV_VF_LOOP(BODY16, BODY32, BODY64)                      \
+  RVV_VI_VFP_LOOP_BASE                                                     \
+  switch (rvv_vsew()) {                                                    \
+    case E16: {                                                            \
+      uint16_t& vd = Rvvelt<uint16_t>(rvv_vd_reg(), i, true);              \
+      Float16 vs1 = Float16::FromBits(Rvvelt<uint16_t>(rvv_vs1_reg(), i)); \
+      Float16 vs2 = Float16::FromBits(Rvvelt<uint16_t>(rvv_vs2_reg(), i)); \
+      Float16 hs1 = hrs1_boxed();                                          \
+      BODY16;                                                              \
+      break;                                                               \
+    }                                                                      \
+    case E32: {                                                            \
+      uint32_t& vd = Rvvelt<uint32_t>(rvv_vd_reg(), i, true);              \
+      uint32_t vs1 = Rvvelt<uint32_t>(rvv_vs1_reg(), i);                   \
+      uint32_t vs2 = Rvvelt<uint32_t>(rvv_vs2_reg(), i);                   \
+      Float32 fs1 = get_fpu_register_Float32(rs1_reg());                   \
+      BODY32;                                                              \
+      break;                                                               \
+    }                                                                      \
+    case E64: {                                                            \
+      uint64_t& vd = Rvvelt<uint64_t>(rvv_vd_reg(), i, true);              \
+      uint64_t vs1 = Rvvelt<uint64_t>(rvv_vs1_reg(), i);                   \
+      uint64_t vs2 = Rvvelt<uint64_t>(rvv_vs2_reg(), i);                   \
+      Float64 fs1 = get_fpu_register_Float64(rs1_reg());                   \
+      BODY64;                                                              \
+      break;                                                               \
+    }                                                                      \
+    default:                                                               \
+      require(0);                                                          \
+      break;                                                               \
+  }                                                                        \
+  RVV_VI_VFP_LOOP_END                                                      \
   rvv_trace_vd();
 
 #define RVV_VI_VFP_VF_LOOP_WIDEN(BODY32, vs2_is_widen)                         \
@@ -1134,28 +1156,31 @@ struct type_sew_t<128> {
   set_rvv_vstart(0);                                    \
   rvv_trace_vd();
 
-#define RVV_VI_VFP_LOOP_CMP(BODY16, BODY32, BODY64, is_vs1) \
-  RVV_VI_VFP_LOOP_CMP_BASE                                  \
-  switch (rvv_vsew()) {                                     \
-    case E16: {                                             \
-      UNIMPLEMENTED();                                      \
-    }                                                       \
-    case E32: {                                             \
-      float vs2 = Rvvelt<float>(rvv_vs2_reg(), i);          \
-      float vs1 = Rvvelt<float>(rvv_vs1_reg(), i);          \
-      BODY32;                                               \
-      break;                                                \
-    }                                                       \
-    case E64: {                                             \
-      double vs2 = Rvvelt<double>(rvv_vs2_reg(), i);        \
-      double vs1 = Rvvelt<double>(rvv_vs1_reg(), i);        \
-      BODY64;                                               \
-      break;                                                \
-    }                                                       \
-    default:                                                \
-      UNREACHABLE();                                        \
-      break;                                                \
-  }                                                         \
+#define RVV_VI_VFP_LOOP_CMP(BODY16, BODY32, BODY64, is_vs1)                \
+  RVV_VI_VFP_LOOP_CMP_BASE                                                 \
+  switch (rvv_vsew()) {                                                    \
+    case E16: {                                                            \
+      Float16 vs2 = Float16::FromBits(Rvvelt<uint16_t>(rvv_vs2_reg(), i)); \
+      Float16 vs1 = Float16::FromBits(Rvvelt<uint16_t>(rvv_vs1_reg(), i)); \
+      BODY16;                                                              \
+      break;                                                               \
+    }                                                                      \
+    case E32: {                                                            \
+      float vs2 = Rvvelt<float>(rvv_vs2_reg(), i);                         \
+      float vs1 = Rvvelt<float>(rvv_vs1_reg(), i);                         \
+      BODY32;                                                              \
+      break;                                                               \
+    }                                                                      \
+    case E64: {                                                            \
+      double vs2 = Rvvelt<double>(rvv_vs2_reg(), i);                       \
+      double vs1 = Rvvelt<double>(rvv_vs1_reg(), i);                       \
+      BODY64;                                                              \
+      break;                                                               \
+    }                                                                      \
+    default:                                                               \
+      UNREACHABLE();                                                       \
+      break;                                                               \
+  }                                                                        \
   RVV_VI_VFP_LOOP_CMP_END
 
 // reduction loop - signed
@@ -1298,7 +1323,7 @@ struct type_sew_t<128> {
   set_rvv_vstart(0);                                                           \
   if (v8_flags.trace_sim) {                                                    \
     int trace_offset = snprintf_vreg(rvv_vd_reg());                            \
-    SNPrintF(trace_buf_.SubVector(trace_offset, trace_buf_.length()),          \
+    SNPrintF(trace_buf_.SubVector(trace_offset, trace_buf_.size()),            \
              "    (%" PRId64 ")    vlen:%" PRId64 " <-- [addr: %" REGIx_FORMAT \
              "]",                                                              \
              icount_, rvv_vlen(), (sreg_t)(get_register(rs1_reg())));          \
@@ -1325,7 +1350,7 @@ struct type_sew_t<128> {
   set_rvv_vstart(0);                                                           \
   if (v8_flags.trace_sim) {                                                    \
     int trace_offset = snprintf_vreg(rvv_vd_reg());                            \
-    SNPrintF(trace_buf_.SubVector(trace_offset, trace_buf_.length()),          \
+    SNPrintF(trace_buf_.SubVector(trace_offset, trace_buf_.size()),            \
              "    (%" PRId64 ")    vlen:%" PRId64 " --> [addr: %" REGIx_FORMAT \
              "]",                                                              \
              icount_, rvv_vlen(), (sreg_t)(get_register(rs1_reg())));          \
@@ -1561,6 +1586,82 @@ inline Dst unsigned_saturation(Src v, uint n) {
 
 namespace v8 {
 namespace internal {
+
+// FLI.S immediate values lookup table (Zfa extension).
+// Each entry is a 32-bit IEEE 754 single-precision representation.
+// Index corresponds to imm5 value (0-31).
+static constexpr uint32_t kFLISImm[32] = {
+    0xbf800000,  /* -1.0 */
+    0x00800000,  /* minimum positive normal */
+    0x37800000,  /* 1.0 * 2^-16 */
+    0x38000000,  /* 1.0 * 2^-15 */
+    0x3b800000,  /* 1.0 * 2^-8  */
+    0x3c000000,  /* 1.0 * 2^-7  */
+    0x3d800000,  /* 1.0 * 2^-4  */
+    0x3e000000,  /* 1.0 * 2^-3  */
+    0x3e800000,  /* 0.25 */
+    0x3ea00000,  /* 0.3125 */
+    0x3ec00000,  /* 0.375 */
+    0x3ee00000,  /* 0.4375 */
+    0x3f000000,  /* 0.5 */
+    0x3f200000,  /* 0.625 */
+    0x3f400000,  /* 0.75 */
+    0x3f600000,  /* 0.875 */
+    0x3f800000,  /* 1.0 */
+    0x3fa00000,  /* 1.25 */
+    0x3fc00000,  /* 1.5 */
+    0x3fe00000,  /* 1.75 */
+    0x40000000,  /* 2.0 */
+    0x40200000,  /* 2.5 */
+    0x40400000,  /* 3 */
+    0x40800000,  /* 4 */
+    0x41000000,  /* 8 */
+    0x41800000,  /* 16 */
+    0x43000000,  /* 2^7 */
+    0x43800000,  /* 2^8 */
+    0x47000000,  /* 2^15 */
+    0x47800000,  /* 2^16 */
+    0x7f800000,  /* +inf */
+    0x7fc00000,  // imm5=31: Canonical NaN
+};
+
+// FLI.D immediate values lookup table (Zfa extension).
+// Each entry is a 64-bit IEEE 754 double-precision representation.
+// Index corresponds to imm5 value (0-31).
+static constexpr uint64_t kFLIDImm[32] = {
+    0xbff0000000000000ull,  /* -1.0 */
+    0x0010000000000000ull,  /* minimum positive normal */
+    0x3ef0000000000000ull,  /* 1.0 * 2^-16 */
+    0x3f00000000000000ull,  /* 1.0 * 2^-15 */
+    0x3f70000000000000ull,  /* 1.0 * 2^-8  */
+    0x3f80000000000000ull,  /* 1.0 * 2^-7  */
+    0x3fb0000000000000ull,  /* 1.0 * 2^-4  */
+    0x3fc0000000000000ull,  /* 1.0 * 2^-3  */
+    0x3fd0000000000000ull,  /* 0.25 */
+    0x3fd4000000000000ull,  /* 0.3125 */
+    0x3fd8000000000000ull,  /* 0.375 */
+    0x3fdc000000000000ull,  /* 0.4375 */
+    0x3fe0000000000000ull,  /* 0.5 */
+    0x3fe4000000000000ull,  /* 0.625 */
+    0x3fe8000000000000ull,  /* 0.75 */
+    0x3fec000000000000ull,  /* 0.875 */
+    0x3ff0000000000000ull,  /* 1.0 */
+    0x3ff4000000000000ull,  /* 1.25 */
+    0x3ff8000000000000ull,  /* 1.5 */
+    0x3ffc000000000000ull,  /* 1.75 */
+    0x4000000000000000ull,  /* 2.0 */
+    0x4004000000000000ull,  /* 2.5 */
+    0x4008000000000000ull,  /* 3 */
+    0x4010000000000000ull,  /* 4 */
+    0x4020000000000000ull,  /* 8 */
+    0x4030000000000000ull,  /* 16 */
+    0x4060000000000000ull,  /* 2^7 */
+    0x4070000000000000ull,  /* 2^8 */
+    0x40e0000000000000ull,  /* 2^15 */
+    0x40f0000000000000ull,  /* 2^16 */
+    0x7ff0000000000000ull,  /* +inf */
+    0x7ff8000000000000ULL,  // imm5=31: Canonical NaN
+};
 
 DEFINE_LAZY_LEAKY_OBJECT_GETTER(Simulator::GlobalMonitor,
                                 Simulator::GlobalMonitor::Get)
@@ -2497,23 +2598,28 @@ void Simulator::set_fpu_register_hi_word(int fpureg, int32_t value) {
   *phiword = value;
 }
 
-void Simulator::set_fpu_register_float(int fpureg, float value) {
+void Simulator::set_fpu_register(int fpureg, uint16_t value) {
+  DCHECK((fpureg >= 0) && (fpureg < kNumFPURegisters));
+  FPUregisters_[fpureg] = box_float16(value);
+}
+
+void Simulator::set_fpu_register(int fpureg, float value) {
   DCHECK((fpureg >= 0) && (fpureg < kNumFPURegisters));
   FPUregisters_[fpureg] = box_float(value);
 }
 
-void Simulator::set_fpu_register_float(int fpureg, Float32 value) {
+void Simulator::set_fpu_register(int fpureg, Float32 value) {
   DCHECK((fpureg >= 0) && (fpureg < kNumFPURegisters));
   Float64 t = Float64::FromBits(box_float(value.get_bits()));
   memcpy(&FPUregisters_[fpureg], &t, 8);
 }
 
-void Simulator::set_fpu_register_double(int fpureg, double value) {
+void Simulator::set_fpu_register(int fpureg, double value) {
   DCHECK((fpureg >= 0) && (fpureg < kNumFPURegisters));
   FPUregisters_[fpureg] = base::bit_cast<int64_t>(value);
 }
 
-void Simulator::set_fpu_register_double(int fpureg, Float64 value) {
+void Simulator::set_fpu_register(int fpureg, Float64 value) {
   DCHECK((fpureg >= 0) && (fpureg < kNumFPURegisters));
   memcpy(&FPUregisters_[fpureg], &value, 8);
 }
@@ -2570,6 +2676,15 @@ float Simulator::get_fpu_register_float(int fpureg) const {
 
 // Fix NaN boxing error according to
 // https://github.com/riscv/riscv-isa-manual/blob/main/src/d-st-ext.adoc#nan-boxing-of-narrower-values"
+uint16_t Simulator::get_fpu_register_Float16(int fpureg,
+                                             bool check_nanbox) const {
+  DCHECK((fpureg >= 0) && (fpureg < kNumFPURegisters));
+  if (check_nanbox && !is_boxed_float16(FPUregisters_[fpureg])) {
+    return uint16_t(0x7e00);
+  }
+  return uint16_t(FPUregisters_[fpureg] & 0xFFFF);
+}
+
 Float32 Simulator::get_fpu_register_Float32(int fpureg,
                                             bool check_nanbox) const {
   DCHECK((fpureg >= 0) && (fpureg < kNumFPURegisters));
@@ -2607,7 +2722,7 @@ void Simulator::GetFpArgs(double* x, double* y, int32_t* z) {
 
 // The return value is in fa0.
 void Simulator::SetFpResult(const double& result) {
-  set_fpu_register_double(fa0, result);
+  set_fpu_register(fa0, result);
 }
 
 // helper functions to read/write/set/clear CRC values/bits
@@ -2718,6 +2833,30 @@ T Simulator::FMaxMinHelper(T a, T b, MaxMinKind kind) {
   }
 
   return result;
+}
+
+// IEEE 754-2019 minimum/maximum for Zfa extension (fminm/fmaxm).
+// Like Fmax/Fmin except that if either input is NaN, the result
+// is the canonical NaN.
+template <typename T>
+T Simulator::FMaxMinMHelper(T a, T b, MaxMinKind kind) {
+  // IEEE 754-2019: if either operand is NaN, return canonical NaN
+  if (std::isnan(a) || std::isnan(b)) {
+    return std::numeric_limits<T>::quiet_NaN();
+  }
+
+  // Handle -0.0 vs +0.0 case
+  if (a == b) {
+    // For min: return -0.0 (the one with sign bit set)
+    // For max: return +0.0 (the one without sign bit set)
+    if (kind == MaxMinKind::kMax) {
+      return std::signbit(b) ? a : b;
+    } else {
+      return std::signbit(b) ? b : a;
+    }
+  }
+
+  return (kind == MaxMinKind::kMax) ? fmax(a, b) : fmin(a, b);
 }
 
 // Raw access to the PC register.
@@ -2971,6 +3110,7 @@ void Simulator::TraceMemWrDouble(sreg_t addr, double value) {
 
 bool Simulator::ProbeMemory(uintptr_t address, uintptr_t access_size) {
 #if V8_ENABLE_WEBASSEMBLY && V8_TRAP_HANDLER_SUPPORTED
+  DCHECK_GT(access_size, 0);
   uintptr_t last_accessed_byte = address + access_size - 1;
   uintptr_t current_pc = registers_[pc];
   uintptr_t landing_pad =
@@ -2989,6 +3129,7 @@ bool Simulator::ProbeMemory(uintptr_t address, uintptr_t access_size) {
 // load/store (e.g., trapping)
 template <typename T>
 T Simulator::ReadMem(sreg_t addr, Instruction* instr) {
+  CheckMemoryAccess(addr, get_register(sp));
   if (addr >= 0 && addr < 0x400) {
     // This has to be a nullptr-dereference, drop into debugger.
     PrintF("Memory read from bad address: 0x%08" REGIx_FORMAT
@@ -2998,7 +3139,7 @@ T Simulator::ReadMem(sreg_t addr, Instruction* instr) {
   }
 #if !defined(V8_COMPRESS_POINTERS) && defined(RISCV_HAS_NO_UNALIGNED)
   // check for natural alignment
-  if (!v8_flags.riscv_c_extension && ((addr & (sizeof(T) - 1)) != 0)) {
+  if (!CpuFeatures::IsSupported(RVC) && ((addr & (sizeof(T) - 1)) != 0)) {
     PrintF("Unaligned read at 0x%08" REGIx_FORMAT " , pc=0x%08" V8PRIxPTR "\n",
            addr, reinterpret_cast<intptr_t>(instr));
     DieOrDebug();
@@ -3011,6 +3152,7 @@ T Simulator::ReadMem(sreg_t addr, Instruction* instr) {
 
 template <typename T>
 void Simulator::WriteMem(sreg_t addr, T value, Instruction* instr) {
+  CheckMemoryAccess(addr, get_register(sp));
   if (addr >= 0 && addr < 0x400) {
     // This has to be a nullptr-dereference, drop into debugger.
     PrintF("Memory write to bad address: 0x%08" REGIx_FORMAT
@@ -3020,7 +3162,7 @@ void Simulator::WriteMem(sreg_t addr, T value, Instruction* instr) {
   }
 #if !defined(V8_COMPRESS_POINTERS) && defined(RISCV_HAS_NO_UNALIGNED)
   // check for natural alignment
-  if (!v8_flags.riscv_c_extension && ((addr & (sizeof(T) - 1)) != 0)) {
+  if (!CpuFeatures::IsSupported(RVC) && ((addr & (sizeof(T) - 1)) != 0)) {
     PrintF("Unaligned write at 0x%08" REGIx_FORMAT " , pc=0x%08" V8PRIxPTR "\n",
            addr, reinterpret_cast<intptr_t>(instr));
     DieOrDebug();
@@ -3046,7 +3188,7 @@ void Simulator::WriteMem(sreg_t addr, Float32 value, Instruction* instr) {
   }
 #if !defined(V8_COMPRESS_POINTERS) && defined(RISCV_HAS_NO_UNALIGNED)
   // check for natural alignment
-  if (!v8_flags.riscv_c_extension && ((addr & (sizeof(T) - 1)) != 0)) {
+  if (!CpuFeatures::IsSupported(RVC) && ((addr & (sizeof(T) - 1)) != 0)) {
     PrintF("Unaligned write at 0x%08" REGIx_FORMAT " , pc=0x%08" V8PRIxPTR "\n",
            addr, reinterpret_cast<intptr_t>(instr));
     DieOrDebug();
@@ -3068,7 +3210,7 @@ void Simulator::WriteMem(sreg_t addr, Float64 value, Instruction* instr) {
   }
 #if !defined(V8_COMPRESS_POINTERS) && defined(RISCV_HAS_NO_UNALIGNED)
   // check for natural alignment
-  if (!v8_flags.riscv_c_extension && ((addr & (sizeof(T) - 1)) != 0)) {
+  if (!CpuFeatures::IsSupported(RVC) && ((addr & (sizeof(T) - 1)) != 0)) {
     PrintF("Unaligned write at 0x%08" REGIx_FORMAT " , pc=0x%08" V8PRIxPTR "\n",
            addr, reinterpret_cast<intptr_t>(instr));
     DieOrDebug();
@@ -3155,8 +3297,14 @@ using SimulatorRuntimeIntFPCall = int32_t (*)(double darg0);
 // (refer to InvocationCallback in v8.h).
 using SimulatorRuntimeDirectApiCall = void (*)(sreg_t arg0);
 
-// This signature supports direct call to accessor getter callback.
-using SimulatorRuntimeDirectGetterCall = void (*)(sreg_t arg0, sreg_t arg1);
+// This signature supports direct call to accessor/interceptor getter callback.
+using SimulatorRuntimeDirectGetterCall = int64_t (*)(int64_t arg0,
+                                                     int64_t arg1);
+
+// This signature supports direct call to accessor/interceptor setter callback.
+using SimulatorRuntimeDirectSetterCall = intptr_t (*)(intptr_t arg0,
+                                                      intptr_t arg1,
+                                                      intptr_t arg2);
 
 // Define four args for future flexibility; at the time of this writing only
 // one is ever used.
@@ -3267,9 +3415,9 @@ void Simulator::CallAnyCTypeFunction(Address target_address,
 #undef GEN_MAX_PARAM_COUNT
   if (signature.IsReturnFloat()) {
     if (signature.IsReturnFloat64()) {
-      set_fpu_register_double(FP_RETURN_REGISTER, result.double_value);
+      set_fpu_register(FP_RETURN_REGISTER, result.double_value);
     } else {
-      set_fpu_register_float(FP_RETURN_REGISTER, result.float_value);
+      set_fpu_register(FP_RETURN_REGISTER, result.float_value);
     }
   } else {
     set_register(RETURN_REGISTER, result.int64_value);
@@ -3472,15 +3620,39 @@ void Simulator::SoftwareInterrupt() {
     } else if (redirection->type() == ExternalReference::DIRECT_GETTER_CALL) {
       // See callers of MacroAssembler::CallApiFunctionAndReturn for
       // explanation of register usage.
-      // void f(v8::Local<String> property, v8::PropertyCallbackInfo& info)
+      // void f(v8::Local<v8::Name>, v8::PropertyCallbackInfo&)
+      // v8::Intercepted f(v8::Local<v8::Name>, v8::PropertyCallbackInfo&)
       if (v8_flags.trace_sim) {
+        PrintF("Type: DIRECT_GETTER_CALL\n");
         PrintF("Call to host function at %p args %08" REGIx_FORMAT
                "  %08" REGIx_FORMAT " \n",
                reinterpret_cast<void*>(external), arg0, arg1);
       }
       SimulatorRuntimeDirectGetterCall target =
           reinterpret_cast<SimulatorRuntimeDirectGetterCall>(external);
-      target(arg0, arg1);
+      int64_t result = target(arg0, arg1);
+      if (v8_flags.trace_sim) {
+        PrintF("Returned %ld\n", result);
+      }
+      set_register(a0, result);
+    } else if (redirection->type() == ExternalReference::DIRECT_SETTER_CALL) {
+      // void f(v8::Local<Name>, v8::Local<v8::Value>,
+      //        v8::PropertyCallbackInfo&)
+      // v8::Intercepted f(v8::Local<Name>, v8::Local<v8::Value>,
+      //                   v8::PropertyCallbackInfo&)
+      if (v8_flags.trace_sim) {
+        PrintF("Type: DIRECT_GETTER_CALL\n");
+        PrintF("Call to host function at %p args %08" REGIx_FORMAT
+               "  %08" REGIx_FORMAT "  %08" REGIx_FORMAT " \n",
+               reinterpret_cast<void*>(external), arg0, arg1, arg2);
+      }
+      SimulatorRuntimeDirectSetterCall target =
+          reinterpret_cast<SimulatorRuntimeDirectSetterCall>(external);
+      intptr_t iresult = target(arg0, arg1, arg2);
+      if (v8_flags.trace_sim) {
+        PrintF("Returned %ld\n", iresult);
+      }
+      set_register(a0, iresult);
     } else {
 #ifdef V8_TARGET_ARCH_RISCV64
       DCHECK(redirection->type() == ExternalReference::BUILTIN_CALL ||
@@ -3990,6 +4162,33 @@ void Simulator::DecodeRVRType() {
   }
 }
 
+#pragma STDC FENV_ACCESS ON
+
+struct ScopedRoundingMode {
+  int old_mode;
+  int get_cfp_roud_mode(uint32_t frm) {
+    switch (frm) {
+      case RNE:
+        return FE_TONEAREST;
+      case RTZ:
+        return FE_TOWARDZERO;
+      case RDN:
+        return FE_UPWARD;
+      case RUP:
+        return FE_DOWNWARD;
+      case RMM:
+        return FE_TONEAREST;
+      default:
+        UNREACHABLE();
+    }
+  }
+  explicit ScopedRoundingMode(uint32_t new_mode) {
+    old_mode = std::fegetround();
+    std::fesetround(get_cfp_roud_mode(new_mode));
+  }
+  ~ScopedRoundingMode() { std::fesetround(old_mode); }
+};
+
 float Simulator::RoundF2FHelper(float input_val, int rmode) {
   if (rmode == DYN) rmode = get_dynamic_rounding_mode();
 
@@ -4028,6 +4227,9 @@ float Simulator::RoundF2FHelper(float input_val, int rmode) {
       UNREACHABLE();
   }
 
+  if (std::isnan(input_val) || std::isnan(rounded)) {
+    return std::numeric_limits<float>::quiet_NaN();
+  }
   return rounded;
 }
 
@@ -4067,6 +4269,9 @@ double Simulator::RoundF2FHelper(double input_val, int rmode) {
       break;
     default:
       UNREACHABLE();
+  }
+  if (std::isnan(input_val) || std::isnan(rounded)) {
+    return std::numeric_limits<double>::quiet_NaN();
   }
   return rounded;
 }
@@ -4589,7 +4794,7 @@ void Simulator::DecodeRVRFPType() {
       }
       break;
     }
-    case RO_FMIN_S: {  // RO_FMAX_S
+    case RO_FMIN_S: {  // RO_FMAX_S, RO_FMINM_S, RO_FMAXM_S
       switch (instr_.Funct3Value()) {
         case 0b000: {  // RO_FMIN_S
           set_frd(FMaxMinHelper(frs1(), frs2(), MaxMinKind::kMin));
@@ -4597,6 +4802,14 @@ void Simulator::DecodeRVRFPType() {
         }
         case 0b001: {  // RO_FMAX_S
           set_frd(FMaxMinHelper(frs1(), frs2(), MaxMinKind::kMax));
+          break;
+        }
+        case 0b010: {  // RO_FMINM_S (Zfa extension)
+          set_frd(FMaxMinMHelper(frs1(), frs2(), MaxMinKind::kMin));
+          break;
+        }
+        case 0b011: {  // RO_FMAXM_S (Zfa extension)
+          set_frd(FMaxMinMHelper(frs1(), frs2(), MaxMinKind::kMax));
           break;
         }
         default: {
@@ -4633,6 +4846,25 @@ void Simulator::DecodeRVRFPType() {
       }
       break;
     }
+    case RO_FMV_X_H: {  // RO_FCLASS_H
+      if (instr_.Rs2Value() != 0b00000) {
+        UNSUPPORTED();
+      }
+      switch (instr_.Funct3Value()) {
+        case 0b000: {  // RO_FMV_X_H
+          set_rd(sext16(get_fpu_register_Float16(rs1_reg())));
+          break;
+        }
+        case 0b001: {  // RO_FCLASS_H
+          set_rd(FclassHelper(hrs1_boxed().ToFloat32()));
+          break;
+        }
+        default: {
+          UNSUPPORTED();
+        }
+      }
+      break;
+    }
     case RO_FMV_X_W: {  // RO_FCLASS_S
       switch (instr_.Funct3Value()) {
         case 0b000: {
@@ -4654,7 +4886,7 @@ void Simulator::DecodeRVRFPType() {
       }
       break;
     }
-    case RO_FLE_S: {  // RO_FEQ_S RO_FLT_S RO_FLE_S
+    case RO_FLE_S: {  // RO_FEQ_S RO_FLT_S RO_FLE_S RO_FLEQ_S RO_FLTQ_S
       switch (instr_.Funct3Value()) {
         case 0b010: {  // RO_FEQ_S
           set_rd(CompareFHelper(frs1(), frs2(), EQ));
@@ -4666,6 +4898,28 @@ void Simulator::DecodeRVRFPType() {
         }
         case 0b000: {  // RO_FLE_S
           set_rd(CompareFHelper(frs1(), frs2(), LE));
+          break;
+        }
+        case 0b100: {  // RO_FLEQ_S (Zfa extension) - quiet LE comparison
+          // fleq.s: Quiet less-than-or-equal comparison
+          // Does NOT raise invalid exception for NaN (unlike fle.s)
+          // Returns false if either operand is NaN
+          if (std::isnan(frs1()) || std::isnan(frs2())) {
+            set_rd(0);
+          } else {
+            set_rd(frs1() <= frs2() ? 1 : 0);
+          }
+          break;
+        }
+        case 0b101: {  // RO_FLTQ_S (Zfa extension) - quiet LT comparison
+          // fltq.s: Quiet less-than comparison
+          // Does NOT raise invalid exception for NaN (unlike flt.s)
+          // Returns false if either operand is NaN
+          if (std::isnan(frs1()) || std::isnan(frs2())) {
+            set_rd(0);
+          } else {
+            set_rd(frs1() < frs2() ? 1 : 0);
+          }
           break;
         }
         default: {
@@ -4700,11 +4954,211 @@ void Simulator::DecodeRVRFPType() {
       }
       break;
     }
-    case RO_FMV_W_X: {
+    case RO_FCVT_H_W: {  // RO_FCVT_H_WU , 64F RO_FCVT_H_L RO_FCVT_H_LU
+      switch (instr_.Rs2Value()) {
+        case 0b00000:  // RO_FCVT_H_W
+          set_hrd(static_cast<float>((int32_t)rs1()));
+          break;
+        case 0b00001:  // RO_FCVT_H_WU
+          set_hrd(static_cast<float>((uint32_t)rs1()));
+          break;
+#ifdef V8_TARGET_ARCH_64_BIT
+        case 0b00010:  // RO_FCVT_H_L
+          set_hrd(static_cast<float>((int64_t)rs1()));
+          break;
+        case 0b00011:  // RO_FCVT_H_LU
+          set_hrd(static_cast<float>((uint64_t)rs1()));
+          break;
+#endif /* V8_TARGET_ARCH_64_BIT */
+        default: {
+          UNSUPPORTED_RISCV();
+        }
+      }
+      break;
+    }
+    case RO_FMV_H_X: {
       if (instr_.Funct3Value() == 0b000) {
         // since FMV preserves source bit-pattern, no need to canonize
-        Float32 result = Float32::FromBits((uint32_t)rs1());
-        set_frd(result);
+        Float16 result = Float16::FromBits((uint16_t)rs1());
+        set_hrd(result);
+      } else {
+        UNSUPPORTED();
+      }
+      break;
+    }
+    // TODO(riscv): Add macro for RISCV ZFH extension
+    case RO_FADD_H: {
+      // TODO(riscv): use rm value (round mode)
+      auto fn = [this](float frs1, float frs2) {
+        if (is_invalid_fadd(frs1, frs2)) {
+          this->set_fflags(kInvalidOperation);
+          return std::numeric_limits<float>::quiet_NaN();
+        } else {
+          return frs1 + frs2;
+        }
+      };
+      Float16 result = CanonicalizeFPUOp2<Float16>(fn);
+      set_hrd(result);
+      break;
+    }
+    case RO_FSUB_H: {
+      // TODO(riscv): use rm value (round mode)
+      auto fn = [this](float frs1, float frs2) {
+        if (is_invalid_fsub(frs1, frs2)) {
+          this->set_fflags(kInvalidOperation);
+          return std::numeric_limits<float>::quiet_NaN();
+        } else {
+          return frs1 - frs2;
+        }
+      };
+      set_hrd(CanonicalizeFPUOp2<Float16>(fn));
+      break;
+    }
+    case RO_FMUL_H: {
+      // TODO(riscv): use rm value (round mode)
+      auto fn = [this](float frs1, float frs2) {
+        if (is_invalid_fmul(frs1, frs2)) {
+          this->set_fflags(kInvalidOperation);
+          return std::numeric_limits<float>::quiet_NaN();
+        } else {
+          return frs1 * frs2;
+        }
+      };
+      set_hrd(CanonicalizeFPUOp2<Float16>(fn));
+      break;
+    }
+    case RO_FDIV_H: {
+      // TODO(riscv): use rm value (round mode)
+      auto fn = [this](float frs1, float frs2) {
+        if (is_invalid_fdiv(frs1, frs2)) {
+          this->set_fflags(kInvalidOperation);
+          return std::numeric_limits<float>::quiet_NaN();
+        } else if (frs2 == 0.0f) {
+          this->set_fflags(kDivideByZero);
+          return (std::signbit(frs1) == std::signbit(frs2)
+                      ? std::numeric_limits<float>::infinity()
+                      : -std::numeric_limits<float>::infinity());
+        } else {
+          return frs1 / frs2;
+        }
+      };
+      set_hrd(CanonicalizeFPUOp2<Float16>(fn));
+      break;
+    }
+    case RO_FSQRT_H: {
+      if (instr_.Rs2Value() == 0b00000) {
+        // TODO(riscv): use rm value (round mode)
+        auto fn = [this](float frs) {
+          if (is_invalid_fsqrt(frs)) {
+            this->set_fflags(kInvalidOperation);
+            return std::numeric_limits<float>::quiet_NaN();
+          } else {
+            return std::sqrt(frs);
+          }
+        };
+        set_hrd(CanonicalizeFPUOp1<Float16>(fn));
+      } else {
+        UNSUPPORTED();
+      }
+      break;
+    }
+    case RO_FSGNJ_H: {  // RO_FSGNJN_H  RO_FSGNJX_H
+      switch (instr_.Funct3Value()) {
+        case 0b000: {  // RO_FSGNJ_H
+          set_hrd(fsgnj16(hrs1_boxed(), hrs2_boxed(), false, false));
+          break;
+        }
+        case 0b001: {  // RO_FSGNJN_H
+          set_hrd(fsgnj16(hrs1_boxed(), hrs2_boxed(), true, false));
+          break;
+        }
+        case 0b010: {  // RO_FSGNJX_H
+          set_hrd(fsgnj16(hrs1_boxed(), hrs2_boxed(), false, true));
+          break;
+        }
+        default:
+          UNSUPPORTED_RISCV();
+      }
+      break;
+    }
+    case RO_FMIN_H: {  // RO_FMAX_H
+      switch (instr_.Funct3Value()) {
+        case 0b000: {  // RO_FMIN_H
+          set_hrd(Float16::FromFloat32(FMaxMinHelper(hrs1_boxed().ToFloat32(),
+                                                     hrs2_boxed().ToFloat32(),
+                                                     MaxMinKind::kMin)));
+          break;
+        }
+        case 0b001: {  // RO_FMAX_H
+          set_hrd(Float16::FromFloat32(FMaxMinHelper(hrs1_boxed().ToFloat32(),
+                                                     hrs2_boxed().ToFloat32(),
+                                                     MaxMinKind::kMax)));
+          break;
+        }
+        default:
+          UNSUPPORTED_RISCV();
+      }
+      break;
+    }
+    case RO_FCVT_W_H: {  // RO_FCVT_WU_H , 64F RO_FCVT_L_H RO_FCVT_LU_H
+      float original_val = hrs1_boxed().ToFloat32();
+      switch (instr_.Rs2Value()) {
+        case 0b00000: {  // RO_FCVT_W_H
+          set_rd(RoundF2IHelper<int32_t>(original_val, instr_.RoundMode()));
+          break;
+        }
+        case 0b00001: {  // RO_FCVT_WU_H
+          set_rd(sext32(
+              RoundF2IHelper<uint32_t>(original_val, instr_.RoundMode())));
+          break;
+        }
+#ifdef V8_TARGET_ARCH_RISCV64
+        case 0b00010: {  // RO_FCVT_L_H
+          set_rd(RoundF2IHelper<int64_t>(original_val, instr_.RoundMode()));
+          break;
+        }
+        case 0b00011: {  // RO_FCVT_LU_H
+          set_rd(RoundF2IHelper<uint64_t>(original_val, instr_.RoundMode()));
+          break;
+        }
+#endif /* V8_TARGET_ARCH_RISCV64 */
+        default:
+          UNSUPPORTED_RISCV();
+      }
+      break;
+    }
+    case RO_FLE_H: {  // RO_FEQ_H RO_FLT_H RO_FLE_H
+      switch (instr_.Funct3Value()) {
+        case 0b010:  // RO_FEQ_H
+          set_rd(CompareFHelper(Float16::FromBits(hrs1()).ToFloat32(),
+                                Float16::FromBits(hrs2()).ToFloat32(), EQ));
+          break;
+        case 0b001:  // RO_FLT_H
+          set_rd(CompareFHelper(Float16::FromBits(hrs1()).ToFloat32(),
+                                Float16::FromBits(hrs2()).ToFloat32(), LT));
+          break;
+        case 0b000:  // RO_FLE_H
+          set_rd(CompareFHelper(Float16::FromBits(hrs1()).ToFloat32(),
+                                Float16::FromBits(hrs2()).ToFloat32(), LE));
+          break;
+        default:
+          UNSUPPORTED_RISCV();
+      }
+      break;
+    }
+    case RO_FMV_W_X: {
+      if (instr_.Funct3Value() == 0b000) {
+        if (instr_.Rs2Value() == 0b00000) {
+          // fmv.w.x: since FMV preserves source bit-pattern, no need to
+          // canonize
+          Float32 result = Float32::FromBits((uint32_t)rs1());
+          set_frd(result);
+        } else if (instr_.Rs2Value() == 0b00001) {
+          // fli.s: Load floating-point immediate (Zfa extension)
+          set_frd(Float32::FromBits(kFLISImm[instr_.Rs1Value()]));
+        } else {
+          UNSUPPORTED();
+        }
       } else {
         UNSUPPORTED();
       }
@@ -4805,7 +5259,7 @@ void Simulator::DecodeRVRFPType() {
       }
       break;
     }
-    case RO_FMIN_D: {  // RO_FMAX_D
+    case RO_FMIN_D: {  // RO_FMAX_D, RO_FMINM_D, RO_FMAXM_D
       switch (instr_.Funct3Value()) {
         case 0b000: {  // RO_FMIN_D
           set_drd(FMaxMinHelper(drs1(), drs2(), MaxMinKind::kMin));
@@ -4813,6 +5267,14 @@ void Simulator::DecodeRVRFPType() {
         }
         case 0b001: {  // RO_FMAX_D
           set_drd(FMaxMinHelper(drs1(), drs2(), MaxMinKind::kMax));
+          break;
+        }
+        case 0b010: {  // RO_FMINM_D (Zfa extension)
+          set_drd(FMaxMinMHelper(drs1(), drs2(), MaxMinKind::kMin));
+          break;
+        }
+        case 0b011: {  // RO_FMAXM_D (Zfa extension)
+          set_drd(FMaxMinMHelper(drs1(), drs2(), MaxMinKind::kMax));
           break;
         }
         default: {
@@ -4825,6 +5287,20 @@ void Simulator::DecodeRVRFPType() {
       if (instr_.Rs2Value() == 0b00001) {
         auto fn = [](double drs) { return static_cast<float>(drs); };
         set_frd(CanonicalizeDoubleToFloatOperation(fn));
+      } else if (instr_.Rs2Value() == 0b00010) {
+        Float16 src = Float16::FromBits(get_fpu_register_Float16(rs1_reg()));
+        set_frd(src.ToFloat32());
+      } else if (instr_.Rs2Value() == 0b00100) {
+        // fround.s: Round single-precision to integer (Zfa extension)
+        set_frd(RoundF2FHelper(frs1(), instr_.RoundMode()));
+      } else if (instr_.Rs2Value() == 0b00101) {
+        // froundnx.s: Round single-precision to integer with inexact (Zfa
+        // extension)
+        float result = RoundF2FHelper(frs1(), instr_.RoundMode());
+        if (frs1() != result) {
+          set_fflags(kInexact);
+        }
+        set_frd(result);
       } else {
         UNSUPPORTED();
       }
@@ -4834,14 +5310,29 @@ void Simulator::DecodeRVRFPType() {
       if (instr_.Rs2Value() == 0b00000) {
         auto fn = [](float frs) { return static_cast<double>(frs); };
         set_drd(CanonicalizeFloatToDoubleOperation(fn));
+      } else if (instr_.Rs2Value() == 0b00010) {  // RO_FCVT_D_H
+        auto fn = [](float frs) { return static_cast<double>(frs); };
+        Float16 src = Float16::FromBits(get_fpu_register_Float16(rs1_reg()));
+        set_drd(CanonicalizeFloatToDoubleOperation(fn, src.ToFloat32()));
+      } else if (instr_.Rs2Value() == 0b00100) {
+        // fround.d: Round double-precision to integer (Zfa extension)
+        set_drd(RoundF2FHelper(drs1(), instr_.RoundMode()));
+      } else if (instr_.Rs2Value() == 0b00101) {
+        // froundnx.d: Round double-precision to integer with inexact (Zfa
+        // extension)
+        double result = RoundF2FHelper(drs1(), instr_.RoundMode());
+        if (drs1() != result) {
+          set_fflags(kInexact);
+        }
+        set_drd(result);
       } else {
         UNSUPPORTED();
       }
       break;
     }
-    case RO_FLE_D: {  // RO_FEQ_D RO_FLT_D RO_FLE_D
+    case RO_FLE_D: {  // RO_FEQ_D RO_FLT_D RO_FLE_D RO_FLEQ_D RO_FLTQ_D
       switch (instr_.Funct3Value()) {
-        case 0b010: {  // RO_FEQ_S
+        case 0b010: {  // RO_FEQ_D
           set_rd(CompareFHelper(drs1(), drs2(), EQ));
           break;
         }
@@ -4851,6 +5342,28 @@ void Simulator::DecodeRVRFPType() {
         }
         case 0b000: {  // RO_FLE_D
           set_rd(CompareFHelper(drs1(), drs2(), LE));
+          break;
+        }
+        case 0b100: {  // RO_FLEQ_D (Zfa extension) - quiet LE comparison
+          // fleq.d: Quiet less-than-or-equal comparison
+          // Does NOT raise invalid exception for NaN (unlike fle.d)
+          // Returns false if either operand is NaN
+          if (std::isnan(drs1()) || std::isnan(drs2())) {
+            set_rd(0);
+          } else {
+            set_rd(drs1() <= drs2() ? 1 : 0);
+          }
+          break;
+        }
+        case 0b101: {  // RO_FLTQ_D (Zfa extension) - quiet LT comparison
+          // fltq.d: Quiet less-than comparison
+          // Does NOT raise invalid exception for NaN (unlike flt.d)
+          // Returns false if either operand is NaN
+          if (std::isnan(drs1()) || std::isnan(drs2())) {
+            set_rd(0);
+          } else {
+            set_rd(drs1() < drs2() ? 1 : 0);
+          }
           break;
         }
         default: {
@@ -4902,6 +5415,78 @@ void Simulator::DecodeRVRFPType() {
           break;
         }
 #endif /* V8_TARGET_ARCH_RISCV64 */
+        case 0b01000: {  // RO_FCVTMOD_W_D (Zfa extension)
+          // FCVTMOD.W.D converts double to signed 32-bit integer modulo 2^32.
+          // Key differences from FCVT.W.D:
+          // 1. Always rounds towards zero (RTZ)
+          // 2. Bits 31:0 are taken from the rounded result (modulo 2^32)
+          // 3. Result is sign-extended to XLEN
+          // 4. NaN and infinity are converted to zero with invalid exception
+          // 5. Overflow raises invalid exception (but result is still modulo
+          // 2^32)
+
+          uint64_t a = base::bit_cast<uint64_t>(original_val);
+          uint32_t sign = (a >> 63) & 1;
+          uint32_t exp = (a >> 52) & 0x7FF;
+          uint64_t frac = a & ((1ULL << 52) - 1);
+
+          bool inexact = false;
+          bool invalid = false;
+
+          if (exp == 0) {
+            // Zero or subnormal
+            inexact = (frac != 0);
+            frac = 0;
+          } else if (exp == 0x7FF) {
+            // Infinity or NaN
+            invalid = true;
+            frac = 0;
+          } else {
+            int true_exp = exp - 1023;
+            int shift = true_exp - 52;
+
+            // Restore implicit bit
+            frac |= (1ULL << 52);
+
+            // Shift the fraction into place
+            if (shift >= 64) {
+              // The fraction is shifted out entirely
+              frac = 0;
+            } else if (shift >= 0) {
+              // Shift left
+              frac <<= shift;
+            } else if (shift > -64) {
+              // Normal case -- shift right and notice if bits shift out
+              inexact = (frac << (64 + shift)) != 0;
+              frac >>= -shift;
+            } else {
+              // The fraction is shifted out entirely
+              frac = 0;
+              inexact = true;
+            }
+
+            // Handle overflow: check if result exceeds 32-bit signed range
+            if (true_exp > 31 ||
+                frac > (sign ? 0x80000000ULL : 0x7FFFFFFFULL)) {
+              invalid = true;
+              inexact = false;  // invalid takes precedence
+            }
+
+            // Honor the sign
+            if (sign) {
+              frac = -static_cast<int64_t>(frac);
+            }
+          }
+
+          // Take bits 31:0 and sign-extend
+          uint32_t result = static_cast<uint32_t>(frac & 0xFFFFFFFFULL);
+          set_rd(sext32(result));
+
+          // Raise exceptions
+          if (inexact) set_fflags(kInexact);
+          if (invalid) set_fflags(kInvalidOperation);
+          break;
+        }
         default: {
           UNSUPPORTED();
         }
@@ -4936,15 +5521,33 @@ void Simulator::DecodeRVRFPType() {
     }
 #ifdef V8_TARGET_ARCH_RISCV64
     case RO_FMV_D_X: {
-      if (instr_.Funct3Value() == 0b000 && instr_.Rs2Value() == 0b00000) {
-        // Since FMV preserves source bit-pattern, no need to canonize
-        set_drd(base::bit_cast<double>(rs1()));
+      if (instr_.Funct3Value() == 0b000) {
+        if (instr_.Rs2Value() == 0b00000) {
+          // fmv.d.x: Since FMV preserves source bit-pattern, no need to
+          // canonize
+          set_drd(base::bit_cast<double>(rs1()));
+        } else if (instr_.Rs2Value() == 0b00001) {
+          // fli.d: Load floating-point immediate (Zfa extension)
+          set_drd(base::bit_cast<double>(kFLIDImm[instr_.Rs1Value()]));
+        } else {
+          UNSUPPORTED();
+        }
       } else {
         UNSUPPORTED();
       }
       break;
     }
 #endif /* V8_TARGET_ARCH_RISCV64 */
+    case RO_FCVT_H_S: {
+      if (instr_.Rs2Value() == 0b00000) {  // fcvt.h.s
+        set_hrd(Float16::FromFloat32(frs1()));
+      } else if (instr_.Rs2Value() == 0b00001) {  // fcvt.h.d
+        set_hrd(Float16::FromBits(DoubleToFloat16(drs1())));
+      } else {
+        UNSUPPORTED_RISCV();
+      }
+      break;
+    }
     default: {
       UNSUPPORTED();
     }
@@ -4953,6 +5556,57 @@ void Simulator::DecodeRVRFPType() {
 
 void Simulator::DecodeRVR4Type() {
   switch (instr_.InstructionBits() & kR4TypeMask) {
+    case RO_FMADD_H: {
+      auto fn = [this](float frs1, float frs2, float frs3) {
+        if (is_invalid_fmul(frs1, frs2) || is_invalid_fadd(frs1 * frs2, frs3)) {
+          this->set_fflags(kInvalidOperation);
+          return std::numeric_limits<float>::quiet_NaN();
+        } else {
+          return std::fma(frs1, frs2, frs3);
+        }
+      };
+      set_hrd(CanonicalizeFPUOp3<Float16>(fn));
+      break;
+    }
+    case RO_FMSUB_H: {
+      // TODO(riscv): use rm value (round mode)
+      auto fn = [this](float frs1, float frs2, float frs3) {
+        if (is_invalid_fmul(frs1, frs2) || is_invalid_fsub(frs1 * frs2, frs3)) {
+          this->set_fflags(kInvalidOperation);
+          return std::numeric_limits<float>::quiet_NaN();
+        } else {
+          return std::fma(frs1, frs2, -frs3);
+        }
+      };
+      set_hrd(CanonicalizeFPUOp3<Float16>(fn));
+      break;
+    }
+    case RO_FNMSUB_H: {
+      // TODO(riscv): use rm value (round mode)
+      auto fn = [this](float frs1, float frs2, float frs3) {
+        if (is_invalid_fmul(frs1, frs2) || is_invalid_fsub(frs3, frs1 * frs2)) {
+          this->set_fflags(kInvalidOperation);
+          return std::numeric_limits<float>::quiet_NaN();
+        } else {
+          return -std::fma(frs1, frs2, -frs3);
+        }
+      };
+      set_hrd(CanonicalizeFPUOp3<Float16>(fn));
+      break;
+    }
+    case RO_FNMADD_H: {
+      // TODO(riscv): use rm value (round mode)
+      auto fn = [this](float frs1, float frs2, float frs3) {
+        if (is_invalid_fmul(frs1, frs2) || is_invalid_fadd(frs1 * frs2, frs3)) {
+          this->set_fflags(kInvalidOperation);
+          return std::numeric_limits<float>::quiet_NaN();
+        } else {
+          return -std::fma(frs1, frs2, frs3);
+        }
+      };
+      set_hrd(CanonicalizeFPUOp3<Float16>(fn));
+      break;
+    }
     // TODO(riscv): use F Extension macro block
     case RO_FMADD_S: {
       // TODO(riscv): use rm value (round mode)
@@ -5106,7 +5760,17 @@ bool Simulator::DecodeRvvVL() {
              RO_V_VLSEG4 == instr_temp || RO_V_VLSEG5 == instr_temp ||
              RO_V_VLSEG6 == instr_temp || RO_V_VLSEG7 == instr_temp ||
              RO_V_VLSEG8 == instr_temp) {
+    uint32_t vlnr_instr =
+        instr_.InstructionBits() & (kRvvMopMask | kRvvVmMask | kRvvLumopMask |
+                                    kRvvNfMask | kBaseOpcodeMask);
+
     if (!(instr_.InstructionBits() & (kRvvRs2Mask))) {
+      UNIMPLEMENTED_RISCV();
+      return true;
+    } else if (RO_V_VL1R == vlnr_instr || RO_V_VL2R == vlnr_instr ||
+               RO_V_VL4R == vlnr_instr || RO_V_VL8R == vlnr_instr) {
+      // vl<nr>r
+      set_vill_ignore(true);
       UNIMPLEMENTED_RISCV();
       return true;
     } else {
@@ -5173,8 +5837,24 @@ bool Simulator::DecodeRvvVS() {
              RO_V_VSSEG4 == instr_temp || RO_V_VSSEG5 == instr_temp ||
              RO_V_VSSEG6 == instr_temp || RO_V_VSSEG7 == instr_temp ||
              RO_V_VSSEG8 == instr_temp) {
-    UNIMPLEMENTED_RISCV();
-    return true;
+    uint32_t vsnr_instr =
+        instr_.InstructionBits() &
+        (kRvvMewMask | kRvvMopMask | kRvvVmMask | kRvvSumopMask |
+         kRvvWidthMask | kRvvNfMask | kBaseOpcodeMask);
+
+    if (!(instr_.InstructionBits() & (kRvvRs2Mask))) {
+      UNIMPLEMENTED_RISCV();
+      return true;
+    } else if (RO_V_VS1R == vsnr_instr || RO_V_VS2R == vsnr_instr ||
+               RO_V_VS4R == vsnr_instr || RO_V_VS8R == vsnr_instr) {
+      // vs<nr>r
+      set_vill_ignore(true);
+      UNIMPLEMENTED_RISCV();
+      return true;
+    } else {
+      UNIMPLEMENTED_RISCV();
+      return true;
+    }
   } else if (RO_V_VSSSEG2 == instr_temp || RO_V_VSSSEG3 == instr_temp ||
              RO_V_VSSSEG4 == instr_temp || RO_V_VSSSEG5 == instr_temp ||
              RO_V_VSSSEG6 == instr_temp || RO_V_VSSSEG7 == instr_temp ||
@@ -5635,6 +6315,15 @@ void Simulator::DecodeRVIType() {
       break;
     }
     // TODO(riscv): use F Extension macro block
+    case RO_FLH: {
+      sreg_t addr = rs1() + imm12();
+      if (!ProbeMemory(addr, sizeof(uint16_t))) return;
+      Float16 val = Float16::Read(addr);
+      set_hrd(val, false);
+      TraceMemRdFloat(addr, Float32(val.ToFloat32()),
+                      get_fpu_register(frd_reg()));
+      break;
+    }
     case RO_FLW: {
       sreg_t addr = rs1() + imm12();
       if (!ProbeMemory(addr, sizeof(float))) return;
@@ -5658,6 +6347,9 @@ void Simulator::DecodeRVIType() {
 #ifdef CAN_USE_RVV_INSTRUCTIONS
       if (!DecodeRvvVL()) {
         UNSUPPORTED();
+      }
+      if (rvv_vill() && !get_vill_ignore()) {
+        ILLEGAL_RISCV();
       }
       break;
 #else
@@ -5688,6 +6380,13 @@ void Simulator::DecodeRVSType() {
       break;
 #endif /*V8_TARGET_ARCH_RISCV64*/
     // TODO(riscv): use F Extension macro block
+    case RO_FSH: {
+      if (!ProbeMemory(rs1() + s_imm12(), sizeof(uint16_t))) return;
+      WriteMem<uint16_t>(rs1() + s_imm12(),
+                         get_fpu_register_Float16(rs2_reg(), false),
+                         instr_.instr());
+      break;
+    }
     case RO_FSW: {
       if (!ProbeMemory(rs1() + s_imm12(), sizeof(float))) return;
       WriteMem<Float32>(rs1() + s_imm12(),
@@ -5706,6 +6405,9 @@ void Simulator::DecodeRVSType() {
 #ifdef CAN_USE_RVV_INSTRUCTIONS
       if (!DecodeRvvVS()) {
         UNSUPPORTED();
+      }
+      if (rvv_vill() && !get_vill_ignore()) {
+        ILLEGAL_RISCV();
       }
       break;
 #else
@@ -6617,6 +7319,10 @@ void Simulator::DecodeRvvIVI() {
     case RO_V_VSLL_VI:
       RVV_VI_VI_ULOOP({ vd = vs2 << (uimm5 & (rvv_sew() - 1)); })
       break;
+    case RO_V_VMVNR_VI:
+      set_vill_ignore(true);
+      UNIMPLEMENTED_RISCV();
+      break;
     case RO_V_VADC_VI:
       if (instr_.RvvVM()) {
         RVV_VI_XI_LOOP_WITH_CARRY({
@@ -7245,7 +7951,28 @@ void Simulator::DecodeRvvFVV() {
   switch (instr_.InstructionBits() & kVTypeMask) {
     case RO_V_VFDIV_VV: {
       RVV_VI_VFP_VV_LOOP(
-          { UNIMPLEMENTED(); },
+          {
+            auto fn = [this](float frs1, float frs2) {
+              if (is_invalid_fdiv(frs1, frs2)) {
+                this->set_fflags(kInvalidOperation);
+                return std::numeric_limits<float>::quiet_NaN();
+              } else {
+                return frs2 / frs1;
+              }
+            };
+            auto alu_out = fn(vs1.ToFloat32(), vs2.ToFloat32());
+            // if any input or result is NaN, the result is quiet_NaN
+            if (std::isnan(alu_out) || std::isnan(vs1.ToFloat32()) ||
+                std::isnan(vs2.ToFloat32())) {
+              // signaling_nan sets kInvalidOperation bit
+              if (isSnan(alu_out) || isSnan(vs1.ToFloat32()) ||
+                  isSnan(vs2.ToFloat32())) {
+                set_fflags(kInvalidOperation);
+              }
+              alu_out = std::numeric_limits<float>::quiet_NaN();
+            }
+            vd = Float16::FromFloat32(alu_out).get_bits();
+          },
           {
             // TODO(riscv): use rm value (round mode)
             auto fn = [this](float vs1, float vs2) {
@@ -7300,7 +8027,28 @@ void Simulator::DecodeRvvFVV() {
     }
     case RO_V_VFMUL_VV: {
       RVV_VI_VFP_VV_LOOP(
-          { UNIMPLEMENTED(); },
+          {
+            auto fn = [this](float frs1, float frs2) {
+              if (is_invalid_fmul(frs1, frs2)) {
+                this->set_fflags(kInvalidOperation);
+                return std::numeric_limits<float>::quiet_NaN();
+              } else {
+                return frs1 * frs2;
+              }
+            };
+            auto alu_out = fn(vs1.ToFloat32(), vs2.ToFloat32());
+            // if any input or result is NaN, the result is quiet_NaN
+            if (std::isnan(alu_out) || std::isnan(vs1.ToFloat32()) ||
+                std::isnan(vs2.ToFloat32())) {
+              // signaling_nan sets kInvalidOperation bit
+              if (isSnan(alu_out) || isSnan(vs1.ToFloat32()) ||
+                  isSnan(vs2.ToFloat32())) {
+                set_fflags(kInvalidOperation);
+              }
+              alu_out = std::numeric_limits<float>::quiet_NaN();
+            }
+            vd = Float16::FromFloat32(alu_out).get_bits();
+          },
           {
             // TODO(riscv): use rm value (round mode)
             auto fn = [this](double drs1, double drs2) {
@@ -7347,7 +8095,12 @@ void Simulator::DecodeRvvFVV() {
       switch (instr_.Vs1Value()) {
         case VFCVT_X_F_V:
           RVV_VI_VFP_VF_LOOP(
-              { UNIMPLEMENTED(); },
+              {
+                Rvvelt<int16_t>(rvv_vd_reg(), i) = RoundF2IHelper<int16_t>(
+                    vs2.ToFloat32(), read_csr_value(csr_frm));
+                USE(vd);
+                USE(hs1);
+              },
               {
                 Rvvelt<int32_t>(rvv_vd_reg(), i) =
                     RoundF2IHelper<int32_t>(vs2, read_csr_value(csr_frm));
@@ -7363,7 +8116,12 @@ void Simulator::DecodeRvvFVV() {
           break;
         case VFCVT_XU_F_V:
           RVV_VI_VFP_VF_LOOP(
-              { UNIMPLEMENTED(); },
+              {
+                Rvvelt<uint16_t>(rvv_vd_reg(), i) = RoundF2IHelper<uint16_t>(
+                    vs2.ToFloat32(), read_csr_value(csr_frm));
+                USE(vd);
+                USE(hs1);
+              },
               {
                 Rvvelt<uint32_t>(rvv_vd_reg(), i) =
                     RoundF2IHelper<uint32_t>(vs2, read_csr_value(csr_frm));
@@ -7379,15 +8137,26 @@ void Simulator::DecodeRvvFVV() {
           break;
         case VFCVT_F_XU_V:
           RVV_VI_VFP_VF_LOOP(
-              { UNIMPLEMENTED(); },
+              {
+                auto vs2_i = Rvvelt<uint16_t>(rvv_vs2_reg(), i);
+                ScopedRoundingMode rounding_mode_setter(
+                    get_dynamic_rounding_mode());
+                vd = Float16::FromFloat32(static_cast<float>(vs2_i)).get_bits();
+                USE(vs2);
+                USE(hs1);
+              },
               {
                 auto vs2_i = Rvvelt<uint32_t>(rvv_vs2_reg(), i);
+                ScopedRoundingMode rounding_mode_setter(
+                    get_dynamic_rounding_mode());
                 vd = static_cast<float>(vs2_i);
                 USE(vs2);
                 USE(fs1);
               },
               {
                 auto vs2_i = Rvvelt<uint64_t>(rvv_vs2_reg(), i);
+                ScopedRoundingMode rounding_mode_setter(
+                    get_dynamic_rounding_mode());
                 vd = static_cast<double>(vs2_i);
                 USE(vs2);
                 USE(fs1);
@@ -7395,15 +8164,26 @@ void Simulator::DecodeRvvFVV() {
           break;
         case VFCVT_F_X_V:
           RVV_VI_VFP_VF_LOOP(
-              { UNIMPLEMENTED(); },
+              {
+                auto vs2_i = Rvvelt<int16_t>(rvv_vs2_reg(), i);
+                ScopedRoundingMode rounding_mode_setter(
+                    get_dynamic_rounding_mode());
+                vd = Float16::FromFloat32(static_cast<float>(vs2_i)).get_bits();
+                USE(vs2);
+                USE(hs1);
+              },
               {
                 auto vs2_i = Rvvelt<int32_t>(rvv_vs2_reg(), i);
+                ScopedRoundingMode rounding_mode_setter(
+                    get_dynamic_rounding_mode());
                 vd = static_cast<float>(vs2_i);
                 USE(vs2);
                 USE(fs1);
               },
               {
                 auto vs2_i = Rvvelt<int64_t>(rvv_vs2_reg(), i);
+                ScopedRoundingMode rounding_mode_setter(
+                    get_dynamic_rounding_mode());
                 vd = static_cast<double>(vs2_i);
                 USE(vs2);
                 USE(fs1);
@@ -7509,7 +8289,12 @@ void Simulator::DecodeRvvFVV() {
       switch (instr_.Vs1Value()) {
         case VFCLASS_V:
           RVV_VI_VFP_VF_LOOP(
-              { UNIMPLEMENTED(); },
+              {
+                int16_t& vd_i = Rvvelt<int16_t>(rvv_vd_reg(), i, true);
+                vd_i = static_cast<int32_t>(FclassHelper(vs2.ToFloat32()));
+                USE(hs1);
+                USE(vd);
+              },
               {
                 int32_t& vd_i = Rvvelt<int32_t>(rvv_vd_reg(), i, true);
                 vd_i = static_cast<int32_t>(FclassHelper(vs2));
@@ -7525,7 +8310,11 @@ void Simulator::DecodeRvvFVV() {
           break;
         case VFSQRT_V:
           RVV_VI_VFP_VF_LOOP(
-              { UNIMPLEMENTED(); },
+              {
+                vd =
+                    Float16::FromFloat32(std::sqrt(vs2.ToFloat32())).get_bits();
+                USE(hs1);
+              },
               {
                 vd = std::sqrt(vs2);
                 USE(fs1);
@@ -7537,7 +8326,11 @@ void Simulator::DecodeRvvFVV() {
           break;
         case VFRSQRT7_V:
           RVV_VI_VFP_VF_LOOP(
-              {},
+              {
+                vd = Float16::FromFloat32(base::RecipSqrt(vs2.ToFloat32()))
+                         .get_bits();
+                USE(hs1);
+              },
               {
                 vd = base::RecipSqrt(vs2);
                 USE(fs1);
@@ -7549,7 +8342,11 @@ void Simulator::DecodeRvvFVV() {
           break;
         case VFREC7_V:
           RVV_VI_VFP_VF_LOOP(
-              {},
+              {
+                vd = Float16::FromFloat32(base::Recip(vs2.ToFloat32()))
+                         .get_bits();
+                USE(hs1);
+              },
               {
                 vd = base::Recip(vs2);
                 USE(fs1);
@@ -7565,27 +8362,34 @@ void Simulator::DecodeRvvFVV() {
       break;
     case RO_V_VMFEQ_VV: {
       RVV_VI_VFP_LOOP_CMP(
-          { UNIMPLEMENTED(); }, { res = CompareFHelper(vs2, vs1, EQ); },
+          { res = CompareFHelper(vs2.ToFloat32(), vs1.ToFloat32(), EQ); },
+          { res = CompareFHelper(vs2, vs1, EQ); },
           { res = CompareFHelper(vs2, vs1, EQ); }, true)
     } break;
     case RO_V_VMFNE_VV: {
       RVV_VI_VFP_LOOP_CMP(
-          { UNIMPLEMENTED(); }, { res = CompareFHelper(vs2, vs1, NE); },
+          { res = CompareFHelper(vs2.ToFloat32(), vs1.ToFloat32(), NE); },
+          { res = CompareFHelper(vs2, vs1, NE); },
           { res = CompareFHelper(vs2, vs1, NE); }, true)
     } break;
     case RO_V_VMFLT_VV: {
       RVV_VI_VFP_LOOP_CMP(
-          { UNIMPLEMENTED(); }, { res = CompareFHelper(vs2, vs1, LT); },
+          { res = CompareFHelper(vs2.ToFloat32(), vs1.ToFloat32(), LT); },
+          { res = CompareFHelper(vs2, vs1, LT); },
           { res = CompareFHelper(vs2, vs1, LT); }, true)
     } break;
     case RO_V_VMFLE_VV: {
       RVV_VI_VFP_LOOP_CMP(
-          { UNIMPLEMENTED(); }, { res = CompareFHelper(vs2, vs1, LE); },
+          { res = CompareFHelper(vs2.ToFloat32(), vs1.ToFloat32(), LE); },
+          { res = CompareFHelper(vs2, vs1, LE); },
           { res = CompareFHelper(vs2, vs1, LE); }, true)
     } break;
     case RO_V_VFMAX_VV: {
       RVV_VI_VFP_VV_LOOP(
-          { UNIMPLEMENTED(); },
+          {
+            vd = FMaxMinHelper(vs2.ToFloat32(), vs1.ToFloat32(),
+                               MaxMinKind::kMax);
+          },
           { vd = FMaxMinHelper(vs2, vs1, MaxMinKind::kMax); },
           { vd = FMaxMinHelper(vs2, vs1, MaxMinKind::kMax); })
       break;
@@ -7599,14 +8403,20 @@ void Simulator::DecodeRvvFVV() {
     }
     case RO_V_VFMIN_VV: {
       RVV_VI_VFP_VV_LOOP(
-          { UNIMPLEMENTED(); },
+          {
+            vd = FMaxMinHelper(vs2.ToFloat32(), vs1.ToFloat32(),
+                               MaxMinKind::kMin);
+          },
           { vd = FMaxMinHelper(vs2, vs1, MaxMinKind::kMin); },
           { vd = FMaxMinHelper(vs2, vs1, MaxMinKind::kMin); })
       break;
     }
     case RO_V_VFSGNJ_VV:
       RVV_VFSGNJ_VV_VF_LOOP(
-          { UNIMPLEMENTED(); },
+          {
+            vd = fsgnj16(vs2, vs1, false, false).get_bits();
+            USE(hs1);
+          },
           {
             vd = fsgnj32(Float32::FromBits(vs2), Float32::FromBits(vs1), false,
                          false)
@@ -7622,7 +8432,10 @@ void Simulator::DecodeRvvFVV() {
       break;
     case RO_V_VFSGNJN_VV:
       RVV_VFSGNJ_VV_VF_LOOP(
-          { UNIMPLEMENTED(); },
+          {
+            vd = fsgnj16(vs2, vs1, true, false).get_bits();
+            USE(hs1);
+          },
           {
             vd = fsgnj32(Float32::FromBits(vs2), Float32::FromBits(vs1), true,
                          false)
@@ -7638,7 +8451,10 @@ void Simulator::DecodeRvvFVV() {
       break;
     case RO_V_VFSGNJX_VV:
       RVV_VFSGNJ_VV_VF_LOOP(
-          { UNIMPLEMENTED(); },
+          {
+            vd = fsgnj16(vs2, vs1, false, true).get_bits();
+            USE(hs1);
+          },
           {
             vd = fsgnj32(Float32::FromBits(vs2), Float32::FromBits(vs1), false,
                          true)
@@ -7654,7 +8470,28 @@ void Simulator::DecodeRvvFVV() {
       break;
     case RO_V_VFADD_VV:
       RVV_VI_VFP_VV_LOOP(
-          { UNIMPLEMENTED(); },
+          {
+            auto fn = [this](float frs1, float frs2) {
+              if (is_invalid_fadd(frs1, frs2)) {
+                this->set_fflags(kInvalidOperation);
+                return std::numeric_limits<float>::quiet_NaN();
+              } else {
+                return frs1 + frs2;
+              }
+            };
+            auto alu_out = fn(vs1.ToFloat32(), vs2.ToFloat32());
+            // if any input or result is NaN, the result is quiet_NaN
+            if (std::isnan(alu_out) || std::isnan(vs1.ToFloat32()) ||
+                std::isnan(vs2.ToFloat32())) {
+              // signaling_nan sets kInvalidOperation bit
+              if (isSnan(alu_out) || isSnan(vs1.ToFloat32()) ||
+                  isSnan(vs2.ToFloat32())) {
+                set_fflags(kInvalidOperation);
+              }
+              alu_out = std::numeric_limits<float>::quiet_NaN();
+            }
+            vd = Float16::FromFloat32(alu_out).get_bits();
+          },
           {
             auto fn = [this](float frs1, float frs2) {
               if (is_invalid_fadd(frs1, frs2)) {
@@ -7696,7 +8533,28 @@ void Simulator::DecodeRvvFVV() {
       break;
     case RO_V_VFSUB_VV:
       RVV_VI_VFP_VV_LOOP(
-          { UNIMPLEMENTED(); },
+          {
+            auto fn = [this](float frs1, float frs2) {
+              if (is_invalid_fsub(frs1, frs2)) {
+                this->set_fflags(kInvalidOperation);
+                return std::numeric_limits<float>::quiet_NaN();
+              } else {
+                return frs2 - frs1;
+              }
+            };
+            auto alu_out = fn(vs1.ToFloat32(), vs2.ToFloat32());
+            // if any input or result is NaN, the result is quiet_NaN
+            if (std::isnan(alu_out) || std::isnan(vs1.ToFloat32()) ||
+                std::isnan(vs2.ToFloat32())) {
+              // signaling_nan sets kInvalidOperation bit
+              if (isSnan(alu_out) || isSnan(vs1.ToFloat32()) ||
+                  isSnan(vs2.ToFloat32())) {
+                set_fflags(kInvalidOperation);
+              }
+              alu_out = std::numeric_limits<float>::quiet_NaN();
+            }
+            vd = Float16::FromFloat32(alu_out).get_bits();
+          },
           {
             auto fn = [this](float frs1, float frs2) {
               if (is_invalid_fsub(frs1, frs2)) {
@@ -7869,7 +8727,9 @@ void Simulator::DecodeRvvFVV() {
     case RO_V_VFMV_FS:
       switch (rvv_vsew()) {
         case E16: {
-          UNIMPLEMENTED();
+          uint16_t hs2 = Rvvelt<uint16_t>(rvv_vs2_reg(), 0);
+          set_hrd(Float16::FromBits(hs2));
+          break;
         }
         case E32: {
           uint32_t fs2 = Rvvelt<uint32_t>(rvv_vs2_reg(), 0);
@@ -7897,7 +8757,10 @@ void Simulator::DecodeRvvFVF() {
   switch (instr_.InstructionBits() & kVTypeMask) {
     case RO_V_VFSGNJ_VF:
       RVV_VFSGNJ_VV_VF_LOOP(
-          {},
+          {
+            vd = fsgnj16(vs2, hs1, false, false).get_bits();
+            USE(vs1);
+          },
           {
             vd = fsgnj32(Float32::FromBits(vs2), fs1, false, false).get_bits();
             USE(vs1);
@@ -7909,7 +8772,10 @@ void Simulator::DecodeRvvFVF() {
       break;
     case RO_V_VFSGNJN_VF:
       RVV_VFSGNJ_VV_VF_LOOP(
-          {},
+          {
+            vd = fsgnj16(vs2, hs1, true, false).get_bits();
+            USE(vs1);
+          },
           {
             vd = fsgnj32(Float32::FromBits(vs2), fs1, true, false).get_bits();
             USE(vs1);
@@ -7921,7 +8787,10 @@ void Simulator::DecodeRvvFVF() {
       break;
     case RO_V_VFSGNJX_VF:
       RVV_VFSGNJ_VV_VF_LOOP(
-          {},
+          {
+            vd = fsgnj16(vs2, hs1, false, true).get_bits();
+            USE(vs1);
+          },
           {
             vd = fsgnj32(Float32::FromBits(vs2), fs1, false, true).get_bits();
             USE(vs1);
@@ -7934,7 +8803,10 @@ void Simulator::DecodeRvvFVF() {
     case RO_V_VFMV_VF:
       if (instr_.RvvVM()) {
         RVV_VI_VF_MERGE_LOOP(
-            {},
+            {
+              vd = hs1;
+              USE(vs2);
+            },
             {
               vd = fs1;
               USE(vs2);
@@ -7945,7 +8817,11 @@ void Simulator::DecodeRvvFVF() {
             });
       } else {
         RVV_VI_VF_MERGE_LOOP(
-            {},
+            {
+              bool use_first =
+                  (Rvvelt<uint64_t>(0, (i / 64)) >> (i % 64)) & 0x1;
+              vd = use_first ? hs1 : vs2;
+            },
             {
               bool use_first =
                   (Rvvelt<uint64_t>(0, (i / 64)) >> (i % 64)) & 0x1;
@@ -7960,7 +8836,28 @@ void Simulator::DecodeRvvFVF() {
       break;
     case RO_V_VFADD_VF:
       RVV_VI_VFP_VF_LOOP(
-          { UNIMPLEMENTED(); },
+          {
+            auto fn = [this](float frs1, float frs2) {
+              if (is_invalid_fadd(frs1, frs2)) {
+                this->set_fflags(kInvalidOperation);
+                return std::numeric_limits<float>::quiet_NaN();
+              } else {
+                return frs1 + frs2;
+              }
+            };
+            auto alu_out = fn(hs1.ToFloat32(), vs2.ToFloat32());
+            // if any input or result is NaN, the result is quiet_NaN
+            if (std::isnan(alu_out) || std::isnan(hs1.ToFloat32()) ||
+                std::isnan(vs2.ToFloat32())) {
+              // signaling_nan sets kInvalidOperation bit
+              if (isSnan(alu_out) || isSnan(hs1.ToFloat32()) ||
+                  isSnan(vs2.ToFloat32())) {
+                set_fflags(kInvalidOperation);
+              }
+              alu_out = std::numeric_limits<float>::quiet_NaN();
+            }
+            vd = alu_out;
+          },
           {
             auto fn = [this](float frs1, float frs2) {
               if (is_invalid_fadd(frs1, frs2)) {
@@ -7974,8 +8871,9 @@ void Simulator::DecodeRvvFVF() {
             // if any input or result is NaN, the result is quiet_NaN
             if (std::isnan(alu_out) || std::isnan(fs1) || std::isnan(vs2)) {
               // signaling_nan sets kInvalidOperation bit
-              if (isSnan(alu_out) || isSnan(fs1) || isSnan(vs2))
+              if (isSnan(alu_out) || isSnan(fs1) || isSnan(vs2)) {
                 set_fflags(kInvalidOperation);
+              }
               alu_out = std::numeric_limits<float>::quiet_NaN();
             }
             vd = alu_out;
@@ -7993,8 +8891,9 @@ void Simulator::DecodeRvvFVF() {
             // if any input or result is NaN, the result is quiet_NaN
             if (std::isnan(alu_out) || std::isnan(fs1) || std::isnan(vs2)) {
               // signaling_nan sets kInvalidOperation bit
-              if (isSnan(alu_out) || isSnan(fs1) || isSnan(vs2))
+              if (isSnan(alu_out) || isSnan(fs1) || isSnan(vs2)) {
                 set_fflags(kInvalidOperation);
+              }
               alu_out = std::numeric_limits<double>::quiet_NaN();
             }
             vd = alu_out;
@@ -8168,24 +9067,45 @@ void Simulator::DecodeVType() {
   switch (instr_.InstructionBits() & (kFunct3Mask | kBaseOpcodeMask)) {
     case OP_IVV:
       DecodeRvvIVV();
+      if (rvv_vill() && !get_vill_ignore()) {
+        ILLEGAL_RISCV();
+      }
       return;
     case OP_FVV:
       DecodeRvvFVV();
+      if (rvv_vill() && !get_vill_ignore()) {
+        ILLEGAL_RISCV();
+      }
       return;
     case OP_MVV:
       DecodeRvvMVV();
+      if (rvv_vill() && !get_vill_ignore()) {
+        ILLEGAL_RISCV();
+      }
       return;
     case OP_IVI:
       DecodeRvvIVI();
+      if (rvv_vill() && !get_vill_ignore()) {
+        ILLEGAL_RISCV();
+      }
       return;
     case OP_IVX:
       DecodeRvvIVX();
+      if (rvv_vill() && !get_vill_ignore()) {
+        ILLEGAL_RISCV();
+      }
       return;
     case OP_FVF:
       DecodeRvvFVF();
+      if (rvv_vill() && !get_vill_ignore()) {
+        ILLEGAL_RISCV();
+      }
       return;
     case OP_MVX:
       DecodeRvvMVX();
+      if (rvv_vill() && !get_vill_ignore()) {
+        ILLEGAL_RISCV();
+      }
       return;
   }
   switch (instr_.InstructionBits() &
@@ -8203,6 +9123,13 @@ void Simulator::DecodeVType() {
         avl = rvv_vl();
       }
       avl = avl <= rvv_vlmax() ? avl : rvv_vlmax();
+      if (rvv_vflmul() * kRvvELEN < rvv_sew()) {
+        // If the `vtype` value is not supported by the implementation, then the
+        // `vil`l bit is set in `vtype`, the remaining bits in `vtype` are set
+        // to zero, and the `vl` register is also set to zero.
+        set_rvv_vtype(0x1UL << (kRvXLEN - 1));
+        avl = 0;
+      }
       set_rvv_vl(avl);
       set_rd(rvv_vl());
       set_rvv_vstart(0);
@@ -8211,8 +9138,8 @@ void Simulator::DecodeVType() {
       break;
     }
     case RO_V_VSETVL: {
+      uint64_t avl;
       if (!(instr_.InstructionBits() & 0x40000000)) {
-        uint64_t avl;
         set_rvv_vtype(rs2());
         CHECK_GE(rvv_sew(), E8);
         CHECK_LE(rvv_sew(), E64);
@@ -8223,26 +9150,24 @@ void Simulator::DecodeVType() {
         } else {
           avl = rvv_vl();
         }
-        avl = avl <= rvv_vlmax()        ? avl
-              : avl < (rvv_vlmax() * 2) ? avl / 2
-                                        : rvv_vlmax();
-        set_rvv_vl(avl);
-        set_rd(rvv_vl());
-        rvv_trace_status();
       } else {
         DCHECK_EQ(instr_.InstructionBits() &
                       (kBaseOpcodeMask | kFunct3Mask | 0xC0000000),
                   RO_V_VSETIVLI);
-        uint64_t avl;
         set_rvv_vtype(rvv_zimm());
         avl = instr_.Rvvuimm();
-        avl = avl <= rvv_vlmax()        ? avl
-              : avl < (rvv_vlmax() * 2) ? avl / 2
-                                        : rvv_vlmax();
-        set_rvv_vl(avl);
-        set_rd(rvv_vl());
-        rvv_trace_status();
       }
+      avl = avl <= rvv_vlmax()        ? avl
+            : avl < (rvv_vlmax() * 2) ? avl / 2
+                                      : rvv_vlmax();
+      if (rvv_vflmul() * kRvvELEN < rvv_sew()) {
+        set_rvv_vtype(0x1UL << (kRvXLEN - 1));
+        avl = 0;
+      }
+      set_rvv_vl(avl);
+      set_rd(rvv_vl());
+      rvv_trace_status();
+
       vu_enabled_ = true;
       break;
     }
@@ -8271,6 +9196,9 @@ void Simulator::InstructionDecode(Instruction* instr) {
     // PrintF("EXECUTING  0x%08" PRIxPTR "   %-44s\n",
     //        reinterpret_cast<intptr_t>(instr), buffer.begin());
   }
+#ifdef CAN_USE_RVV_INSTRUCTIONS
+  set_vill_ignore(false);
+#endif
   instr_ = instr;
   switch (instr_.InstructionType()) {
     case Instruction::kRType:
@@ -8483,7 +9411,13 @@ void Simulator::PushShadowStack(uintptr_t value) {
   }
   csr_ssp_ = csr_ssp_ - 1;
   shadow_stack_[csr_ssp_] = value;
-  SNPrintF(trace_buf_, "%016" PRIuPTR "    (%" PRId64 ")", value, icount_);
+  if (v8_flags.trace_shadowstack) {
+    PrintF("PushShadowStack  %016" REGIx_FORMAT "    (%" PRId64
+           ")    ssp:%zu\n",
+           value, icount_, csr_ssp_);
+  }
+  SNPrintF(trace_buf_, "%016" REGIx_FORMAT "    (%" PRId64 ")    ssp:%zu",
+           value, icount_, csr_ssp_);
   return;
 }
 
@@ -8493,15 +9427,34 @@ uintptr_t Simulator::PopShadowStack(uintptr_t value) {
   auto temp = shadow_stack_[csr_ssp_];
   if (temp != value) {
     if (v8_flags.sim_abort_on_shadowstack_mismatch) {
+      PrintF("PopShadowStack %016" REGIx_FORMAT "    (%" PRId64
+             ")    ssp:%zu\n",
+             temp, icount_, csr_ssp_);
       FATAL("RISC-V ShadowStack mismatch");
     } else {
       ss_mismatch_count_ += 1;
+      csr_ssp_ += 1;
     }
   } else {
     csr_ssp_ += 1;
   }
-  SNPrintF(trace_buf_, "%016" PRIuPTR "    (%" PRId64 ")", value, icount_);
+  if (v8_flags.trace_shadowstack) {
+    PrintF("PopShadowStack  %016" REGIx_FORMAT "    (%" PRId64 ")    ssp:%zu\n",
+           temp, icount_, csr_ssp_ - 1);
+  }
+  SNPrintF(trace_buf_, "%016" REGIx_FORMAT "    (%" PRId64 ")    ssp:%zu", temp,
+           icount_, csr_ssp_ - 1);
   return temp;
+}
+
+uintptr_t Simulator::SwapShadowStack(uintptr_t value, int nest) {
+  CHECK_GE(nest, 0);
+  auto pop_value = shadow_stack_[csr_ssp_ + nest];
+  shadow_stack_[csr_ssp_ + nest] = value;
+  if (v8_flags.trace_shadowstack) {
+    PrintF("SwapShadowStack: old=%016lx, new=%016lx\n", pop_value, value);
+  }
+  return pop_value;
 }
 
 #ifdef V8_TARGET_ARCH_RISCV64
@@ -8540,15 +9493,14 @@ void Simulator::CallImpl(Address entry, CallArgument* args) {
   // Remaining arguments passed on stack.
   int64_t original_stack = get_register(sp);
   // Compute position of stack on entry to generated code.
-  int64_t stack_args_size =
-      stack_args.size() * sizeof(stack_args[0]) + kCArgsSlotsSize;
+  int64_t stack_args_size = stack_args.size() * sizeof(stack_args[0]);
   int64_t entry_stack = original_stack - stack_args_size;
   if (base::OS::ActivationFrameAlignment() != 0) {
     entry_stack &= -base::OS::ActivationFrameAlignment();
   }
   // Store remaining arguments on stack, from low to high memory.
   char* stack_argument = reinterpret_cast<char*>(entry_stack);
-  memcpy(stack_argument + kCArgSlotCount, stack_args.data(),
+  memcpy(stack_argument, stack_args.data(),
          stack_args.size() * sizeof(int64_t));
   set_register(sp, entry_stack);
   CallInternal(entry);
@@ -8585,14 +9537,14 @@ intptr_t Simulator::CallImpl(Address entry, int argument_count,
   sreg_t original_stack = get_register(sp);
   // Compute position of stack on entry to generated code.
   int stack_args_count = argument_count - reg_arg_count;
-  int stack_args_size = stack_args_count * sizeof(*arguments) + kCArgsSlotsSize;
+  int stack_args_size = stack_args_count * sizeof(*arguments);
   sreg_t entry_stack = original_stack - stack_args_size;
   if (base::OS::ActivationFrameAlignment() != 0) {
     entry_stack &= -base::OS::ActivationFrameAlignment();
   }
   // Store remaining arguments on stack, from low to high memory.
   intptr_t* stack_argument = reinterpret_cast<intptr_t*>(entry_stack);
-  memcpy(stack_argument + kCArgSlotCount, arguments + reg_arg_count,
+  memcpy(stack_argument, arguments + reg_arg_count,
          stack_args_count * sizeof(*arguments));
   set_register(sp, entry_stack);
   CallInternal(entry);
@@ -8606,8 +9558,8 @@ intptr_t Simulator::CallImpl(Address entry, int argument_count,
 #endif  // V8_TARGET_ARCH_RISCV64
 
 double Simulator::CallFP(Address entry, double d0, double d1) {
-  set_fpu_register_double(fa0, d0);
-  set_fpu_register_double(fa1, d1);
+  set_fpu_register(fa0, d0);
+  set_fpu_register(fa1, d1);
   CallInternal(entry);
   return get_fpu_register_double(fa0);
 }
@@ -8800,6 +9752,21 @@ void Simulator::DoSwitchStackLimit(Instruction* instr) {
   // {stack_limit_} will be shortened by kAdditionalStackMargin yielding
   // positive feedback loop.
   stack_limit_ = static_cast<uintptr_t>(stack_limit - kAdditionalStackMargin);
+}
+
+void Simulator::CheckMemoryAccess(uintptr_t address, uintptr_t stack) {
+#ifdef V8_COMPRESS_POINTERS
+  if ((address >= stack_limit_) && (address < stack)) {
+    PrintF("ACCESS BELOW STACK POINTER:\n");
+    PrintF("  sp is here:          0x%016" PRIx64 "\n",
+           static_cast<uint64_t>(stack));
+    PrintF("  access was here:     0x%016" PRIx64 "\n",
+           static_cast<uint64_t>(address));
+    PrintF("  stack limit is here: 0x%016" PRIx64 "\n",
+           static_cast<uint64_t>(stack_limit_));
+    FATAL("ACCESS BELOW STACK POINTER");
+  }
+#endif
 }
 
 }  // namespace internal

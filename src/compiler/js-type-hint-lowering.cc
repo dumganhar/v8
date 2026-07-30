@@ -83,7 +83,21 @@ class JSSpeculativeBinopBuilder final {
         right_(right),
         effect_(effect),
         control_(control),
-        slot_(slot) {}
+        slot_(slot),
+        embedded_hint_(EmbeddedHintParameter::Invalid()) {}
+
+  JSSpeculativeBinopBuilder(const JSTypeHintLowering* lowering,
+                            const Operator* op, Node* left, Node* right,
+                            Node* effect, Node* control,
+                            const EmbeddedHintParameter& embedded_hint)
+      : lowering_(lowering),
+        op_(op),
+        left_(left),
+        right_(right),
+        effect_(effect),
+        control_(control),
+        slot_(FeedbackSlot::Invalid()),
+        embedded_hint_(embedded_hint) {}
 
   bool GetBinaryNumberOperationHint(NumberOperationHint* hint) {
     return BinaryOperationHintToNumberOperationHint(GetBinaryOperationHint(),
@@ -146,6 +160,7 @@ class JSSpeculativeBinopBuilder final {
         *hint = BigIntOperationHint::kBigInt64;
         return true;
     }
+    UNREACHABLE();
   }
 
   const Operator* SpeculativeNumberOp(NumberOperationHint hint) {
@@ -325,10 +340,16 @@ class JSSpeculativeBinopBuilder final {
 
  private:
   BinaryOperationHint GetBinaryOperationHint() {
+    if (slot_.IsInvalid() && !embedded_hint_.IsInvalid()) {
+      return std::get<BinaryOperationHint>(embedded_hint_.hint());
+    }
     return lowering_->GetBinaryOperationHint(slot_);
   }
 
   CompareOperationHint GetCompareOperationHint() {
+    if (slot_.IsInvalid() && !embedded_hint_.IsInvalid()) {
+      return std::get<CompareOperationHint>(embedded_hint_.hint());
+    }
     return lowering_->GetCompareOperationHint(slot_);
   }
 
@@ -339,6 +360,7 @@ class JSSpeculativeBinopBuilder final {
   Node* const effect_;
   Node* const control_;
   FeedbackSlot const slot_;
+  EmbeddedHintParameter const embedded_hint_;
 };
 
 JSTypeHintLowering::JSTypeHintLowering(JSHeapBroker* broker, JSGraph* jsgraph,
@@ -427,6 +449,7 @@ JSTypeHintLowering::LoweringResult JSTypeHintLowering::ReduceUnaryOperation(
       TypeOfFeedback::Result hint = broker()->GetFeedbackForTypeOf(feedback);
       switch (hint) {
         case TypeOfFeedback::kNumber:
+        case TypeOfFeedback::kSmi:
           check = jsgraph()->graph()->NewNode(
               jsgraph()->simplified()->CheckNumber(FeedbackSource()), operand,
               effect, control);
@@ -470,35 +493,6 @@ JSTypeHintLowering::LoweringResult JSTypeHintLowering::ReduceBinaryOperation(
     const Operator* op, Node* left, Node* right, Node* effect, Node* control,
     FeedbackSlot slot) const {
   switch (op->opcode()) {
-    case IrOpcode::kJSStrictEqual: {
-      if (Node* node = BuildDeoptIfFeedbackIsInsufficient(
-              slot, effect, control,
-              DeoptimizeReason::kInsufficientTypeFeedbackForCompareOperation)) {
-        return LoweringResult::Exit(node);
-      }
-      // TODO(turbofan): Should we generally support early lowering of
-      // JSStrictEqual operators here?
-      break;
-    }
-    case IrOpcode::kJSEqual:
-    case IrOpcode::kJSLessThan:
-    case IrOpcode::kJSGreaterThan:
-    case IrOpcode::kJSLessThanOrEqual:
-    case IrOpcode::kJSGreaterThanOrEqual: {
-      if (Node* node = BuildDeoptIfFeedbackIsInsufficient(
-              slot, effect, control,
-              DeoptimizeReason::kInsufficientTypeFeedbackForCompareOperation)) {
-        return LoweringResult::Exit(node);
-      }
-      JSSpeculativeBinopBuilder b(this, op, left, right, effect, control, slot);
-      if (Node* node = b.TryBuildNumberCompare()) {
-        return LoweringResult::SideEffectFree(node, node, control);
-      }
-      if (Node* node = b.TryBuildBigIntCompare()) {
-        return LoweringResult::SideEffectFree(node, node, control);
-      }
-      break;
-    }
     case IrOpcode::kJSInstanceOf: {
       if (Node* node = BuildDeoptIfFeedbackIsInsufficient(
               slot, effect, control,
@@ -551,11 +545,63 @@ JSTypeHintLowering::ReduceBinaryOperationWithEmbeddedHint(const Operator* op,
                                                           Node* effect,
                                                           Node* control) const {
   switch (op->opcode()) {
+    case IrOpcode::kJSEqual:
+    case IrOpcode::kJSLessThan:
+    case IrOpcode::kJSGreaterThan:
+    case IrOpcode::kJSLessThanOrEqual:
+    case IrOpcode::kJSGreaterThanOrEqual: {
+      auto embedded_hint = EmbeddedHintParameterOf(op);
+      if (Node* node = BuildDeoptIfFeedbackIsInsufficient(
+              embedded_hint, effect, control,
+              DeoptimizeReason::kInsufficientTypeFeedbackForCompareOperation)) {
+        return LoweringResult::Exit(node);
+      }
+      JSSpeculativeBinopBuilder b(this, op, left, right, effect, control,
+                                  embedded_hint);
+      if (Node* node = b.TryBuildNumberCompare()) {
+        return LoweringResult::SideEffectFree(node, node, control);
+      }
+      if (Node* node = b.TryBuildBigIntCompare()) {
+        return LoweringResult::SideEffectFree(node, node, control);
+      }
+      break;
+    }
     case IrOpcode::kJSStrictEqual: {
       if (Node* node = BuildDeoptIfFeedbackIsInsufficient(
               EmbeddedHintParameterOf(op), effect, control,
               DeoptimizeReason::kInsufficientTypeFeedbackForBinaryOperation)) {
         return LoweringResult::Exit(node);
+      }
+      break;
+    }
+    case IrOpcode::kJSBitwiseOr:
+    case IrOpcode::kJSBitwiseXor:
+    case IrOpcode::kJSBitwiseAnd:
+    case IrOpcode::kJSShiftLeft:
+    case IrOpcode::kJSShiftRight:
+    case IrOpcode::kJSShiftRightLogical:
+    case IrOpcode::kJSAdd:
+    case IrOpcode::kJSSubtract:
+    case IrOpcode::kJSMultiply:
+    case IrOpcode::kJSDivide:
+    case IrOpcode::kJSModulus:
+    case IrOpcode::kJSExponentiate: {
+      auto embedded_hint = EmbeddedHintParameterOf(op);
+      if (Node* node = BuildDeoptIfFeedbackIsInsufficient(
+              embedded_hint, effect, control,
+              DeoptimizeReason::kInsufficientTypeFeedbackForBinaryOperation)) {
+        return LoweringResult::Exit(node);
+      }
+      JSSpeculativeBinopBuilder b(this, op, left, right, effect, control,
+                                  embedded_hint);
+      if (Node* node = b.TryBuildNumberBinop()) {
+        return LoweringResult::SideEffectFree(node, node, control);
+      }
+      if (op->opcode() != IrOpcode::kJSShiftRightLogical &&
+          op->opcode() != IrOpcode::kJSExponentiate) {
+        if (Node* node = b.TryBuildBigIntBinop()) {
+          return LoweringResult::SideEffectFree(node, node, control);
+        }
       }
       break;
     }
@@ -714,6 +760,10 @@ Node* JSTypeHintLowering::BuildDeoptIfFeedbackIsInsufficient(
         using T = std::decay_t<decltype(h)>;
         if constexpr (std::is_same_v<T, CompareOperationHint>) {
           return h != CompareOperationHint::kNone;
+        } else if constexpr (std::is_same_v<T, BinaryOperationHint>) {
+          return h != BinaryOperationHint::kNone;
+        } else if constexpr (std::is_same_v<T, std::monostate>) {
+          return false;
         } else {
           UNREACHABLE();
         }

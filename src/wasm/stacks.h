@@ -11,6 +11,7 @@
 
 #include <optional>
 
+#include "src/base/functional/function-ref.h"
 #include "src/common/globals.h"
 #include "src/flags/flags.h"
 #include "src/objects/visitors.h"
@@ -27,6 +28,7 @@ class ThreadLocalTop;
 namespace v8::internal::wasm {
 
 class StackMemory;
+class WasmCode;
 
 struct JumpBuffer {
   Address sp;
@@ -68,6 +70,7 @@ class StackMemory {
   static StackMemory* GetCentralStackView(Isolate* isolate);
 
   ~StackMemory();
+  Address limit() const;
   void* jslimit() const;
   Address base() const {
     Address memory_limit = active_segment_
@@ -89,6 +92,8 @@ class StackMemory {
   void set_current_continuation(Tagged<WasmContinuationObject> cont) {
     current_cont_ = cont;
   }
+  void set_stack_obj(Tagged<WasmStackObject> stack) { stack_obj_ = stack; }
+  Tagged<WasmStackObject> stack_obj() { return stack_obj_; }
   bool IsValidContinuation(Tagged<WasmContinuationObject> cont);
   JumpBuffer* jmpbuf() { return &jmpbuf_; }
   bool Contains(Address addr) {
@@ -173,6 +178,7 @@ class StackMemory {
   }
 
   void set_func_ref(Tagged<WasmFuncRef> func_ref) { func_ref_ = func_ref; }
+  Tagged<WasmFuncRef> func_ref() const { return func_ref_; }
   static int func_ref_offset() { return OFFSET_OF(StackMemory, func_ref_); }
 
   static int JSCentralStackLimitMarginKB() {
@@ -184,7 +190,7 @@ class StackMemory {
   }
 
   static int JSGrowableStackLimitMarginKB() {
-    if (!v8_flags.experimental_wasm_growable_stacks) {
+    if (!v8_flags.wasm_growable_stacks) {
       return JSCentralStackLimitMarginKB();
     }
     // The limiting factor for this margin is the stack space used by outgoing
@@ -214,8 +220,43 @@ class StackMemory {
   constexpr static uint32_t current_continuation_offset() {
     return OFFSET_OF(StackMemory, current_cont_);
   }
+  constexpr static uint32_t signature_id_offset() {
+    return OFFSET_OF(StackMemory, signature_id_);
+  }
+  CanonicalTypeIndex signature_id() { return signature_id_; }
+  void set_signature_id(CanonicalTypeIndex id) { signature_id_ = id; }
+  constexpr static uint32_t wasm_code_offset() {
+    return OFFSET_OF(StackMemory, wasm_code_);
+  }
+  WasmCode* wasm_code() const { return wasm_code_; }
+  void set_wasm_code(WasmCode* code) { wasm_code_ = code; }
+  constexpr static uint32_t arg_buffer_offset() {
+    return OFFSET_OF(StackMemory, arg_buffer_);
+  }
+  void set_arg_buffer(Address addr) { arg_buffer_ = addr; }
+  void set_param_types(base::Vector<const CanonicalValueType> types) {
+    param_types_ = types;
+  }
+  base::Vector<const CanonicalValueType> param_types() const {
+    return param_types_;
+  }
+  void bind_arguments(int count) {
+    num_bound_args_ += count;
+    DCHECK_LE(num_bound_args_, param_types_.size());
+  }
+  int num_bound_args() const { return num_bound_args_; }
+  void clear_bound_args() {
+    param_types_ = {};
+    arg_buffer_ = kNullAddress;
+    num_bound_args_ = 0;
+  }
   Address central_stack_sp() const { return central_stack_sp_; }
   void set_central_stack_sp(Address sp) { central_stack_sp_ = sp; }
+  bool has_frames() const {
+    return !((jmpbuf_.state == JumpBuffer::Suspended &&
+              jmpbuf_.fp == kNullAddress) ||
+             jmpbuf_.state == JumpBuffer::Retired);
+  }
 
  private:
   // This constructor allocates a new stack segment.
@@ -239,8 +280,34 @@ class StackMemory {
   StackSwitchInfo stack_switch_info_;
   StackSegment* first_segment_ = nullptr;
   StackSegment* active_segment_ = nullptr;
+  // WasmFX specific fields below.
+  // Last continuation object created from this stack. The code traps if we
+  // attempt to resume it with any other continuation object.
   Tagged<WasmContinuationObject> current_cont_ = {};
   Tagged<WasmFuncRef> func_ref_ = {};
+  Tagged<WasmStackObject> stack_obj_ = {};
+  // Param type vector, to know which bound arguments are references and need to
+  // be visited by the GC. The memory is owned by the type canonicalizer.
+  base::Vector<const CanonicalValueType> param_types_;
+  Address arg_buffer_ = kNullAddress;
+  int num_bound_args_ = 0;
+  // Signature of {current_cont_}. This field is set when the stack is suspended
+  // or switched out of, and compared to the continuation type immediate when
+  // the continuation is consumed, in order to enforce type safety if
+  // continuation objects are corrupted inside the sandbox. Continuations are
+  // not castable so the canonical signature index must match exactly.
+  CanonicalTypeIndex signature_id_{kInvalidCanonicalIndex};
+  // Pointer to the WasmCode that executed the resume instruction that switched
+  // out of this stack. Used to quickly find the effect handler table during
+  // suspend.
+  // The GC keeps this code alive via the stack's top Wasm frame, so we don't
+  // need to track it explicitly here.
+  // The pointer is cleared when we return/suspend back to this stack to avoid
+  // keeping a dangling pointer if the frame is popped.
+  WasmCode* wasm_code_ = nullptr;
+  // When adding fields here, also check if it needs to be cleared in
+  // StackMemory::Reset() when the stack is moved to the stack pool after
+  // retiring.
 };
 
 constexpr int kStackSpOffset =
@@ -275,6 +342,34 @@ class StackPool {
   // stack is freed instead of being added to the free list.
   static constexpr int kMaxSize = 4 * MB;
 };
+
+using WasmFXArgBufferCallback =
+    base::FunctionRef<void(size_t value_index, int offset)>;
+
+template <typename T>
+int IterateWasmFXArgBuffer(base::Vector<const T> types,
+                           WasmFXArgBufferCallback callback) {
+  int offset = 0;
+  // There can be an unknown number of bound arguments for a given cont target.
+  // So we place the arguments from right to left in the buffer so that their
+  // offsets only depend on the remaining unbound arguments.
+  for (int i = static_cast<int>(types.size()) - 1; i >= 0; i--) {
+    int param_size = types[i].value_kind_full_size();
+    offset = RoundUp(offset, param_size);
+    callback(i, offset);
+    offset += param_size;
+  }
+  return offset;
+}
+
+template <typename T>
+std::pair<int, int> GetBufferSizeAndAlignmentFor(base::Vector<const T> types) {
+  int alignment = kSystemPointerSize;
+  int size = IterateWasmFXArgBuffer(types, [&](size_t index, int offset) {
+    alignment = std::max(alignment, types[index].value_kind_full_size());
+  });
+  return {size, alignment};
+}
 
 }  // namespace v8::internal::wasm
 

@@ -9,14 +9,14 @@
 // Include the non-inl header before the rest of the headers.
 
 #include "src/heap/heap-inl.h"
-#include "src/heap/page-metadata-inl.h"
+#include "src/heap/normal-page-inl.h"
 #include "src/objects/instance-type-inl.h"
 
 namespace v8::internal {
 
 LiveObjectRange::iterator::iterator() : cage_base_(kNullAddress) {}
 
-LiveObjectRange::iterator::iterator(const PageMetadata* page)
+LiveObjectRange::iterator::iterator(const NormalPage* page)
     : page_(page),
       cells_(page->marking_bitmap()->cells()),
       cage_base_(page->heap()->isolate()),
@@ -59,7 +59,7 @@ bool LiveObjectRange::iterator::AdvanceToNextMarkedObject() {
     // up and including the end address. This works for one word fillers as
     // well as other objects.
     Address next_object = current_object_.address() + current_size_;
-    current_object_ = HeapObject();
+    current_object_ = {};
     if (MemoryChunk::IsAligned(next_object)) {
       return false;
     }
@@ -88,10 +88,10 @@ bool LiveObjectRange::iterator::AdvanceToNextMarkedObject() {
       Address object_address = current_cell_base + trailing_zeros * kTaggedSize;
       // The object may be a filler which we want to skip.
       current_object_ = HeapObject::FromAddress(object_address);
-      current_map_ = current_object_->map(cage_base_, kAcquireLoad);
+      current_map_ = current_object_->map(kAcquireLoad);
       DCHECK(MapWord::IsMapOrForwarded(current_map_));
       current_size_ = ALIGN_TO_ALLOCATION_ALIGNMENT(
-          current_object_->SizeFromMap(current_map_));
+          current_object_->SafeSizeFromMap(current_map_).value());
       CHECK(page_->ContainsLimit(object_address + current_size_));
       return true;
     }

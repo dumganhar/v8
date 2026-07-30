@@ -35,10 +35,10 @@
 #include "src/flags/flags.h"
 #include "src/handles/handles-inl.h"
 #include "src/handles/handles.h"
+#include "src/heap/base-page.h"
 #include "src/heap/factory-inl.h"
 #include "src/heap/factory.h"
-#include "src/heap/memory-chunk-metadata.h"
-#include "src/heap/mutable-page-metadata.h"
+#include "src/heap/mutable-page.h"
 #include "src/logging/counters.h"
 #include "src/objects/code.h"
 #include "src/objects/contexts.h"
@@ -706,20 +706,23 @@ void MacroAssembler::SarPair_cl(Register high, Register low) {
 }
 
 void MacroAssembler::LoadMap(Register destination, Register object) {
-  mov(destination, FieldOperand(object, HeapObject::kMapOffset));
+  mov(destination, FieldOperand(object, offsetof(HeapObject, map_)));
 }
 
-void MacroAssembler::LoadFeedbackVector(Register dst, Register closure,
-                                        Register scratch, Label* fbv_undef,
-                                        Label::Distance distance) {
-  Label done;
+void MacroAssembler::LoadFeedbackCell(Register dst, Register closure) {
+  mov(dst, FieldOperand(closure, offsetof(JSFunction, feedback_cell_)));
+}
 
-  // Load the feedback vector from the closure.
-  mov(dst, FieldOperand(closure, JSFunction::kFeedbackCellOffset));
-  mov(dst, FieldOperand(dst, FeedbackCell::kValueOffset));
+void MacroAssembler::LoadFeedbackVectorFromCell(Register dst,
+                                                Register feedback_cell,
+                                                Register scratch,
+                                                Label* fbv_undef,
+                                                Label::Distance distance) {
+  Label done;
+  mov(dst, FieldOperand(feedback_cell, offsetof(FeedbackCell, value_)));
 
   // Check if feedback vector is valid.
-  mov(scratch, FieldOperand(dst, HeapObject::kMapOffset));
+  mov(scratch, FieldOperand(dst, offsetof(HeapObject, map_)));
   CmpInstanceType(scratch, FEEDBACK_VECTOR_TYPE);
   j(equal, &done, Label::kNear);
 
@@ -728,6 +731,13 @@ void MacroAssembler::LoadFeedbackVector(Register dst, Register closure,
   jmp(fbv_undef, distance);
 
   bind(&done);
+}
+
+void MacroAssembler::LoadFeedbackVector(Register dst, Register closure,
+                                        Register scratch, Label* fbv_undef,
+                                        Label::Distance distance) {
+  LoadFeedbackCell(dst, closure);
+  LoadFeedbackVectorFromCell(dst, dst, scratch, fbv_undef, distance);
 }
 
 void MacroAssembler::LoadInterpreterDataBytecodeArray(
@@ -751,7 +761,7 @@ void MacroAssembler::CmpObjectType(Register heap_object, InstanceType type,
 }
 
 void MacroAssembler::CmpInstanceType(Register map, InstanceType type) {
-  cmpw(FieldOperand(map, Map::kInstanceTypeOffset), Immediate(type));
+  cmpw(FieldOperand(map, offsetof(Map, instance_type_)), Immediate(type));
 }
 
 void MacroAssembler::CmpInstanceTypeRange(Register map,
@@ -761,7 +771,7 @@ void MacroAssembler::CmpInstanceTypeRange(Register map,
                                           InstanceType higher_limit) {
   ASM_CODE_COMMENT(this);
   DCHECK_LT(lower_limit, higher_limit);
-  movzx_w(instance_type_out, FieldOperand(map, Map::kInstanceTypeOffset));
+  movzx_w(instance_type_out, FieldOperand(map, offsetof(Map, instance_type_)));
   CompareRange(instance_type_out, lower_limit, higher_limit, scratch);
 }
 
@@ -843,6 +853,19 @@ void MacroAssembler::AssertSmi(Operand object) {
   Check(equal, AbortReason::kOperandIsNotASmi);
 }
 
+void MacroAssembler::AssertMap(Register object, Register scratch) {
+  if (!v8_flags.debug_code) return;
+  ASM_CODE_COMMENT(this);
+  DCHECK(!AreAliased(object, scratch));
+  test(object, Immediate(kSmiTagMask));
+  Check(not_equal, AbortReason::kOperandIsNotAMap);
+  Push(object);
+  LoadMap(object, object);
+  CmpObjectType(object, MAP_TYPE, scratch);
+  Pop(object);
+  Check(equal, AbortReason::kOperandIsNotAMap);
+}
+
 void MacroAssembler::AssertConstructor(Register object) {
   if (v8_flags.debug_code) {
     ASM_CODE_COMMENT(this);
@@ -850,7 +873,7 @@ void MacroAssembler::AssertConstructor(Register object) {
     Check(not_equal, AbortReason::kOperandIsASmiAndNotAConstructor);
     Push(object);
     LoadMap(object, object);
-    test_b(FieldOperand(object, Map::kBitFieldOffset),
+    test_b(FieldOperand(object, offsetof(Map, bit_field_)),
            Immediate(Map::Bits1::IsConstructorBit::kMask));
     Pop(object);
     Check(not_zero, AbortReason::kOperandIsNotAConstructor);
@@ -953,7 +976,7 @@ void MacroAssembler::AssertJSAny(Register object, Register map_tmp,
 
   JumpIfSmi(object, &ok, Label::kNear);
 
-  mov(map_tmp, FieldOperand(object, HeapObject::kMapOffset));
+  mov(map_tmp, FieldOperand(object, offsetof(HeapObject, map_)));
 
   CmpInstanceType(map_tmp, LAST_NAME_TYPE);
   j(below_equal, &ok, Label::kNear);
@@ -1100,12 +1123,11 @@ void MacroAssembler::AllocateStackSpace(int bytes) {
 #endif
 
 void MacroAssembler::EnterExitFrame(int extra_slots,
-                                    StackFrame::Type frame_type,
-                                    Register c_function) {
+                                    StackFrame::Type frame_type) {
   ASM_CODE_COMMENT(this);
   DCHECK(frame_type == StackFrame::EXIT ||
          frame_type == StackFrame::BUILTIN_EXIT ||
-         frame_type == StackFrame::API_ACCESSOR_EXIT ||
+         frame_type == StackFrame::API_NAMED_ACCESSOR_EXIT ||
          frame_type == StackFrame::API_CALLBACK_EXIT);
 
   // Set up the frame structure on the stack.
@@ -1120,15 +1142,9 @@ void MacroAssembler::EnterExitFrame(int extra_slots,
   push(Immediate(0));  // Saved entry sp, patched below.
 
   // Save the frame pointer and the context in top.
-  DCHECK(!AreAliased(ebp, kContextRegister, c_function));
-  using ER = ExternalReference;
-  ER r0 = ER::Create(IsolateAddressId::kCEntryFPAddress, isolate());
-  mov(ExternalReferenceAsOperand(r0, no_reg), ebp);
-  ER r1 = ER::Create(IsolateAddressId::kContextAddress, isolate());
-  mov(ExternalReferenceAsOperand(r1, no_reg), kContextRegister);
-  static_assert(edx == kRuntimeCallFunctionRegister);
-  ER r2 = ER::Create(IsolateAddressId::kCFunctionAddress, isolate());
-  mov(ExternalReferenceAsOperand(r2, no_reg), c_function);
+  DCHECK(!AreAliased(ebp, kContextRegister));
+  mov(AsMemOperand(IsolateFieldId::kCEntryFP), ebp);
+  mov(AsMemOperand(IsolateFieldId::kContext), kContextRegister);
 
   AllocateStackSpace(extra_slots * kSystemPointerSize);
 
@@ -1149,20 +1165,13 @@ void MacroAssembler::LeaveExitFrame(Register scratch) {
   leave();
 
   // Clear the top frame.
-  ExternalReference c_entry_fp_address =
-      ExternalReference::Create(IsolateAddressId::kCEntryFPAddress, isolate());
-  mov(ExternalReferenceAsOperand(c_entry_fp_address, scratch), Immediate(0));
+  mov(AsMemOperand(IsolateFieldId::kCEntryFP), Immediate(0));
 
   // Restore the current context from top and clear it in debug mode.
-  ExternalReference context_address =
-      ExternalReference::Create(IsolateAddressId::kContextAddress, isolate());
-  mov(esi, ExternalReferenceAsOperand(context_address, scratch));
+  mov(esi, AsMemOperand(IsolateFieldId::kContext));
 
 #ifdef DEBUG
-  push(eax);
-  mov(ExternalReferenceAsOperand(context_address, eax),
-      Immediate(Context::kNoContext));
-  pop(eax);
+  mov(AsMemOperand(IsolateFieldId::kContext), Immediate(Context::kNoContext));
 #endif
 }
 
@@ -1175,20 +1184,17 @@ void MacroAssembler::PushStackHandler(Register scratch) {
   push(Immediate(0));  // Padding.
 
   // Link the current handler as the next handler.
-  ExternalReference handler_address =
-      ExternalReference::Create(IsolateAddressId::kHandlerAddress, isolate());
-  push(ExternalReferenceAsOperand(handler_address, scratch));
+  Operand handler_op = AsMemOperand(IsolateFieldId::kHandler);
+  push(handler_op);
 
   // Set this new handler as the current one.
-  mov(ExternalReferenceAsOperand(handler_address, scratch), esp);
+  mov(handler_op, esp);
 }
 
 void MacroAssembler::PopStackHandler(Register scratch) {
   ASM_CODE_COMMENT(this);
   static_assert(StackHandlerConstants::kNextOffset == 0);
-  ExternalReference handler_address =
-      ExternalReference::Create(IsolateAddressId::kHandlerAddress, isolate());
-  pop(ExternalReferenceAsOperand(handler_address, scratch));
+  pop(AsMemOperand(IsolateFieldId::kHandler));
   add(esp, Immediate(StackHandlerConstants::kSize - kSystemPointerSize));
 }
 
@@ -1264,11 +1270,10 @@ void MacroAssembler::StackOverflowCheck(Register num_args, Register scratch,
   // Check the stack for overflow. We are not trying to catch
   // interruptions (e.g. debug break and preemption) here, so the "real stack
   // limit" is checked.
-  ExternalReference real_stack_limit =
-      ExternalReference::address_of_real_jslimit(isolate());
+
   // Compute the space that is left as a negative number in scratch. If
   // we already overflowed, this will be a positive number.
-  mov(scratch, ExternalReferenceAsOperand(real_stack_limit, scratch));
+  mov(scratch, AsMemOperand(IsolateFieldId::kRealJsLimit));
   sub(scratch, esp);
   // TODO(victorgomes): Remove {include_receiver} and always require one extra
   // word of the stack space.
@@ -1473,10 +1478,10 @@ void MacroAssembler::InvokeFunction(Register fun, Register new_target,
   DCHECK(type == InvokeType::kJump || has_frame());
 
   DCHECK(fun == edi);
-  mov(ecx, FieldOperand(edi, JSFunction::kSharedFunctionInfoOffset));
-  mov(esi, FieldOperand(edi, JSFunction::kContextOffset));
-  movzx_w(ecx,
-          FieldOperand(ecx, SharedFunctionInfo::kFormalParameterCountOffset));
+  mov(ecx, FieldOperand(edi, offsetof(JSFunction, shared_function_info_)));
+  mov(esi, FieldOperand(edi, offsetof(JSFunction, context_)));
+  movzx_w(ecx, FieldOperand(
+                   ecx, offsetof(SharedFunctionInfo, formal_parameter_count_)));
 
   InvokeFunctionCode(edi, new_target, ecx, actual_parameter_count, type);
 }
@@ -1490,8 +1495,9 @@ void MacroAssembler::LoadNativeContextSlot(Register destination, int index) {
   // Load the native context from the current context.
   LoadMap(destination, esi);
   mov(destination,
-      FieldOperand(destination,
-                   Map::kConstructorOrBackPointerOrNativeContextOffset));
+      FieldOperand(
+          destination,
+          offsetof(Map, constructor_or_back_pointer_or_native_context_)));
   // Load the function from the native context.
   mov(destination, Operand(destination, Context::SlotOffset(index)));
 }
@@ -2073,7 +2079,8 @@ void MacroAssembler::LoadEntrypointFromJSDispatchTable(
 void MacroAssembler::CallJSFunction(Register function_object,
                                     uint16_t argument_count) {
   static_assert(kJavaScriptCallCodeStartRegister == ecx, "ABI mismatch");
-  mov(ecx, FieldOperand(function_object, JSFunction::kDispatchHandleOffset));
+  mov(ecx,
+      FieldOperand(function_object, offsetof(JSFunction, dispatch_handle_)));
   LoadEntrypointFromJSDispatchTable(ecx, ecx);
   call(ecx);
 }
@@ -2081,7 +2088,8 @@ void MacroAssembler::CallJSFunction(Register function_object,
 void MacroAssembler::JumpJSFunction(Register function_object,
                                     JumpMode jump_mode) {
   static_assert(kJavaScriptCallCodeStartRegister == ecx, "ABI mismatch");
-  mov(ecx, FieldOperand(function_object, JSFunction::kDispatchHandleOffset));
+  mov(ecx,
+      FieldOperand(function_object, offsetof(JSFunction, dispatch_handle_)));
   LoadEntrypointFromJSDispatchTable(ecx, ecx);
   jmp(ecx);
 }
@@ -2269,7 +2277,8 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
                               ExternalReference thunk_ref, Register thunk_arg,
                               int slots_to_drop_on_return,
                               MemOperand* argc_operand,
-                              MemOperand return_value_operand) {
+                              MemOperand return_value_operand,
+                              bool handle_interceptor_result) {
   ASM_CODE_COMMENT(masm);
 
   using ER = ExternalReference;
@@ -2296,7 +2305,7 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
   DCHECK(!AreAliased(return_value, scratch, prev_next_address_reg,
                      prev_limit_reg));
   // function_address and thunk_arg might overlap but this function must not
-  // corrupted them until the call is made (i.e. overlap with return_value is
+  // corrupt them until the call is made (i.e. overlap with return_value is
   // fine).
   DCHECK(!AreAliased(function_address,  // incoming parameters
                      scratch, prev_next_address_reg, prev_limit_reg));
@@ -2310,7 +2319,8 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
     __ mov(prev_limit_reg, limit_mem_op);
   }
 
-  Label profiler_or_side_effects_check_enabled, done_api_call;
+  Label profiler_or_side_effects_check_enabled, done_api_call,
+      done_reading_result;
   if (with_profiling) {
     __ RecordComment("Check if profiler or side effects check is enabled");
     __ cmpb(__ ExternalReferenceAsOperand(IsolateFieldId::kExecutionMode),
@@ -2328,8 +2338,21 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
   __ call(function_address);
   __ bind(&done_api_call);
 
+  if (handle_interceptor_result) {
+    // Skip reading return value if the callback returned kInterceptedNo,
+    // this would make the builtin return kNotInterceptedSentinel value.
+    // Size is important here, otherwise the C++ function could have returned
+    // one- or two-byte value with junk in the upper part.
+    static_assert(kInterceptedNo == 1 && kInterceptedSize == 4);
+    static_assert(kInterceptedNo == kNotInterceptedSentinel);
+    static_assert(kInterceptedYes == 0);
+    __ test_b(return_value, return_value);
+    __ j(not_zero, &done_reading_result);
+  }
+
   __ RecordComment("Load the value from ReturnValue");
   __ mov(return_value, return_value_operand);
+  __ bind(&done_reading_result);
 
   Label propagate_exception;
   Label delete_allocated_handles;
@@ -2364,8 +2387,16 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
     __ j(not_equal, &propagate_exception);
   }
 
-  __ AssertJSAny(return_value, scratch,
-                 AbortReason::kAPICallReturnedInvalidObject);
+  if (v8_flags.debug_code) {
+    Label ok;
+    if (handle_interceptor_result) {
+      __ cmp(return_value, kNotInterceptedSentinel);
+      __ j(equal, &ok);
+    }
+    __ AssertJSAny(return_value, scratch,
+                   AbortReason::kAPICallReturnedInvalidObject);
+    __ bind(&ok);
+  }
 
   if (argc_operand == nullptr) {
     DCHECK_NE(slots_to_drop_on_return, 0);
@@ -2382,7 +2413,7 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
   if (with_profiling) {
     ASM_CODE_COMMENT_STRING(masm, "Call the api function via thunk wrapper.");
     __ bind(&profiler_or_side_effects_check_enabled);
-    // Additional parameter is the address of the actual callback function.
+    // Additional parameter if provided.
     if (thunk_arg.is_valid()) {
       MemOperand thunk_arg_mem_op = __ ExternalReferenceAsOperand(
           IsolateFieldId::kApiCallbackThunkArgument);

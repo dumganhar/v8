@@ -9,6 +9,7 @@
 #error This header should only be included if WebAssembly is enabled.
 #endif  // !V8_ENABLE_WEBASSEMBLY
 
+#include "src/base/logging.h"
 #include "src/base/memory.h"
 #include "src/common/simd128.h"
 #include "src/handles/handles.h"
@@ -77,27 +78,25 @@ class WasmValue {
       : type_(type), bit_pattern_{} {
     static_assert(sizeof(DirectHandle<Object>) <= sizeof(bit_pattern_),
                   "bit_pattern_ must be large enough to fit a Handle");
-    DCHECK(type.is_reference());
+    DCHECK(type.is_ref());
     base::WriteUnalignedValue<DirectHandle<Object>>(
         reinterpret_cast<Address>(bit_pattern_), ref);
   }
 
   DirectHandle<Object> to_ref() const {
-    DCHECK(type_.is_reference());
+    DCHECK(type_.is_ref());
     return base::ReadUnalignedValue<DirectHandle<Object>>(
         reinterpret_cast<Address>(bit_pattern_));
   }
 
   CanonicalValueType type() const { return type_; }
 
-  const WasmModule* module() const { return module_; }
-
   // Checks equality of type and bit pattern (also for float and double values).
   bool operator==(const WasmValue& other) const {
     return type_ == other.type_ &&
            !memcmp(bit_pattern_, other.bit_pattern_,
-                   type_.is_reference() ? sizeof(DirectHandle<Object>)
-                                        : type_.value_kind_size());
+                   type_.is_ref() ? sizeof(DirectHandle<Object>)
+                                  : type_.value_kind_size());
   }
 
   void CopyTo(uint8_t* to) const {
@@ -107,7 +106,7 @@ class WasmValue {
     memcpy(to, bit_pattern_, type_.value_kind_size());
   }
 
-  // If {packed_type.is_packed()}, create a new value of {packed_type()}.
+  // If {packed_type.is_packed()}, create a new value of {packed_type}.
   // Otherwise, return this object.
   WasmValue Packed(ValueType packed_type) const {
     if (packed_type == kWasmI8) {
@@ -171,6 +170,7 @@ class WasmValue {
       case kBottom:
         UNREACHABLE();
     }
+    UNREACHABLE();
   }
 
   bool zero_byte_representation() {
@@ -183,7 +183,6 @@ class WasmValue {
  private:
   CanonicalValueType type_;
   uint8_t bit_pattern_[16];
-  const WasmModule* module_ = nullptr;
 };
 
 #define DECLARE_CAST(name, localtype, ctype, ...) \

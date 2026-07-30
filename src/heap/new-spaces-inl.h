@@ -8,14 +8,12 @@
 #include "src/heap/new-spaces.h"
 // Include the non-inl header before the rest of the headers.
 
-#include "src/base/sanitizer/msan.h"
 #include "src/common/globals.h"
 #include "src/heap/heap.h"
-#include "src/heap/page-metadata.h"
+#include "src/heap/normal-page.h"
 #include "src/heap/paged-spaces-inl.h"
 #include "src/heap/spaces-inl.h"
-#include "src/objects/objects-inl.h"
-#include "src/objects/tagged-impl.h"
+#include "src/objects/heap-object-inl.h"
 #include "src/objects/tagged.h"
 
 namespace v8 {
@@ -35,7 +33,7 @@ Tagged<HeapObject> SemiSpaceObjectIterator::Next() {
     while (current_object_ < current_page_->area_end()) {
       Tagged<HeapObject> object = HeapObject::FromAddress(current_object_);
       SafeHeapObjectSize object_size = object->SafeSize();
-      DCHECK_LE(object_size.value(), PageMetadata::kPageSize);
+      DCHECK_LE(object_size.value(), NormalPage::kPageSize);
       Address next_object =
           current_object_ + ALIGN_TO_ALLOCATION_ALIGNMENT(object_size.value());
       DCHECK_GT(next_object, current_object_);
@@ -53,15 +51,15 @@ Tagged<HeapObject> SemiSpaceObjectIterator::Next() {
 
 void SemiSpaceNewSpace::IncrementAllocationTop(Address new_top) {
   DCHECK_LE(allocation_top_, new_top);
-  DCHECK_EQ(PageMetadata::FromAllocationAreaAddress(allocation_top_),
-            PageMetadata::FromAllocationAreaAddress(new_top));
+  DCHECK_EQ(NormalPage::FromAllocationAreaAddress(allocation_top_),
+            NormalPage::FromAllocationAreaAddress(new_top));
   allocation_top_ = new_top;
 }
 
 void SemiSpaceNewSpace::DecrementAllocationTop(Address new_top) {
   DCHECK_LE(new_top, allocation_top_);
-  DCHECK_EQ(PageMetadata::FromAllocationAreaAddress(allocation_top_),
-            PageMetadata::FromAllocationAreaAddress(new_top));
+  DCHECK_EQ(NormalPage::FromAllocationAreaAddress(allocation_top_),
+            NormalPage::FromAllocationAreaAddress(new_top));
   allocation_top_ = new_top;
 }
 
@@ -74,7 +72,7 @@ bool SemiSpaceNewSpace::IsAddressBelowAgeMark(Address address) const {
   // However, on page promotion (new to old) during a full GC the page flags are
   // already updated to old space before using this method.
 #ifdef DEBUG
-  auto* metadata = chunk->Metadata(heap()->isolate());
+  auto* metadata = chunk->Metadata(Isolate::FromHeap(heap()));
   DCHECK_IMPLIES(!chunk->InYoungGeneration(), metadata->will_be_promoted());
   DCHECK(!metadata->is_large());
 #endif  // DEBUG
@@ -86,7 +84,7 @@ bool SemiSpaceNewSpace::IsAddressBelowAgeMark(Address address) const {
   const Address age_mark = age_mark_;
   const bool on_age_mark_page =
       chunk->address() < age_mark &&
-      age_mark <= chunk->address() + PageMetadata::kPageSize;
+      age_mark <= chunk->address() + NormalPage::kPageSize;
   DCHECK_EQ(chunk->Metadata()->ContainsLimit(age_mark), on_age_mark_page);
   return !on_age_mark_page || address < age_mark;
 }

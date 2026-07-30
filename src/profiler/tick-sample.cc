@@ -65,16 +65,19 @@ bool IsNoFrameRegion(i::Address address) {
       int offset = *offset_ptr;
       if (!offset || IsSamePage(address, address - offset)) {
         MSAN_MEMORY_IS_INITIALIZED(pc - offset, pattern->bytes_count);
-        if (!memcmp(pc - offset, pattern->bytes, pattern->bytes_count))
+        if (!memcmp(pc - offset, pattern->bytes, pattern->bytes_count)) {
           return true;
+        }
       } else {
         // It is not safe to examine bytes on another page as it might not be
         // allocated thus causing a SEGFAULT.
         // Check the pattern part that's on the same page and
         // pessimistically assume it could be the entire pattern match.
         MSAN_MEMORY_IS_INITIALIZED(pc, pattern->bytes_count - offset);
-        if (!memcmp(pc, pattern->bytes + offset, pattern->bytes_count - offset))
+        if (!memcmp(pc, pattern->bytes + offset,
+                    pattern->bytes_count - offset)) {
           return true;
+        }
       }
     }
   }
@@ -336,16 +339,8 @@ bool TickSample::GetStackSample(Isolate* v8_isolate, RegisterState* regs,
   if (record_c_entry_frame == kIncludeCEntryFrame &&
       (it.top_frame_type() == internal::StackFrame::EXIT ||
        it.top_frame_type() == internal::StackFrame::BUILTIN_EXIT)) {
-    // While BUILTIN_EXIT definitely represents a call to CEntry the EXIT frame
-    // might represent either a call to CEntry or an optimized call to
-    // Api callback. In the latter case the ExternalCallbackScope points to
-    // the same function, so skip adding a frame in that case in order to avoid
-    // double-reporting.
     void* c_function = reinterpret_cast<void*>(isolate->c_function());
-    if (sample_info->external_callback_entry != c_function) {
-      frames[i] = c_function;
-      i++;
-    }
+    frames[i++] = c_function;
   }
 #ifdef V8_RUNTIME_CALL_STATS
   i::RuntimeCallTimer* timer =

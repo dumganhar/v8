@@ -154,9 +154,7 @@ remoting/host/worker_process_ipc_delegate.h
 remoting/protocol/audio_source.h
 remoting/protocol/audio_stream.h
 remoting/protocol/cursor_shape_stub.h
-remoting/protocol/message_channel_factory.h
 remoting/protocol/test_event_matchers.h
-remoting/protocol/video_feedback_stub.h
 remoting/protocol/video_stream.h
 sandbox/linux/system_headers/capability.h
 skia/ext/convolver_mips_dspr2.h
@@ -187,7 +185,6 @@ third_party/libvpx/source/config/nacl/vpx_scale_rtcd.h
 third_party/libvpx/source/config/vpx_version.h
 third_party/opus/src/src/opus_private.h
 third_party/opus/src/tests/test_opus_common.h
-third_party/protobuf/src/google/protobuf/compiler/csharp/csharp_names.h
 third_party/snappy/linux/config.h
 third_party/speech-dispatcher/libspeechd.h
 third_party/sqlite/sqlite3.h

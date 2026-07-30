@@ -40,6 +40,7 @@
 #include "RawPtrManualPathsToIgnore.h"
 #include "SeparateRepositoryPaths.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/TypeLoc.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/ASTMatchers/ASTMatchersMacros.h"
@@ -83,6 +84,15 @@ const char kRawSpanIncludePath[] = "base/memory/raw_span.h";
 // - OutputSectionHelper
 // - raw_ptr_plugin::FilterFile
 const char kExcludeFieldsParamName[] = "exclude-fields";
+
+// Name of a cmdline parameter that can be used to specify a file listing
+// fully-qualified names of fields that should be rewritten using
+// raw_ptr<T, AllowPtrArithmetic> instead of raw_ptr<T>.
+//
+// See also:
+// - OutputSectionHelper
+// - raw_ptr_plugin::FilterFile
+const char kArithmeticFieldsParamName[] = "arithmetic-fields";
 
 // Name of a cmdline parameter that can be used to specify a file listing
 // regular expressions describing paths that should be excluded from the
@@ -271,7 +281,7 @@ class OutputHelper : public clang::tooling::SourceFileCallbacks {
       case clang::Language::LLVM_IR:
       case clang::Language::OpenCL:
       case clang::Language::CUDA:
-      case clang::Language::RenderScript:
+      case clang::Language::CIR:
       case clang::Language::HIP:
       case clang::Language::HLSL:
         // Rewriter can't handle rewriting the current input language.
@@ -425,16 +435,16 @@ AST_MATCHER_P(clang::QualType,
 class FieldDeclRewriter : public MatchFinder::MatchCallback {
  public:
   explicit FieldDeclRewriter(OutputHelper* output_helper,
-                             const char* format_string,
                              const char* include_path)
-      : output_helper_(output_helper),
-        format_string_(format_string),
-        include_path_(include_path) {}
+      : output_helper_(output_helper), include_path_(include_path) {}
 
   FieldDeclRewriter(const FieldDeclRewriter&) = delete;
   FieldDeclRewriter& operator=(const FieldDeclRewriter&) = delete;
 
   virtual bool earlyExit(const MatchFinder::MatchResult& result) const = 0;
+
+  virtual std::string GetFormatString(
+      const clang::FieldDecl& field_decl) const = 0;
 
   void run(const MatchFinder::MatchResult& result) override {
     if (earlyExit(result)) {
@@ -479,7 +489,8 @@ class FieldDeclRewriter : public MatchFinder::MatchCallback {
                                          field_decl->getLocation());
 
     // Calculate |replacement_text|.
-    std::string replacement_text = GenerateNewText(ast_context, pointer_type);
+    std::string replacement_text =
+        GenerateNewText(ast_context, pointer_type, *field_decl);
     if (field_decl->isMutable())
       replacement_text.insert(0, "mutable ");
 
@@ -490,7 +501,8 @@ class FieldDeclRewriter : public MatchFinder::MatchCallback {
 
  private:
   std::string GenerateNewText(const clang::ASTContext& ast_context,
-                              const clang::QualType& pointer_type) {
+                              const clang::QualType& pointer_type,
+                              const clang::FieldDecl& field_decl) {
     std::string result;
 
     clang::QualType pointee_type = pointer_type->getPointeeType();
@@ -506,19 +518,17 @@ class FieldDeclRewriter : public MatchFinder::MatchCallback {
 
     // Convert pointee type to string.
     clang::PrintingPolicy printing_policy(ast_context.getLangOpts());
-    printing_policy.SuppressScope = 1;  // s/blink::Pointee/Pointee/
     std::string pointee_type_as_string =
         pointee_type.getAsString(printing_policy);
-    result += llvm::formatv(format_string_, pointee_type_as_string);
+    result += llvm::formatv(GetFormatString(field_decl).c_str(),
+                            pointee_type_as_string);
 
     return result;
   }
 
   OutputHelper* const output_helper_;
-  const char* format_string_;
   const char* include_path_;
 };
-
 class AffectedExprRewriter : public MatchFinder::MatchCallback {
  public:
   explicit AffectedExprRewriter(
@@ -573,18 +583,23 @@ class RawPtrRewriter {
   RawPtrRewriter(
       OutputHelper* output_helper,
       MatchFinder& finder,
-      const raw_ptr_plugin::RawPtrAndRefExclusionsOptions& exclusion_options)
+      const raw_ptr_plugin::RawPtrAndRefExclusionsOptions& exclusion_options,
+      const raw_ptr_plugin::FilterFile* arithmetic_fields)
       : match_finder(finder),
-        field_decl_rewriter(output_helper, "raw_ptr<{0}> ", kRawPtrIncludePath),
+        field_decl_rewriter(output_helper,
+                            kRawPtrIncludePath,
+                            arithmetic_fields),
         affected_expr_rewriter(output_helper, getRangeAndText_),
-        filtered_addr_of_expr_writer(output_helper, "addr-of"),
-        filtered_in_out_ref_arg_writer(output_helper, "in-out-param-ref"),
-        overlapping_field_decl_writer(output_helper, "overlapping"),
-        macro_field_decl_writer(output_helper, "macro"),
-        global_scope_rewriter(output_helper, "global-scope"),
-        union_field_decl_writer(output_helper, "union"),
+        filtered_addr_of_expr_writer(output_helper, "ignore:addr-of"),
+        filtered_in_out_ref_arg_writer(output_helper,
+                                       "ignore:in-out-param-ref"),
+        overlapping_field_decl_writer(output_helper, "ignore:overlapping"),
+        macro_field_decl_writer(output_helper, "ignore:macro"),
+        global_scope_rewriter(output_helper, "ignore:global-scope"),
+        union_field_decl_writer(output_helper, "ignore:union"),
         reinterpret_cast_struct_writer(output_helper,
-                                       "reinterpret-cast-trivial-type"),
+                                       "ignore:reinterpret-cast-trivial-type"),
+        filtered_ptr_arithmetic_writer(output_helper, "pointer-arithmetic"),
         exclusion_options_(exclusion_options) {}
 
   void addMatchers() {
@@ -609,6 +624,15 @@ class RawPtrRewriter {
             .bind("affectedMemberExpr");
     auto affected_expr_matcher = ignoringImplicit(affected_member_expr_matcher);
 
+    auto arithmetic_matcher =
+        stmt(anyOf(binaryOperator(hasAnyOperatorName("+", "-", "+=", "-="),
+                                  hasEitherOperand(affected_expr_matcher)),
+                   unaryOperator(hasAnyOperatorName("++", "--"),
+                                 hasUnaryOperand(affected_expr_matcher)),
+                   arraySubscriptExpr(hasBase(affected_expr_matcher))));
+    match_finder.addMatcher(arithmetic_matcher,
+                            &filtered_ptr_arithmetic_writer);
+
     // Places where |.get()| needs to be appended =========
     // Given
     //   void foo(const S& s) {
@@ -620,7 +644,7 @@ class RawPtrRewriter {
     //
     // See also testcases in tests/affected-expr-original.cc
     auto affected_expr_that_needs_fixing_matcher = expr(allOf(
-        affected_expr_matcher,
+        affected_expr_matcher, unless(hasParent(cxxStaticCastExpr())),
         hasParent(expr(anyOf(callExpr(callee(functionDecl(isVariadic()))),
                              cxxConstCastExpr(), cxxReinterpretCastExpr())))));
 
@@ -822,14 +846,28 @@ class RawPtrRewriter {
   // |#include "base/memory/raw_ptr.h"|.
   class RawPtrFieldDeclRewriter : public FieldDeclRewriter {
    public:
-    explicit RawPtrFieldDeclRewriter(OutputHelper* output_helper,
-                                     const char* format_string,
-                                     const char* include_path)
-        : FieldDeclRewriter(output_helper, format_string, include_path) {}
+    explicit RawPtrFieldDeclRewriter(
+        OutputHelper* output_helper,
+        const char* include_path,
+        const raw_ptr_plugin::FilterFile* arithmetic_fields)
+        : FieldDeclRewriter(output_helper, include_path),
+          arithmetic_fields_(arithmetic_fields) {}
 
     bool earlyExit(const MatchFinder::MatchResult& result) const override {
       return false;
     }
+
+    std::string GetFormatString(
+        const clang::FieldDecl& field_decl) const override {
+      if (arithmetic_fields_ && arithmetic_fields_->ContainsLine(
+                                    field_decl.getQualifiedNameAsString())) {
+        return "raw_ptr<{0}, AllowPtrArithmetic> ";
+      }
+      return "raw_ptr<{0}> ";
+    }
+
+   private:
+    const raw_ptr_plugin::FilterFile* arithmetic_fields_;
   };
   // Rewrites |my_struct.ptr_field| (matched as "affectedMemberExpr") into
   // |my_struct.ptr_field.get()|.
@@ -859,6 +897,7 @@ class RawPtrRewriter {
   FilteredExprWriter global_scope_rewriter;
   FilteredExprWriter union_field_decl_writer;
   FilteredExprWriter reinterpret_cast_struct_writer;
+  FilteredExprWriter filtered_ptr_arithmetic_writer;
   std::unique_ptr<raw_ptr_plugin::FilterFile> files_with_audited_unions;
   const raw_ptr_plugin::RawPtrAndRefExclusionsOptions exclusion_options_;
 };
@@ -870,9 +909,7 @@ class RawRefRewriter {
       MatchFinder& finder,
       const raw_ptr_plugin::RawPtrAndRefExclusionsOptions& exclusion_options)
       : match_finder(finder),
-        field_decl_rewriter(output_helper,
-                            "const raw_ref<{0}> ",
-                            kRawRefIncludePath),
+        field_decl_rewriter(output_helper, kRawRefIncludePath),
         affected_expr_operator_rewriter(output_helper,
                                         affectedMemberExprOperatorFct_),
         affected_expr_rewriter(output_helper, affectedMemberExprFct_),
@@ -881,9 +918,9 @@ class RawRefRewriter {
             affectedMemberExprWithParenFct_),
         affected_initializer_expr_rewriter(output_helper,
                                            affectedInitializerExprFct_),
-        global_scope_rewriter(output_helper, "global-scope"),
-        overlapping_field_decl_writer(output_helper, "overlapping"),
-        macro_field_decl_writer(output_helper, "macro"),
+        global_scope_rewriter(output_helper, "ignore:global-scope"),
+        overlapping_field_decl_writer(output_helper, "ignore:overlapping"),
+        macro_field_decl_writer(output_helper, "ignore:macro"),
         exclusion_options_(exclusion_options) {}
 
   void addMatchers() {
@@ -936,9 +973,11 @@ class RawRefRewriter {
             // Exclude memberExpressions appearing inside a constructor
             // initializer of a reference field where we should NOT add
             // operator*.
-            hasParent(cxxConstructorDecl(hasAnyConstructorInitializer(
-                allOf(withInitializer(
-                          memberExpr(equalsBoundNode("affectedMemberExpr"))),
+            hasAncestor(cxxConstructorDecl(hasAnyConstructorInitializer(
+                allOf(withInitializer(anyOf(
+                          memberExpr(equalsBoundNode("affectedMemberExpr")),
+                          parenListExpr(has(expr(ignoringImplicit(
+                              equalsBoundNode("affectedMemberExpr"))))))),
                       forField(fieldDecl(raw_ptr_plugin::hasExplicitFieldDecl(
                           field_decl_matcher))))))),
             // Exclude memberExpressions, in initializer lists, that are
@@ -1061,15 +1100,19 @@ class RawRefRewriter {
   class RawRefFieldDeclRewriter : public FieldDeclRewriter {
    public:
     explicit RawRefFieldDeclRewriter(OutputHelper* output_helper,
-                                     const char* format_string,
                                      const char* include_path)
-        : FieldDeclRewriter(output_helper, format_string, include_path) {}
+        : FieldDeclRewriter(output_helper, include_path) {}
 
     bool earlyExit(const MatchFinder::MatchResult& result) const override {
       auto* type = result.Nodes.getNodeAs<clang::LValueReferenceTypeLoc>(
           "affectedFieldDeclType");
       // in this case, it's not an lvalue reference type member => DO NOTHING
       return !type;
+    }
+
+    std::string GetFormatString(
+        const clang::FieldDecl& field_decl) const override {
+      return "const raw_ref<{0}> ";
     }
   };
 
@@ -1261,19 +1304,6 @@ class SpanFieldDeclRewriter : public MatchFinder::MatchCallback {
       return specialization;
     }
 
-    // Or an elaboratedTypeLoc, which has a namedTypeLoc (the
-    // TemplateSpecializationTypeLoc)
-    // Example:
-    // base::span<some_type> member;
-    //       ^-------------^ => templateSpecializationTypeLoc
-    // ^-------------------^ => elaboratedTypeLoc
-    if (auto elaborated = loc.getAs<clang::ElaboratedTypeLoc>()) {
-      if (auto specialization =
-              elaborated.getNamedTypeLoc()
-                  .getAs<clang::TemplateSpecializationTypeLoc>()) {
-        return specialization;
-      }
-    }
     return {};
   }
 
@@ -1349,9 +1379,9 @@ class SpanRewriter {
       const raw_ptr_plugin::RawPtrAndRefExclusionsOptions& exclusion_options)
       : match_finder(finder),
         field_decl_rewriter(output_helper, kRawSpanIncludePath),
-        global_scope_rewriter(output_helper, "global-scope"),
-        overlapping_field_decl_writer(output_helper, "overlapping"),
-        macro_field_decl_writer(output_helper, "macro"),
+        global_scope_rewriter(output_helper, "ignore:global-scope"),
+        overlapping_field_decl_writer(output_helper, "ignore:overlapping"),
+        macro_field_decl_writer(output_helper, "ignore:macro"),
         exclusion_options_(exclusion_options) {}
 
   void addMatchers() {
@@ -1467,6 +1497,11 @@ int main(int argc, const char* argv[]) {
   llvm::cl::opt<std::string> exclude_fields_param(
       kExcludeFieldsParamName, llvm::cl::value_desc("filepath"),
       llvm::cl::desc("file listing fields to be blocked (not rewritten)"));
+  llvm::cl::opt<std::string> arithmetic_fields_param(
+      kArithmeticFieldsParamName, llvm::cl::value_desc("filepath"),
+      llvm::cl::desc(
+          "file listing fields that use pointer arithmetic (rewritten with "
+          "AllowPtrArithmetic trait)"));
   llvm::cl::opt<std::string> override_exclude_paths_param(
       kOverrideExcludePathsParamName, llvm::cl::value_desc("filepath"),
       llvm::cl::desc(
@@ -1500,12 +1535,13 @@ int main(int argc, const char* argv[]) {
   raw_ptr_plugin::FilterFile fields_to_exclude(
       exclude_fields_param, exclude_fields_param.ArgStr.str());
 
+  raw_ptr_plugin::FilterFile arithmetic_fields(
+      arithmetic_fields_param, arithmetic_fields_param.ArgStr.str());
+
   std::unique_ptr<raw_ptr_plugin::FilterFile> paths_to_exclude;
   if (override_exclude_paths_param == "") {
     std::vector<std::string> paths_to_exclude_lines;
-    for (auto* const line : kRawPtrManualPathsToIgnore) {
-      paths_to_exclude_lines.push_back(line);
-    }
+    raw_ptr_plugin::AddManualPathsToIgnore(paths_to_exclude_lines);
     for (auto* const line : kSeparateRepositoryPaths) {
       paths_to_exclude_lines.push_back(line);
     }
@@ -1523,7 +1559,7 @@ int main(int argc, const char* argv[]) {
       &stack_allocated_checker, true};
 
   RawPtrRewriter raw_ptr_rewriter(&output_helper, match_finder,
-                                  exclusion_options);
+                                  exclusion_options, &arithmetic_fields);
   if (rewrite_raw_ref_and_ptr || enable_raw_ptr_rewrite) {
     raw_ptr_rewriter.addMatchers();
   }

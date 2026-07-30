@@ -7,7 +7,6 @@ import json
 import logging
 import multiprocessing
 import os
-import pathlib
 import queue
 import re
 import subprocess
@@ -17,7 +16,6 @@ import threading
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-import ast
 
 from devil.utils import cmd_helper
 from py_utils import tempfile_ext
@@ -26,9 +24,6 @@ from pylib.base import base_test_result
 from pylib.base import test_run
 from pylib.constants import host_paths
 from pylib.results import json_results
-
-sys.path.append(str(pathlib.Path(__file__).parents[3] / 'gyp'))
-from util import md5_check
 
 # Chosen after timing test runs of chrome_junit_tests with 7,16,32,
 # and 64 workers in threadpool and different classes_per_job.
@@ -48,6 +43,7 @@ _LOGCAT_RE = re.compile(r' ?\d+\| (:?\d+\| )?[A-Z]/[\w\d_-]+:')
 # [ FAILED|CRASHED|TIMEOUT ] org.ui.ForeignBinderUnitTest.test_phone[28] (56 ms)
 _TEST_START_RE = re.compile(r'.*\[\s+RUN\s+\]\s(.*)')
 _TEST_FAILED_RE = re.compile(r'.*\[\s+(?:FAILED|CRASHED|TIMEOUT)\s+\]')
+_TEST_FINISHED_RE = re.compile(r'.*\[\s+(?:OK|SKIPPED)\s+\]')
 
 
 @dataclasses.dataclass
@@ -78,6 +74,8 @@ class LocalMachineJunitTestRun(test_run.TestRun):
     ret = []
     for test_filter in self._test_instance.test_filters:
       ret += ['--gtest-filter', test_filter]
+    for test_filter_file in self._test_instance.test_filter_files:
+      ret += ['--test-launcher-filter-file', test_filter_file]
 
     if self._test_instance.package_filter:
       ret += ['--package-filter', self._test_instance.package_filter]
@@ -92,20 +90,41 @@ class LocalMachineJunitTestRun(test_run.TestRun):
     properties_jar_path = os.path.join(temp_dir, 'properties.jar')
     resource_apk = self._test_instance.resource_apk
     with zipfile.ZipFile(properties_jar_path, 'w') as z:
-      z.writestr('com/android/tools/test_config.properties',
-                 'android_resource_apk=%s\n' % resource_apk)
+      if resource_apk:
+        z.writestr('com/android/tools/test_config.properties',
+                   'android_resource_apk=%s\n' % resource_apk)
+      # These values must be kept in sync with BaseRobolectricTestRunner.java.
+      min_sdk = '29'
+      max_sdk = '36'
+
+      if self._test_instance.single_variant:
+        sdk_string = max_sdk
+      else:
+        sdk_string = f"{min_sdk},{max_sdk}"
       props = [
           'application = android.app.Application',
-          'sdk = 29',
+          'sdk = %s' % sdk_string,
           ('shadows = org.chromium.testing.local.'
            'CustomShadowApplicationPackageManager'),
       ]
+
+      if not resource_apk:
+        # Setting manifest = --none improves performance by avoiding Robolectric
+        # having to scan for and parse a dummy manifest.
+        props.append('manifest = --none')
+
       z.writestr('robolectric.properties', '\n'.join(props))
     return properties_jar_path
 
   def _CreateJvmArgsList(self, for_listing=False, allow_debugging=True):
     # Creates a list of jvm_args (robolectric, code coverage, etc...)
     jvm_args = [
+        # JDK 17+ requires explicit opens for Robolectric reflection on
+        # internal fields:
+        # https://docs.oracle.com/en/java/javase/17/migrate/migrating-jdk-8-later-jdk-releases.html
+        '--add-opens=java.base/java.io=ALL-UNNAMED',
+        '--add-opens=java.base/java.lang=ALL-UNNAMED',
+        '--add-opens=java.base/java.util=ALL-UNNAMED',
         # Disable warning about mockito/bytebuddy dynamically adding an agent.
         '-XX:+EnableDynamicAgentLoading',
         '-Drobolectric.dependency.dir=%s' %
@@ -117,6 +136,8 @@ class LocalMachineJunitTestRun(test_run.TestRun):
         '-Drobolectric.logging=stdout',
         '-Djava.library.path=%s' % self._test_instance.native_libs_dir,
     ]
+    if self._test_instance.run_disabled:
+      jvm_args += ['-Dchromium.run_disabled=1']
     if self._test_instance.debug_socket and allow_debugging:
       jvm_args += [
           '-Dchromium.jdwp_active=true',
@@ -156,6 +177,28 @@ class LocalMachineJunitTestRun(test_run.TestRun):
     else:
       num_workers = max(1, multiprocessing.cpu_count() // 2)
     return min(num_workers, num_jobs)
+
+  def _ApplyExternalSharding(self, json_config):
+    shard_index = self._test_instance.external_shard_index
+    total_shards = self._test_instance.total_external_shards
+    if total_shards <= 1:
+      return json_config
+
+    logging.info('Using external sharding settings. This is shard %d/%d',
+                 shard_index, total_shards)
+
+    all_groups = GroupTests(json_config, _MAX_TESTS_PER_JOB)
+    selected_groups = [
+        g for i, g in enumerate(all_groups) if i % total_shards == shard_index
+    ]
+
+    new_configs = {}
+    for group in selected_groups:
+      if group.config not in new_configs:
+        new_configs[group.config] = {}
+      new_configs[group.config].update(group.methods_by_class)
+
+    return {**json_config, 'configs': new_configs}
 
   @property
   def _wrapper_path(self):
@@ -208,88 +251,30 @@ class LocalMachineJunitTestRun(test_run.TestRun):
       # 3 seconds per method.
       num_classes = len(test_group.methods_by_class)
       num_tests = sum(len(x) for x in test_group.methods_by_class.values())
-      timeout = 30 + 5 * num_classes + num_tests * 3
+      timeout = 60 + 10 * num_classes + num_tests * 5
     return _Job(shard_id=shard_id,
                 cmd=cmd,
                 timeout=timeout,
                 json_config=job_json_config,
                 json_results_path=json_results_path)
 
-  def _GetJsonConfig(self, list_only: bool = False):
-    # The test list is expensive to generate, so cache it. The cache is
-    # invalidated when the classpath or this file changes.
-    cache_dir = pathlib.Path(
-        constants.GetOutDirectory()) / 'junit_test_list_cache'
-    os.makedirs(cache_dir, exist_ok=True)
-
-    # Cache --list-tests separately so that changing test filters does not
-    # invalidate its cache.
-    if list_only:
-      record_path = (cache_dir / f'{self._test_instance.suite}_list.stamp')
-      cached_test_list_path = (cache_dir /
-                               f'{self._test_instance.suite}_list.json')
-    else:
-      record_path = cache_dir / f'{self._test_instance.suite}.stamp'
-      cached_test_list_path = cache_dir / f'{self._test_instance.suite}.json'
-
-    # Extract the classpath from the wrapper script.
-    wrapper_script_source = ''
-    print(f'Wrapper path: {self._wrapper_path}')
-    with open(self._wrapper_path) as f:
-      wrapper_script_source = f.read()
-    classpath_re = re.compile(r'classpath = (\[[^\]]+\])', re.MULTILINE)
-    matches = classpath_re.search(wrapper_script_source)
-    classpath_str = matches.group(1)
-    classpath_list = ast.literal_eval(classpath_str)
-    # The paths in the wrapper script are relative to the script's location. We
-    # need to make them relative to the current working directory.
-    wrapper_dir = pathlib.Path(self._wrapper_path).parent
-    classpath = [str(wrapper_dir / p) for p in classpath_list]
-
-    # Filters affect the test list so changes in filter should invalidate the
-    # cache.
-    input_strings = self._GetFilterArgs()
-
-    # We don't want to rebuild the cache if only method implementations have
-    # been changed and no new tests have been added. This would be common when
-    # iterating on private methods or tests method content. We should only
-    # invalidate the cache if the public interface changes, which is likely
-    # when a new test is added or tests are removed. But avoid this
-    # optimization when listing tests as for parameterized tests, turbine jars
-    # do not change when parameters are updated (this does not affect modifying
-    # parameters and then running the test as robolectric loads the correct
-    # values at runtime).
-    if not list_only:
-      for i, p in enumerate(classpath):
-        if 'javac' in p:
-          turbine_p = p.replace('javac', 'turbine')
-          if os.path.exists(turbine_p):
-            classpath[i] = turbine_p
-
-    def do_query_test_json_config():
-      with tempfile_ext.NamedTemporaryDirectory() as temp_dir:
-        result = self._QueryTestJsonConfig(temp_dir,
-                                           allow_debugging=False,
-                                           enable_shadow_allowlist=True)
-        with open(cached_test_list_path, 'w') as f:
-          json.dump(result, f)
-
-    md5_check.CallAndRecordIfStale(do_query_test_json_config,
-                                   record_path=str(record_path),
-                                   input_paths=classpath + [__file__],
-                                   input_strings=input_strings,
-                                   output_paths=[str(cached_test_list_path)])
-
-    with open(cached_test_list_path) as f:
-      return json.load(f)
+  def _GetJsonConfig(self):
+    with tempfile_ext.NamedTemporaryDirectory() as temp_dir:
+      return self._QueryTestJsonConfig(temp_dir,
+                                       allow_debugging=False,
+                                       enable_shadow_allowlist=True)
 
   #override
   def GetTestsForListing(self):
-    json_config = self._GetJsonConfig(list_only=True)
+    json_config = self._GetJsonConfig()
+    json_config = self._ApplyExternalSharding(json_config)
     ret = []
     for config in json_config['configs'].values():
       for class_name, methods in config.items():
         ret.extend(f'{class_name}.{method}' for method in methods)
+    for config in json_config.get('disabled', {}).values():
+      for class_name, methods in config.items():
+        ret.extend(f'{class_name}.{method} (disabled)' for method in methods)
     ret.sort()
     return ret
 
@@ -308,6 +293,17 @@ class LocalMachineJunitTestRun(test_run.TestRun):
       except (subprocess.CalledProcessError, IOError):
         results.append(_MakeUnknownFailureResult('Filter matched no tests'))
         return
+
+    # Disabled tests are nested in a top-level "disabled" key.
+    # Merge them into the main "configs".
+    if self._test_instance.run_disabled:
+      for config, classes in json_config.get('disabled', {}).items():
+        target_classes = json_config['configs'].setdefault(config, {})
+        for class_name, methods in classes.items():
+          target_methods = target_classes.setdefault(class_name, [])
+          target_methods.extend(methods)
+
+    json_config = self._ApplyExternalSharding(json_config)
     test_groups = GroupTests(json_config, _MAX_TESTS_PER_JOB)
 
     shard_list = list(range(len(test_groups)))
@@ -339,13 +335,17 @@ class LocalMachineJunitTestRun(test_run.TestRun):
     failed_test_logs = {}
     log_lines = []
     current_test = None
-    for line in RunCommandsAndSerializeOutput(jobs, num_workers):
+    for line in RunCommandsAndSerializeOutput(jobs,
+                                              num_workers,
+                                              quiet=self._test_instance.quiet):
       if raw_logs_fh:
         raw_logs_fh.write(line)
-      if show_logcat or not _LOGCAT_RE.match(line):
-        sys.stdout.write(line)
-      else:
-        num_omitted_lines += 1
+
+      if not self._test_instance.quiet:
+        if show_logcat or not _LOGCAT_RE.match(line):
+          sys.stdout.write(line)
+        else:
+          num_omitted_lines += 1
 
       # Collect log data between a test starting and the test failing.
       # There can be info after a test fails and before the next test starts
@@ -357,6 +357,11 @@ class LocalMachineJunitTestRun(test_run.TestRun):
       elif _TEST_FAILED_RE.match(line) and current_test:
         log_lines.append(line)
         failed_test_logs[current_test] = ''.join(log_lines)
+        if self._test_instance.quiet:
+          for l in log_lines:
+            sys.stdout.write(l)
+        current_test = None
+      elif _TEST_FINISHED_RE.match(line) and current_test:
         current_test = None
       else:
         log_lines.append(line)
@@ -389,7 +394,7 @@ class LocalMachineJunitTestRun(test_run.TestRun):
                                           base_test_result.ResultType.UNKNOWN)
       ]
 
-    if failed_jobs:
+    if failed_jobs and not self._test_instance.quiet:
       for job in failed_jobs:
         print(f'To re-run failed shard {job.shard_id}, use --json-config '
               'config.json, where config.json contains:')
@@ -403,6 +408,38 @@ class LocalMachineJunitTestRun(test_run.TestRun):
 
     test_run_results = base_test_result.TestRunResults()
     test_run_results.AddResults(results_list)
+
+    num_actual = len(test_run_results.GetAll())
+    num_expected = sum(
+        len(methods) for classes in json_config['configs'].values()
+        for methods in classes.values())
+
+    # Check that all tests actually ran that we expected to run.
+    if num_actual != num_expected:
+      sb = [
+          f'Expected {num_expected} tests, but got only {num_actual} results.',
+          'Missing results for:',
+      ]
+      actual_test_names = {r.GetName() for r in test_run_results.GetAll()}
+      for config, classes in json_config['configs'].items():
+        for class_name, methods in classes.items():
+          for method in methods:
+            test_name = f'{class_name}#{method}'
+            if test_name not in actual_test_names:
+              sb.append(f'  {test_name} ({config})')
+      if self._test_instance.run_disabled:
+        sb.append('The missing tests could be due to not using '
+                  'BaseJUnit4ClassRunner / BaseRobolectricTestRunner, since '
+                  'these are required for --run-disabled.')
+      results.append(
+          _MakeUnknownFailureResult('Not Enough Results', '\n'.join(sb)))
+
+    if json_config.get('disabled') and not self._test_instance.run_disabled:
+      num_disabled = sum(
+          len(methods) for classes in json_config['disabled'].values()
+          for methods in classes.values())
+      test_run.ShowDisabledTestsHint(count=num_disabled)
+
     results.append(test_run_results)
 
   # override
@@ -443,13 +480,16 @@ def GroupTests(json_config, max_per_job):
   return ret
 
 
-def _MakeUnknownFailureResult(message):
+def _MakeUnknownFailureResult(name, details=None):
+  # TODO(504602174): These result types are not handled properly.
   results_list = [
-      base_test_result.BaseTestResult(message,
-                                      base_test_result.ResultType.UNKNOWN)
+      base_test_result.BaseTestResult(name,
+                                      base_test_result.ResultType.UNKNOWN,
+                                      log=details)
   ]
   test_run_results = base_test_result.TestRunResults()
   test_run_results.AddResults(results_list)
+  logging.error('%s. Details: %s', name, details)
   return test_run_results
 
 
@@ -465,7 +505,7 @@ def _DumpJavaStacks(pid):
   return result.stdout
 
 
-def RunCommandsAndSerializeOutput(jobs, num_workers):
+def RunCommandsAndSerializeOutput(jobs, num_workers, quiet=False):
   """Runs multiple commands in parallel and yields serialized output lines.
 
   Raises:
@@ -479,8 +519,9 @@ def RunCommandsAndSerializeOutput(jobs, num_workers):
   for _ in range(len(jobs) - 1):
     temp_files.append(tempfile.TemporaryFile(mode='w+t', encoding='utf-8'))
 
-  yield '\n'
-  yield f'Shard {jobs[0].shard_id} output:\n'
+  if not quiet:
+    yield '\n'
+    yield f'Shard {jobs[0].shard_id} output:\n'
 
   timeout_dumps = {}
 
@@ -512,7 +553,9 @@ def RunCommandsAndSerializeOutput(jobs, num_workers):
   with ThreadPoolExecutor(max_workers=num_workers) as pool:
     futures = [pool.submit(run_proc, idx=i) for i in range(len(jobs))]
 
-    yield from _StreamFirstShardOutput(jobs[0], futures[0].result())
+    yield from _StreamFirstShardOutput(jobs[0],
+                                       futures[0].result(),
+                                       quiet=quiet)
 
     for i, job in enumerate(jobs[1:], 1):
       shard_id = job.shard_id
@@ -520,11 +563,15 @@ def RunCommandsAndSerializeOutput(jobs, num_workers):
       # a proc.wait().
       futures[i].result()
       f = temp_files[i]
-      yield '\n'
-      yield f'Shard {shard_id} output:\n'
+      if not quiet:
+        yield '\n'
+        yield f'Shard {shard_id} output:\n'
       f.seek(0)
       for line in f.readlines():
-        yield f'{shard_id:2}| {line}'
+        if quiet:
+          yield line
+        else:
+          yield f'{shard_id:2}| {line}'
       f.close()
 
   # Output stacks
@@ -543,7 +590,7 @@ def RunCommandsAndSerializeOutput(jobs, num_workers):
     raise cmd_helper.TimeoutError('Junit shards timed out.')
 
 
-def _StreamFirstShardOutput(job, shard_proc):
+def _StreamFirstShardOutput(job, shard_proc, quiet=False):
   shard_id = job.shard_id
   # The following will be run from a thread to pump Shard 0 results, allowing
   # live output while allowing timeout.
@@ -563,7 +610,10 @@ def _StreamFirstShardOutput(job, shard_proc):
       line = shard_queue.get(timeout=max(0, deadline - time.time()))
       if line is None:
         break
-      yield f'{shard_id:2}| {line}'
+      if quiet:
+        yield line
+      else:
+        yield f'{shard_id:2}| {line}'
     except queue.Empty:
       if time.time() > deadline:
         break
@@ -573,4 +623,7 @@ def _StreamFirstShardOutput(job, shard_proc):
   while not shard_queue.empty():
     line = shard_queue.get()
     if line:
-      yield f'{shard_id:2}| {line}'
+      if quiet:
+        yield line
+      else:
+        yield f'{shard_id:2}| {line}'

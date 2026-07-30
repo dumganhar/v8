@@ -78,6 +78,8 @@ namespace internal {
     "Uint32 cannot be converted to Int32 without loss of precision")          \
   V(kUnalignedCellInWriteBarrier, "Unaligned cell in write barrier")          \
   V(kUnexpectedAdditionalPopValue, "Unexpected additional pop value")         \
+  V(kUnexpectedBigIntTerminationSentinel,                                     \
+    "Unexpected BigInt TerminationRequested sentinel")                        \
   V(kUnexpectedElementsKindInArrayConstructor,                                \
     "Unexpected ElementsKind in array constructor")                           \
   V(kUnexpectedFPCRMode, "Unexpected FPCR mode.")                             \
@@ -119,12 +121,16 @@ namespace internal {
     "The metadata doesn't belong to the chunk")                               \
   V(kExternalPointerTagMismatch,                                              \
     "Tag mismatch during external pointer access")                            \
+  V(kIndirectPointerTagMismatch,                                              \
+    "Tag mismatch during indirect pointer access")                            \
   V(kJSSignatureMismatch, "Signature mismatch during JS function call")       \
   V(kWasmSignatureMismatch, "Signature mismatch during Wasm indirect call")   \
   V(kFastCallFallbackInvalid, "Fast call fallback returned incorrect type")   \
   V(k32BitValueInRegisterIsNotSignExtended,                                   \
     "32 bit value in register is not sign-extended")                          \
   V(kUnexpectedSandboxMode, "The sandboxing mode is not as expected")         \
+  IF_TARGET_ARCH_X64(V, kOSREmptyCheckFailed,                                 \
+                     "OSR target slot should be empty")                       \
   V(kLastReason, "")
 
 #define TERMINAL_BAILOUT_MESSAGES_LIST(V)                                  \
@@ -202,6 +208,10 @@ inline bool IsTerminalBailoutReasonForTurbofan(BailoutReason reason) {
     default:
       return false;
   }
+}
+
+inline std::ostream& operator<<(std::ostream& os, AbortReason reason) {
+  return os << GetAbortReason(reason);
 }
 
 }  // namespace internal

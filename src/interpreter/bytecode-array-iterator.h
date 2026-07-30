@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "include/v8-callbacks.h"
+#include "include/v8config.h"
 #include "src/common/globals.h"
 #include "src/handles/handles.h"
 #include "src/interpreter/bytecode-register.h"
@@ -69,12 +70,33 @@ class V8_EXPORT_PRIVATE JumpTableTargetOffsets final {
   int case_value_base_;
 };
 
+template <typename Feedback>
+struct EmbeddedFeedbackHintTraits;
+
+template <>
+struct EmbeddedFeedbackHintTraits<CompareOperationFeedback> {
+  using Hint = CompareOperationHint;
+  static Hint FromFeedback(uint32_t feedback_value);
+  static bool IsWithEmbeddedFeedbackOp(Bytecode bc) {
+    return Bytecodes::IsCompareWithEmbeddedFeedback(bc);
+  }
+};
+template <>
+struct EmbeddedFeedbackHintTraits<BinaryOperationFeedback> {
+  using Hint = BinaryOperationHint;
+  static Hint FromFeedback(uint32_t feedback_value);
+  static bool IsWithEmbeddedFeedbackOp(Bytecode bc) {
+    return Bytecodes::IsBinaryOpWithEmbeddedFeedback(bc);
+  }
+};
+
 class V8_EXPORT_PRIVATE BytecodeArrayIterator {
  public:
   explicit BytecodeArrayIterator(Handle<BytecodeArray> bytecode_array,
                                  int initial_offset = 0);
   BytecodeArrayIterator(Handle<BytecodeArray> bytecode_array,
-                        int initial_offset, DisallowGarbageCollection& no_gc);
+                        int initial_offset,
+                        DisallowGarbageCollection& no_gc V8_LIFETIME_BOUND);
   ~BytecodeArrayIterator();
 
   BytecodeArrayIterator(const BytecodeArrayIterator&) = delete;
@@ -82,7 +104,7 @@ class V8_EXPORT_PRIVATE BytecodeArrayIterator {
 
   inline void Advance() {
     cursor_ += current_bytecode_size_without_prefix();
-    UpdateOperandScale();
+    UpdateCurrentBytecode();
   }
   // Prefer AdvanceTo over SetOffset if the new offset is greater than the
   // current offset as it is more efficient.
@@ -99,20 +121,15 @@ class V8_EXPORT_PRIVATE BytecodeArrayIterator {
 
   void ApplyDebugBreak();
 
-  inline Bytecode current_bytecode() const {
-    DCHECK(!done());
-    uint8_t current_byte = *cursor_;
-    Bytecode current_bytecode = Bytecodes::FromByte(current_byte);
-    DCHECK(!Bytecodes::IsPrefixScalingBytecode(current_bytecode));
-    return current_bytecode;
-  }
+  inline Bytecode current_bytecode() const { return current_bytecode_; }
   int current_bytecode_size() const {
     return prefix_size_ + current_bytecode_size_without_prefix();
   }
   int current_bytecode_size_without_prefix() const {
-    return Bytecodes::Size(current_bytecode(), current_operand_scale());
+    return Bytecodes::Size(current_bytecode_, current_operand_scale());
   }
   int current_offset() const {
+    DCHECK(!done());
     return static_cast<int>(cursor_ - start_ - prefix_size_);
   }
   int current_operand_offset(int operand_index) const {
@@ -148,11 +165,13 @@ class V8_EXPORT_PRIVATE BytecodeArrayIterator {
   Register GetStarTargetRegister() const;
   std::pair<Register, Register> GetRegisterPairOperand(int operand_index) const;
   RegisterList GetRegisterListOperand(int operand_index) const;
-  int GetRegisterOperandRange(int operand_index) const;
+  uint32_t GetRegisterOperandRange(int operand_index) const;
   Runtime::FunctionId GetRuntimeIdOperand(int operand_index) const;
   Runtime::FunctionId GetIntrinsicIdOperand(int operand_index) const;
   uint32_t GetNativeContextIndexOperand(int operand_index) const;
   AbortReason GetAbortReasonOperand(int operand_index) const;
+  uint8_t GetEmbeddedFeedback(int operand_index) const;
+  Tagged<Object> GetConstantAtIndex(int offset) const;
   Handle<Object> GetConstantAtIndex(int offset, Isolate* isolate) const;
   Handle<Object> GetConstantAtIndex(int offset, LocalIsolate* isolate) const;
   Tagged<Smi> GetConstantAtIndexAsSmi(int offset) const;
@@ -186,10 +205,16 @@ class V8_EXPORT_PRIVATE BytecodeArrayIterator {
 
   void UpdatePointers();
 
-  CompareOperationHint GetEmbeddedCompareOperationHint();
+  template <typename Feedback>
+  typename EmbeddedFeedbackHintTraits<Feedback>::Hint
+  GetEmbeddedOperationHint();
+
+  CompareOperationHint GetEmbeddedCompareOperationHint() {
+    return GetEmbeddedOperationHint<CompareOperationFeedback>();
+  }
   int GetEmbeddedFeedbackOffset(int operand_index) const;
 
-  inline bool done() const { return cursor_ >= end_; }
+  inline bool done() const { return cursor_ == nullptr; }
 
   bool operator==(const BytecodeArrayIterator& other) const {
     return cursor_ == other.cursor_;
@@ -205,16 +230,24 @@ class V8_EXPORT_PRIVATE BytecodeArrayIterator {
   uint32_t GetUnsignedOperand(int operand_index,
                               OperandType operand_type) const;
   int32_t GetSignedOperand(int operand_index, OperandType operand_type) const;
-  uint32_t GetEmbeddedFeedback(int operand_index) const;
 
-  inline void UpdateOperandScale() {
-    if (done()) return;
-    uint8_t current_byte = *cursor_;
-    Bytecode current_bytecode = Bytecodes::FromByte(current_byte);
-    if (Bytecodes::IsPrefixScalingBytecode(current_bytecode)) {
+  inline void UpdateCurrentBytecode() {
+    if (cursor_ >= end_) {
+      cursor_ = nullptr;
+      prefix_size_ = 0;
+      current_bytecode_ = Bytecode::kIllegal;
+      DCHECK(done());
+      return;
+    }
+
+    DCHECK(!done());
+    current_bytecode_ = Bytecodes::FromByte(*cursor_);
+    if (Bytecodes::IsPrefixScalingBytecode(current_bytecode_)) {
       operand_scale_ =
-          Bytecodes::PrefixBytecodeToOperandScale(current_bytecode);
+          Bytecodes::PrefixBytecodeToOperandScale(current_bytecode_);
       ++cursor_;
+      current_bytecode_ = Bytecodes::FromByte(*cursor_);
+      DCHECK(!Bytecodes::IsPrefixScalingBytecode(current_bytecode_));
       prefix_size_ = 1;
     } else {
       operand_scale_ = OperandScale::kSingle;
@@ -228,6 +261,7 @@ class V8_EXPORT_PRIVATE BytecodeArrayIterator {
   // The cursor always points to the active bytecode. If there's a prefix, the
   // prefix is at (cursor - 1).
   uint8_t* cursor_;
+  Bytecode current_bytecode_;
   OperandScale operand_scale_;
   int prefix_size_;
   LocalHeap* const local_heap_;

@@ -15,6 +15,7 @@
 
 namespace v8 {
 namespace internal {
+namespace regexp {
 
 /* clang-format off
  * This assembler uses the following register assignment convention
@@ -503,8 +504,8 @@ void RegExpMacroAssemblerRISCV::CheckBitInTable(Handle<ByteArray> table,
 
 void RegExpMacroAssemblerRISCV::SkipUntilBitInTable(
     int cp_offset, Handle<ByteArray> table,
-    Handle<ByteArray> nibble_table_array, int advance_by, Label* on_match,
-    Label* on_no_match) {
+    Handle<ByteArray> nibble_table_array, int advance_by,
+    int bounds_check_offset, Label* on_match, Label* on_no_match) {
   const bool use_simd = SkipUntilBitInTableUseSimd(advance_by);
   if (use_simd) {
     DCHECK(!nibble_table_array.is_null());
@@ -515,9 +516,9 @@ void RegExpMacroAssemblerRISCV::SkipUntilBitInTable(
     // Fallback to scalar version if there are less than kCharsPerVector chars
     // left in the subject.
     // We subtract 1 because CheckPosition assumes we are reading 1 character
-    // plus cp_offset. So the -1 is the the character that is assumed to be
+    // plus cp_offset. So the -1 is the character that is assumed to be
     // read by default.
-    CheckPosition(cp_offset + kCharsPerVector - 1, &scalar);
+    CheckPosition(bounds_check_offset + kCharsPerVector - 1, &scalar);
 
     __ VU.SetSimd128(E8);
 
@@ -564,8 +565,8 @@ void RegExpMacroAssemblerRISCV::SkipUntilBitInTable(
     // Check if high nibble is set in row.
     // bitmask = 1 << (hi_nibbles & 0x7)
     //         = hi_nibbles_lookup_mask[hi_nibbles] & 0x7
-    // Note: The hi_nibbles & 0x7 part is implicitly executed, as tbl sets
-    // the result byte to zero if the lookup index is out of range.
+    // Note: The hi_nibbles & 0x7 part is implicitly executed, because the
+    // lookup table repeats the 0x80402010'08040201 pattern.
     VRegister bitmask = v7;
     __ vrgather_vv(bitmask, hi_nibble_lookup_mask, hi_nibbles);
 
@@ -583,7 +584,7 @@ void RegExpMacroAssemblerRISCV::SkipUntilBitInTable(
     // The maximum lookahead for boyer moore is less than vector size, so we can
     // ignore advance_by in the vectorized version.
     AdvanceCurrentPosition(kCharsPerVector);
-    CheckPosition(cp_offset + kCharsPerVector - 1, &scalar);
+    CheckPosition(bounds_check_offset + kCharsPerVector - 1, &scalar);
     __ Branch(&simd_repeat);
 
     Bind(&found);
@@ -605,7 +606,7 @@ void RegExpMacroAssemblerRISCV::SkipUntilBitInTable(
 
   Label scalar_repeat;
   Bind(&scalar_repeat);
-  CheckPosition(cp_offset, on_no_match);
+  CheckPosition(bounds_check_offset, on_no_match);
   LoadCurrentCharacterUnchecked(cp_offset, 1);
 
   // We use `a1` as a temporary for the table lookup.
@@ -629,8 +630,9 @@ void RegExpMacroAssemblerRISCV::SkipUntilBitInTable(
 bool RegExpMacroAssemblerRISCV::SkipUntilBitInTableUseSimd(int advance_by) {
   // We only use SIMD instead of the scalar version if we advance by 1 byte
   // in each iteration. For higher values the scalar version performs better.
+  // We only implemented SIMD instead of the scalar version for latin1 strings.
   return v8_flags.regexp_simd && advance_by * char_size() == 1 &&
-         CpuFeatures::IsSupported(RISCV_SIMD);
+         CpuFeatures::IsSupported(RVV);
 }
 
 void RegExpMacroAssemblerRISCV::CheckSpecialClassRanges(
@@ -781,7 +783,7 @@ void RegExpMacroAssemblerRISCV::PopRegExpBasePointer(Register stack_pointer_out,
 }
 
 DirectHandle<HeapObject> RegExpMacroAssemblerRISCV::GetCode(
-    DirectHandle<String> source, RegExpFlags flags) {
+    DirectHandle<RegExpData> re_data, Flags flags) {
   // Finalize code - write the entry point code now we know how many
   // registers we need.
   Label return_a0;
@@ -819,6 +821,9 @@ DirectHandle<HeapObject> RegExpMacroAssemblerRISCV::GetCode(
 
   // According to MultiPush implementation, registers will be pushed in the
   // order of ra, fp, then s8, ..., s1, and finally a7,...a0
+#ifdef V8_ENABLE_RISCV_SHADOW_STACK
+  __ sspush_ra();
+#endif
   __ MultiPush(RegList{ra} | registers_to_retain);
 
   // Set frame pointer in space for it if this is not a direct call
@@ -871,10 +876,12 @@ DirectHandle<HeapObject> RegExpMacroAssemblerRISCV::GetCode(
     __ jmp(&return_a0);
 
     __ bind(&stack_limit_hit);
+    StoreRegExpStackPointerToMemory(backtrack_stackpointer(), a1);
     CallCheckStackGuardState(a0, extra_space_for_variables);
     // If returned value is non-zero, we exit with the returned value as
     // result.
     __ Branch(&return_a0, ne, a0, Operand(zero_reg));
+    LoadRegExpStackPointerFromMemory(backtrack_stackpointer());
 
     __ bind(&stack_ok);
   }
@@ -1049,7 +1056,9 @@ DirectHandle<HeapObject> RegExpMacroAssemblerRISCV::GetCode(
 
   // Restore registers fp..s11 and return (restoring ra to pc).
   __ MultiPop(registers_to_retain | ra);
-
+#ifdef V8_ENABLE_RISCV_SHADOW_STACK
+  __ sspopchk_ra();
+#endif
   __ Ret();
 
   // Backtrack code (branch target for conditional backtracks).
@@ -1120,8 +1129,7 @@ DirectHandle<HeapObject> RegExpMacroAssemblerRISCV::GetCode(
   if (v8_flags.print_regexp_code) {
     Print(*code);
   }
-  LOG(masm_->isolate(),
-      RegExpCodeCreateEvent(Cast<AbstractCode>(code), source, flags));
+  LogCode(masm_->isolate(), code, re_data, flags);
   return Cast<HeapObject>(code);
 }
 
@@ -1316,7 +1324,7 @@ void RegExpMacroAssemblerRISCV::CallCheckStackGuardState(Register scratch,
   // [sp + 2] - C argument slot.
   // [sp + 1] - C argument slot.
   // [sp + 0] - C argument slot.
-  __ LoadWord(sp, MemOperand(sp, stack_alignment + kCArgsSlotsSize));
+  __ LoadWord(sp, MemOperand(sp, stack_alignment));
 
   __ li(code_pointer(), Operand(masm_->CodeObject()));
 }
@@ -1336,8 +1344,8 @@ int64_t RegExpMacroAssemblerRISCV::CheckStackGuardState(Address* return_address,
                                                         Address raw_code,
                                                         Address re_frame,
                                                         uintptr_t extra_space) {
-  Tagged<InstructionStream> re_code =
-      SbxCast<InstructionStream>(Tagged<Object>(raw_code));
+  Tagged<InstructionStream> re_code = SbxCast<InstructionStream>(
+      TrustedCast<TrustedObject>(Tagged<Object>(raw_code)));
   return NativeRegExpMacroAssembler::CheckStackGuardState(
       frame_entry<Isolate*>(re_frame, kIsolateOffset),
       static_cast<int>(frame_entry<int64_t>(re_frame, kStartIndexOffset)),
@@ -1454,7 +1462,7 @@ void RegExpMacroAssemblerRISCV::AssertAboveStackLimitMinusSlack() {
   auto l = ExternalReference::address_of_regexp_stack_limit_address(isolate());
   __ li(a0, l);
   __ LoadWord(a0, MemOperand(a0, 0));
-  __ SubWord(a0, a0, Operand(RegExpStack::kStackLimitSlackSize));
+  __ SubWord(a0, a0, Operand(Stack::kStackLimitSlackSize));
   __ Branch(&no_stack_overflow, Ugreater, backtrack_stackpointer(),
             Operand(a0));
   __ DebugBreak();
@@ -1518,5 +1526,6 @@ void RegExpMacroAssemblerRISCV::CallCFunctionFromIrregexpCode(
 }
 #undef __
 
+}  // namespace regexp
 }  // namespace internal
 }  // namespace v8

@@ -112,17 +112,17 @@ diff --git a/build/toolchain/mac/BUILD.gn b/build/toolchain/mac/BUILD.gn
 index 0063a0f..acd48d0 100644
 --- a/build/toolchain/mac/BUILD.gn
 +++ b/build/toolchain/mac/BUILD.gn
-@@ -22,7 +22,7 @@ template("mac_toolchain") {
-       forward_variables_from(invoker.toolchain_args, "*")
-       current_os = "mac"
- 
--      if (target_os == "ios") {
+@@ -24,8 +24,8 @@ template("mac_toolchain") {
+       if (target_os == "ios") {
 -        # Use LLD for the host part of a chrome/ios build.
 -        use_lld = true
-+      if (target_os == "ios") {
 +        # Standalone builds use Xcode's libtool instead of Chromium's llvm-ar.
 +        use_lld = false
  
+         # Override `is_component_build` for the host toolchain.
+         # See https://crbug.com/gn/286 for details why this is
+         # required.
+         is_component_build = is_debug
 diff --git a/include/v8-callbacks.h b/include/v8-callbacks.h
 index e5eba5a..59c5df6 100644
 --- a/include/v8-callbacks.h
@@ -407,12 +407,13 @@ diff --git a/.gitattributes b/.gitattributes
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
-@@ -145,3 +145,15 @@ bazel-out
- bazel-testlogs
- bazel-v8
- launch.json
+@@ -162,3 +162,16 @@ MODULE.bazel.lock
+ GEMINI.md
+ AGENTS.md
+ /worktrees
 +
 +# Flattened standalone snapshot owns these imported dependency trees.
++!AGENTS.md
 +!/build/
 +!/build/**
 +!/buildtools/

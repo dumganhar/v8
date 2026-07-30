@@ -2,7 +2,7 @@ diff --git a/src/base/atomic-ref.h b/src/base/atomic-ref.h
 new file mode 100644
 --- /dev/null
 +++ b/src/base/atomic-ref.h
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,108 @@
 +// Copyright 2026 the V8 project authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -47,33 +47,37 @@ new file mode 100644
 +// type of the referenced object.
 +template <typename T>
 +class AtomicRef {
-+  static_assert(std::is_integral_v<T>);
++  static_assert(std::is_trivially_copyable_v<T>);
 +
 + public:
 +  explicit AtomicRef(T& value) : ptr_(&value) {}
 +
 +  void store(T value,
 +             std::memory_order order = std::memory_order_seq_cst) const {
-+    __atomic_store_n(ptr_, value,
-+                     atomic_ref_internal::ToBuiltinMemoryOrder(order));
++    __atomic_store(ptr_, &value,
++                   atomic_ref_internal::ToBuiltinMemoryOrder(order));
 +  }
 +
 +  T load(std::memory_order order = std::memory_order_seq_cst) const {
-+    return __atomic_load_n(ptr_,
-+                           atomic_ref_internal::ToBuiltinMemoryOrder(order));
++    T value;
++    __atomic_load(ptr_, &value,
++                  atomic_ref_internal::ToBuiltinMemoryOrder(order));
++    return value;
 +  }
 +
 +  T exchange(T value,
 +             std::memory_order order = std::memory_order_seq_cst) const {
-+    return __atomic_exchange_n(
-+        ptr_, value, atomic_ref_internal::ToBuiltinMemoryOrder(order));
++    T old_value;
++    __atomic_exchange(ptr_, &value, &old_value,
++                      atomic_ref_internal::ToBuiltinMemoryOrder(order));
++    return old_value;
 +  }
 +
 +  bool compare_exchange_strong(T& expected, T desired,
 +                               std::memory_order success,
 +                               std::memory_order failure) const {
-+    return __atomic_compare_exchange_n(
-+        ptr_, &expected, desired, false,
++    return __atomic_compare_exchange(
++        ptr_, &expected, &desired, false,
 +        atomic_ref_internal::ToBuiltinMemoryOrder(success),
 +        atomic_ref_internal::ToBuiltinMemoryOrder(failure));
 +  }
@@ -205,7 +209,7 @@ diff --git a/src/objects/simd.cc b/src/objects/simd.cc
 +++ b/src/objects/simd.cc
 @@ -7 +7,2 @@
 +#include "src/base/atomic-ref.h"
- #include "src/base/cpu.h"
+ #include "src/base/cpu/cpu.h"
 @@ -487,7 +488,7 @@ void AtomicUint8ArrayToHexSlow(
    char* mutable_bytes = const_cast<char*>(bytes);
    for (size_t i = 0; i < length; i++) {

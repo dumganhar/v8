@@ -1,13 +1,13 @@
 {
-  "manifest_sha256": "01910149086fbdd5e1855221f6d8a25a125fbf5cd74bae7737bfdd387960a56d",
+  "manifest_sha256": "9c4426e4e742d8c7d657eeedf795b40eef911fff06814a1ee6c195d077abc2f8",
   "patches": [
     {
       "path": ".standalone-sync/patches/0001-standalone-embedder-api.patch",
-      "sha256": "75c159f0b3050238cd2efe5eda52795cb4e9821ec428fbd1f75af7ce7cd436b0"
+      "sha256": "ff48695889f41678a9fb3c6c14791899a6c1fe4dbcbe9d669f3f0da23f3815d8"
     },
     {
       "path": ".standalone-sync/patches/0002-ndk-r28c-atomic-ref.patch",
-      "sha256": "295b0ac5cd0204e76787aa5e1e3268b898e9eda3e187bd27f170b818d1e35e60"
+      "sha256": "dc126265b7bddf30886135770d26c9c13d2045f44ca39e038c1ccea231524c87"
     },
     {
       "path": ".standalone-sync/patches/0003-ndk-clang-warning-flags.patch",
@@ -23,52 +23,60 @@
     },
     {
       "path": ".standalone-sync/patches/0006-ndk-clang19-regexp-constexpr.patch",
-      "sha256": "8ecccca3d421f38a8635f396673e6b1acf64eb753fdcae4938925d8331f9e006"
+      "sha256": "4163c47c3ca073f581ca4ff136c09ce607bb72dbb725b2fd67085754860293fd"
+    },
+    {
+      "path": ".standalone-sync/patches/0007-ndk-r28c-cppgc-atomic-ref.patch",
+      "sha256": "f7ffc00eb17e42c33af90fac03fef85df5f369be2ff10df43d2c1d370628cbcf"
+    },
+    {
+      "path": ".standalone-sync/patches/0008-xcode-clang-flags.patch",
+      "sha256": "070a420b0eceb7da646e25eeaf3562832a43034b096ed0290ba2727530e36977"
     }
   ],
   "repositories": [
     {
-      "commit": "e9c24d882a23b29750cd012690c6fb666bee4fae",
+      "commit": "2826b27d7b79a7096ace600b9f8fa1deb794d539",
       "path": ".",
       "remote": "https://chromium.googlesource.com/v8/v8.git"
     },
     {
-      "commit": "2ea8e0f4b0a7fc9a65b231a159cc0904fb5e7b5d",
+      "commit": "6bb98d0865c859a763b390c583fe7670516ce08d",
       "path": "build",
       "remote": "https://chromium.googlesource.com/chromium/src/build.git"
     },
     {
-      "commit": "1267724b67c1e44a778f610ae9dac191f06e2ff4",
+      "commit": "0d39be5a3f129cf1f35e7812108a2184e2193315",
       "path": "buildtools",
       "remote": "https://chromium.googlesource.com/chromium/src/buildtools.git"
     },
     {
-      "commit": "768d15952d4ac4789455b947375c2ebd7e78d143",
+      "commit": "87b5008339057d77c0323472183178030bb4df41",
       "path": "tools/clang",
       "remote": "https://chromium.googlesource.com/chromium/src/tools/clang.git"
     },
     {
-      "commit": "dcfa08fa08bb8ee1f28a2e94d80e0ac1a7015013",
+      "commit": "d8e483edd8b44da1845874ee84b42489589bb90f",
       "path": "third_party/abseil-cpp",
       "remote": "https://chromium.googlesource.com/chromium/src/third_party/abseil-cpp.git"
     },
     {
-      "commit": "936b9ab5515dead115606559502e3864958f7f6e",
+      "commit": "81d13c49649f0714dd41fb56bb246398b6584085",
       "path": "third_party/cpu_features/src",
       "remote": "https://chromium.googlesource.com/external/github.com/google/cpu_features.git"
     },
     {
-      "commit": "6c7c925b571d54486b9ffae8d9d18a822801cbda",
+      "commit": "beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44",
       "path": "third_party/dragonbox/src",
       "remote": "https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox.git"
     },
     {
-      "commit": "cb1d42aaa1e14b09e1452cfdef373d051b8c02a4",
+      "commit": "34164f547b7df3f5d794ff67e9f885c36819ebfc",
       "path": "third_party/fast_float/src",
       "remote": "https://chromium.googlesource.com/external/github.com/fastfloat/fast_float.git"
     },
     {
-      "commit": "3d2de1816307bac63c16a297e8c4dc501b4076df",
+      "commit": "782eea126dc5c755827be751a099eb01826175cf",
       "path": "third_party/fp16/src",
       "remote": "https://chromium.googlesource.com/external/github.com/Maratyszcza/FP16.git"
     },
@@ -78,12 +86,12 @@
       "remote": "https://chromium.googlesource.com/external/github.com/google/googletest.git"
     },
     {
-      "commit": "84379d1c73de9681b54fbe1c035a23c7bd5d272d",
+      "commit": "2607d3b5b0113992fe84d3848859eae13b3b52c1",
       "path": "third_party/highway/src",
       "remote": "https://chromium.googlesource.com/external/github.com/google/highway.git"
     },
     {
-      "commit": "a86a32e67b8d1384b33f8fa48c83a6079b86f8cd",
+      "commit": "d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738",
       "path": "third_party/icu",
       "remote": "https://chromium.googlesource.com/chromium/deps/icu.git"
     },
@@ -93,17 +101,17 @@
       "remote": "https://chromium.googlesource.com/chromium/src/third_party/jinja2.git"
     },
     {
-      "commit": "99d9ab2603b02b6fb974cf19be99777f5cd99e7a",
+      "commit": "5abc7f839700f0f17338434e1c1c6a8c87c00c11",
       "path": "third_party/libc++/src",
       "remote": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx.git"
     },
     {
-      "commit": "de02e5d57052b3b6d5fcd76dccde9380bca39360",
+      "commit": "8f11bb1d4438d0239d0dfc1bd9456a9f31629dda",
       "path": "third_party/libc++abi/src",
       "remote": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxxabi.git"
     },
     {
-      "commit": "b2be5ea77d1978b763e282d5572be69fcbca96d1",
+      "commit": "265cc6a83652bac5cb8ceb59741bc288ebe6b312",
       "path": "third_party/llvm-libc/src",
       "remote": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc.git"
     },
@@ -113,16 +121,21 @@
       "remote": "https://chromium.googlesource.com/chromium/src/third_party/markupsafe.git"
     },
     {
-      "commit": "880a4923a95e0b525f7bf72da82661cfffe46fb3",
+      "commit": "009c3b60a1c149c0f4f241150c993b2032487829",
+      "path": "third_party/partition_alloc",
+      "remote": "https://chromium.googlesource.com/chromium/src/base/allocator/partition_allocator.git"
+    },
+    {
+      "commit": "f7356eed293f8208c40b3c1b344a50bd70971983",
       "path": "third_party/simdutf",
       "remote": "https://chromium.googlesource.com/chromium/src/third_party/simdutf"
     },
     {
-      "commit": "63d7e16739d83e3a16c673692a348e52db1a3a11",
+      "commit": "8b3aa8a1cd7585c0c4c67351481227b046a662a0",
       "path": "third_party/zlib",
       "remote": "https://chromium.googlesource.com/chromium/src/third_party/zlib.git"
     }
   ],
   "schema": 1,
-  "v8_version": "14.4.258.49"
+  "v8_version": "15.1.206.13"
 }

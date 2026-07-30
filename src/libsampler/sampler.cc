@@ -237,8 +237,7 @@ void SamplerManager::RemoveSampler(Sampler* sampler) {
   auto it = sampler_map_.find(thread_id);
   DCHECK_NE(it, sampler_map_.end());
   SamplerList& samplers = it->second;
-  samplers.erase(std::remove(samplers.begin(), samplers.end(), sampler),
-                 samplers.end());
+  std::erase(samplers, sampler);
   if (samplers.empty()) {
     sampler_map_.erase(it);
   }
@@ -488,6 +487,7 @@ void SignalHandler::FillRegisterState(void* context, RegisterState* state) {
   state->pc = reinterpret_cast<void*>(mcontext->__ss.__pc);
   state->sp = reinterpret_cast<void*>(mcontext->__ss.__sp);
   state->fp = reinterpret_cast<void*>(mcontext->__ss.__fp);
+  state->lr = reinterpret_cast<void*>(mcontext->__ss.__lr);
 #elif V8_TARGET_ARCH_X64
   // Building for the iOS simulator.
   state->pc = reinterpret_cast<void*>(mcontext->__ss.__rip);
@@ -513,6 +513,8 @@ void SignalHandler::FillRegisterState(void* context, RegisterState* state) {
       reinterpret_cast<void*>(arm_thread_state64_get_sp(mcontext->__ss));
   state->fp =
       reinterpret_cast<void*>(arm_thread_state64_get_fp(mcontext->__ss));
+  state->lr =
+      reinterpret_cast<void*>(arm_thread_state64_get_lr(mcontext->__ss));
 #endif  // V8_HOST_ARCH_*
 #elif V8_OS_FREEBSD
 #if V8_HOST_ARCH_IA32

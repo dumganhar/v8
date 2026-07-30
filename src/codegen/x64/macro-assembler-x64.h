@@ -18,6 +18,7 @@
 #include "src/execution/isolate-data.h"
 #include "src/objects/contexts.h"
 #include "src/objects/tagged-index.h"
+#include "src/sandbox/indirect-pointer-tag.h"
 
 namespace v8 {
 namespace internal {
@@ -416,6 +417,10 @@ class V8_EXPORT_PRIVATE MacroAssembler
 
   void LoadFeedbackVector(Register dst, Register closure, Label* fbv_undef,
                           Label::Distance distance);
+  void LoadFeedbackCell(Register dst, Register closure);
+  void LoadFeedbackVectorFromCell(Register dst, Register feedback_cell,
+                                  Register scratch, Label* fbv_undef,
+                                  Label::Distance distance);
 
   void LoadInterpreterDataBytecodeArray(Register destination,
                                         Register interpreter_data);
@@ -508,6 +513,11 @@ class V8_EXPORT_PRIVATE MacroAssembler
   void LoadRootRegisterOffset(Register destination, intptr_t offset) final;
   void LoadRootRelative(Register destination, int32_t offset) final;
   void StoreRootRelative(int32_t offset, Register value) final;
+
+  MemOperand AsMemOperand(IsolateFieldId id) {
+    DCHECK(root_array_available());
+    return MemOperand(kRootRegister, IsolateData::GetOffset(id));
+  }
 
   // Operand pointing to an external reference.
   // May emit code to set up the scratch register. The operand is
@@ -847,16 +857,22 @@ class V8_EXPORT_PRIVATE MacroAssembler
   // When the sandbox is enabled, these are indirect pointers using the trusted
   // pointer table. Otherwise they are regular tagged fields.
   void LoadTrustedPointerField(Register destination, Operand field_operand,
-                               IndirectPointerTag tag, Register scratch);
+                               IndirectPointerTagRange tag_range,
+                               Register scratch);
   // As above, but for kUnknownIndirectPointerTag. The type of the loaded object
   // is unknown, so this helper will check for a series of expected types and
   // jump to the given labels if the loaded object has a matching type. If the
-  // object has none of the expected types, the destination register will be
-  // zeroed and execution continues as fall-through.
+  // field is null (with enabled sandbox) or a Smi (with disabled sandbox) and
+  // the provided is_unavailable label is not a nullptr, then the helper will
+  // jump there. If the field is valid and the object has one of the expected
+  // types, then the helper will jump to the corresponding label. In all other
+  // cases, the destination register will be zeroed and execution continues as
+  // fall-through.
   void LoadTrustedUnknownPointerField(
       Register destination, Operand field_operand, Register scratch,
       const std::initializer_list<
-          std::tuple<InstanceType, Label*, Label::Distance>>& cases);
+          std::tuple<InstanceType, Label*, Label::Distance>>& cases,
+      Label* is_unavailable = nullptr);
   // Store a trusted pointer field.
   void StoreTrustedPointerField(Operand dst_field_operand, Register value);
 
@@ -877,7 +893,8 @@ class V8_EXPORT_PRIVATE MacroAssembler
   // Only available when the sandbox is enabled, but always visible to avoid
   // having to place the #ifdefs into the caller.
   void LoadIndirectPointerField(Register destination, Operand field_operand,
-                                IndirectPointerTag tag, Register scratch);
+                                IndirectPointerTagRange tag_range,
+                                Register scratch);
 
   // Store an indirect pointer field.
   // Only available when the sandbox is enabled, but always visible to avoid
@@ -885,35 +902,13 @@ class V8_EXPORT_PRIVATE MacroAssembler
   void StoreIndirectPointerField(Operand dst_field_operand, Register value);
 
 #ifdef V8_ENABLE_SANDBOX
-  // Retrieve the heap object referenced by the given indirect pointer handle,
-  // which can either be a trusted pointer handle or a code pointer handle.
+  // Retrieve the heap object referenced by the given indirect pointer handle.
   void ResolveIndirectPointerHandle(Register destination, Register handle,
-                                    IndirectPointerTag tag);
-
-  // Retrieve the heap object referenced by the given trusted pointer handle.
-  void ResolveTrustedPointerHandle(Register destination, Register handle,
-                                   IndirectPointerTag tag);
-
-  // Retrieve the Code object referenced by the given code pointer handle.
-  void ResolveCodePointerHandle(Register destination, Register handle);
-
-  // Load the pointer to a Code's entrypoint via a code pointer.
-  // Only available when the sandbox is enabled as it requires the code pointer
-  // table.
-  void LoadCodeEntrypointViaCodePointer(Register destination,
-                                        Operand field_operand,
-                                        CodeEntrypointTag tag);
-
-  // Load the value of Code pointer table corresponding to
-  // IsolateGroup::current()->code_pointer_table_.
-  // Only available when the sandbox is enabled.
-  void LoadCodePointerTableBase(Register destination);
+                                    IndirectPointerTagRange tag_range);
 #endif  // V8_ENABLE_SANDBOX
 
   void LoadEntrypointFromJSDispatchTable(Register destination,
                                          Register dispatch_handle);
-  void LoadEntrypointFromJSDispatchTable(Register destination,
-                                         JSDispatchHandle dispatch_handle);
   void LoadParameterCountFromJSDispatchTable(Register destination,
                                              Register dispatch_handle);
   void LoadEntrypointAndParameterCountFromJSDispatchTable(
@@ -931,7 +926,7 @@ class V8_EXPORT_PRIVATE MacroAssembler
   void Store(ExternalReference destination, Register source);
 
   // Pushes the address of the external reference onto the stack.
-  void PushAddress(ExternalReference source);
+  void PushAddress(ExternalReference source, Register scratch);
 
   // Operations on roots in the root-array.
   // Load a root value where the index (or part of it) is variable.
@@ -994,8 +989,7 @@ class V8_EXPORT_PRIVATE MacroAssembler
 
   // Allocates an EXIT/BUILTIN_EXIT/API_CALLBACK_EXIT frame with given number
   // of slots in non-GCed area.
-  void EnterExitFrame(int extra_slots, StackFrame::Type frame_type,
-                      Register c_function);
+  void EnterExitFrame(int extra_slots, StackFrame::Type frame_type);
   void LeaveExitFrame();
 
   // ---------------------------------------------------------------------------
@@ -1299,7 +1293,8 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
                               ExternalReference thunk_ref, Register thunk_arg,
                               int slots_to_drop_on_return,
                               MemOperand* argc_operand,
-                              MemOperand return_value_operand);
+                              MemOperand return_value_operand,
+                              bool handle_interceptor_result);
 
 #define ACCESS_MASM(masm) masm->
 

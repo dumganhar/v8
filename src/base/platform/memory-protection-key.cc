@@ -6,8 +6,11 @@
 
 #if V8_HAS_PKU_SUPPORT
 
-#include <pthread.h>  // For SetKeyForCurrentThreadsStack.
+#include <pthread.h>   // For SetKeyForCurrentThreadsStack.
 #include <sys/mman.h>  // For {mprotect()} protection macros.
+#include <unistd.h>    // For sysconf.
+
+#include <cerrno>
 #undef MAP_TYPE  // Conflicts with MAP_TYPE in Torque-generated instance-types.h
 
 #include "src/base/logging.h"
@@ -27,20 +30,11 @@ namespace base {
 namespace {
 
 int GetProtectionFromMemoryPermission(PagePermissions permission) {
-  // Mappings for PKU are either RWX (for code), no access (for uncommitted
-  // memory), or RO for globals.
-  switch (permission) {
-    case PagePermissions::kNoAccess:
-      return PROT_NONE;
-    case PagePermissions::kRead:
-      return PROT_READ;
-    case PagePermissions::kReadWrite:
-      return PROT_READ | PROT_WRITE;
-    case PagePermissions::kReadWriteExecute:
-      return PROT_READ | PROT_WRITE | PROT_EXEC;
-    default:
-      UNREACHABLE();
-  }
+  static_assert(static_cast<int>(PagePermissions::kNoAccess) == PROT_NONE);
+  static_assert(static_cast<int>(PagePermissions::kRead) == PROT_READ);
+  static_assert(static_cast<int>(PagePermissions::kWrite) == PROT_WRITE);
+  static_assert(static_cast<int>(PagePermissions::kExecute) == PROT_EXEC);
+  return static_cast<int>(permission);
 }
 
 }  // namespace
@@ -113,7 +107,11 @@ bool MemoryProtectionKey::SetPermissionsAndKey(base::AddressRegion region,
 
   int protection = GetProtectionFromMemoryPermission(permissions);
 
-  return pkey_mprotect(address, size, protection, key) == 0;
+  bool success = pkey_mprotect(address, size, protection, key) == 0;
+  // If `pkey_mprotect` fails for something other than ENOMEM, then the input
+  // arguments were invalid.
+  CHECK(success || errno == ENOMEM);
+  return success;
 }
 
 // static
@@ -170,7 +168,8 @@ void MemoryProtectionKey::SetDefaultPermissionsForAllKeysInSignalHandler(
   }
 }
 
-bool MemoryProtectionKey::SetKeyForCurrentThreadsStack(int key) {
+bool MemoryProtectionKey::SetKeyForCurrentThreadsStack(int key,
+                                                       void* limit_address) {
   DCHECK_NE(kNoMemoryProtectionKey, key);
 
   pthread_attr_t attr;
@@ -183,6 +182,17 @@ bool MemoryProtectionKey::SetKeyForCurrentThreadsStack(int key) {
   CHECK_EQ(pthread_getattr_np(pthread_self(), &attr), 0);
   CHECK_EQ(pthread_attr_getstack(&attr, &stackaddr, &stacksize), 0);
   CHECK_EQ(pthread_attr_destroy(&attr), 0);
+
+  if (limit_address) {
+    uintptr_t start = reinterpret_cast<uintptr_t>(stackaddr);
+    uintptr_t end = start + stacksize;
+    const size_t kPageSize = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    uintptr_t limit =
+        RoundUp(reinterpret_cast<uintptr_t>(limit_address), kPageSize);
+    CHECK_GT(limit, start);
+    CHECK_LT(limit, end);
+    stacksize = limit - start;
+  }
 
   int flags = PROT_READ | PROT_WRITE;
   bool success = pkey_mprotect(stackaddr, stacksize, flags, key) == 0;

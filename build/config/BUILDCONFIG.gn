@@ -162,13 +162,14 @@ declare_args() {
 
 declare_args() {
   # Component build. Setting to true compiles targets declared as "components"
-  # as shared libraries loaded dynamically. This speeds up development time.
-  # When false, components will be linked statically.
+  # as shared libraries loaded dynamically. This can sometimes speed up
+  # development time by having smaller link steps. When false, components will
+  # be linked statically.
   #
   # For more information see
   # https://chromium.googlesource.com/chromium/src/+/main/docs/component_build.md
-  is_component_build =
-      is_debug && current_os != "ios" && current_os != "watchos"
+  is_component_build = is_debug && current_os != "android" &&
+                       current_os != "ios" && current_os != "watchos"
 }
 
 assert(!(is_debug && is_official_build), "Can't do official debug builds")
@@ -182,6 +183,15 @@ declare_args() {
   # the codebase which have been made manifestly safe.
   clang_unsafe_buffers_paths = ""
   clang_warning_suppression_file = ""
+}
+
+declare_args() {
+  # Whether to enable strict deps checks. This ensures that your dependencies
+  # are correctly declared (no missing deps and no accessing transitive deps).
+  enable_strict_deps = false
+}
+if (enable_strict_deps) {
+  generate_modulemap = "textual"
 }
 
 # ==============================================================================
@@ -277,7 +287,8 @@ if (target_os == "android") {
 } else if (target_os == "zos") {
   _default_toolchain = "//build/toolchain/zos:$target_cpu"
 } else if (target_os == "emscripten") {
-  # Because it's too hard to remove all targets from //BUILD.gn that do not work with it.
+  # Because it's too hard to remove all targets from //BUILD.gn that do not work
+  # with it.
   assert(
       false,
       "emscripten is not a supported target_os. It is available only as secondary toolchain.")
@@ -362,6 +373,7 @@ default_compiler_configs = [
   "//build/config/compiler:no_unresolved_symbols",
   "//build/config/compiler:runtime_library",
   "//build/config/compiler:sanitize_c_array_bounds",
+  "//build/config/compiler:sanitize_return",
   "//build/config/compiler:thin_archive",
   "//build/config/compiler:thinlto_optimize_default",
   "//build/config/compiler:tot_warnings",
@@ -378,6 +390,7 @@ if (is_win) {
     "//build/config/win:nominmax",
     "//build/config/win:unicode",
     "//build/config/win:winver",
+    "//build/config/win:wincrypt_use_symbol_prefix",
   ]
 }
 
@@ -416,6 +429,10 @@ if (is_debug) {
   default_compiler_configs += [ "//build/config:release" ]
 }
 
+if (current_os == "zos") {
+  default_compiler_configs += [ "//build/config/zos:compiler" ]
+}
+
 # Static libraries and source sets use only the compiler ones.
 set_defaults("static_library") {
   configs = default_compiler_configs
@@ -429,10 +446,14 @@ set_defaults("rust_library") {
 
 # Compute the set of configs common to all linked targets (shared libraries,
 # loadable modules, executables) to avoid duplication below.
+_linker_configs = [
+  "//build/config:default_libs",
+  "//build/config/compiler:linker",
+]
 if (is_win) {
   # Many targets remove these configs, so they are not contained within
   # //build/config:executable_config for easy removal.
-  _linker_configs = [
+  _linker_configs += [
     "//build/config/win:default_incremental_linking",
 
     # Default to console-mode apps. Most of our targets are tests and such
@@ -440,24 +461,18 @@ if (is_win) {
     "//build/config/win:console",
   ]
 } else if (is_apple) {
-  _linker_configs = [ "//build/config/apple:strip_all" ]
+  _linker_configs += [ "//build/config/apple:strip_all" ]
 } else if (is_android) {
   # Warn whenever linking code that could unintentionally switch off
   # branch target identification (BTI) on Arm systems.
-  _linker_configs = [
-    "//build/config/android:lld_branch_target_hardening",
-    "//build/config/android:default_relr_relocations",
-  ]
-} else {
-  _linker_configs = []
+  _linker_configs += [ "//build/config/android:lld_branch_target_hardening" ]
 }
 
 # Executable defaults.
-default_executable_configs = default_compiler_configs + [
+default_executable_configs = default_compiler_configs + _linker_configs + [
                                "//build/config/compiler:export_dynamic",
-                               "//build/config:default_libs",
                                "//build/config:executable_config",
-                             ] + _linker_configs
+                             ]
 
 if (is_win) {
   # Turn on linker CFI for executables, and position it so it can be removed
@@ -479,10 +494,8 @@ set_defaults("executable") {
 
 # Shared library and loadable module defaults (also for components in component
 # mode).
-default_shared_library_configs = default_compiler_configs + [
-                                   "//build/config:default_libs",
-                                   "//build/config:shared_library_config",
-                                 ] + _linker_configs
+default_shared_library_configs = default_compiler_configs + _linker_configs +
+                                 [ "//build/config:shared_library_config" ]
 if (is_win) {
   # Turn on linker CFI for DLLs, and position it so it can be removed if needed.
   default_shared_library_configs += [ "//build/config/win:cfi_linker" ]
@@ -547,6 +560,9 @@ TESTONLY_AND_VISIBILITY = [
 # Variables
 #   use_libcxx_modules: If true, libc++'s modules are added to deps.
 #       This is true by default.
+#   strict_deps: If false, the strict deps check will be disabled even when the
+#       feature is enabled in args.gn.
+#       This is true by default.
 foreach(_target_type,
         [
           "source_set",
@@ -565,16 +581,6 @@ foreach(_target_type,
 
       if (!defined(public_deps)) {
         public_deps = []
-      }
-
-      if (is_clang) {
-        # When clang is used, some target may use clang module. This dependency
-        # is required for things to work, regardless of whether the libc++
-        # module is used in this target or not.
-        public_deps += [
-          "//buildtools/third_party/libc++:custom_headers",
-          "//buildtools/third_party/libc++:libcxx_headers",
-        ]
       }
 
       if (!defined(use_libcxx_modules)) {
@@ -598,9 +604,26 @@ foreach(_target_type,
         use_libcxx_modules = false
       }
 
+      if (!defined(strict_deps)) {
+        strict_deps = enable_strict_deps
+      }
+
+      if (use_libcxx_modules && is_clang) {
+        if (strict_deps) {
+          configs += [ "//build/modules:strict_deps" ]
+        }
+      } else {
+        not_needed([ "strict_deps" ])
+      }
+
       if (use_libcxx_modules) {
         # Add a dependency needed for Clang modules builds.
         deps += [ "//buildtools/third_party/libc++:all_modules" ]
+
+        if (!defined(invoker.generate_modulemap) &&
+            defined(generate_modulemap)) {
+          generate_modulemap = generate_modulemap
+        }
       }
 
       # Consumed by the unsafe-buffers plugin during compile.
@@ -633,6 +656,9 @@ foreach(_target_type,
 #       "//build/config/compiler:runtime_library" from configs (to remove
 #       its subconfig "//build/config/c++:runtime_library").
 #   use_libcxx_modules: If true, libc++'s modules are added to deps.
+#       This is true by default.
+#   strict_deps: If false, the strict deps check will be disabled even when the
+#       feature is enabled in args.gn.
 #       This is true by default.
 foreach(_target_type,
         [
@@ -688,16 +714,6 @@ foreach(_target_type,
         public_deps = []
       }
 
-      if (is_clang) {
-        # When clang is used, some target may use clang module. This dependency
-        # is required for things to work, regardless of whether the libc++
-        # module is used in this target or not.
-        public_deps += [
-          "//buildtools/third_party/libc++:custom_headers",
-          "//buildtools/third_party/libc++:libcxx_headers",
-        ]
-      }
-
       if (!defined(use_libcxx_modules)) {
         use_libcxx_modules = is_clang
       }
@@ -719,9 +735,26 @@ foreach(_target_type,
         use_libcxx_modules = false
       }
 
+      if (!defined(strict_deps)) {
+        strict_deps = enable_strict_deps
+      }
+
+      if (use_libcxx_modules && is_clang) {
+        if (strict_deps) {
+          configs += [ "//build/modules:strict_deps" ]
+        }
+      } else {
+        not_needed([ "strict_deps" ])
+      }
+
       if (use_libcxx_modules) {
         # Add a dependency needed for Clang modules builds.
         deps += [ "//buildtools/third_party/libc++:all_modules" ]
+
+        if (!defined(invoker.generate_modulemap) &&
+            defined(generate_modulemap)) {
+          generate_modulemap = generate_modulemap
+        }
       }
 
       # On Android, write shared library output file to metadata. We will use

@@ -87,6 +87,11 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
   void LoadRootRelative(Register destination, int32_t offset) final;
   void StoreRootRelative(int32_t offset, Register value) final;
 
+  MemOperand AsMemOperand(IsolateFieldId id) {
+    DCHECK(root_array_available());
+    return MemOperand(kRootRegister, IsolateData::GetOffset(id));
+  }
+
   // Operand pointing to an external reference.
   // May emit code to set up the scratch register. The operand is
   // only guaranteed to be correct as long as the scratch register
@@ -116,6 +121,7 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
 
   void JumpIfEqual(Register x, int32_t y, Label* dest);
   void JumpIfLessThan(Register x, int32_t y, Label* dest);
+  void JumpIfUnsignedLessThan(Register x, int32_t y, Label* dest);
 
   // Caution: if {reg} is a 32-bit negative int, it should be sign-extended to
   // 64-bit before calling this function.
@@ -132,6 +138,10 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
 
   void LoadFeedbackVector(Register dst, Register closure, Register scratch,
                           Label* fbv_undef);
+
+  void LoadFeedbackCell(Register dst, Register closure);
+  void LoadFeedbackVectorFromCell(Register dst, Register feedback_cell,
+                                  Register scratch, Label* fbv_undef);
 
   void LoadInterpreterDataBytecodeArray(Register destination,
                                         Register interpreter_data);
@@ -344,36 +354,14 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
   void MulS64(Register dst, Register src);
   void MulS64(Register dst, const MemOperand& opnd);
   void MulS64(Register dst, Register src1, Register src2) {
-    if (CpuFeatures::IsSupported(MISC_INSTR_EXT2)) {
       msgrkc(dst, src1, src2);
-    } else {
-      if (dst == src2) {
-        MulS64(dst, src1);
-      } else if (dst == src1) {
-        MulS64(dst, src2);
-      } else {
-        mov(dst, src1);
-        MulS64(dst, src2);
-      }
-    }
   }
 
   void MulS32(Register dst, const MemOperand& src1);
   void MulS32(Register dst, Register src1);
   void MulS32(Register dst, const Operand& src1);
   void MulS32(Register dst, Register src1, Register src2) {
-    if (CpuFeatures::IsSupported(MISC_INSTR_EXT2)) {
       msrkc(dst, src1, src2);
-    } else {
-      if (dst == src2) {
-        MulS32(dst, src1);
-      } else if (dst == src1) {
-        MulS32(dst, src2);
-      } else {
-        mov(dst, src1);
-        MulS32(dst, src2);
-      }
-    }
   }
   void MulHighS64(Register dst, Register src1, Register src2);
   void MulHighS64(Register dst, Register src1, const MemOperand& src2);
@@ -446,6 +434,8 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
 
   // Load
   void LoadU64(Register dst, const MemOperand& mem, Register scratch = no_reg);
+  void LoadReversedU64(Register dst, const MemOperand& mem,
+                       Register scratch = no_reg);
   void LoadS32(Register dst, const MemOperand& opnd, Register scratch = no_reg);
   void LoadS32(Register dst, Register src);
   void LoadU32(Register dst, const MemOperand& opnd, Register scratch = no_reg);
@@ -527,6 +517,8 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
   void StoreU64(const MemOperand& mem, const Operand& opnd,
                 Register scratch = no_reg);
   void StoreU64(Register src, const MemOperand& mem, Register scratch = no_reg);
+  void StoreReversedU64(Register src, const MemOperand& mem,
+                        Register scratch = no_reg);
   void StoreU32(Register src, const MemOperand& mem, Register scratch = no_reg);
 
   void StoreU16(Register src, const MemOperand& mem, Register scratch = r0);
@@ -1022,24 +1014,11 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
                               int rangeEnd) {
     DCHECK(rangeStart >= rangeEnd && rangeStart < kBitsPerSystemPointer);
 
-    // Try to use RISBG if possible.
-    if (CpuFeatures::IsSupported(GENERAL_INSTR_EXT)) {
       int shiftAmount = (64 - rangeEnd) % 64;  // Convert to shift left.
       int endBit = 63;  // End is always LSB after shifting.
       int startBit = 63 - rangeStart + rangeEnd;
       RotateInsertSelectBits(dst, src, Operand(startBit), Operand(endBit),
                              Operand(shiftAmount), true);
-    } else {
-      if (rangeEnd > 0)  // Don't need to shift if rangeEnd is zero.
-        ShiftRightU64(dst, src, Operand(rangeEnd));
-      else if (dst != src)  // If we didn't shift, we might need to copy
-        mov(dst, src);
-      int width = rangeStart - rangeEnd + 1;
-      uint64_t mask = (static_cast<uint64_t>(1) << width) - 1;
-      nihf(dst, Operand(mask >> 32));
-      nilf(dst, Operand(mask & 0xFFFFFFFF));
-      ltgr(dst, dst);
-    }
   }
 
   inline void ExtractBit(Register dst, Register src, uint32_t bitNumber) {
@@ -1639,13 +1618,13 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
   // sets the flags and leaves the object type in the type_reg register.
   template <bool use_unsigned_cmp = false>
   void CompareInstanceType(Register map, Register type_reg, InstanceType type) {
-    static_assert(Map::kInstanceTypeOffset < 4096);
+    static_assert(offsetof(Map, instance_type_) < 4096);
     static_assert(LAST_TYPE <= 0xFFFF);
     if (use_unsigned_cmp) {
-      LoadU16(type_reg, FieldMemOperand(map, Map::kInstanceTypeOffset));
+      LoadU16(type_reg, FieldMemOperand(map, offsetof(Map, instance_type_)));
       CmpU64(type_reg, Operand(type));
     } else {
-      LoadS16(type_reg, FieldMemOperand(map, Map::kInstanceTypeOffset));
+      LoadS16(type_reg, FieldMemOperand(map, offsetof(Map, instance_type_)));
       CmpS64(type_reg, Operand(type));
     }
   }
@@ -1952,7 +1931,8 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
                               ExternalReference thunk_ref, Register thunk_arg,
                               int slots_to_drop_on_return,
                               MemOperand* argc_operand,
-                              MemOperand return_value_operand);
+                              MemOperand return_value_operand,
+                              bool handle_interceptor_result);
 
 #define ACCESS_MASM(masm) masm->
 

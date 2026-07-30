@@ -21,6 +21,7 @@ import("//build/rust/rust_static_library.gni")
 #  aliased_deps
 #  allow_unsafe
 #  build_native_rust_unit_tests
+#  cpp_api_from_rust
 #  crate_name
 #  crate_root
 #  deps
@@ -87,6 +88,13 @@ import("//build/rust/rust_static_library.gni")
 #  crate_type "bin", "proc-macro" or "rlib" (optional)
 #    Whether to build an executable. The default is "rlib".
 #    At present others are not supported.
+#
+#  override_crate_type_as_dylib_in_component_builds (optional)
+#    Whether to change `crate_type` to `dylib` if `is_component_build`.
+#    Can be used as needed (e.g. to avoid bifurcating a global variable which
+#    would happen when linking the crate statically into multiple components).
+#    TODO(https://crbug.com/505430456): Automatically opt-in all `cargo_crate`
+#    targets into `override_crate_type_as_dylib_in_component_builds`
 #
 #  cargo_pkg_authors
 #  cargo_pkg_version
@@ -282,8 +290,11 @@ template("cargo_crate") {
       # Don't import the `chromium` crate into third-party code.
       no_chromium_prelude = true
 
-      # Depend by default on the `//build/rust/allocator` library, but avoid this
-      # dependency in `no_std` mode.  This is desirable for two reasons:
+      # Disable generating `..._clippy` targets for third-party code.
+      no_clippy = true
+
+      # Depend by default on the `//build/rust/allocator` library, but avoid
+      # this dependency in `no_std` mode. This is desirable for two reasons:
       # 1. It gives users of `cargo_crate` an indirect way to control presence of
       #    this dependency.
       # 2. More importantly, it avoid cyclic dependencies like the one below:
@@ -355,7 +366,8 @@ template("cargo_crate") {
       if ((!defined(output_dir) || output_dir == "") && _crate_type == "rlib") {
         # Cargo crate rlibs can be compiled differently for tests, and must not
         # collide with the production outputs. This does *not* override the
-        # unit_test_output_dir, which is set above, as that target is not an rlib.
+        # unit_test_output_dir, which is set above, as that target is not an
+        # rlib.
         output_dir = "$target_out_dir/$_orig_target_name"
       }
 
@@ -376,8 +388,8 @@ template("cargo_crate") {
         }
 
         # This... is a bit weird. We generate a file called cargo_flags.rs which
-        # does not actually contain Rust code, but instead some flags to add
-        # to the rustc command line. We need it to end in a .rs extension so that
+        # does not actually contain Rust code, but instead some flags to add to
+        # the rustc command line. We need it to end in a .rs extension so that
         # we can include it in the 'sources' line and thus have dependency
         # calculation done correctly. data_deps won't work because targets don't
         # require them to be present until runtime.
@@ -385,10 +397,10 @@ template("cargo_crate") {
         rustflags += [ "@" + rebase_path(flags_file, root_build_dir) ]
         sources += [ flags_file ]
         if (defined(invoker.build_script_outputs)) {
-          # Build scripts may output arbitrary files. They are usually included in
-          # the main Rust target using include! or include_str! and therefore the
-          # filename may be .rs or may be arbitrary. We want to educate ninja
-          # about the dependency either way.
+          # Build scripts may output arbitrary files. They are usually included
+          # in the main Rust target using include! or include_str! and therefore
+          # the filename may be .rs or may be arbitrary. We want to educate
+          # ninja about the dependency either way.
           foreach(extra_source,
                   filter_include(invoker.build_script_outputs, [ "*.rs" ])) {
             sources += [ "$_build_script_env_out_dir/$extra_source" ]
@@ -423,6 +435,10 @@ template("cargo_crate") {
       _rustflags_txt = "$_build_script_env_out_dir/rustflags.txt"
       outputs = [ _rustflags_txt ]
       script = rebase_path("//build/rust/gni_impl/write_rustflags.py")
+      inputs = [
+        "//build/action_helpers.py",
+        "//build/gn_helpers.py",
+      ]
       args = [
         "--output",
         rebase_path(_rustflags_txt, root_build_dir),
@@ -451,6 +467,13 @@ template("cargo_crate") {
         _rustflags_txt,
         rustc_print_cfg_path,
       ]
+
+      if (host_os == "win") {
+        inputs += [ "//third_party/rust-toolchain/bin/rustc.exe" ]
+      } else {
+        inputs += [ "//third_party/rust-toolchain/bin/rustc" ]
+      }
+
       build_script_target = ":${_build_script_name}($rust_macro_toolchain)"
       deps = [
         ":${_build_script_name}_write_rustflags",
@@ -539,6 +562,9 @@ template("cargo_crate") {
 
         # Don't import the `chromium` crate into third-party code.
         no_chromium_prelude = true
+
+        # Disable generating `..._clippy` targets for third-party code.
+        no_clippy = true
 
         # Build scripts do not need to link to chrome's allocator.
         no_allocator_crate = true

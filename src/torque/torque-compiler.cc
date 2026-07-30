@@ -7,12 +7,17 @@
 #include <fstream>
 #include <optional>
 
+#include "src/torque/ast.h"
 #include "src/torque/declarable.h"
 #include "src/torque/declaration-visitor.h"
 #include "src/torque/global-context.h"
 #include "src/torque/implementation-visitor.h"
 #include "src/torque/torque-parser.h"
+#ifdef V8_ENABLE_EXPERIMENTAL_TQ_TO_TSA
+#include "src/torque/tsa-generator.h"
+#endif
 #include "src/torque/type-oracle.h"
+#include "src/torque/utils.h"
 
 namespace v8::internal::torque {
 
@@ -46,6 +51,8 @@ void ReadAndParseTorqueFile(const std::string& path) {
 }
 
 void CompileCurrentAst(TorqueCompilerOptions options) {
+  std::string output_directory = options.output_directory;
+
   GlobalContext::Scope global_context(std::move(CurrentAst::Get()));
   if (options.collect_language_server_data) {
     GlobalContext::SetCollectLanguageServerData();
@@ -58,6 +65,9 @@ void CompileCurrentAst(TorqueCompilerOptions options) {
   }
   if (options.annotate_ir) {
     GlobalContext::SetAnnotateIR();
+  }
+  if (options.torque_dwarf) {
+    GlobalContext::SetTorqueDwarf();
   }
   TypeOracle::Scope type_oracle;
   CurrentScope::Scope current_namespace(GlobalContext::GetDefaultNamespace());
@@ -74,7 +84,17 @@ void CompileCurrentAst(TorqueCompilerOptions options) {
   // mutually refer to each others.
   TypeOracle::FinalizeAggregateTypes();
 
-  std::string output_directory = options.output_directory;
+  if (options.output_tsa) {
+#ifdef V8_ENABLE_EXPERIMENTAL_TQ_TO_TSA
+#ifdef DEBUG
+    std::cout << "=== RUNNING TORQUE TO GENERATE TSA ===" << std::endl;
+#endif
+    GenerateTSA(*GlobalContext::ast(), output_directory);
+    return;
+#else
+    UNREACHABLE();
+#endif
+  }
 
   ImplementationVisitor implementation_visitor;
   implementation_visitor.SetDryRun(output_directory.empty());
@@ -89,14 +109,10 @@ void CompileCurrentAst(TorqueCompilerOptions options) {
 
   implementation_visitor.GenerateBuiltinDefinitionsAndInterfaceDescriptors(
       output_directory);
-  implementation_visitor.GenerateVisitorLists(output_directory);
   implementation_visitor.GenerateBitFields(output_directory);
-  implementation_visitor.GeneratePrintDefinitions(output_directory);
   implementation_visitor.GenerateClassDefinitions(output_directory);
-  implementation_visitor.GenerateClassVerifiers(output_directory);
   implementation_visitor.GenerateClassDebugReaders(output_directory);
   implementation_visitor.GenerateEnumVerifiers(output_directory);
-  implementation_visitor.GenerateBodyDescriptors(output_directory);
   implementation_visitor.GenerateExportedMacrosAssembler(output_directory);
   implementation_visitor.GenerateCSATypes(output_directory);
 
@@ -114,6 +130,7 @@ void CompileCurrentAst(TorqueCompilerOptions options) {
 
 TorqueCompilerResult CompileTorque(const std::string& source,
                                    TorqueCompilerOptions options) {
+  CurrentCompilerOptions::Scope compiler_options_scope(options);
   TargetArchitecture::Scope target_architecture(options.force_32bit_output);
   SourceFileMap::Scope source_map_scope(options.v8_root);
   CurrentSourceFile::Scope no_file_scope(
@@ -140,6 +157,7 @@ TorqueCompilerResult CompileTorque(const std::string& source,
 
 TorqueCompilerResult CompileTorque(const std::vector<std::string>& files,
                                    TorqueCompilerOptions options) {
+  CurrentCompilerOptions::Scope compiler_options_scope(options);
   TargetArchitecture::Scope target_architecture(options.force_32bit_output);
   SourceFileMap::Scope source_map_scope(options.v8_root);
   CurrentSourceFile::Scope unknown_source_file_scope(SourceId::Invalid());
@@ -168,6 +186,7 @@ TorqueCompilerResult CompileTorque(const std::vector<std::string>& files,
 TorqueCompilerResult CompileTorqueForKythe(
     std::vector<TorqueCompilationUnit> units, TorqueCompilerOptions options,
     KytheConsumer* consumer) {
+  CurrentCompilerOptions::Scope compiler_options_scope(options);
   TargetArchitecture::Scope target_architecture(options.force_32bit_output);
   SourceFileMap::Scope source_map_scope(options.v8_root);
   CurrentSourceFile::Scope unknown_source_file_scope(SourceId::Invalid());

@@ -71,8 +71,8 @@ namespace internal {
     "CallSite expects wasm object as first or function as second argument, "   \
     "got <%, %>")                                                              \
   T(CallSiteMethod, "CallSite method % expects CallSite as receiver")          \
-  T(CallSiteMethodUnsupportedInShadowRealm,                                    \
-    "CallSite method % is unsupported inside ShadowRealms")                    \
+  T(CallSiteMethodCrossedShadowRealmBoundary,                                  \
+    "CallSite method % cannot access objects across ShadowRealm boundary")     \
   T(CallWrappedFunctionThrew, "WrappedFunction threw (%)")                     \
   T(CannotBeShared, "% cannot be shared")                                      \
   T(CannotConvertToPrimitive, "Cannot convert object to primitive value")      \
@@ -104,7 +104,19 @@ namespace internal {
   T(DefineDisallowed, "Cannot define property %, object is not extensible")    \
   T(DefineDisallowedFixedLayout,                                               \
     "Cannot define property %, object has fixed layout")                       \
-  T(DetachedOperation, "Cannot perform % on a detached ArrayBuffer")           \
+  T(TypedArrayDetachedErrorOperation,                                          \
+    "Cannot perform % on a detached ArrayBuffer")                              \
+  T(TypedArrayOOBErrorOperation,                                               \
+    "Cannot perform % out-of-bounds of the ArrayBuffer")                       \
+  T(TypedArrayValidateErrorOperation,                                          \
+    "Cannot perform % on a detached or out-of-bounds ArrayBuffer")             \
+  T(TypedArrayValidateWriteErrorOperation,                                     \
+    (v8_flags.js_immutable_arraybuffer                                         \
+         ? "Cannot perform % on a detached or out-of-bounds or immutable "     \
+           "ArrayBuffer"                                                       \
+         : "Cannot perform % on a detached or out-of-bounds ArrayBuffer"))     \
+  T(TypedArrayImmutableBufferErrorOperation,                                   \
+    "Cannot perform % on an immutable ArrayBuffer")                            \
   T(DoNotUse, "Do not use %; %")                                               \
   T(DuplicateTemplateProperty, "Object template has duplicate property '%'")   \
   T(ExtendsValueNotConstructor,                                                \
@@ -138,6 +150,10 @@ namespace internal {
   T(IteratorReduceNoInitial,                                                   \
     "Reduce of a done iterator with no initial value")                         \
   T(IteratorResultNotAnObject, "Iterator result % is not an object")           \
+  T(InvalidIteratorZipMode,                                                    \
+    "% mode must be 'shortest', 'longest', or 'strict'")                       \
+  T(IteratorZipStrictMismatch,                                                 \
+    "Iterators passed to % in 'strict' mode must have the same length")        \
   T(SpreadIteratorSymbolNonCallable,                                           \
     "Spread syntax requires ...iterable[Symbol.iterator] to be a function")    \
   T(FirstArgumentIteratorSymbolNonCallable,                                    \
@@ -177,6 +193,7 @@ namespace internal {
   T(NonStringImportAttributeValue, "Import attribute value must be a string")  \
   T(NoSetterInCallback, "Cannot set property % of % which has only a getter")  \
   T(NotAnIterator, "% is not an iterator")                                     \
+  T(NotReadyForSyncExec, "Deferred module is not ready for sync execution")    \
   T(PromiseNewTargetUndefined,                                                 \
     "Promise constructor cannot be invoked without 'new'")                     \
   T(NotConstructor, "% is not a constructor")                                  \
@@ -443,6 +460,7 @@ namespace internal {
   T(TypedArraySetSourceTooLarge, "Source is too large")                        \
   T(TypedArrayTooLargeToSort,                                                  \
     "Custom comparefn not supported for huge TypedArrays")                     \
+  T(IterableTooLargeToSum, "Math.sumPrecise not supported for huge iterables") \
   T(ValueOutOfRange, "Value % out of range for % options property %")          \
   T(CollectionGrowFailed, "% maximum size exceeded")                           \
   T(MustBePositive, "% must be positive")                                      \
@@ -714,8 +732,11 @@ namespace internal {
   T(WasmTrapStringInvalidUtf8, "invalid UTF-8 string")                         \
   T(WasmTrapStringInvalidWtf8, "invalid WTF-8 string")                         \
   T(WasmTrapStringOffsetOutOfBounds, "string offset out of bounds")            \
-  T(WasmTrapResume, "resuming an invalid continuation")                        \
+  T(WasmTrapResume, "WasmFX: resuming an invalid continuation")                \
+  T(WasmTrapSuspend, "WasmFX: unhandled suspend")                              \
+  T(WasmTrapSwitch, "WasmFX: switching from central stack")                    \
   T(WasmSuspendError, "trying to suspend without WebAssembly.promising")       \
+  T(WasmFXSuspendError, "WasmFX: unhandled suspend")                           \
   T(WasmTrapStringIsolatedSurrogate,                                           \
     "Failed to encode string as UTF-8: contains unpaired surrogate")           \
   T(WasmSuspendJSFrames, "trying to suspend JS frames")                        \

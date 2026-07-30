@@ -5,13 +5,22 @@
 """Config module for checking siso -config flags."""
 
 load("@builtin//struct.star", "module")
+load("./backend_config/backend.star", "backend")
 
 __KNOWN_CONFIG_OPTIONS = [
+    # Indicates that it is for Google Chromium/Chrome build using Google RBE
+    # as REAPI backend and all remote exeuctions are tested/maintained by
+    # Chrome build infra team.
+    "googlechrome",
+
     # Indicates that the build runs on a builder.
     "builder",
 
     # Indicate that it runs on Cog (automatically set on Cog).
     "cog",
+
+    # Enable remote as default rule.
+    "default-remote",
 
     # Force disable additional remote on cog.
     # TODO: b/333033551 - check performance with/without remote on cog.
@@ -54,6 +63,9 @@ def __get(ctx, key):
                 disableRemoteOnCog = True
             if cfg == "cog":
                 onCog = True
+    if hasattr(backend, "configs"):
+        if key in backend.configs(ctx):
+            return True
     if onCog:
         if disableRemoteOnCog:
             return False

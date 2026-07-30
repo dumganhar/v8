@@ -12,6 +12,7 @@
 #include "include/v8-function.h"
 #include "include/v8-profiler.h"
 #include "src/api/api-inl.h"
+#include "src/base/iterator.h"
 #include "src/base/macros.h"
 #include "src/base/numbers/double.h"
 #include "src/codegen/compiler.h"
@@ -23,7 +24,6 @@
 #include "src/deoptimizer/deoptimizer.h"
 #include "src/execution/arguments-inl.h"
 #include "src/execution/frames-inl.h"
-#include "src/execution/frames.h"
 #include "src/execution/isolate-inl.h"
 #include "src/execution/protectors-inl.h"
 #include "src/execution/tiering-manager.h"
@@ -32,9 +32,11 @@
 #include "src/heap/heap-write-barrier-inl.h"
 #include "src/heap/pretenuring-handler-inl.h"
 #include "src/ic/stub-cache.h"
+#include "src/objects/abstract-code-inl.h"
 #include "src/objects/bytecode-array.h"
 #include "src/objects/js-collection-inl.h"
 #include "src/profiler/heap-profiler.h"
+#include "src/sandbox/bytecode-verifier.h"
 #include "src/utils/utils.h"
 #ifdef V8_ENABLE_MAGLEV
 #include "src/maglev/maglev-concurrent-dispatcher.h"
@@ -124,7 +126,7 @@ V8_WARN_UNUSED_RESULT Tagged<Object> ReturnFuzzSafe(Tagged<Object> value,
 // fuzzing mode.
 #define CONVERT_BOOLEAN_ARG_FUZZ_SAFE(name, index) \
   CHECK_UNLESS_FUZZING(IsBoolean(args[index]));    \
-  bool name = IsTrue(args[index], isolate);
+  bool name = IsTrue(args[index]);
 
 bool IsAsmWasmFunction(Isolate* isolate, Tagged<JSFunction> function) {
   DisallowGarbageCollection no_gc;
@@ -252,13 +254,13 @@ RUNTIME_FUNCTION(Runtime_DeoptimizeFunction) {
   CHECK_UNLESS_FUZZING(IsJSFunction(*function_object));
   auto function = Cast<JSFunction>(function_object);
 
-  if (function->IsTieringRequestedOrInProgress()) {
+  if (function->IsTieringRequestedOrInProgress(isolate)) {
     if (function->tiering_in_progress()) {
       // Abort optimization so that calling DeoptimizeFunction on a function
       // currently being optimized ends up with a non-optimized function.
       isolate->AbortConcurrentOptimization(BlockingBehavior::kBlock);
     }
-    function->ResetTieringRequests();
+    function->ResetTieringRequests(isolate);
   }
 
   if (function->HasAttachedOptimizedCode(isolate)) {
@@ -460,9 +462,9 @@ RUNTIME_FUNCTION(Runtime_CompileBaseline) {
   DirectHandle<JSFunction> function = Cast<JSFunction>(function_object);
 
   IsCompiledScope is_compiled_scope =
-      function->shared(isolate)->is_compiled_scope(isolate);
+      function->shared()->is_compiled_scope(isolate);
 
-  CHECK_UNLESS_FUZZING(function->shared(isolate)->IsUserJavaScript());
+  CHECK_UNLESS_FUZZING(function->shared()->IsUserJavaScript());
 
   // First compile the bytecode, if we have to.
   CHECK_UNLESS_FUZZING(is_compiled_scope.is_compiled() ||
@@ -602,6 +604,27 @@ RUNTIME_FUNCTION(Runtime_OptimizeFunctionOnNextCall) {
       v8_flags.optimize_on_next_call_optimizes_to_maglev
           ? CodeKind::MAGLEV
           : CodeKind::TURBOFAN_JS);
+}
+
+RUNTIME_FUNCTION(Runtime_ExhaustInterruptBudget) {
+  HandleScope scope(isolate);
+  CHECK_UNLESS_FUZZING(args.length() == 1);
+  CHECK_UNLESS_FUZZING(IsJSFunction(args[0]));
+  DirectHandle<JSFunction> function = args.at<JSFunction>(0);
+
+  if (!function->has_feedback_vector()) {
+    IsCompiledScope is_compiled_scope;
+    CHECK_UNLESS_FUZZING(
+        EnsureCompiledAndFeedbackVector(isolate, function, &is_compiled_scope));
+  }
+
+  CHECK_UNLESS_FUZZING(function->has_feedback_vector());
+  CHECK_UNLESS_FUZZING(function->shared()->HasBytecodeArray());
+
+  function->SetInterruptBudget(isolate, BudgetModification::kReset);
+  function->raw_feedback_cell()->set_interrupt_budget(0);
+
+  return ReadOnlyRoots(isolate).undefined_value();
 }
 
 RUNTIME_FUNCTION(Runtime_EnsureFeedbackVectorForFunction) {
@@ -860,11 +883,10 @@ RUNTIME_FUNCTION(Runtime_NeverOptimizeFunction) {
   HandleScope scope(isolate);
   CHECK_UNLESS_FUZZING(args.length() == 1);
   Handle<Object> function_object = args.at(0);
-  PtrComprCageBase cage_base(isolate);
-  CHECK_UNLESS_FUZZING(IsJSFunction(*function_object, cage_base));
+  CHECK_UNLESS_FUZZING(IsJSFunction(*function_object));
   auto function = Cast<JSFunction>(function_object);
-  DirectHandle<SharedFunctionInfo> sfi(function->shared(cage_base), isolate);
-  CodeKind code_kind = sfi->abstract_code(isolate)->kind(cage_base);
+  DirectHandle<SharedFunctionInfo> sfi(function->shared(), isolate);
+  CodeKind code_kind = sfi->abstract_code(isolate)->kind();
   switch (code_kind) {
     case CodeKind::INTERPRETED_FUNCTION:
       break;
@@ -1044,7 +1066,7 @@ RUNTIME_FUNCTION(Runtime_ForceFlush) {
   Handle<Object> function_object = args.at(0);
   CHECK_UNLESS_FUZZING(IsJSFunction(*function_object));
   auto function = Cast<JSFunction>(function_object);
-  Tagged<SharedFunctionInfo> sfi = function->shared(isolate);
+  Tagged<SharedFunctionInfo> sfi = function->shared();
 
   // Don't try to flush functions that cannot be flushed.
   CHECK_UNLESS_FUZZING(sfi->CanDiscardCompiled());
@@ -1054,8 +1076,8 @@ RUNTIME_FUNCTION(Runtime_ForceFlush) {
        frame_it.Advance()) {
     std::vector<Tagged<SharedFunctionInfo>> infos;
     frame_it.frame()->GetFunctions(&infos);
-    for (auto infos_it = infos.rbegin(); infos_it != infos.rend(); ++infos_it) {
-      CHECK_UNLESS_FUZZING(*infos_it != sfi);
+    for (Tagged<SharedFunctionInfo> info : base::Reversed(infos)) {
+      CHECK_UNLESS_FUZZING(info != sfi);
     }
   }
 
@@ -1120,7 +1142,7 @@ RUNTIME_FUNCTION(Runtime_GetAbstractModuleSource) {
   DisallowGarbageCollection no_gc;
   Tagged<JSFunction> abstract_module_source_function =
       isolate->native_context()->abstract_module_source_function();
-  CHECK(IsJSFunction(*abstract_module_source_function));
+  CHECK(IsJSFunction(abstract_module_source_function));
   return abstract_module_source_function;
 }
 
@@ -1152,7 +1174,7 @@ RUNTIME_FUNCTION(Runtime_ClearFunctionFeedback) {
   function->ClearAllTypeFeedbackInfoForTesting(isolate);
   // Typically tests use this function to start from scratch. Thus, we should
   // also clear tiering requests.
-  function->ResetTieringRequests();
+  function->ResetTieringRequests(isolate);
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
@@ -1170,7 +1192,14 @@ RUNTIME_FUNCTION(Runtime_SetAllocationTimeout) {
   HeapAllocator::SetAllocationGcInterval(interval);
   CONVERT_INT32_ARG_FUZZ_SAFE(timeout, 1);
   isolate->heap()->set_allocation_timeout(timeout);
-#endif
+#else   // !V8_ENABLE_ALLOCATION_TIMEOUT
+  static std::atomic_flag printed_warning = ATOMIC_FLAG_INIT;
+  if (!printed_warning.test_and_set()) {
+    base::OS::PrintError(
+        "Warning: %%SetAllocationTimeout has no effect in this build. Set the "
+        "`v8_enable_test_features` GN arg to enable it.\n");
+  }
+#endif  // !V8_ENABLE_ALLOCATION_TIMEOUT
 #ifdef DEBUG
   if (args.length() == 3) {
     // Enable/disable inline allocation if requested.
@@ -1263,12 +1292,8 @@ RUNTIME_FUNCTION(Runtime_TakeHeapSnapshot) {
   }
 
   HeapProfiler* heap_profiler = isolate->heap()->heap_profiler();
-  // Since this API is intended for V8 devs, we do not treat globals as roots
-  // here on purpose.
-  v8::HeapProfiler::HeapSnapshotOptions options;
-  options.numerics_mode = v8::HeapProfiler::NumericsMode::kExposeNumericValues;
-  options.snapshot_mode = v8::HeapProfiler::HeapSnapshotMode::kExposeInternals;
-  heap_profiler->TakeSnapshotToFile(options, filename);
+  heap_profiler->TakeSnapshotToFile(
+      HeapProfiler::GetDefaultHeapSnapshotOptionsForTestingUsage(), filename);
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
@@ -1332,10 +1357,10 @@ RUNTIME_FUNCTION(Runtime_DebugPrintGeneric) {
 
   CHECK_UNLESS_FUZZING(args.length() == 2 + kNum16BitChunks + 1);
 
-  CHECK(IsSmi(args[1]));
+  CHECK_UNLESS_FUZZING(IsSmi(args[1]));
   DebugPrintValueType value_type =
       static_cast<DebugPrintValueType>(Cast<Smi>(args[1]).value());
-  CHECK(IsSmi(args[6]));
+  CHECK_UNLESS_FUZZING(IsSmi(args[6]));
   int stream_int = Cast<Smi>(args[6]).value();
   FILE* output_stream = stream_int == fileno(stderr) ? stderr : stdout;
 
@@ -1352,10 +1377,10 @@ RUNTIME_FUNCTION(Runtime_DebugPrintGeneric) {
   if (value_type != DebugPrintValueType::kTagged) {
     for (int i = 0; i < kNum16BitChunks; ++i) {
       value <<= 16;
-      CHECK(IsSmi(args[2 + i]));
+      CHECK_UNLESS_FUZZING(IsSmi(args[2 + i]));
       uint32_t chunk = Cast<Smi>(args[2 + i]).value();
       // We encode 16 bit per chunk only!
-      CHECK_EQ(chunk & 0xFFFF0000, 0);
+      CHECK_UNLESS_FUZZING((chunk & 0xFFFF0000) == 0);
       value |= chunk;
     }
   }
@@ -1390,7 +1415,7 @@ RUNTIME_FUNCTION(Runtime_DebugPrintGeneric) {
     }
     case DebugPrintValueType::kTagged: {
       Tagged<Object> tagged = args[5];
-      CHECK(IsHeapObject(tagged));
+      CHECK_UNLESS_FUZZING(IsHeapObject(tagged));
       if (IsString(tagged) && !IsString(args[0])) {
         // We don't have a prefix and just print a string. In this case we don't
         // print the full JS object but just the text.
@@ -1444,10 +1469,10 @@ RUNTIME_FUNCTION(Runtime_DebugPrintWord) {
   uint64_t value = 0;
   for (int i = 0; i < kNum16BitChunks; ++i) {
     value <<= 16;
-    CHECK(IsSmi(args[i]));
+    CHECK_UNLESS_FUZZING(IsSmi(args[i]));
     uint32_t chunk = Cast<Smi>(args[i]).value();
     // We encode 16 bit per chunk only!
-    CHECK_EQ(chunk & 0xFFFF0000, 0);
+    CHECK_UNLESS_FUZZING((chunk & 0xFFFF0000) == 0);
     value |= chunk;
   }
 
@@ -1471,10 +1496,10 @@ RUNTIME_FUNCTION(Runtime_DebugPrintFloat) {
   uint64_t value = 0;
   for (int i = 0; i < kNum16BitChunks; ++i) {
     value <<= 16;
-    CHECK(IsSmi(args[i]));
+    CHECK_UNLESS_FUZZING(IsSmi(args[i]));
     uint32_t chunk = Cast<Smi>(args[i]).value();
     // We encode 16 bit per chunk only!
-    CHECK_EQ(chunk & 0xFFFF0000, 0);
+    CHECK_UNLESS_FUZZING((chunk & 0xFFFF0000) == 0);
     value |= chunk;
   }
 
@@ -1528,6 +1553,12 @@ RUNTIME_FUNCTION(Runtime_DebugTrace) {
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
+RUNTIME_FUNCTION(Runtime_DebugTraceMinimal) {
+  SealHandleScope shs(isolate);
+  isolate->PrintMinimalStack(stdout);
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+
 // This will not allocate (flatten the string), but it may run
 // very slowly for very deeply nested ConsStrings.  For debugging use only.
 RUNTIME_FUNCTION(Runtime_GlobalPrint) {
@@ -1545,6 +1576,7 @@ RUNTIME_FUNCTION(Runtime_GlobalPrint) {
     }
   }
 
+  CHECK_UNLESS_FUZZING(args.length() >= 1);
   if (!IsString(args[0])) {
     return args[0];
   }
@@ -1571,13 +1603,13 @@ RUNTIME_FUNCTION(Runtime_SetForceSlowPath) {
   SealHandleScope shs(isolate);
   CHECK_UNLESS_FUZZING(args.length() == 1);
   Tagged<Object> arg = args[0];
-  if (IsTrue(arg, isolate)) {
+  if (IsTrue(arg)) {
     isolate->set_force_slow_path(true);
   } else {
     // This function is fuzzer exposed and as such we might not always have an
     // input that IsTrue or IsFalse. In these cases we assume that if !IsTrue
     // then it IsFalse when fuzzing.
-    DCHECK(IsFalse(arg, isolate) || v8_flags.fuzzing);
+    DCHECK(IsFalse(arg) || v8_flags.fuzzing);
     isolate->set_force_slow_path(false);
   }
   return ReadOnlyRoots(isolate).undefined_value();
@@ -1624,8 +1656,8 @@ RUNTIME_FUNCTION(Runtime_AbortCSADcheck) {
     std::unique_ptr<char[]> message_str = message->ToCString();
     base::OS::PrintError("abort: CSA_DCHECK failed: %s\n\n", message_str.get());
 
-    isolate->PushStackTraceAndDie(reinterpret_cast<void*>(message->ptr()),
-                                  message_str.get());
+    isolate->PushStackTraceAndDie(message_str.get(),
+                                  reinterpret_cast<void*>(message->ptr()));
   }
   base::OS::Abort();
   UNREACHABLE();
@@ -1671,6 +1703,8 @@ int StackSize(Isolate* isolate) {
   return n;
 }
 
+}  // anonymous namespace
+
 void PrintIndentation(int stack_size) {
   const int max_display = 80;
   if (stack_size <= max_display) {
@@ -1679,8 +1713,6 @@ void PrintIndentation(int stack_size) {
     PrintF("%4d:%*s", stack_size, max_display, "...");
   }
 }
-
-}  // namespace
 
 RUNTIME_FUNCTION(Runtime_TraceEnter) {
   SealHandleScope shs(isolate);
@@ -1769,8 +1801,9 @@ RUNTIME_FUNCTION(Runtime_PretenureAllocationSite) {
   PretenuringHandler* pretenuring_handler = heap->pretenuring_handler();
   Tagged<AllocationMemento> memento = PretenuringHandler::FindAllocationMemento<
       PretenuringHandler::kForRuntime>(heap, object->map(), object);
-  if (memento.is_null())
+  if (memento.is_null()) {
     return ReturnFuzzSafe(ReadOnlyRoots(isolate).false_value(), isolate);
+  }
   Tagged<AllocationSite> site = memento->GetAllocationSite();
   pretenuring_handler->PretenureAllocationSiteOnNextCollection(site);
   return ReturnFuzzSafe(ReadOnlyRoots(isolate).true_value(), isolate);
@@ -1988,6 +2021,9 @@ RUNTIME_FUNCTION(Runtime_HeapObjectVerify) {
   DirectHandle<Object> object = args.at(0);
 #ifdef VERIFY_HEAP
   Object::ObjectVerify(*object, isolate);
+  if (IsHeapObject(*object)) {
+    Cast<HeapObject>(*object)->map()->MapVerify(isolate);
+  }
 #else
   CHECK(IsObject(*object));
   if (IsHeapObject(*object)) {
@@ -2038,6 +2074,22 @@ RUNTIME_FUNCTION(Runtime_TurbofanStaticAssert) {
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
+RUNTIME_FUNCTION(Runtime_AssertPeeled) {
+  SealHandleScope shs(isolate);
+  // In Turbolev this is lowered to an AssertPeeled node that the loop peeler
+  // removes when it peels the surrounding loop, so we never reach this in
+  // compiled code once peeling fires.
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+
+RUNTIME_FUNCTION(Runtime_AssertNotPeeled) {
+  SealHandleScope shs(isolate);
+  // In Turbolev this is lowered to an AssertPeeled node that fails compilation
+  // if the loop peeler peels the surrounding loop, so we never reach this in
+  // compiled code unless the loop was (correctly) left unpeeled.
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+
 RUNTIME_FUNCTION(Runtime_IsBeingInterpreted) {
   SealHandleScope shs(isolate);
   // Always lowered to false in Turbofan, so we never get here in compiled code.
@@ -2073,7 +2125,7 @@ RUNTIME_FUNCTION(Runtime_EnableCodeLoggingForTesting) {
                              Address entry_point) final {}
     void RegExpCodeCreateEvent(DirectHandle<AbstractCode> code,
                                DirectHandle<String> source,
-                               RegExpFlags flags) final {}
+                               regexp::Flags flags) final {}
     void CodeMoveEvent(Tagged<InstructionStream> from,
                        Tagged<InstructionStream> to) final {}
     void BytecodeMoveEvent(Tagged<BytecodeArray> from,
@@ -2125,9 +2177,9 @@ RUNTIME_FUNCTION(Runtime_Is64Bit) {
   return isolate->heap()->ToBoolean(kSystemPointerSize == 8);
 }
 
-RUNTIME_FUNCTION(Runtime_BigIntMaxLengthBits) {
+RUNTIME_FUNCTION(Runtime_BigIntMaxBits) {
   HandleScope scope(isolate);
-  return *isolate->factory()->NewNumber(BigInt::kMaxLengthBits);
+  return *isolate->factory()->NewNumber(BigInt::kMaxBits);
 }
 
 RUNTIME_FUNCTION(Runtime_IsSameHeapObject) {
@@ -2385,7 +2437,13 @@ RUNTIME_FUNCTION(Runtime_GetFeedback) {
       if (interpreter::Bytecodes::IsCompareWithEmbeddedFeedback(bytecode)) {
         out << "CompareOp";
         feedback_value.slot_kind_ = out.str();
-        out << ":" << it.GetEmbeddedCompareOperationHint();
+        out << ":" << it.GetEmbeddedOperationHint<CompareOperationFeedback>();
+        feedback_value.details_ = out.str();
+      } else if (interpreter::Bytecodes::IsBinaryOpWithEmbeddedFeedback(
+                     bytecode)) {
+        out << "BinaryOp";
+        feedback_value.slot_kind_ = out.str();
+        out << ":" << it.GetEmbeddedOperationHint<BinaryOperationFeedback>();
         feedback_value.details_ = out.str();
       } else {
         UNREACHABLE();
@@ -2425,7 +2483,6 @@ RUNTIME_FUNCTION(Runtime_GetFeedback) {
 
 RUNTIME_FUNCTION(Runtime_ArrayBufferDetachForceWasm) {
   HandleScope scope(isolate);
-  DisallowGarbageCollection no_gc;
   // This isn't exposed to fuzzers so doesn't need to handle invalid arguments.
   DCHECK_LE(args.length(), 2);
   DCHECK(IsJSArrayBuffer(*args.at(0)));
@@ -2598,6 +2655,272 @@ RUNTIME_FUNCTION(Runtime_GetUndefinedNaN) {
   CHECK_UNLESS_FUZZING(false && "undefined NaNs are disabled via build flag");
   return ReadOnlyRoots(isolate).undefined_value();
 #endif
+}
+
+RUNTIME_FUNCTION(Runtime_GetBytecode) {
+  HandleScope scope(isolate);
+  CHECK_UNLESS_FUZZING(args.length() == 1);
+  CHECK_UNLESS_FUZZING(IsJSFunction(args[0]));
+  DirectHandle<JSFunction> function = args.at<JSFunction>(0);
+
+  DirectHandle<SharedFunctionInfo> shared(function->shared(), isolate);
+  if (!shared->HasBytecodeArray()) {
+    return ReadOnlyRoots(isolate).undefined_value();
+  }
+
+  DirectHandle<BytecodeArray> bytecode_array(shared->GetBytecodeArray(isolate),
+                                             isolate);
+
+  if (v8_flags.print_bytecode) {
+    PrintF("%%GetBytecode:\n");
+    StdoutStream os;
+    bytecode_array->Disassemble(os);
+    os << std::flush;
+  }
+
+  int length = bytecode_array->length();
+  Handle<JSArrayBuffer> bytecode_buffer =
+      isolate->factory()
+          ->NewJSArrayBufferAndBackingStore(length,
+                                            InitializedFlag::kUninitialized)
+          .ToHandleChecked();
+  memcpy(
+      bytecode_buffer->backing_store(),
+      reinterpret_cast<const void*>(bytecode_array->GetFirstBytecodeAddress()),
+      length);
+
+  DirectHandle<TrustedFixedArray> constant_pool(bytecode_array->constant_pool(),
+                                                isolate);
+  uint32_t cp_length = constant_pool->ulength().value();
+  Handle<JSArray> constant_pool_array =
+      isolate->factory()->NewJSArray(cp_length);
+  for (uint32_t i = 0; i < cp_length; ++i) {
+    Handle<Object> value(constant_pool->get(i), isolate);
+    RETURN_FAILURE_ON_EXCEPTION(
+        isolate, Object::SetElement(isolate, constant_pool_array, i, value,
+                                    ShouldThrow::kThrowOnError));
+  }
+
+  DirectHandle<TrustedByteArray> handler_table(bytecode_array->handler_table(),
+                                               isolate);
+  size_t ht_length = static_cast<size_t>(handler_table->ulength().value());
+  Handle<JSArrayBuffer> handler_table_buffer =
+      isolate->factory()
+          ->NewJSArrayBufferAndBackingStore(ht_length,
+                                            InitializedFlag::kUninitialized)
+          .ToHandleChecked();
+  memcpy(handler_table_buffer->backing_store(), handler_table->begin(),
+         ht_length);
+
+  Handle<JSObject> result =
+      isolate->factory()->NewJSObject(isolate->object_function());
+
+  JSObject::AddProperty(isolate, result, "bytecode", bytecode_buffer,
+                        PropertyAttributes::NONE);
+  JSObject::AddProperty(isolate, result, "constant_pool", constant_pool_array,
+                        PropertyAttributes::NONE);
+  JSObject::AddProperty(isolate, result, "handler_table", handler_table_buffer,
+                        PropertyAttributes::NONE);
+
+  JSObject::AddProperty(
+      isolate, result, "frame_size",
+      isolate->factory()->NewNumberFromInt(bytecode_array->frame_size()),
+      PropertyAttributes::NONE);
+  JSObject::AddProperty(
+      isolate, result, "parameter_count",
+      isolate->factory()->NewNumberFromInt(bytecode_array->parameter_count()),
+      PropertyAttributes::NONE);
+  JSObject::AddProperty(
+      isolate, result, "max_arguments",
+      isolate->factory()->NewNumberFromInt(bytecode_array->max_arguments()),
+      PropertyAttributes::NONE);
+  JSObject::AddProperty(
+      isolate, result, "incoming_new_target_or_generator_register",
+      isolate->factory()->NewNumberFromInt(
+          bytecode_array->incoming_new_target_or_generator_register().index()),
+      PropertyAttributes::NONE);
+
+  return *result;
+}
+
+RUNTIME_FUNCTION(Runtime_InstallBytecode) {
+  HandleScope scope(isolate);
+  CHECK_UNLESS_FUZZING(args.length() == 2);
+  CHECK_UNLESS_FUZZING(IsJSFunction(args[0]));
+  CHECK_UNLESS_FUZZING(IsJSObject(args[1]));
+
+  DirectHandle<JSFunction> function = args.at<JSFunction>(0);
+  Handle<JSObject> input = args.at<JSObject>(1);
+
+  auto GetIntProperty = [&](const char* name) -> Maybe<int32_t> {
+    Handle<Object> val;
+    ASSIGN_RETURN_ON_EXCEPTION_VALUE(
+        isolate, val, JSReceiver::GetProperty(isolate, input, name),
+        Nothing<int32_t>());
+    Handle<Object> result_obj;
+    ASSIGN_RETURN_ON_EXCEPTION_VALUE(
+        isolate, result_obj, Object::ToInt32(isolate, val), Nothing<int32_t>());
+    int32_t result;
+    CHECK(Object::ToInt32(*result_obj, &result));
+    return Just(result);
+  };
+
+  Handle<Object> bytecode_obj;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, bytecode_obj,
+      JSReceiver::GetProperty(isolate, input, "bytecode"));
+  CHECK_UNLESS_FUZZING(IsJSArrayBuffer(*bytecode_obj));
+  auto bytecode_buffer = Cast<JSArrayBuffer>(bytecode_obj);
+
+  Handle<Object> cp_obj;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, cp_obj,
+      JSReceiver::GetProperty(isolate, input, "constant_pool"));
+  CHECK_UNLESS_FUZZING(IsJSArray(*cp_obj));
+  auto cp_array = Cast<JSArray>(cp_obj);
+  uint32_t cp_length = Smi::ToUInt(cp_array->length());
+  DirectHandle<TrustedFixedArray> constant_pool =
+      isolate->factory()->NewTrustedFixedArray(cp_length);
+  for (uint32_t i = 0; i < cp_length; ++i) {
+    Handle<Object> val;
+    ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+        isolate, val, JSReceiver::GetElement(isolate, cp_array, i));
+    constant_pool->set(i, *val);
+  }
+
+  Handle<Object> ht_obj;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, ht_obj,
+      JSReceiver::GetProperty(isolate, input, "handler_table"));
+  CHECK_UNLESS_FUZZING(IsJSArrayBuffer(*ht_obj));
+  auto ht_buffer = Cast<JSArrayBuffer>(ht_obj);
+  uint32_t ht_length = static_cast<uint32_t>(ht_buffer->byte_length());
+  uint8_t* ht_data = static_cast<uint8_t*>(ht_buffer->backing_store());
+  DirectHandle<TrustedByteArray> handler_table =
+      isolate->factory()->NewTrustedByteArray(ht_length);
+  memcpy(handler_table->begin(), ht_data, ht_length);
+
+  int frame_size;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, frame_size,
+                                     GetIntProperty("frame_size"));
+
+  int parameter_count;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, parameter_count,
+                                     GetIntProperty("parameter_count"));
+
+  int max_arguments;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, max_arguments,
+                                     GetIntProperty("max_arguments"));
+
+  int incoming_reg_index;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, incoming_reg_index,
+      GetIntProperty("incoming_new_target_or_generator_register"));
+
+  int length = static_cast<int>(bytecode_buffer->byte_length());
+  const uint8_t* raw_bytecodes =
+      static_cast<uint8_t*>(bytecode_buffer->backing_store());
+  Handle<BytecodeArray> new_bytecode = isolate->factory()->NewBytecodeArray(
+      length, raw_bytecodes, frame_size, parameter_count, max_arguments,
+      constant_pool, handler_table);
+
+  new_bytecode->set_incoming_new_target_or_generator_register(
+      interpreter::Register(incoming_reg_index));
+
+  Zone zone(isolate->allocator(), "Runtime_InstallBytecode");
+  BytecodeVerifier::Verify(isolate, new_bytecode, &zone);
+
+  if (v8_flags.print_bytecode) {
+    PrintF("%%InstallBytecode:\n");
+    StdoutStream os;
+    new_bytecode->Disassemble(os);
+    os << std::flush;
+  }
+
+  DirectHandle<SharedFunctionInfo> shared(function->shared(), isolate);
+  if (shared->is_compiled()) {
+    SharedFunctionInfo::DiscardCompiled(isolate, shared);
+  }
+  shared->set_bytecode_array(*new_bytecode);
+
+  if (function->HasAttachedOptimizedCode(isolate)) {
+    Deoptimizer::DeoptimizeFunction(*function, LazyDeoptimizeReason::kTesting);
+  }
+  function->UpdateCode(isolate,
+                       *BUILTIN_CODE(isolate, InterpreterEntryTrampoline));
+
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+
+RUNTIME_FUNCTION(Runtime_AllocateHeapNumberWithValue) {
+  HandleScope scope(isolate);
+  CHECK_UNLESS_FUZZING(args.length() == 1);
+  MaybeHandle<Number> result =
+      Object::ToNumber(isolate, handle(args[0], isolate));
+  DirectHandle<Number> result_handle;
+  if (!result.ToHandle(&result_handle)) {
+    return ReadOnlyRoots(isolate).exception();
+  }
+  // Force HeapNumber, even if the value is representable as a Smi.
+  if (IsSmi(*result_handle)) {
+    return *isolate->factory()->NewHeapNumber(i::Smi::ToInt(*result_handle));
+  }
+  return *result_handle;
+}
+
+// Blocks the background compiler (or other background tasks) at the specified
+// synchronization point. The task will remain blocked until %Resume is called.
+// This is primarily used for deterministically testing race conditions.
+RUNTIME_FUNCTION(Runtime_BlockAt) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(2, args.length());
+  CHECK_UNLESS_FUZZING(IsString(args[0]));
+  CHECK_UNLESS_FUZZING(IsSmi(args[1]));
+  DirectHandle<String> phase_name = args.at<String>(0);
+  base::TimeDelta timeout =
+      base::TimeDelta::FromMilliseconds(args.smi_value_at(1));
+  isolate->isolate_group()->SetBlockAtSynchronizationPointForTesting(
+      phase_name->ToStdString(), timeout);
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+
+// Resumes a background compiler (or other background task) that was previously
+// blocked by %BlockAt at the specified synchronization point.
+RUNTIME_FUNCTION(Runtime_Resume) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+  CHECK_UNLESS_FUZZING(IsString(args[0]));
+  DirectHandle<String> phase_name = args.at<String>(0);
+  bool resumed = isolate->isolate_group()->ResumeSynchronizationPointForTesting(
+      phase_name->ToStdString());
+  if (!resumed) {
+    return isolate->Throw(*isolate->factory()->NewStringFromAsciiChecked(
+        "No thread is currently blocked at this synchronization point"));
+  }
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+
+// Waits until the given synchronization point is reached. Throws an exception
+// if the point is not armed or if a timeout is reached. The timeout is
+// provided in milliseconds.
+RUNTIME_FUNCTION(Runtime_WaitUntilBlocked) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(2, args.length());
+  CHECK_UNLESS_FUZZING(IsString(args[0]));
+  CHECK_UNLESS_FUZZING(IsSmi(args[1]));
+  DirectHandle<String> phase_name = args.at<String>(0);
+  base::TimeDelta timeout =
+      base::TimeDelta::FromMilliseconds(args.smi_value_at(1));
+
+  bool timed_out = false;
+  bool blocked = isolate->isolate_group()->WaitUntilBlockedForTesting(
+      phase_name->ToStdString(), timeout, timed_out);
+  if (!blocked) {
+    return isolate->Throw(*isolate->factory()->NewStringFromAsciiChecked(
+        timed_out ? "Synchronization point wait timed out"
+                  : "Synchronization point not found or not armed"));
+  }
+  return ReadOnlyRoots(isolate).undefined_value();
 }
 
 }  // namespace internal

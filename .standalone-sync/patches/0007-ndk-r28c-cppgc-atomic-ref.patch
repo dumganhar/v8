@@ -1,0 +1,123 @@
+diff --git a/src/heap/cppgc-internal/heap-page.h b/src/heap/cppgc-internal/heap-page.h
+--- a/src/heap/cppgc-internal/heap-page.h
++++ b/src/heap/cppgc-internal/heap-page.h
+@@ -10,5 +10,6 @@
+ 
+ #include "include/cppgc/internal/base-page-handle.h"
++#include "src/base/atomic-ref.h"
+ #include "src/base/hashing.h"
+ #include "src/base/iterator.h"
+ #include "src/base/macros.h"
+@@ -89,13 +90,13 @@ class V8_EXPORT_PRIVATE BasePage : public BasePageHandle {
+   // added for tsan builds.
+   void SynchronizedLoad() const {
+ #if defined(THREAD_SANITIZER)
+-    (void)std::atomic_ref<PageType>(const_cast<PageType&>(type_))
++    (void)v8::base::AtomicRef<PageType>(const_cast<PageType&>(type_))
+         .load(std::memory_order_acquire);
+ #endif
+   }
+   void SynchronizedStore() {
+     std::atomic_thread_fence(std::memory_order_seq_cst);
+ #if defined(THREAD_SANITIZER)
+-    std::atomic_ref<PageType>(type_).store(type_, std::memory_order_release);
++    v8::base::AtomicRef<PageType>(type_).store(type_, std::memory_order_release);
+ #endif
+   }
+diff --git a/src/heap/cppgc-internal/object-start-bitmap.h b/src/heap/cppgc-internal/object-start-bitmap.h
+--- a/src/heap/cppgc-internal/object-start-bitmap.h
++++ b/src/heap/cppgc-internal/object-start-bitmap.h
+@@ -10,6 +10,7 @@
+ #include <array>
+ 
+ #include "include/cppgc/internal/write-barrier.h"
++#include "src/base/atomic-ref.h"
+ #include "src/base/atomic-utils.h"
+ #include "src/base/bits.h"
+ #include "src/base/macros.h"
+@@ -174,7 +175,7 @@ void ObjectStartBitmap::store(size_t cell_index, uint8_t value) {
+   // reordered before the setting of the mark bit, which may lead to the
+   // concurrent marker missing the right object (because the bit is not yet
+   // propagated).
+-  std::atomic_ref<uint8_t>(object_start_bit_map_[cell_index])
++  v8::base::AtomicRef<uint8_t>(object_start_bit_map_[cell_index])
+       .exchange(value, std::memory_order_acq_rel);
+ }
+ 
+@@ -183,7 +184,7 @@ uint8_t ObjectStartBitmap::load(size_t cell_index) const {
+   if (mode == AccessMode::kNonAtomic) {
+     return object_start_bit_map_[cell_index];
+   }
+-  return std::atomic_ref<uint8_t>(
++  return v8::base::AtomicRef<uint8_t>(
+              const_cast<uint8_t&>(object_start_bit_map_[cell_index]))
+       .load(std::memory_order_acquire);
+ }
+diff --git a/src/heap/cppgc-internal/heap-object-header.h b/src/heap/cppgc-internal/heap-object-header.h
+--- a/src/heap/cppgc-internal/heap-object-header.h
++++ b/src/heap/cppgc-internal/heap-object-header.h
+@@ -11,6 +11,7 @@
+ #include "include/cppgc/internal/gc-info.h"
+ #include "include/cppgc/internal/member-storage.h"
+ #include "include/cppgc/internal/name-trait.h"
++#include "src/base/atomic-ref.h"
+ #include "src/base/atomic-utils.h"
+ #include "src/base/bit-field.h"
+ #include "src/base/logging.h"
+@@ -196,7 +197,7 @@ HeapObjectHeader::HeapObjectHeader(size_t size, GCInfoIndex gc_info_index) {
+   // this write is not observed by the marker, since the sweeper  sets the
+   // in-construction bit to 0 and we can rely on that to guarantee a correct
+   // answer when checking if objects are in-construction.
+-  std::atomic_ref<uint16_t>(encoded_high_)
++  v8::base::AtomicRef<uint16_t>(encoded_high_)
+       .store(GCInfoIndexField::encode(gc_info_index),
+              std::memory_order_relaxed);
+   DCHECK(IsInConstruction());
+@@ -281,7 +282,7 @@ bool HeapObjectHeader::IsMarked() const {
+ }
+ 
+ bool HeapObjectHeader::TryMarkAtomic() {
+-  std::atomic_ref<uint16_t> atomic_encoded(encoded_low_);
++  v8::base::AtomicRef<uint16_t> atomic_encoded(encoded_low_);
+   uint16_t old_value = atomic_encoded.load(std::memory_order_relaxed);
+   const uint16_t new_value = old_value | MarkBitField::encode(true);
+   if (new_value == old_value) {
+@@ -354,7 +355,8 @@ uint16_t HeapObjectHeader::LoadEncoded() const {
+   if constexpr (mode == AccessMode::kNonAtomic) {
+     return half;
+   }
+-  return std::atomic_ref(const_cast<uint16_t&>(half)).load(memory_order);
++  return v8::base::AtomicRef<uint16_t>(const_cast<uint16_t&>(half))
++      .load(memory_order);
+ }
+ 
+ template <AccessMode mode, HeapObjectHeader::EncodedHalf part,
+@@ -373,7 +375,7 @@ void HeapObjectHeader::StoreEncoded(uint16_t bits, uint16_t mask) {
+   }
+   // We don't perform CAS loop here assuming that only none of the info that
+   // shares the same encoded halfs change at the same time.
+-  std::atomic_ref<uint16_t> atomic_encoded(half);
++  v8::base::AtomicRef<uint16_t> atomic_encoded(half);
+   uint16_t value = atomic_encoded.load(std::memory_order_relaxed);
+   value = (value & ~mask) | bits;
+   atomic_encoded.store(value, memory_order);
+diff --git a/src/heap/sweeper.cc b/src/heap/sweeper.cc
+--- a/src/heap/sweeper.cc
++++ b/src/heap/sweeper.cc
+@@ -10,6 +10,7 @@
+ #include <optional>
+ #include <vector>
+ 
++#include "src/base/atomic-ref.h"
+ #include "src/base/atomic-utils.h"
+ #include "src/base/logging.h"
+ #include "src/common/globals.h"
+@@ -57,7 +58,7 @@ V8_INLINE void AtomicZapBlock(Address addr, size_t size_in_bytes) {
+   const size_t size_in_tagged = size_in_bytes / kTaggedSize;
+   Tagged_t* current_addr = reinterpret_cast<Tagged_t*>(addr);
+   for (size_t i = 0; i < size_in_tagged; ++i) {
+-    std::atomic_ref<Tagged_t>(*current_addr)
++    base::AtomicRef<Tagged_t>(*current_addr)
+         .store(kZapTagged, std::memory_order_relaxed);
+     current_addr++;
+   }

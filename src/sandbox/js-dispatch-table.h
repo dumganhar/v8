@@ -12,7 +12,6 @@
 #include "src/runtime/runtime.h"
 #include "src/sandbox/external-entity-table.h"
 
-
 namespace v8 {
 namespace internal {
 
@@ -52,12 +51,17 @@ struct JSDispatchEntry {
 
   // Returns true if this entry is a freelist entry.
   inline bool IsFreelistEntry() const;
+#ifdef V8_TARGET_ARCH_64_BIT
+  // Helper to check if an entry is a freelist entry using an already-loaded
+  // entrypoint value.
+  inline bool IsFreelistEntry(Address entrypoint) const;
+#endif
 
   // Get the index of the next entry on the freelist. This method may be
   // called even when the entry is not a freelist entry. However, the result
   // is only valid if this is a freelist entry. This behaviour is required
   // for efficient entry allocation, see TryAllocateEntryFromFreelist.
-  inline uint32_t GetNextFreelistEntryIndex() const;
+  inline std::optional<uint32_t> GetNextFreelistEntryIndex() const;
 
   // Mark this entry as alive during garbage collection.
   inline void Mark();
@@ -243,14 +247,6 @@ class V8_EXPORT_PRIVATE JSDispatchTable
   inline std::optional<JSDispatchHandle> TryAllocateAndInitializeEntry(
       Space* space, uint16_t parameter_count, Tagged<Code> code);
 
-  // The following methods are used to pre allocate entries and then initialize
-  // them later.
-  void PreAllocateEntries(Space* space, int num);
-  bool PreAllocatedEntryNeedsInitialization(Space* space,
-                                            JSDispatchHandle handle);
-  void InitializePreAllocatedEntry(Space* space, JSDispatchHandle handle,
-                                   Tagged<Code> code, uint16_t parameter_count);
-
   // Can be used to statically predict the handles if the pre allocated entries
   // are in the overall first read only segment of the whole table.
 #if V8_STATIC_DISPATCH_HANDLES_BOOL
@@ -300,6 +296,14 @@ class V8_EXPORT_PRIVATE JSDispatchTable
                           Space* ro_space);
 #endif  // defined(DEBUG) || defined(VERIFY_HEAP)
 
+  // Verifies that all entries in the given space are valid.
+  //
+  // In practice, this means that every active entry must point to a valid
+  // (e.g. not freed or corrupted) object of the expected type. As a general
+  // rule, the table must be in a consistent state (and so pass verification)
+  // whenever we can execute JS or Wasm code.
+  void Verify(Isolate* isolate, Space* space);
+
   void PrintEntry(JSDispatchHandle handle);
   void PrintCurrentTieringRequest(JSDispatchHandle handle, Isolate* isolate,
                                   std::ostream& os);
@@ -330,7 +334,12 @@ class V8_EXPORT_PRIVATE JSDispatchTable
     return handle;
   }
 
+  friend class Isolate;
   friend class MarkCompactCollector;
+
+  // Using `ExternalReferenceAsOperand(IsolateFieldId::kJSDispatchTable)` in the
+  // macro assembler to get the table's base address relies the offset being 0.
+  static_assert(Internals::kExternalEntityTableBasePointerOffset == 0);
 };
 
 }  // namespace internal

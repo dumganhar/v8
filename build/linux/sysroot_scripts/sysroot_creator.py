@@ -30,6 +30,7 @@ RELEASES = {
     "mips64el": "bullseye",
     "ppc64el": "bullseye",
     "riscv64": "trixie",
+    "s390x": "bullseye",
 }
 
 GCC_VERSIONS = {
@@ -41,7 +42,7 @@ GCC_VERSIONS = {
 # This number is appended to the sysroot key to cause full rebuilds.  It
 # should be incremented when removing packages or patching existing packages.
 # It should not be incremented when adding packages.
-SYSROOT_RELEASE = 1
+SYSROOT_RELEASE = 2
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -73,6 +74,7 @@ APT_SOURCES_LISTS = {
     "mips64el": APT_SOURCES_LIST,
     "ppc64el": APT_SOURCES_LIST,
     "riscv64": APT_SOURCES_LIST_RISCV,
+    "s390x": APT_SOURCES_LIST,
 }
 
 TRIPLES = {
@@ -84,6 +86,7 @@ TRIPLES = {
     "mips64el": "mips64el-linux-gnuabi64",
     "ppc64el": "powerpc64le-linux-gnu",
     "riscv64": "riscv64-linux-gnu",
+    "s390x": "s390x-linux-gnu",
 }
 
 LIB_DIRS = {
@@ -449,6 +452,36 @@ def hacks_and_patches(install_root: str, script_dir: str, arch: str) -> None:
     replace_in_file(stdlib_h, r"(#include <stddef.h>)",
                     r"\1\n#include <limits.h>")
 
+    # Glibc < 2.34 (like in our Bullseye sysroot) doesn't support
+    # _FORTIFY_SOURCE=3.  We can "upgrade" it by redefining the internal macros
+    # used by the fortified headers to use __builtin_dynamic_object_size instead
+    # of __builtin_object_size. This can be removed when the sysroot is upgraded
+    # from bullseye to bookworm.
+    #
+    # First, allow __USE_FORTIFY_LEVEL to be 3.
+    replace_in_file(
+        features_h, r"(#\s?if\s+_FORTIFY_SOURCE\s?>\s?1)",
+        r"# if _FORTIFY_SOURCE > 2\n"
+        r"#  define __USE_FORTIFY_LEVEL 3\n"
+        r"# elif _FORTIFY_SOURCE > 1")
+    # Second, redefine __bos and __bos0 to use __builtin_dynamic_object_size
+    # when __USE_FORTIFY_LEVEL is 3.
+    cdefs_h = os.path.join(install_root, "usr", "include", TRIPLES[arch],
+                           "sys", "cdefs.h")
+    replace_in_file(
+        cdefs_h, r"(#define\s+__bos\(ptr\)\s+__builtin_object_size\s+"
+        r"\(ptr,\s+__USE_FORTIFY_LEVEL\s+>\s+1\))",
+        r"#if defined(__clang__) && defined(__USE_FORTIFY_LEVEL) && "
+        r"__USE_FORTIFY_LEVEL > 2\n"
+        r"# define __bos(ptr) __builtin_dynamic_object_size (ptr, 1)\n"
+        r"# define __bos0(ptr) __builtin_dynamic_object_size (ptr, 0)\n"
+        r"#else\n"
+        r"\1")
+    replace_in_file(
+        cdefs_h,
+        r"(#define\s+__bos0\(ptr\)\s+__builtin_object_size\s+\(ptr,\s+0\))",
+        r"\1\n#endif")
+
     # Move pkgconfig scripts.
     pkgconfig_dir = os.path.join(install_root, "usr", "lib", "pkgconfig")
     os.makedirs(pkgconfig_dir, exist_ok=True)
@@ -695,6 +728,8 @@ def strip_sections(install_root: str, arch: str):
             if sections_to_remove:
                 objcopy_arch = "amd64" if arch == "i386" else arch
                 objcopy_bin = TRIPLES[objcopy_arch] + "-objcopy"
+                if not shutil.which(objcopy_bin):
+                    objcopy_bin = "objcopy"
                 objcopy_cmd = ([objcopy_bin] + [
                     f"--remove-section={section}"
                     for section in sections_to_remove

@@ -4,7 +4,6 @@
 
 #include <optional>
 
-#include "src/flags/flags.h"
 #include "src/torque/implementation-visitor.h"
 #include "src/torque/type-oracle.h"
 
@@ -535,8 +534,11 @@ void ImplementationVisitor::GenerateClassDebugReaders(
     h_contents << "#include <cstdint>\n";
     h_contents << "#include <vector>\n\n";
 
-    for (const std::string& include_path : GlobalContext::CppIncludes()) {
-      h_contents << "#include " << StringLiteralQuote(include_path) << "\n";
+    for (const CppInclude& include : GlobalContext::CppIncludes()) {
+      if (include.csa_selected()) {
+        h_contents << "#include " << StringLiteralQuote(include.include_path)
+                   << "\n";
+      }
     }
 
     h_contents

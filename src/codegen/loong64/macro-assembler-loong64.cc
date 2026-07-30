@@ -21,7 +21,7 @@
 #include "src/debug/debug.h"
 #include "src/deoptimizer/deoptimizer.h"
 #include "src/execution/frames-inl.h"
-#include "src/heap/mutable-page-metadata.h"
+#include "src/heap/mutable-page.h"
 #include "src/init/bootstrapper.h"
 #include "src/logging/counters.h"
 #include "src/objects/heap-number.h"
@@ -58,7 +58,16 @@ int MacroAssembler::RequiredStackSizeForCallerSaved(SaveFPRegsMode fp_mode,
   bytes += list.Count() * kSystemPointerSize;
 
   if (fp_mode == SaveFPRegsMode::kSave) {
+#if V8_ENABLE_SIMD128
+    if (options().generating_embedded_builtin ||
+        CpuFeatures::SupportsSimd128()) {
+      bytes += kCallerSavedVR.Count() * kSimd128Size;
+    } else {
+      bytes += kCallerSavedFPU.Count() * kDoubleSize;
+    }
+#else
     bytes += kCallerSavedFPU.Count() * kDoubleSize;
+#endif  // V8_ENABLE_SIMD128
   }
 
   return bytes;
@@ -75,10 +84,48 @@ int MacroAssembler::PushCallerSaved(SaveFPRegsMode fp_mode, Register exclusion1,
   bytes += list.Count() * kSystemPointerSize;
 
   if (fp_mode == SaveFPRegsMode::kSave) {
+#if V8_ENABLE_SIMD128
+    if (options().generating_embedded_builtin) {
+      Label no_simd, done;
+      UseScratchRegisterScope temps(this);
+      Register scratch = temps.Acquire();
+      int vr_extrabytes = kCallerSavedVR.Count() * kSimd128Size -
+                          kCallerSavedFPU.Count() * kDoubleSize;
+      DCHECK_GE(vr_extrabytes, 0);
+
+      li(scratch, ExternalReference::supports_simd_128_address());
+      // If > 0 then simd is available.
+      Ld_bu(scratch, MemOperand(scratch, 0));
+      Branch(&no_simd, eq, scratch, Operand(zero_reg));
+
+      // Save vector registers.
+      {
+        CpuFeatureScope lsx_scope(
+            this, LSX, CpuFeatureScope::CheckPolicy::kDontCheckSupported);
+        MultiPushLSX(kCallerSavedVR);
+      }
+      Branch(&done);
+
+      bind(&no_simd);
+      MultiPushFPU(kCallerSavedFPU);
+      Sub_d(sp, sp, vr_extrabytes);
+
+      bind(&done);
+      bytes += kCallerSavedVR.Count() * kSimd128Size;
+    } else {
+      if (CpuFeatures::SupportsSimd128()) {
+        MultiPushLSX(kCallerSavedVR);
+        bytes += kCallerSavedVR.Count() * kSimd128Size;
+      } else {
+        MultiPushFPU(kCallerSavedFPU);
+        bytes += kCallerSavedFPU.Count() * kDoubleSize;
+      }
+    }
+#else
     MultiPushFPU(kCallerSavedFPU);
     bytes += kCallerSavedFPU.Count() * kDoubleSize;
+#endif  // V8_ENABLE_SIMD128
   }
-
   return bytes;
 }
 
@@ -87,8 +134,49 @@ int MacroAssembler::PopCallerSaved(SaveFPRegsMode fp_mode, Register exclusion1,
   ASM_CODE_COMMENT(this);
   int bytes = 0;
   if (fp_mode == SaveFPRegsMode::kSave) {
+#if V8_ENABLE_SIMD128
+    if (options().generating_embedded_builtin) {
+      // Check if machine has simd enabled, if so push vector registers. If not
+      // then only push double registers.
+      Label no_simd, done;
+      UseScratchRegisterScope temps(this);
+      Register scratch = temps.Acquire();
+      int vr_extrabytes = kCallerSavedVR.Count() * kSimd128Size -
+                          kCallerSavedFPU.Count() * kDoubleSize;
+      DCHECK_GE(vr_extrabytes, 0);
+
+      li(scratch, ExternalReference::supports_simd_128_address());
+      // If > 0 then simd is available.
+      Ld_bu(scratch, MemOperand(scratch, 0));
+      Branch(&no_simd, eq, scratch, Operand(zero_reg));
+
+      // Save vector registers.
+      {
+        CpuFeatureScope lsx_scope(
+            this, LSX, CpuFeatureScope::CheckPolicy::kDontCheckSupported);
+        MultiPopLSX(kCallerSavedVR);
+      }
+      Branch(&done);
+
+      bind(&no_simd);
+      Add_d(sp, sp, vr_extrabytes);
+      MultiPopFPU(kCallerSavedFPU);
+
+      bind(&done);
+      bytes += kCallerSavedVR.Count() * kSimd128Size;
+    } else {
+      if (CpuFeatures::SupportsSimd128()) {
+        MultiPopLSX(kCallerSavedVR);
+        bytes += kCallerSavedVR.Count() * kSimd128Size;
+      } else {
+        MultiPopFPU(kCallerSavedFPU);
+        bytes += kCallerSavedFPU.Count() * kDoubleSize;
+      }
+    }
+#else
     MultiPopFPU(kCallerSavedFPU);
     bytes += kCallerSavedFPU.Count() * kDoubleSize;
+#endif  // V8_ENABLE_SIMD128
   }
 
   RegList exclusions = {exclusion1, exclusion2, exclusion3};
@@ -112,8 +200,20 @@ void MacroAssembler::LoadRoot(Register destination, RootIndex index) {
 }
 
 void MacroAssembler::LoadTaggedRoot(Register destination, RootIndex index) {
-  if (V8_STATIC_ROOTS_BOOL && RootsTable::IsReadOnly(index) &&
-      is_int12(ReadOnlyRootPtr(index))) {
+  ASM_CODE_COMMENT(this);
+  if (CanBeImmediate(index)) {
+    li(destination, Operand(ReadOnlyRootPtr(index), RelocInfo::Mode::NO_INFO));
+    return;
+  }
+  if (COMPRESS_POINTERS_BOOL) {
+    Ld_w(destination, MemOperand(s6, RootRegisterOffsetForRootIndex(index)));
+  } else {
+    Ld_d(destination, MemOperand(s6, RootRegisterOffsetForRootIndex(index)));
+  }
+}
+
+void MacroAssembler::LoadCompressedRoot(Register destination, RootIndex index) {
+  if (V8_STATIC_ROOTS_BOOL && RootsTable::IsReadOnly(index)) {
     li(destination, (int32_t)ReadOnlyRootPtr(index));
     return;
   }
@@ -160,8 +260,12 @@ void MacroAssembler::PreCheckSkippedWriteBarrier(Register object,
     Branch(ok, Condition::kEqual, scratch, Operand(scratch1));
   }
 
+#if CONTIGUOUS_COMPRESSED_READ_ONLY_SPACE_BOOL
+  JumpIfUnsignedLessThan(value, kContiguousReadOnlyReservationSize, ok);
+#else   // !CONTIGUOUS_COMPRESSED_READ_ONLY_SPACE_BOOL
   // Write barier can also be removed if value is in read-only space.
   CheckPageFlag(value, MemoryChunk::kIsInReadOnlyHeapMask, ne, ok);
+#endif  // !CONTIGUOUS_COMPRESSED_READ_ONLY_SPACE_BOOL
 
   Label not_ok;
 
@@ -196,14 +300,16 @@ void MacroAssembler::PreCheckSkippedWriteBarrier(Register object,
 
 void MacroAssembler::MaybeJumpIfReadOnlyOrSmallSmi(Register value,
                                                    Label* dest) {
-#if V8_STATIC_ROOTS_BOOL
+#if V8_STATIC_ROOTS_BOOL && CONTIGUOUS_COMPRESSED_READ_ONLY_SPACE_BOOL
   // Quick check for Read-only and small Smi values.
+  // This optimization requires contiguous compressed RO space to ensure RO
+  // space is at the beginning of the cage; otherwise, objects from other spaces
+  // could alias with low addresses.
   constexpr int kLastStaticRootPage =
       RoundUp<kRegularPageSize>(StaticReadOnlyRoot::kLastAllocatedRoot);
-  static_assert(kLastStaticRootPage <=
-                V8_CONTIGUOUS_COMPRESSED_RO_SPACE_SIZE_MB * MB);
-  JumpIfUnsignedLessThan(value, kLastStaticRootPage, dest);
-#endif  // V8_STATIC_ROOTS_BOOL
+  static_assert(kLastStaticRootPage <= kContiguousReadOnlyReservationSize);
+  JumpIfUnsignedLessThan(value, kContiguousReadOnlyReservationSize, dest);
+#endif  // V8_STATIC_ROOTS_BOOL && CONTIGUOUS_COMPRESSED_READ_ONLY_SPACE_BOOL
 }
 
 // Clobbers object, dst, value, and ra, if (ra_status == kRAHasBeenSaved)
@@ -307,7 +413,7 @@ void MacroAssembler::LoadExternalPointerField(Register destination,
   Ld_d(external_table,
        MemOperand(isolate_root,
                   IsolateData::external_pointer_table_offset() +
-                      Internals::kExternalPointerTableBasePointerOffset));
+                      Internals::kExternalEntityTableBasePointerOffset));
   Ld_wu(destination, field_operand);
   srli_d(destination, destination, kExternalPointerIndexShift);
   slli_d(destination, destination, kExternalPointerTableEntrySizeLog2);
@@ -316,7 +422,11 @@ void MacroAssembler::LoadExternalPointerField(Register destination,
   // We don't expect to see empty fields here. If this is ever needed, consider
   // using an dedicated empty value entry for those tags instead (i.e. an entry
   // with the right tag and nullptr payload).
-  DCHECK(!ExternalPointerCanBeEmpty(tag_range));
+  // Although interceptor callbacks can be empty in general, once we decide
+  // to generate a code loading a callback value it's guaranteed that the
+  // external pointer handle is not empty.
+  DCHECK(!ExternalPointerCanBeEmpty(tag_range) ||
+         kAnyInterceptorInfoExternalPointerTagRange.Contains(tag_range));
 
   // We need another scratch register for the 64-bit tag constant. Instead of
   // forcing the `And` to allocate a new temp register (which we may not have),
@@ -325,7 +435,7 @@ void MacroAssembler::LoadExternalPointerField(Register destination,
   if (tag_range.Size() == 1) {
     // The common and simple case: we expect exactly one tag.
     static_assert(kExternalPointerShiftedTagMask == 0x7f);
-    bstrpick_d(scratch, destination, kExternalPointerTagShift + 7,
+    bstrpick_d(scratch, destination, kExternalPointerTagShift + 6,
                kExternalPointerTagShift);
     SbxCheck(eq, AbortReason::kExternalPointerTagMismatch, scratch,
              Operand(tag_range.first));
@@ -352,67 +462,50 @@ void MacroAssembler::LoadTrustedPointerField(Register destination,
 
 void MacroAssembler::LoadTrustedUnknownPointerField(
     Register destination, MemOperand field_operand, Register scratch,
-    const std::initializer_list<std::tuple<InstanceType, Label*>>& cases) {
+    const std::initializer_list<std::tuple<InstanceType, Label*>>& cases,
+    Label* is_unavailable) {
   DCHECK(!AreAliased(destination, scratch));
-  Label done;
+  Label zero_and_fallthrough, done;
+
+  // The label is_unavailable will be used if the field is null (with enabled
+  // sandbox) or a Smi (with disabled sandbox). In these two cases, if the
+  // label is a nullptr, then we zero the destination register and fall through.
+  if (!is_unavailable) is_unavailable = &zero_and_fallthrough;
 
 #ifdef V8_ENABLE_SANDBOX
   {
     Register handle = scratch;
     Ld_wu(handle, field_operand);
 
-    bool handles_code_case = false;
-    constexpr int kCodePointerHandleMarkerBit = 0;
-    static_assert((1 << kCodePointerHandleMarkerBit) ==
-                  kCodePointerHandleMarker);
-    And(destination, handle, kCodePointerHandleMarker);
-    for (auto& [type, label] : cases) {
-      if (type == CODE_TYPE) {
-        handles_code_case = true;
+    static_assert(kNullIndirectPointerHandle == 0);
+    Branch(is_unavailable, eq, handle, Operand(zero_reg));
 
-        Label not_code_handle;
-        Branch(&not_code_handle, eq, destination, Operand(zero_reg));
-
-        ResolveCodePointerHandle(destination, handle);
-        Branch(label);
-
-        bind(&not_code_handle);
-        break;
-      }
-    }
-    if (!handles_code_case) {
-      Branch(&done, ne, destination, Operand(zero_reg));
-    }
-
-    ResolveTrustedPointerHandle(destination, handle,
-                                kUnknownIndirectPointerTag);
+    ResolveIndirectPointerHandle(destination, handle, kAllIndirectPointerTags);
   }
 #else
   LoadTaggedField(destination, field_operand);
+  JumpIfSmi(destination, is_unavailable);
 #endif  // V8_ENABLE_SANDBOX
 
 #if V8_STATIC_ROOTS_BOOL
   LoadCompressedMap(scratch, destination);
   for (auto& [type, label] : cases) {
-    if (V8_ENABLE_SANDBOX_BOOL && type == CODE_TYPE) {
-      continue;
-    }
     BranchInstanceTypeWithUniqueCompressedMap(label, eq, scratch,
                                               Register::no_reg(), type);
   }
 #else
   LoadMap(scratch, destination);
-  Ld_hu(scratch, FieldMemOperand(scratch, Map::kInstanceTypeOffset));
+  Ld_hu(scratch, FieldMemOperand(scratch, offsetof(Map, instance_type_)));
   for (auto& [type, label] : cases) {
-    if (V8_ENABLE_SANDBOX_BOOL && type == CODE_TYPE) {
-      continue;
-    }
     Branch(label, eq, scratch, Operand(type));
   }
 #endif
 
-  bind(&done);
+  Branch(&done);
+
+  bind(&zero_and_fallthrough);
   Move(destination, zero_reg);
+  bind(&done);
 }
 
 void MacroAssembler::StoreTrustedPointerField(Register value,
@@ -424,16 +517,16 @@ void MacroAssembler::StoreTrustedPointerField(Register value,
 #endif
 }
 
-void MacroAssembler::LoadIndirectPointerField(Register destination,
-                                              MemOperand field_operand,
-                                              IndirectPointerTag tag) {
+void MacroAssembler::LoadIndirectPointerField(
+    Register destination, MemOperand field_operand,
+    IndirectPointerTagRange tag_range) {
 #ifdef V8_ENABLE_SANDBOX
   ASM_CODE_COMMENT(this);
   UseScratchRegisterScope temps(this);
   Register handle = temps.Acquire();
   Ld_wu(handle, field_operand);
 
-  ResolveIndirectPointerHandle(destination, handle, tag);
+  ResolveIndirectPointerHandle(destination, handle, tag_range);
 #else
   UNREACHABLE();
 #endif  // V8_ENABLE_SANDBOX
@@ -445,8 +538,8 @@ void MacroAssembler::StoreIndirectPointerField(Register value,
 #ifdef V8_ENABLE_SANDBOX
   UseScratchRegisterScope temps(this);
   Register scratch = temps.Acquire();
-  Ld_w(scratch, FieldMemOperand(
-                    value, ExposedTrustedObject::kSelfIndirectPointerOffset));
+  Ld_w(scratch, FieldMemOperand(value, offsetof(ExposedTrustedObject,
+                                                self_indirect_pointer_)));
   St_w(scratch, dst_field_operand, trap_pc);
 #else
   UNREACHABLE();
@@ -454,25 +547,8 @@ void MacroAssembler::StoreIndirectPointerField(Register value,
 }
 
 #ifdef V8_ENABLE_SANDBOX
-void MacroAssembler::ResolveIndirectPointerHandle(Register destination,
-                                                  Register handle,
-                                                  IndirectPointerTag tag) {
-  // This function must not be used to resolve kUnknownIndirectPointerTag. Use
-  // LoadTrustedUnknownPointerField for that instead.
-  CHECK_NE(tag, kUnknownIndirectPointerTag);
-
-  // The tag implies which pointer table to use.
-  if (tag == kCodeIndirectPointerTag) {
-    ResolveCodePointerHandle(destination, handle);
-  } else {
-    ResolveTrustedPointerHandle(destination, handle, tag);
-  }
-}
-
-void MacroAssembler::ResolveTrustedPointerHandle(Register destination,
-                                                 Register handle,
-                                                 IndirectPointerTag tag) {
-  DCHECK_NE(tag, kCodeIndirectPointerTag);
+void MacroAssembler::ResolveIndirectPointerHandle(
+    Register destination, Register handle, IndirectPointerTagRange tag_range) {
   DCHECK(!AreAliased(handle, destination));
 
   DCHECK(root_array_available_);
@@ -482,64 +558,29 @@ void MacroAssembler::ResolveTrustedPointerHandle(Register destination,
   srli_d(handle, handle, kTrustedPointerHandleShift);
   Alsl_d(destination, handle, table, kTrustedPointerTableEntrySizeLog2);
   Ld_d(destination, MemOperand(destination, 0));
-  // Untag the pointer and remove the marking bit in one operation.
-  Register tag_reg = handle;
-  li(tag_reg, Operand(~(tag | kTrustedPointerTableMarkBit)));
-  and_(destination, destination, tag_reg);
-}
 
-void MacroAssembler::ResolveCodePointerHandle(Register destination,
-                                              Register handle) {
-  DCHECK(!AreAliased(handle, destination));
-
-  Register table = destination;
-  LoadCodePointerTableBase(table);
-  srli_d(handle, handle, kCodePointerHandleShift);
-  Alsl_d(destination, handle, table, kCodePointerTableEntrySizeLog2);
-  Ld_d(destination,
-       MemOperand(destination, kCodePointerTableEntryCodeObjectOffset));
-  // The LSB is used as marking bit by the code pointer table, so here we have
-  // to set it using a bitwise OR as it may or may not be set.
-  Or(destination, destination, Operand(kHeapObjectTag));
-}
-
-void MacroAssembler::LoadCodeEntrypointViaCodePointer(Register destination,
-                                                      MemOperand field_operand,
-                                                      CodeEntrypointTag tag) {
-  DCHECK_NE(tag, kInvalidEntrypointTag);
-  ASM_CODE_COMMENT(this);
-  UseScratchRegisterScope temps(this);
-  Register scratch = temps.Acquire();
-  LoadCodePointerTableBase(scratch);
-  Ld_wu(destination, field_operand);
-  srli_d(destination, destination, kCodePointerHandleShift);
-  slli_d(destination, destination, kCodePointerTableEntrySizeLog2);
-  Ld_d(destination, MemOperand(scratch, destination));
-  if (tag != 0) {
-    li(scratch, Operand(tag));
-    xor_(destination, destination, scratch);
-  }
-}
-
-void MacroAssembler::LoadCodePointerTableBase(Register destination) {
-#ifdef V8_COMPRESS_POINTERS_IN_MULTIPLE_CAGES
-  if (!options().isolate_independent_code && isolate()) {
-    // Embed the code pointer table address into the code.
-    li(destination,
-       ExternalReference::code_pointer_table_base_address(isolate()));
+  if (IsFastIndirectPointerTagRange(tag_range)) {
+    uint64_t mask = ComputeUntaggingMaskForFastIndirectPointerTag(tag_range);
+    And(destination, destination, Operand(mask));
   } else {
-    // Force indirect load via root register as a workaround for
-    // isolate-independent code (for example, for Wasm).
-    Ld_d(destination,
-         ExternalReferenceAsOperand(
-             ExternalReference::address_of_code_pointer_table_base_address(),
-             destination));
+    Register tag_reg = handle;
+    srli_d(tag_reg, destination, kTrustedPointerTableTagShift);
+
+    UseScratchRegisterScope temps(this);
+    Register scratch = temps.Acquire();
+    if (tag_range.Size() == 1) {
+      Sub_d(scratch, tag_reg, Operand(tag_range.first));
+      masknez(destination, destination, scratch);
+    } else {
+      Sub_d(tag_reg, tag_reg, Operand(tag_range.first));
+      Sleu(scratch, tag_reg, Operand(tag_range.last - tag_range.first));
+      maskeqz(destination, destination, scratch);
+    }
+
+    And(destination, destination, Operand(kTrustedPointerTablePayloadMask));
   }
-#else
-  // Embed the code pointer table address into the code.
-  li(destination, ExternalReference::global_code_pointer_table_base_address());
-#endif  // V8_COMPRESS_POINTERS_IN_MULTIPLE_CAGES
 }
+
 #endif  // V8_ENABLE_SANDBOX
 
 void MacroAssembler::LoadEntrypointFromJSDispatchTable(Register destination,
@@ -554,24 +595,6 @@ void MacroAssembler::LoadEntrypointFromJSDispatchTable(Register destination,
   slli_d(destination, index, kJSDispatchTableEntrySizeLog2);
   Add_d(scratch, scratch, destination);
   Ld_d(destination, MemOperand(scratch, JSDispatchEntry::kEntrypointOffset));
-}
-
-void MacroAssembler::LoadEntrypointFromJSDispatchTable(
-    Register destination, JSDispatchHandle dispatch_handle, Register scratch) {
-  DCHECK(!AreAliased(destination, scratch));
-  ASM_CODE_COMMENT(this);
-
-  Ld_d(scratch, ExternalReferenceAsOperand(IsolateFieldId::kJSDispatchTable));
-  // WARNING: This offset calculation is only safe if we have already stored a
-  // RelocInfo for the dispatch handle, e.g. in CallJSDispatchEntry, (thus
-  // keeping the dispatch entry alive) _and_ because the entrypoints are not
-  // compatible (thus meaning that the offset calculation is not invalidated by
-  // a compaction).
-  // TODO(leszeks): Make this less of a footgun.
-  static_assert(!JSDispatchTable::kSupportsCompaction);
-  int offset = JSDispatchTable::OffsetOfEntry(dispatch_handle) +
-               JSDispatchEntry::kEntrypointOffset;
-  Ld_d(destination, MemOperand(scratch, offset));
 }
 
 void MacroAssembler::LoadParameterCountFromJSDispatchTable(
@@ -1662,6 +1685,59 @@ void MacroAssembler::Sc_d(Register rd, const MemOperand& rj, int* trap_pc) {
   }
 }
 
+void MacroAssembler::Vst(VRegister vd, const MemOperand& vj, int* trap_pc) {
+  MemOperand source = vj;
+  AdjustBaseAndOffset(&source);
+  if (trap_pc != NULL) *trap_pc = pc_offset();
+  if (source.hasIndexReg()) {
+    vstx(vd, source.base(), source.index());
+  } else {
+    vst(vd, source.base(), source.offset());
+  }
+}
+
+void MacroAssembler::Vld(VRegister vd, const MemOperand& vj, int* trap_pc) {
+  MemOperand source = vj;
+  AdjustBaseAndOffset(&source);
+  if (trap_pc != NULL) *trap_pc = pc_offset();
+  if (source.hasIndexReg()) {
+    vldx(vd, source.base(), source.index());
+  } else {
+    vld(vd, source.base(), source.offset());
+  }
+}
+
+void MacroAssembler::Vmove(VRegister dst, VRegister src) {
+  if (dst != src) vaddi_bu(dst, src, 0);
+}
+
+void MacroAssembler::LoadSplat(LSXSize sz, VRegister dst, MemOperand src,
+                               int* trap_pc) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+  UseScratchRegisterScope temps(this);
+  Register scratch = temps.Acquire();
+  switch (sz) {
+    case LSX_B:
+      Ld_b(scratch, src, trap_pc);
+      vreplgr2vr_b(dst, scratch);
+      break;
+    case LSX_H:
+      Ld_h(scratch, src, trap_pc);
+      vreplgr2vr_h(dst, scratch);
+      break;
+    case LSX_W:
+      Ld_w(scratch, src, trap_pc);
+      vreplgr2vr_w(dst, scratch);
+      break;
+    case LSX_D:
+      Ld_d(scratch, src, trap_pc);
+      vreplgr2vr_d(dst, scratch);
+      break;
+    default:
+      UNREACHABLE();
+  }
+}
+
 void MacroAssembler::li(Register dst, Handle<HeapObject> value,
                         RelocInfo::Mode rmode, LiFlags mode) {
   // TODO(jgruber,v8:8887): Also consider a root-relative load when generating
@@ -1977,6 +2053,145 @@ void MacroAssembler::MultiPopFPU(DoubleRegList regs) {
   addi_d(sp, sp, stack_offset);
 }
 
+void MacroAssembler::MultiPushLSX(DoubleRegList regs) {
+  int16_t num_to_push = regs.Count();
+  int16_t stack_offset = num_to_push * kSimd128Size;
+
+  Sub_d(sp, sp, Operand(stack_offset));
+  for (int16_t i = kNumRegisters - 1; i >= 0; i--) {
+    if ((regs.bits() & (1 << i)) != 0) {
+      stack_offset -= kSimd128Size;
+      Vst(VRegister::from_code(i), MemOperand(sp, stack_offset));
+    }
+  }
+}
+
+void MacroAssembler::MultiPopLSX(DoubleRegList regs) {
+  int16_t stack_offset = 0;
+
+  for (int16_t i = 0; i < kNumRegisters; i++) {
+    if ((regs.bits() & (1 << i)) != 0) {
+      Vld(VRegister::from_code(i), MemOperand(sp, stack_offset));
+      stack_offset += kSimd128Size;
+    }
+  }
+  addi_d(sp, sp, stack_offset);
+}
+
+// This function stores the 64-bit scalar data into the lower half of the
+// stack slot and steps the stack pointer by a "wide stride" of 16 bytes
+// per register, leaving the remaining 64 bits of each slot uninitialized.
+void MacroAssembler::MultiPushFPUWideStride(DoubleRegList regs) {
+  int16_t num_to_push = regs.Count();
+  int16_t stack_offset = num_to_push * kSimd128Size;
+
+  Sub_d(sp, sp, Operand(stack_offset));
+  for (int16_t i = kNumRegisters - 1; i >= 0; i--) {
+    if ((regs.bits() & (1 << i)) != 0) {
+      stack_offset -= kSimd128Size;
+      Fst_d(FPURegister::from_code(i), MemOperand(sp, stack_offset));
+    }
+  }
+}
+
+void MacroAssembler::MultiPopFPUWideStride(DoubleRegList regs) {
+  int16_t stack_offset = 0;
+
+  for (int16_t i = 0; i < kNumRegisters; i++) {
+    if ((regs.bits() & (1 << i)) != 0) {
+      Fld_d(FPURegister::from_code(i), MemOperand(sp, stack_offset));
+      stack_offset += kSimd128Size;
+    }
+  }
+  Add_d(sp, sp, Operand(stack_offset));
+}
+
+void MacroAssembler::MultiPushFPUOrLSX(DoubleRegList regs, bool need_align) {
+#if V8_ENABLE_SIMD128
+  bool generating_builtins =
+      isolate() && isolate()->IsGeneratingEmbeddedBuiltins();
+  if (generating_builtins) {
+    // Check if machine has simd enabled, if so push vector registers. If not
+    // then only push double registers.
+    Label no_simd, done;
+    UseScratchRegisterScope temps(this);
+    Register scratch = temps.Acquire();
+
+    li(scratch, ExternalReference::supports_simd_128_address());
+    // If != 0 then simd is available.
+    Ld_bu(scratch, MemOperand(scratch, 0));
+    Branch(&no_simd, eq, scratch, Operand(zero_reg));
+
+    // Save vector registers.
+    {
+      CpuFeatureScope lsx_scope(
+          this, LSX, CpuFeatureScope::CheckPolicy::kDontCheckSupported);
+      MultiPushLSX(regs);
+    }
+    Branch(&done);
+
+    bind(&no_simd);
+    MultiPushFPU(regs);
+    if (need_align) Sub_d(sp, sp, regs.Count() * kDoubleSize);
+
+    bind(&done);
+  } else {
+    if (CpuFeatures::SupportsSimd128()) {
+      MultiPushLSX(regs);
+    } else {
+      MultiPushFPU(regs);
+      if (need_align) Sub_d(sp, sp, regs.Count() * kDoubleSize);
+    }
+  }
+#else
+  MultiPushFPU(regs);
+  if (need_align) Sub_d(sp, sp, regs.Count() * kDoubleSize);
+#endif
+}
+
+void MacroAssembler::MultiPopFPUOrLSX(DoubleRegList regs, bool need_align) {
+#if V8_ENABLE_SIMD128
+  bool generating_builtins =
+      isolate() && isolate()->IsGeneratingEmbeddedBuiltins();
+  if (generating_builtins) {
+    // Check if machine has simd enabled, if so pop vector registers. If not
+    // then only pop double registers.
+    Label no_simd, done;
+    UseScratchRegisterScope temps(this);
+    Register scratch = temps.Acquire();
+
+    li(scratch, ExternalReference::supports_simd_128_address());
+    // If != 0 then simd is available.
+    Ld_bu(scratch, MemOperand(scratch, 0));
+    Branch(&no_simd, eq, scratch, Operand(zero_reg));
+
+    // Restore vector registers.
+    {
+      CpuFeatureScope lsx_scope(
+          this, LSX, CpuFeatureScope::CheckPolicy::kDontCheckSupported);
+      MultiPopLSX(regs);
+    }
+    Branch(&done);
+
+    bind(&no_simd);
+    if (need_align) Add_d(sp, sp, regs.Count() * kDoubleSize);
+    MultiPopFPU(regs);
+
+    bind(&done);
+  } else {
+    if (CpuFeatures::SupportsSimd128()) {
+      MultiPopLSX(regs);
+    } else {
+      if (need_align) Add_d(sp, sp, regs.Count() * kDoubleSize);
+      MultiPopFPU(regs);
+    }
+  }
+#else
+  if (need_align) Add_d(sp, sp, regs.Count() * kDoubleSize);
+  MultiPopFPU(regs);
+#endif
+}
+
 void MacroAssembler::Bstrpick_w(Register rk, Register rj, uint16_t msbw,
                                 uint16_t lsbw) {
   DCHECK_LT(lsbw, msbw);
@@ -1987,7 +2202,7 @@ void MacroAssembler::Bstrpick_w(Register rk, Register rj, uint16_t msbw,
 
 void MacroAssembler::Bstrpick_d(Register rk, Register rj, uint16_t msbw,
                                 uint16_t lsbw) {
-  DCHECK_LT(lsbw, msbw);
+  DCHECK_LE(lsbw, msbw);
   DCHECK_LT(lsbw, 64);
   DCHECK_LT(msbw, 64);
   bstrpick_d(rk, rj, msbw, lsbw);
@@ -2027,18 +2242,21 @@ void MacroAssembler::Ffint_d_ul(FPURegister fd, FPURegister fj) {
 void MacroAssembler::Ffint_d_ul(FPURegister fd, Register rj) {
   BlockTrampolinePoolScope block_trampoline_pool(this);
   UseScratchRegisterScope temps(this);
-  Register scratch = temps.Acquire();
-  DCHECK(rj != scratch);
+  Register scratch1 = temps.Acquire();
+  DCHECK(rj != scratch1);
 
   Label msb_clear, conversion_done;
 
   Branch(&msb_clear, ge, rj, Operand(zero_reg));
 
   // Rj >= 2^63
-  andi(scratch, rj, 1);
-  srli_d(rj, rj, 1);
-  or_(scratch, scratch, rj);
-  movgr2fr_d(fd, scratch);
+  {
+    Register scratch2 = temps.Acquire();
+    andi(scratch1, rj, 1);
+    srli_d(scratch2, rj, 1);
+    or_(scratch1, scratch1, scratch2);
+  }
+  movgr2fr_d(fd, scratch1);
   ffint_d_l(fd, fd);
   fadd_d(fd, fd, fd);
   Branch(&conversion_done);
@@ -2081,18 +2299,21 @@ void MacroAssembler::Ffint_s_ul(FPURegister fd, FPURegister fj) {
 void MacroAssembler::Ffint_s_ul(FPURegister fd, Register rj) {
   BlockTrampolinePoolScope block_trampoline_pool(this);
   UseScratchRegisterScope temps(this);
-  Register scratch = temps.Acquire();
-  DCHECK(rj != scratch);
+  Register scratch1 = temps.Acquire();
+  DCHECK(rj != scratch1);
 
   Label positive, conversion_done;
 
   Branch(&positive, ge, rj, Operand(zero_reg));
 
   // Rs >= 2^31.
-  andi(scratch, rj, 1);
-  srli_d(rj, rj, 1);
-  or_(scratch, scratch, rj);
-  movgr2fr_d(fd, scratch);
+  {
+    Register scratch2 = temps.Acquire();
+    andi(scratch1, rj, 1);
+    srli_d(scratch2, rj, 1);
+    or_(scratch1, scratch1, scratch2);
+  }
+  movgr2fr_d(fd, scratch1);
   ffint_s_l(fd, fd);
   fadd_s(fd, fd, fd);
   Branch(&conversion_done);
@@ -2345,6 +2566,179 @@ void MacroAssembler::Ftintrz_ul_s(Register rd, FPURegister fj,
   bind(&fail);
 }
 
+void MacroAssembler::ExtAddPairwise(LSXDataType type, VRegister dst,
+                                    VRegister src) {
+  switch (type) {
+    case LSXS8:
+      vhaddw_h_b(dst, src, src);
+      break;
+    case LSXU8:
+      vhaddw_hu_bu(dst, src, src);
+      break;
+    case LSXS16:
+      vhaddw_w_h(dst, src, src);
+      break;
+    case LSXU16:
+      vhaddw_wu_hu(dst, src, src);
+      break;
+    default:
+      UNREACHABLE();
+  }
+}
+
+void MacroAssembler::LoadLane(LSXSize sz, VRegister dst, uint8_t laneidx,
+                              MemOperand src, int* trap_pc) {
+  UseScratchRegisterScope temps(this);
+  Register scratch = temps.Acquire();
+  switch (sz) {
+    case LSX_B:
+      Ld_bu(scratch, src, trap_pc);
+      vinsgr2vr_b(dst, scratch, laneidx);
+      break;
+    case LSX_H:
+      Ld_hu(scratch, src, trap_pc);
+      vinsgr2vr_h(dst, scratch, laneidx);
+      break;
+    case LSX_W:
+      Ld_wu(scratch, src, trap_pc);
+      vinsgr2vr_w(dst, scratch, laneidx);
+      break;
+    case LSX_D:
+      Ld_d(scratch, src, trap_pc);
+      vinsgr2vr_d(dst, scratch, laneidx);
+      break;
+    default:
+      UNREACHABLE();
+  }
+}
+
+void MacroAssembler::StoreLane(LSXSize sz, VRegister src, uint8_t laneidx,
+                               MemOperand dst, int* trap_pc) {
+  UseScratchRegisterScope temps(this);
+  Register scratch = temps.Acquire();
+  switch (sz) {
+    case LSX_B:
+      vpickve2gr_bu(scratch, src, laneidx);
+      St_b(scratch, dst, trap_pc);
+      break;
+    case LSX_H:
+      vpickve2gr_hu(scratch, src, laneidx);
+      St_h(scratch, dst, trap_pc);
+      break;
+    case LSX_W:
+      if (laneidx == 0) {
+        FPURegister src_reg = FPURegister::from_code(src.code());
+        Fst_s(src_reg, dst, trap_pc);
+      } else {
+        vpickve2gr_wu(scratch, src, laneidx);
+        St_w(scratch, dst, trap_pc);
+      }
+      break;
+    case LSX_D:
+      if (laneidx == 0) {
+        FPURegister src_reg = FPURegister::from_code(src.code());
+        Fst_d(src_reg, dst, trap_pc);
+      } else {
+        vpickve2gr_d(scratch, src, laneidx);
+        St_d(scratch, dst, trap_pc);
+      }
+      break;
+    default:
+      UNREACHABLE();
+  }
+}
+
+void MacroAssembler::Dotp_w(VRegister dst, VRegister src1, VRegister src2,
+                            VRegister temp) {
+  vmulwev_w_h(temp, src1, src2);
+  vmulwod_w_h(dst, src1, src2);
+  vadd_w(dst, dst, temp);
+}
+
+void MacroAssembler::Dotp_h(VRegister dst, VRegister src1, VRegister src2,
+                            VRegister temp) {
+  vmulwev_h_b(temp, src1, src2);
+  vmulwod_h_b(dst, src1, src2);
+  vadd_h(dst, dst, temp);
+}
+
+#define EXT_MUL_BINOP(type, ilv_instr, Dotp_instr)             \
+  case type:                                                   \
+    vxor_v(kSimd128RegZero, kSimd128RegZero, kSimd128RegZero); \
+    ilv_instr(kSimd128ScratchReg, kSimd128RegZero, src1);      \
+    ilv_instr(kSimd128ScratchReg1, kSimd128RegZero, src2);     \
+    Dotp_instr(dst, kSimd128ScratchReg, kSimd128ScratchReg1);  \
+    break;
+
+void MacroAssembler::ExtMulLow(LSXDataType type, VRegister dst, VRegister src1,
+                               VRegister src2) {
+  switch (type) {
+    EXT_MUL_BINOP(LSXS8, vilvl_b, vmulwev_h_b)
+    EXT_MUL_BINOP(LSXS16, vilvl_h, vmulwev_w_h)
+    EXT_MUL_BINOP(LSXS32, vilvl_w, vmulwev_d_w)
+    EXT_MUL_BINOP(LSXU8, vilvl_b, vmulwev_h_bu)
+    EXT_MUL_BINOP(LSXU16, vilvl_h, vmulwev_w_hu)
+    EXT_MUL_BINOP(LSXU32, vilvl_w, vmulwev_d_wu)
+    default:
+      UNREACHABLE();
+  }
+}
+
+void MacroAssembler::ExtMulHigh(LSXDataType type, VRegister dst, VRegister src1,
+                                VRegister src2) {
+  switch (type) {
+    EXT_MUL_BINOP(LSXS8, vilvh_b, vmulwev_h_b)
+    EXT_MUL_BINOP(LSXS16, vilvh_h, vmulwev_w_h)
+    EXT_MUL_BINOP(LSXS32, vilvh_w, vmulwev_d_w)
+    EXT_MUL_BINOP(LSXU8, vilvh_b, vmulwev_h_bu)
+    EXT_MUL_BINOP(LSXU16, vilvh_h, vmulwev_w_hu)
+    EXT_MUL_BINOP(LSXU32, vilvh_w, vmulwev_d_wu)
+    default:
+      UNREACHABLE();
+  }
+}
+#undef EXT_MUL_BINOP
+
+void MacroAssembler::LSXRoundW(VRegister dst, VRegister src,
+                               FPURoundingMode mode) {
+  switch (mode) {
+    case kRoundToNearest:
+      vfrintrne_s(dst, src);
+      break;
+    case kRoundToPlusInf:
+      vfrintrp_s(dst, src);
+      break;
+    case kRoundToMinusInf:
+      vfrintrm_s(dst, src);
+      break;
+    case kRoundToZero:
+      vfrintrz_s(dst, src);
+      break;
+    default:
+      UNREACHABLE();
+  }
+}
+
+void MacroAssembler::LSXRoundD(VRegister dst, VRegister src,
+                               FPURoundingMode mode) {
+  switch (mode) {
+    case kRoundToNearest:
+      vfrintrne_d(dst, src);
+      break;
+    case kRoundToPlusInf:
+      vfrintrp_d(dst, src);
+      break;
+    case kRoundToMinusInf:
+      vfrintrm_d(dst, src);
+      break;
+    case kRoundToZero:
+      vfrintrz_d(dst, src);
+      break;
+    default:
+      UNREACHABLE();
+  }
+}
+
 void MacroAssembler::RoundDouble(FPURegister dst, FPURegister src,
                                  FPURoundingMode mode) {
   BlockTrampolinePoolScope block_trampoline_pool(this);
@@ -2470,6 +2864,83 @@ void MacroAssembler::MovePair(Register dst0, Register src0, Register dst1,
   }
 }
 
+void MacroAssembler::BranchLSX(Label* target, LSXBranchDF df,
+                               LSXBranchCondition cond, VRegister vj,
+                               CFRegister cj) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+  if (target) {
+    bool long_branch = target->is_bound()
+                           ? !is_near(target, OffsetSize::kOffset21)
+                           : is_trampoline_emitted();
+    if (long_branch) {
+      Label skip;
+      LSXBranchCondition neg_cond = NegateLSXBranchCondition(cond);
+      BranchShortLSX(&skip, df, neg_cond, vj, cj);
+      Branch(target);
+      bind(&skip);
+    } else {
+      BranchShortLSX(target, df, cond, vj, cj);
+    }
+  }
+}
+
+void MacroAssembler::BranchShortLSX(Label* target, LSXBranchDF df,
+                                    LSXBranchCondition cond, VRegister vj,
+                                    CFRegister cj) {
+  if (IsEnabled(LSX)) {
+    BlockTrampolinePoolScope block_trampoline_pool(this);
+    if (target) {
+      switch (cond) {
+        case all_not_zero:
+          switch (df) {
+            case LSX_BRANCH_D:
+              vsetallnez_d(cj, vj);
+              break;
+            case LSX_BRANCH_W:
+              vsetallnez_w(cj, vj);
+              break;
+            case LSX_BRANCH_H:
+              vsetallnez_h(cj, vj);
+              break;
+            case LSX_BRANCH_B:
+            default:
+              vsetallnez_b(cj, vj);
+              break;
+          }
+          break;
+        case one_elem_not_zero:
+          vsetnez_v(cj, vj);
+          break;
+        case one_elem_zero:
+          switch (df) {
+            case LSX_BRANCH_D:
+              vsetanyeqz_d(cj, vj);
+              break;
+            case LSX_BRANCH_W:
+              vsetanyeqz_w(cj, vj);
+              break;
+            case LSX_BRANCH_H:
+              vsetanyeqz_h(cj, vj);
+              break;
+            case LSX_BRANCH_B:
+            default:
+              vsetanyeqz_b(cj, vj);
+              break;
+          }
+          break;
+        case all_zero:
+          vseteqz_v(cj, vj);
+          break;
+        default:
+          UNREACHABLE();
+      }
+      BranchTrueShortF(target, cj);
+    }
+  } else {
+    UNREACHABLE();
+  }
+}
+
 void MacroAssembler::FmoveLow(FPURegister dst, Register src_low) {
   UseScratchRegisterScope temps(this);
   Register scratch = temps.Acquire();
@@ -2488,17 +2959,15 @@ void MacroAssembler::Move(FPURegister dst, uint32_t src) {
 
 void MacroAssembler::Move(FPURegister dst, uint64_t src) {
   // Handle special values first.
-  if (src == base::bit_cast<uint64_t>(0.0) && has_double_zero_reg_set_) {
-    fmov_d(dst, kDoubleRegZero);
-  } else if (src == base::bit_cast<uint64_t>(-0.0) &&
-             has_double_zero_reg_set_) {
-    Neg_d(dst, kDoubleRegZero);
+  if (src == base::bit_cast<uint64_t>(0.0)) {
+    // TODO(loong64_dev): fmov_d is better, but kDoubleRegZero is not
+    // initialized in cctest and unittest, so it cannot be used directly.
+    movgr2fr_d(dst, zero_reg);
   } else {
     UseScratchRegisterScope temps(this);
     Register scratch = temps.Acquire();
     li(scratch, Operand(static_cast<int64_t>(src)));
     movgr2fr_d(dst, scratch);
-    if (dst == kDoubleRegZero) has_double_zero_reg_set_ = true;
   }
 }
 
@@ -2706,6 +3175,83 @@ void MacroAssembler::TruncateDoubleToI(Isolate* isolate, Zone* zone,
   bind(&done);
 }
 
+void MacroAssembler::Float64Mod(DoubleRegister out, DoubleRegister left,
+                                DoubleRegister right) {
+  ASM_CODE_COMMENT(this);
+  DCHECK_EQ(left, f0);
+  DCHECK_EQ(right, f1);
+  DCHECK_EQ(out, f0);
+
+  Label slow, done_mod;
+  {
+    UseScratchRegisterScope temps(this);
+    DoubleRegister dst_temp = temps.AcquireFp();
+    DoubleRegister zero_temp = temps.AcquireFp();
+
+    movgr2fr_d(zero_temp, zero_reg);
+    // Check if left is a positive integer.
+    frint_d(dst_temp, left);
+    CompareF64(left, dst_temp, CUNE);
+    BranchTrueShortF(&slow);
+    CompareF64(left, zero_temp, CLE);
+    BranchTrueShortF(&slow);
+
+    // Check if right is a positive integer.
+    frint_d(dst_temp, right);
+    CompareF64(right, dst_temp, CUNE);
+    BranchTrueShortF(&slow);
+    CompareF64(right, zero_temp, CLE);
+    BranchTrueShortF(&slow);
+
+    // Both are positive integers. The fast path is only valid if the computed
+    // remainder stays within the range [0, right).
+    fdiv_d(dst_temp, left, right);
+    Ftintrz_l_d(dst_temp, dst_temp);
+    ffint_d_l(dst_temp, dst_temp);
+    fnmsub_d(dst_temp, dst_temp, right, left);
+
+    // If quotient rounding changed the integer truncation result, the computed
+    // remainder escapes [0, right) and we must fall back to the precise slow
+    // path.
+    CompareF64(dst_temp, zero_temp, CULT);
+    BranchTrueShortF(&slow);
+    CompareF64(right, dst_temp, CLE);
+    BranchTrueShortF(&slow);
+
+    // If the remainder is in the range (0, right), result remains unchanged;
+    // If the remainder is 0, the result calculated in fnmsub_d is -0.0,
+    // which is changed to +0.0 here.
+    fabs_d(out, dst_temp);
+    Branch(&done_mod);
+  }
+
+  bind(&slow);
+  {
+    FrameScope assume_frame(this, StackFrame::NO_FRAME_TYPE);
+    UseScratchRegisterScope temps(this);
+    Register scratch = temps.Acquire();
+    PrepareCallCFunction(0, 2, scratch);
+    CallCFunction(ExternalReference::mod_two_doubles_operation(), 0, 2);
+  }
+
+  bind(&done_mod);
+}
+
+void MacroAssembler::SelectWord(Register result, Register cond, Register v_true,
+                                Register v_false) {
+  if (v_false == zero_reg) {
+    maskeqz(result, v_true, cond);
+  } else if (v_true == zero_reg) {
+    masknez(result, v_false, cond);
+  } else {
+    UseScratchRegisterScope temps(this);
+    Register scratch = temps.Acquire();
+    maskeqz(scratch, v_true, cond);
+    masknez(result, v_false, cond);
+    or_(result, scratch, result);
+  }
+}
+
 void MacroAssembler::CompareWord(Condition cond, Register dst, Register lhs,
                                  const Operand& rhs) {
   switch (cond) {
@@ -2828,7 +3374,7 @@ void MacroAssembler::Branch(Label* L, Condition cond, Register rj,
       left = temps.Acquire();
       slli_w(left, rj, 0);
     }
-    LoadTaggedRoot(right, index);
+    LoadCompressedRoot(right, index);
     Branch(L, cond, left, Operand(right));
   } else {
     LoadRoot(right, index);
@@ -3007,9 +3553,9 @@ bool MacroAssembler::BranchShortOrFallback(Label* L, Condition cond,
         if (rk.is_reg() && rj.code() == rk.rm().code()) {
           // No code needs to be emitted.
         } else if (IsZero(rk)) {
-          if (L->is_bound() && !is_near(L, OffsetSize::kOffset26)) return false;
+          if (L->is_bound() && !is_near(L, OffsetSize::kOffset21)) return false;
           if (need_link) pcaddi(ra, 2);
-          offset = GetOffset(L, OffsetSize::kOffset26);
+          offset = GetOffset(L, OffsetSize::kOffset21);
           bnez(rj, offset);
         } else {
           if (L->is_bound() && !is_near(L, OffsetSize::kOffset16)) return false;
@@ -3105,7 +3651,17 @@ void MacroAssembler::CompareTaggedAndBranch(Label* label, Condition cond,
       if (r2.is_reg()) {
         slli_w(scratch1, r2.rm(), 0);
       } else {
-        li(scratch1, r2);
+        if (RelocInfo::IsFullEmbeddedObject(r2.rmode())) {
+          li(scratch1,
+             Operand(r2.immediate(), RelocInfo::COMPRESSED_EMBEDDED_OBJECT));
+        } else if (RelocInfo::IsCompressedEmbeddedObject(r2.rmode())) {
+          li(scratch1, r2);
+        } else if (RelocInfo::IsNoInfo(r2.rmode())) {
+          LiLower32BitHelper(scratch1, r2);
+        } else {
+          li(scratch1, r2);
+          slli_w(scratch1, scratch1, 0);
+        }
       }
       Branch(label, cond, scratch0, Operand(scratch1), need_link);
     }
@@ -3292,7 +3848,7 @@ void MacroAssembler::CompareTaggedRootAndBranch(const Register& obj,
                                                 RootIndex index, Condition cc,
                                                 Label* target) {
   ASM_CODE_COMMENT(this);
-  // AssertSmiOrHeapObjectInMainCompressionCage(obj);
+  AssertSmiOrHeapObjectInMainCompressionCage(obj);
   UseScratchRegisterScope temps(this);
   if (V8_STATIC_ROOTS_BOOL && RootsTable::IsReadOnly(index)) {
     CompareTaggedAndBranch(target, cc, obj, Operand(ReadOnlyRootPtr(index)));
@@ -3302,11 +3858,17 @@ void MacroAssembler::CompareTaggedRootAndBranch(const Register& obj,
   DCHECK(base::IsInRange(index, RootIndex::kFirstStrongOrReadOnlyRoot,
                          RootIndex::kLastStrongOrReadOnlyRoot));
   Register scratch1 = temps.Acquire();
-  Register scratch2 = temps.Acquire();
-  DCHECK(!AreAliased(obj, scratch1, scratch2));
-  slli_w(scratch1, obj, 0);
-  LoadTaggedRoot(scratch2, index);
-  Branch(target, cc, scratch1, Operand(scratch2));
+  if (COMPRESS_POINTERS_BOOL) {
+    Register scratch2 = temps.Acquire();
+    DCHECK(!AreAliased(obj, scratch1, scratch2));
+    LoadCompressedRoot(scratch1, index);
+    slli_w(scratch2, obj, 0);
+    Branch(target, cc, scratch2, Operand(scratch1));
+  } else {
+    DCHECK(!AreAliased(obj, scratch1));
+    LoadRoot(scratch1, index);
+    Branch(target, cc, obj, Operand(scratch1));
+  }
 }
 
 // Compare the object in a register to a value from the root list.
@@ -3335,10 +3897,26 @@ void MacroAssembler::JumpIfIsInRange(Register value, unsigned lower_limit,
   if (lower_limit != 0) {
     UseScratchRegisterScope temps(this);
     Register scratch = temps.Acquire();
-    Sub_d(scratch, value, Operand(lower_limit));
-    Branch(on_in_range, ls, scratch, Operand(higher_limit - lower_limit));
+    Sub_w(scratch, value, Operand(lower_limit));
+    Branch(on_in_range, kUnsignedLessThanEqual, scratch,
+           Operand(higher_limit - lower_limit));
   } else {
-    Branch(on_in_range, ls, value, Operand(higher_limit - lower_limit));
+    Branch(on_in_range, kUnsignedLessThanEqual, value, Operand(higher_limit));
+  }
+}
+
+void MacroAssembler::JumpIfNotInRange(Register value, unsigned lower_limit,
+                                      unsigned higher_limit,
+                                      Label* on_not_in_range) {
+  ASM_CODE_COMMENT(this);
+  if (lower_limit != 0) {
+    UseScratchRegisterScope temps(this);
+    Register scratch = temps.Acquire();
+    Sub_w(scratch, value, Operand(lower_limit));
+    Branch(on_not_in_range, kUnsignedGreaterThan, scratch,
+           Operand(higher_limit - lower_limit));
+  } else {
+    Branch(on_not_in_range, kUnsignedGreaterThan, value, Operand(higher_limit));
   }
 }
 
@@ -3381,6 +3959,7 @@ void MacroAssembler::Call(Address target, RelocInfo::Mode rmode, Condition cond,
     li(scratch, Operand(static_cast<int64_t>(target), rmode), ADDRESS_LOAD);
     Call(scratch, cc_always, rj, rk);
   }
+  set_pc_for_safepoint();
   bind(&skip);
 }
 
@@ -3589,12 +4168,55 @@ void MacroAssembler::Swap(Register reg1, Register reg2, Register scratch) {
   }
 }
 
-void MacroAssembler::Call(Label* target) { Branch(target, true); }
+void MacroAssembler::Call(Label* target) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+  Branch(target, true);
+  set_pc_for_safepoint();
+}
+
+void MacroAssembler::Switch(Register scratch, Register value,
+                            int case_value_base, Label** labels,
+                            int num_labels) {
+  Register table = scratch;
+  Label fallthrough, jump_table;
+  if (case_value_base != 0) {
+    Sub_d(value, value, Operand(case_value_base));
+  }
+  Branch(&fallthrough, uge, value, Operand(num_labels));
+  LoadLabelRelative(table, &jump_table);
+  Alsl_d(table, value, table, kSystemPointerSizeLog2);
+  Ld_d(table, MemOperand(table, 0));
+  Jump(table);
+  // Calculate label area size and let MASM know that it will be impossible to
+  // create the trampoline within the range. That forces MASM to create the
+  // trampoline right here if necessary, i.e. if label area is too large and
+  // all unbound forward branches cannot be bound over it.
+
+  static constexpr int mask = kInstrSize - 1;
+  int aligned_label_area_size = num_labels * kUIntptrSize + kSystemPointerSize;
+  int instructions_per_label_area =
+      ((aligned_label_area_size + mask) & ~mask) >> kInstrSizeLog2;
+  BlockTrampolinePoolFor(instructions_per_label_area);
+  // Emit the jump table inline, under the assumption that it's not too big.
+  Align(kSystemPointerSize);
+  bind(&jump_table);
+  for (int i = 0; i < num_labels; ++i) {
+    dd(labels[i]);
+  }
+  bind(&fallthrough);
+}
 
 void MacroAssembler::Push(Tagged<Smi> smi) {
   UseScratchRegisterScope temps(this);
   Register scratch = temps.Acquire();
   li(scratch, Operand(smi));
+  Push(scratch);
+}
+
+void MacroAssembler::Push(Tagged<TaggedIndex> index) {
+  UseScratchRegisterScope temps(this);
+  Register scratch = temps.Acquire();
+  li(scratch, Operand(static_cast<int32_t>(index.ptr())));
   Push(scratch);
 }
 
@@ -3643,26 +4265,24 @@ void MacroAssembler::PushStackHandler() {
   Push(Smi::zero());  // Padding.
 
   // Link the current handler as the next handler.
-  li(t2,
-     ExternalReference::Create(IsolateAddressId::kHandlerAddress, isolate()));
-  Ld_d(t1, MemOperand(t2, 0));
-  Push(t1);
+  UseScratchRegisterScope temps(this);
+  Register scratch = temps.Acquire();
+  Ld_d(scratch, AsMemOperand(IsolateFieldId::kHandler));
+  Push(scratch);
 
   // Set this new handler as the current one.
-  St_d(sp, MemOperand(t2, 0));
+  St_d(sp, AsMemOperand(IsolateFieldId::kHandler));
 }
 
 void MacroAssembler::PopStackHandler() {
   static_assert(StackHandlerConstants::kNextOffset == 0);
-  Pop(a1);
+  UseScratchRegisterScope temps(this);
+  Register scratch = temps.Acquire();
+  Pop(scratch);
   Add_d(sp, sp,
         Operand(static_cast<int64_t>(StackHandlerConstants::kSize -
                                      kSystemPointerSize)));
-  UseScratchRegisterScope temps(this);
-  Register scratch = temps.Acquire();
-  li(scratch,
-     ExternalReference::Create(IsolateAddressId::kHandlerAddress, isolate()));
-  St_d(a1, MemOperand(scratch, 0));
+  St_d(scratch, AsMemOperand(IsolateFieldId::kHandler));
 }
 
 void MacroAssembler::FPUCanonicalizeNaN(const DoubleRegister dst,
@@ -3691,12 +4311,15 @@ void MacroAssembler::StackOverflowCheck(Register num_args, Register scratch1,
   // interruptions (e.g. debug break and preemption) here, so the "real stack
   // limit" is checked.
 
+  // Check if the arguments is negative.
+  slli_d(scratch2, num_args, kSystemPointerSizeLog2);
+  Branch(stack_overflow, lt, scratch2, Operand(zero_reg));
+
   LoadStackLimit(scratch1, StackLimitKind::kRealStackLimit);
   // Make scratch1 the space we have left. The stack might already be overflowed
   // here which will cause scratch1 to become negative.
   sub_d(scratch1, sp, scratch1);
   // Check if the arguments will overflow the stack.
-  slli_d(scratch2, num_args, kSystemPointerSizeLog2);
   // Signed comparison.
   Branch(stack_overflow, le, scratch1, Operand(scratch2));
 }
@@ -3707,6 +4330,13 @@ void MacroAssembler::TestCodeIsMarkedForDeoptimizationAndJump(
   Ld_wu(scratch, FieldMemOperand(code_data_container, Code::kFlagsOffset));
   And(scratch, scratch, Operand(1 << Code::kMarkedForDeoptimizationBit));
   Branch(target, cond, scratch, Operand(zero_reg));
+}
+
+void MacroAssembler::JumpIfCodeIsTurbofanned(Register code, Register scratch,
+                                             Label* if_turbofanned) {
+  Ld_wu(scratch, FieldMemOperand(code, Code::kFlagsOffset));
+  And(scratch, scratch, Operand(1 << Code::kIsTurbofannedBit));
+  Branch(if_turbofanned, ne, scratch, Operand(zero_reg));
 }
 
 Operand MacroAssembler::ClearedValue() const {
@@ -3777,35 +4407,37 @@ void MacroAssembler::InvokePrologue(Register expected_parameter_count,
   bind(&regular_invoke);
 }
 
-void MacroAssembler::CallDebugOnFunctionCall(
-    Register fun, Register new_target,
-    Register expected_parameter_count_or_dispatch_handle,
-    Register actual_parameter_count) {
-  DCHECK(!AreAliased(t0, fun, new_target,
-                     expected_parameter_count_or_dispatch_handle,
+void MacroAssembler::CallDebugOnFunctionCall(Register fun, Register new_target,
+                                             Register dispatch_handle,
+                                             Register actual_parameter_count) {
+  DCHECK(!AreAliased(t0, fun, new_target, dispatch_handle,
                      actual_parameter_count));
   // Load receiver to pass it later to DebugOnFunctionCall hook.
   LoadReceiver(t0);
   FrameScope frame(
       this, has_frame() ? StackFrame::NO_FRAME_TYPE : StackFrame::INTERNAL);
 
-  SmiTag(expected_parameter_count_or_dispatch_handle);
+  // We must not Smi-tag the dispatch handle, because its top bits are
+  // meaningful; and we also don't need to, because its low bits are zero.
+  static_assert(kJSDispatchHandleShift >= 1);
   SmiTag(actual_parameter_count);
-  Push(expected_parameter_count_or_dispatch_handle, actual_parameter_count);
 
   if (new_target.is_valid()) {
-    Push(new_target);
+    Push(dispatch_handle, actual_parameter_count, new_target, fun);
+  } else {
+    Push(dispatch_handle, actual_parameter_count, fun);
   }
-  Push(fun, fun, t0);
+
+  Push(fun, t0);
   CallRuntime(Runtime::kDebugOnFunctionCall);
-  Pop(fun);
+
   if (new_target.is_valid()) {
-    Pop(new_target);
+    Pop(dispatch_handle, actual_parameter_count, new_target, fun);
+  } else {
+    Pop(dispatch_handle, actual_parameter_count, fun);
   }
 
-  Pop(expected_parameter_count_or_dispatch_handle, actual_parameter_count);
   SmiUntag(actual_parameter_count);
-  SmiUntag(expected_parameter_count_or_dispatch_handle);
 }
 
 void MacroAssembler::InvokeFunction(
@@ -3820,7 +4452,8 @@ void MacroAssembler::InvokeFunction(
   DCHECK_EQ(function, a1);
 
   // Set up the context.
-  LoadTaggedField(cp, FieldMemOperand(function, JSFunction::kContextOffset));
+  LoadTaggedField(cp,
+                  FieldMemOperand(function, offsetof(JSFunction, context_)));
 
   InvokeFunctionCode(function, no_reg, actual_parameter_count, type,
                      argument_adaption_mode);
@@ -3837,7 +4470,8 @@ void MacroAssembler::InvokeFunctionWithNewTarget(
   // (See FullCodeGenerator::Generate().)
   DCHECK_EQ(function, a1);
 
-  LoadTaggedField(cp, FieldMemOperand(function, JSFunction::kContextOffset));
+  LoadTaggedField(cp,
+                  FieldMemOperand(function, offsetof(JSFunction, context_)));
 
   InvokeFunctionCode(function, new_target, actual_parameter_count, type);
 }
@@ -3853,7 +4487,7 @@ void MacroAssembler::InvokeFunctionCode(
 
   Register dispatch_handle = kJavaScriptCallDispatchHandleRegister;
   Ld_w(dispatch_handle,
-       FieldMemOperand(function, JSFunction::kDispatchHandleOffset));
+       FieldMemOperand(function, offsetof(JSFunction, dispatch_handle_)));
 
   // On function call, call into the debugger if necessary.
   Label debug_hook, continue_after_hook;
@@ -3937,14 +4571,15 @@ void MacroAssembler::BranchObjectTypeFast(Label* target, Condition cc,
 
 void MacroAssembler::GetObjectType(Register object, Register map,
                                    Register type_reg) {
+  ASM_CODE_COMMENT(this);
   LoadMap(map, object);
-  Ld_hu(type_reg, FieldMemOperand(map, Map::kInstanceTypeOffset));
+  Ld_hu(type_reg, FieldMemOperand(map, offsetof(Map, instance_type_)));
 }
 
 void MacroAssembler::GetInstanceTypeRange(Register map, Register type_reg,
                                           InstanceType lower_limit,
                                           Register range) {
-  Ld_hu(type_reg, FieldMemOperand(map, Map::kInstanceTypeOffset));
+  Ld_hu(type_reg, FieldMemOperand(map, offsetof(Map, instance_type_)));
   if (lower_limit != 0 || type_reg != range) {
     Sub_d(range, type_reg, Operand(lower_limit));
   }
@@ -4243,25 +4878,32 @@ void MacroAssembler::Abort(AbortReason reason) {
 }
 
 void MacroAssembler::LoadMap(Register destination, Register object) {
-  LoadTaggedField(destination, FieldMemOperand(object, HeapObject::kMapOffset));
+  ASM_CODE_COMMENT(this);
+  LoadTaggedField(destination,
+                  FieldMemOperand(object, offsetof(HeapObject, map_)));
 }
 
 void MacroAssembler::LoadCompressedMap(Register dst, Register object) {
   ASM_CODE_COMMENT(this);
-  Ld_w(dst, FieldMemOperand(object, HeapObject::kMapOffset));
+  Ld_w(dst, FieldMemOperand(object, offsetof(HeapObject, map_)));
 }
 
-void MacroAssembler::LoadFeedbackVector(Register dst, Register closure,
-                                        Register scratch, Label* fbv_undef) {
+void MacroAssembler::LoadFeedbackCell(Register dst, Register closure) {
+  LoadTaggedField(
+      dst, FieldMemOperand(closure, offsetof(JSFunction, feedback_cell_)));
+}
+
+void MacroAssembler::LoadFeedbackVectorFromCell(Register dst,
+                                                Register feedback_cell,
+                                                Register scratch,
+                                                Label* fbv_undef) {
   Label done;
-  // Load the feedback vector from the closure.
-  LoadTaggedField(dst,
-                  FieldMemOperand(closure, JSFunction::kFeedbackCellOffset));
-  LoadTaggedField(dst, FieldMemOperand(dst, FeedbackCell::kValueOffset));
+  LoadTaggedField(
+      dst, FieldMemOperand(feedback_cell, offsetof(FeedbackCell, value_)));
 
   // Check if feedback vector is valid.
-  LoadTaggedField(scratch, FieldMemOperand(dst, HeapObject::kMapOffset));
-  Ld_hu(scratch, FieldMemOperand(scratch, Map::kInstanceTypeOffset));
+  LoadTaggedField(scratch, FieldMemOperand(dst, offsetof(HeapObject, map_)));
+  Ld_hu(scratch, FieldMemOperand(scratch, offsetof(Map, instance_type_)));
   Branch(&done, eq, scratch, Operand(FEEDBACK_VECTOR_TYPE));
 
   // Not valid, load undefined.
@@ -4269,6 +4911,12 @@ void MacroAssembler::LoadFeedbackVector(Register dst, Register closure,
   Branch(fbv_undef);
 
   bind(&done);
+}
+
+void MacroAssembler::LoadFeedbackVector(Register dst, Register closure,
+                                        Register scratch, Label* fbv_undef) {
+  LoadFeedbackCell(dst, closure);
+  LoadFeedbackVectorFromCell(dst, dst, scratch, fbv_undef);
 }
 
 void MacroAssembler::LoadInterpreterDataBytecodeArray(
@@ -4289,9 +4937,55 @@ void MacroAssembler::LoadInterpreterDataInterpreterTrampoline(
 void MacroAssembler::LoadNativeContextSlot(Register dst, int index) {
   LoadMap(dst, cp);
   LoadTaggedField(
-      dst, FieldMemOperand(
-               dst, Map::kConstructorOrBackPointerOrNativeContextOffset));
+      dst,
+      FieldMemOperand(
+          dst, offsetof(Map, constructor_or_back_pointer_or_native_context_)));
   LoadTaggedField(dst, MemOperand(dst, Context::SlotOffset(index)));
+}
+
+void MacroAssembler::TryLoadOptimizedOsrCode(Register scratch_and_result,
+                                             CodeKind min_opt_level,
+                                             Register feedback_vector,
+                                             FeedbackSlot slot,
+                                             Label* on_result,
+                                             Label::Distance) {
+  ASM_CODE_COMMENT(this);
+  Label fallthrough, clear_slot;
+  LoadTaggedField(
+      scratch_and_result,
+      FieldMemOperand(feedback_vector,
+                      FeedbackVector::OffsetOfElementAt(slot.ToInt())));
+  LoadWeakValue(scratch_and_result, scratch_and_result, &fallthrough);
+  // Is it marked_for_deoptimization? If yes, clear the slot.
+  {
+    UseScratchRegisterScope temps(this);
+
+    // The entry references a CodeWrapper object. Unwrap it now.
+    LoadCodePointerField(
+        scratch_and_result,
+        FieldMemOperand(scratch_and_result, offsetof(CodeWrapper, code_)));
+
+    Register scratch = temps.Acquire();
+    TestCodeIsMarkedForDeoptimizationAndJump(scratch_and_result, scratch, ne,
+                                             &clear_slot);
+    if (min_opt_level == CodeKind::TURBOFAN_JS) {
+      JumpIfCodeIsTurbofanned(scratch_and_result, scratch, on_result);
+      jmp(&fallthrough);
+    } else {
+      DCHECK_EQ(min_opt_level, CodeKind::MAGLEV);
+      jmp(on_result);
+    }
+  }
+
+  bind(&clear_slot);
+  li(scratch_and_result, ClearedValue());
+  StoreTaggedField(
+      scratch_and_result,
+      FieldMemOperand(feedback_vector,
+                      FeedbackVector::OffsetOfElementAt(slot.ToInt())));
+
+  bind(&fallthrough);
+  mov(scratch_and_result, zero_reg);
 }
 
 void MacroAssembler::StubPrologue(StackFrame::Type type) {
@@ -4330,10 +5024,8 @@ void MacroAssembler::EnterExitFrame(Register scratch, int stack_space,
   ASM_CODE_COMMENT(this);
   DCHECK(frame_type == StackFrame::EXIT ||
          frame_type == StackFrame::BUILTIN_EXIT ||
-         frame_type == StackFrame::API_ACCESSOR_EXIT ||
+         frame_type == StackFrame::API_NAMED_ACCESSOR_EXIT ||
          frame_type == StackFrame::API_CALLBACK_EXIT);
-
-  using ER = ExternalReference;
 
   // Set up the frame structure on the stack.
   static_assert(2 * kSystemPointerSize ==
@@ -4366,12 +5058,8 @@ void MacroAssembler::EnterExitFrame(Register scratch, int stack_space,
   }
 
   // Save the frame pointer and the context in top.
-  ER c_entry_fp_address =
-      ER::Create(IsolateAddressId::kCEntryFPAddress, isolate());
-  St_d(fp, ExternalReferenceAsOperand(c_entry_fp_address, no_reg));
-
-  ER context_address = ER::Create(IsolateAddressId::kContextAddress, isolate());
-  St_d(cp, ExternalReferenceAsOperand(context_address, no_reg));
+  St_d(fp, AsMemOperand(IsolateFieldId::kCEntryFP));
+  St_d(cp, AsMemOperand(IsolateFieldId::kContext));
 
   const int frame_alignment = MacroAssembler::ActivationFrameAlignment();
 
@@ -4390,25 +5078,20 @@ void MacroAssembler::EnterExitFrame(Register scratch, int stack_space,
   St_d(scratch, MemOperand(fp, ExitFrameConstants::kSPOffset));
 }
 
-void MacroAssembler::LeaveExitFrame(Register scratch) {
+void MacroAssembler::LeaveExitFrame() {
   ASM_CODE_COMMENT(this);
   BlockTrampolinePoolScope block_trampoline_pool(this);
 
-  using ER = ExternalReference;
-
   // Restore current context from top and clear it in debug mode.
-  ER context_address = ER::Create(IsolateAddressId::kContextAddress, isolate());
-  Ld_d(cp, ExternalReferenceAsOperand(context_address, no_reg));
+  Ld_d(cp, AsMemOperand(IsolateFieldId::kContext));
 
   if (v8_flags.debug_code) {
-    li(scratch, Operand(Context::kNoContext));
-    St_d(scratch, ExternalReferenceAsOperand(context_address, no_reg));
+    static_assert(Context::kNoContext == 0);
+    St_d(zero_reg, AsMemOperand(IsolateFieldId::kContext));
   }
 
   // Clear the top frame.
-  ER c_entry_fp_address =
-      ER::Create(IsolateAddressId::kCEntryFPAddress, isolate());
-  St_d(zero_reg, ExternalReferenceAsOperand(c_entry_fp_address, no_reg));
+  St_d(zero_reg, AsMemOperand(IsolateFieldId::kCEntryFP));
 
   // Pop the arguments, restore registers, and return.
   mov(sp, fp);  // Respect ABI stack constraint.
@@ -4447,6 +5130,20 @@ void MacroAssembler::SmiUntag(Register dst, const MemOperand& src) {
   }
 }
 
+void MacroAssembler::SmiUntagUnsigned(Register dst, const MemOperand& src) {
+  if (SmiValuesAre32Bits()) {
+    Ld_wu(dst, MemOperand(src.base(), SmiWordOffset(src.offset())));
+  } else {
+    DCHECK(SmiValuesAre31Bits());
+    if (COMPRESS_POINTERS_BOOL) {
+      Ld_wu(dst, src);
+    } else {
+      Ld_d(dst, src);
+    }
+    SmiUntagUnsigned(dst);
+  }
+}
+
 void MacroAssembler::JumpIfSmi(Register value, Label* smi_label) {
   DCHECK_EQ(0, kSmiTag);
   UseScratchRegisterScope temps(this);
@@ -4467,6 +5164,7 @@ void MacroAssembler::JumpIfObjectType(Label* target, Condition cc,
                                       Register object,
                                       InstanceType instance_type,
                                       Register scratch) {
+  ASM_CODE_COMMENT(this);
   DCHECK(cc == eq || cc == ne);
   UseScratchRegisterScope temps(this);
   if (scratch == no_reg) {
@@ -4562,24 +5260,55 @@ void MacroAssembler::AssertJSAny(Register object, Register map_tmp,
   bind(&ok);
 }
 
-void MacroAssembler::AssertNotSmi(Register object) {
+void MacroAssembler::AssertNotSmi(Register object, AbortReason reason) {
   if (!v8_flags.debug_code) return;
   ASM_CODE_COMMENT(this);
   static_assert(kSmiTag == 0);
   UseScratchRegisterScope temps(this);
   Register scratch = temps.Acquire();
   andi(scratch, object, kSmiTagMask);
-  Check(ne, AbortReason::kOperandIsASmi, scratch, Operand(zero_reg));
+  Check(ne, reason, scratch, Operand(zero_reg));
 }
 
-void MacroAssembler::AssertSmi(Register object) {
+void MacroAssembler::AssertSmi(Register object, AbortReason reason) {
   if (!v8_flags.debug_code) return;
   ASM_CODE_COMMENT(this);
   static_assert(kSmiTag == 0);
   UseScratchRegisterScope temps(this);
   Register scratch = temps.Acquire();
   andi(scratch, object, kSmiTagMask);
-  Check(eq, AbortReason::kOperandIsASmi, scratch, Operand(zero_reg));
+  Check(eq, reason, scratch, Operand(zero_reg));
+}
+
+void MacroAssembler::AssertZeroExtended(Register int32_register) {
+  if (!v8_flags.debug_code) return;
+  ASM_CODE_COMMENT(this);
+  UseScratchRegisterScope temps(this);
+  Register scratch = temps.Acquire();
+  srli_d(scratch, int32_register, 32);
+  Check(eq, AbortReason::k32BitValueInRegisterIsNotZeroExtended, scratch,
+        Operand(zero_reg));
+}
+
+void MacroAssembler::AssertSignExtended(Register int32_register) {
+  if (!v8_flags.debug_code) return;
+  ASM_CODE_COMMENT(this);
+  UseScratchRegisterScope temps(this);
+  Register scratch = temps.Acquire();
+  slli_w(scratch, int32_register, 0);
+  Check(eq, AbortReason::kUint32IsNotAInt32, scratch, Operand(zero_reg));
+}
+
+void MacroAssembler::AssertMap(Register object) {
+  if (!v8_flags.debug_code) return;
+  ASM_CODE_COMMENT(this);
+  AssertNotSmi(object, AbortReason::kOperandIsNotAMap);
+
+  UseScratchRegisterScope temps(this);
+  Register scratch = temps.Acquire();
+
+  GetObjectType(object, scratch, scratch);
+  Check(eq, AbortReason::kOperandIsNotAMap, scratch, Operand(MAP_TYPE));
 }
 
 void MacroAssembler::AssertStackIsAligned() {
@@ -4615,7 +5344,7 @@ void MacroAssembler::AssertConstructor(Register object) {
         Operand(zero_reg));
 
   LoadMap(scratch, object);
-  Ld_bu(scratch, FieldMemOperand(scratch, Map::kBitFieldOffset));
+  Ld_bu(scratch, FieldMemOperand(scratch, offsetof(Map, bit_field_)));
   And(scratch, scratch, Operand(Map::Bits1::IsConstructorBit::kMask));
   Check(ne, AbortReason::kOperandIsNotAConstructor, scratch, Operand(zero_reg));
 }
@@ -4673,6 +5402,27 @@ void MacroAssembler::AssertBoundFunction(Register object) {
         Operand(JS_BOUND_FUNCTION_TYPE));
 }
 
+void MacroAssembler::AssertSmiOrHeapObjectInMainCompressionCage(
+    Register object) {
+  if (!PointerCompressionIsEnabled()) return;
+  if (!v8_flags.debug_code) return;
+  ASM_CODE_COMMENT(this);
+  Label ok;
+  UseScratchRegisterScope temps(this);
+  Register scratch = temps.Acquire();
+  static_assert(kSmiTag == 0);
+  SmiTst(object, scratch);
+  BranchShort(&ok, kEqual, scratch, Operand(zero_reg));
+  // Clear the lower 32 bits.
+  bstrins_d(scratch, zero_reg, 31, 0);
+  // Either the value is now equal to the pointer compression cage base or it's
+  // zero if we got a compressed pointer register as input.
+  BranchShort(&ok, kEqual, scratch, Operand(zero_reg));
+  Check(kEqual, AbortReason::kObjectNotTagged, scratch,
+        Operand(kPtrComprCageBaseRegister));
+  bind(&ok);
+}
+
 void MacroAssembler::AssertGeneratorObject(Register object) {
   if (!v8_flags.debug_code) return;
   ASM_CODE_COMMENT(this);
@@ -4688,6 +5438,17 @@ void MacroAssembler::AssertGeneratorObject(Register object) {
   Check(
       ls, AbortReason::kOperandIsNotAGeneratorObject, scratch,
       Operand(LAST_JS_GENERATOR_OBJECT_TYPE - FIRST_JS_GENERATOR_OBJECT_TYPE));
+}
+
+void MacroAssembler::AssertInRange(Register heap_object, Tagged_t lower_limit,
+                                   Tagged_t higher_limit, AbortReason reason) {
+  if (!v8_flags.debug_code) return;
+  ASM_CODE_COMMENT(this);
+  DCHECK_LT(lower_limit, higher_limit);
+  UseScratchRegisterScope temps(this);
+  Register scratch = temps.Acquire();
+  Sub_w(scratch, heap_object, Operand(lower_limit));
+  Assert(le, reason, scratch, Operand(higher_limit - lower_limit));
 }
 
 void MacroAssembler::AssertUnreachable(AbortReason reason) {
@@ -5023,16 +5784,15 @@ void MacroAssembler::AssertNotDeoptimized() {
   bind(&not_deoptimized);
 }
 
-void MacroAssembler::CallForDeoptimization(Builtin target, int, Label* exit,
-                                           DeoptimizeKind kind, Label* ret,
-                                           Label*) {
+void MacroAssembler::CallForDeoptimization(
+    Builtin target, int, Label* exit, DeoptimizeKind kind, Label* ret,
+    Label* jump_deoptimization_entry_label) {
   ASM_CODE_COMMENT(this);
-  BlockTrampolinePoolScope block_trampoline_pool(this);
-  UseScratchRegisterScope temps(this);
-  Register scratch = temps.Acquire();
-  Ld_d(scratch,
-       MemOperand(kRootRegister, IsolateData::BuiltinEntrySlotOffset(target)));
-  Call(scratch);
+  // make sure the label is within bl's 26 bit range(near)
+  DCHECK_WITH_MSG(
+      is_near(jump_deoptimization_entry_label, OffsetSize::kOffset26),
+      "deopt exit is too far from deopt entry jump");
+  Call(jump_deoptimization_entry_label);
   DCHECK_EQ(SizeOfCodeGeneratedSince(exit),
             (kind == DeoptimizeKind::kLazy) ? Deoptimizer::kLazyDeoptExitSize
                                             : Deoptimizer::kEagerDeoptExitSize);
@@ -5042,13 +5802,15 @@ void MacroAssembler::LoadCodeInstructionStart(Register destination,
                                               Register code_object,
                                               CodeEntrypointTag tag) {
   ASM_CODE_COMMENT(this);
-#ifdef V8_ENABLE_SANDBOX
-  LoadCodeEntrypointViaCodePointer(
-      destination,
-      FieldMemOperand(code_object, Code::kSelfIndirectPointerOffset), tag);
-#else
   Ld_d(destination,
        FieldMemOperand(code_object, Code::kInstructionStartOffset));
+#ifdef V8_ENABLE_SANDBOX
+  if (tag != 0) {
+    UseScratchRegisterScope temps(this);
+    Register scratch = temps.Acquire();
+    li(scratch, Operand(tag));
+    xor_(destination, destination, scratch);
+  }
 #endif
 }
 
@@ -5077,8 +5839,9 @@ void MacroAssembler::CallJSFunction(Register function_object,
   Register parameter_count = s1;
   Register scratch = s2;
 
-  Ld_w(dispatch_handle,
-       FieldMemOperand(function_object, JSFunction::kDispatchHandleOffset));
+  Ld_w(
+      dispatch_handle,
+      FieldMemOperand(function_object, offsetof(JSFunction, dispatch_handle_)));
   LoadEntrypointAndParameterCountFromJSDispatchTable(code, parameter_count,
                                                      dispatch_handle, scratch);
 
@@ -5094,17 +5857,10 @@ void MacroAssembler::CallJSDispatchEntry(JSDispatchHandle dispatch_handle,
   Register scratch = s1;
   li(kJavaScriptCallDispatchHandleRegister,
      Operand(dispatch_handle.value(), RelocInfo::JS_DISPATCH_HANDLE));
-  // WARNING: This entrypoint load is only safe because we are storing a
-  // RelocInfo for the dispatch handle in the li above (thus keeping the
-  // dispatch entry alive) _and_ because the entrypoints are not compactable
-  // (thus meaning that the calculation in the entrypoint load is not
-  // invalidated by a compaction).
-  // TODO(leszeks): Make this less of a footgun.
-  static_assert(!JSDispatchTable::kSupportsCompaction);
-  LoadEntrypointFromJSDispatchTable(code, dispatch_handle, scratch);
+  LoadEntrypointFromJSDispatchTable(code, kJavaScriptCallDispatchHandleRegister,
+                                    scratch);
   CHECK_EQ(argument_count,
-           IsolateGroup::current()->js_dispatch_table()->GetParameterCount(
-               dispatch_handle));
+           isolate()->js_dispatch_table().GetParameterCount(dispatch_handle));
   Call(code);
 }
 
@@ -5122,14 +5878,19 @@ void MacroAssembler::JumpJSFunction(Register function_object,
 void MacroAssembler::ResolveWasmCodePointer(Register target,
                                             uint64_t signature_hash) {
   ASM_CODE_COMMENT(this);
-  ExternalReference global_jump_table =
-      ExternalReference::wasm_code_pointer_table();
   UseScratchRegisterScope temps(this);
   Register scratch = temps.Acquire();
-  li(scratch, global_jump_table);
+  li(scratch, ExternalReference::wasm_code_pointer_table());
 #ifdef V8_ENABLE_SANDBOX
-  static_assert(sizeof(wasm::WasmCodePointerTableEntry) == 16);
-  Alsl_d(target, target, scratch, 4);
+  static constexpr int kNumRelevantBits =
+      base::bits::WhichPowerOfTwo(WasmCodePointer::kIndexSpaceSize);
+  static constexpr int kLeftShift =
+      base::bits::WhichPowerOfTwo(sizeof(wasm::WasmCodePointerTableEntry));
+  // Only keep `kNumRelevantBits` bits (to avoid OOB access to the table),
+  Bstrpick_d(target, target, kNumRelevantBits - 1, 0);
+  // Shift to multiply by `sizeof(WasmCodePointerTableEntry)`.
+  Alsl_d(target, target, scratch, kLeftShift);
+
   Ld_d(scratch,
        MemOperand(target, wasm::WasmCodePointerTable::kOffsetOfSignatureHash));
   bool has_second_tmp = temps.hasAvailable();
@@ -5163,14 +5924,20 @@ void MacroAssembler::CallWasmCodePointer(Register target,
 }
 
 void MacroAssembler::CallWasmCodePointerNoSignatureCheck(Register target) {
-  ExternalReference global_jump_table =
-      ExternalReference::wasm_code_pointer_table();
+  ASM_CODE_COMMENT(this);
   UseScratchRegisterScope temps(this);
   Register scratch = temps.Acquire();
-  li(scratch, global_jump_table);
-  constexpr unsigned int kEntrySizeLog2 =
-      std::bit_width(sizeof(wasm::WasmCodePointerTableEntry)) - 1;
-  Alsl_d(target, target, scratch, kEntrySizeLog2);
+  li(scratch, ExternalReference::wasm_code_pointer_table());
+
+  static constexpr int kNumRelevantBits =
+      base::bits::WhichPowerOfTwo(WasmCodePointer::kIndexSpaceSize);
+  static constexpr int kLeftShift =
+      base::bits::WhichPowerOfTwo(sizeof(wasm::WasmCodePointerTableEntry));
+  // Only keep `kNumRelevantBits` bits (to avoid OOB access to the table),
+  Bstrpick_d(target, target, kNumRelevantBits - 1, 0);
+  // Shift to multiply by `sizeof(WasmCodePointerTableEntry)`.
+  Alsl_d(target, target, scratch, kLeftShift);
+
   Ld_d(target, MemOperand(target, 0));
 
   Call(target);
@@ -5192,6 +5959,7 @@ void MacroAssembler::AssertFeedbackCell(Register object, Register scratch) {
   }
 }
 void MacroAssembler::AssertFeedbackVector(Register object, Register scratch) {
+  ASM_CODE_COMMENT(this);
   if (v8_flags.debug_code) {
     GetObjectType(object, scratch, scratch);
     Assert(eq, AbortReason::kExpectedFeedbackVector, scratch,
@@ -5242,13 +6010,12 @@ void MacroAssembler::GenerateTailCallToReturnedCode(
 #ifndef V8_JS_LINKAGE_INCLUDES_DISPATCH_HANDLE
   Ld_wu(kJavaScriptCallDispatchHandleRegister,
         FieldMemOperand(kJavaScriptCallTargetRegister,
-                        JSFunction::kDispatchHandleOffset));
+                        offsetof(JSFunction, dispatch_handle_)));
 #endif
   LoadEntrypointFromJSDispatchTable(a2, kJavaScriptCallDispatchHandleRegister,
                                     a5);
   Jump(a2);
 }
-
 
 void MacroAssembler::LoadTaggedField(Register destination,
                                      const MemOperand& field_operand,
@@ -5257,6 +6024,15 @@ void MacroAssembler::LoadTaggedField(Register destination,
     DecompressTagged(destination, field_operand, trap_pc);
   } else {
     Ld_d(destination, field_operand, trap_pc);
+  }
+}
+
+void MacroAssembler::LoadTaggedFieldWithoutDecompressing(
+    const Register& destination, const MemOperand& field_operand) {
+  if (COMPRESS_POINTERS_BOOL) {
+    Ld_w(destination, field_operand);
+  } else {
+    Ld_d(destination, field_operand);
   }
 }
 
@@ -5271,6 +6047,11 @@ void MacroAssembler::LoadTaggedSignedField(Register destination,
 
 void MacroAssembler::SmiUntagField(Register dst, const MemOperand& src) {
   SmiUntag(dst, src);
+}
+
+void MacroAssembler::SmiUntagFieldUnsigned(Register dst,
+                                           const MemOperand& src) {
+  SmiUntagUnsigned(dst, src);
 }
 
 void MacroAssembler::StoreTaggedField(Register src, const MemOperand& dst,
@@ -5372,20 +6153,17 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
                               ExternalReference thunk_ref, Register thunk_arg,
                               int slots_to_drop_on_return,
                               MemOperand* argc_operand,
-                              MemOperand return_value_operand) {
+                              MemOperand return_value_operand,
+                              bool handle_interceptor_result) {
   using ER = ExternalReference;
 
-  Isolate* isolate = masm->isolate();
-  MemOperand next_mem_op = __ ExternalReferenceAsOperand(
-      ER::handle_scope_next_address(isolate), no_reg);
-  MemOperand limit_mem_op = __ ExternalReferenceAsOperand(
-      ER::handle_scope_limit_address(isolate), no_reg);
-  MemOperand level_mem_op = __ ExternalReferenceAsOperand(
-      ER::handle_scope_level_address(isolate), no_reg);
+  MemOperand next_mem_op = __ AsMemOperand(IsolateFieldId::kHandleScopeNext);
+  MemOperand limit_mem_op = __ AsMemOperand(IsolateFieldId::kHandleScopeLimit);
+  MemOperand level_mem_op = __ AsMemOperand(IsolateFieldId::kHandleScopeLevel);
 
   Register return_value = a0;
-  Register scratch = a4;
-  Register scratch2 = a5;
+  Register scratch = a5;
+  Register scratch2 = a6;
 
   // Allocate HandleScope in callee-saved registers.
   // We will need to restore the HandleScope after the call to the API function,
@@ -5394,14 +6172,14 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
   Register prev_limit_reg = s1;
   Register prev_level_reg = s2;
 
-  // C arguments (kCArgRegs[0/1]) are expected to be initialized outside, so
+  // C arguments (kCArgRegs[0/1/2]) are expected to be initialized outside, so
   // this function must not corrupt them (return_value overlaps with
   // kCArgRegs[0] but that's ok because we start using it only after the C
   // call).
-  DCHECK(!AreAliased(kCArgRegs[0], kCArgRegs[1],  // C args
+  DCHECK(!AreAliased(kCArgRegs[0], kCArgRegs[1], kCArgRegs[2],  // C args
                      scratch, scratch2, prev_next_address_reg, prev_limit_reg));
   // function_address and thunk_arg might overlap but this function must not
-  // corrupted them until the call is made (i.e. overlap with return_value is
+  // corrupt them until the call is made (i.e. overlap with return_value is
   // fine).
   DCHECK(!AreAliased(function_address,  // incoming parameters
                      scratch, scratch2, prev_next_address_reg, prev_limit_reg));
@@ -5417,11 +6195,11 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
     __ St_w(scratch, level_mem_op);
   }
 
-  Label profiler_or_side_effects_check_enabled, done_api_call;
+  Label profiler_or_side_effects_check_enabled, done_api_call,
+      done_reading_result;
   if (with_profiling) {
     __ RecordComment("Check if profiler or side effects check is enabled");
-    __ Ld_b(scratch,
-            __ ExternalReferenceAsOperand(IsolateFieldId::kExecutionMode));
+    __ Ld_b(scratch, __ AsMemOperand(IsolateFieldId::kExecutionMode));
     __ Branch(&profiler_or_side_effects_check_enabled, ne, scratch,
               Operand(zero_reg));
 #ifdef V8_RUNTIME_CALL_STATS
@@ -5437,12 +6215,24 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
   __ StoreReturnAddressAndCall(function_address);
   __ bind(&done_api_call);
 
+  if (handle_interceptor_result) {
+    // Skip reading return value if the callback returned kInterceptedNo,
+    // this would make the builtin return kNotInterceptedSentinel value.
+    // Size is important here, otherwise the C++ function could have returned
+    // one- or two-byte value with junk in the upper part.
+    static_assert(kInterceptedNo == 1 && kInterceptedSize == 4);
+    static_assert(kInterceptedNo == kNotInterceptedSentinel);
+    static_assert(kInterceptedYes == 0);
+    __ Branch(&done_reading_result, ne, return_value, Operand(zero_reg));
+  }
+
   Label propagate_exception;
   Label delete_allocated_handles;
   Label leave_exit_frame;
 
   __ RecordComment("Load the value from ReturnValue");
   __ Ld_d(return_value, return_value_operand);
+  __ bind(&done_reading_result);
 
   {
     ASM_CODE_COMMENT_STRING(
@@ -5470,19 +6260,30 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
     __ Ld_d(argc_reg, *argc_operand);
   }
 
-  __ LeaveExitFrame(scratch);
+  __ LeaveExitFrame();
 
   {
     ASM_CODE_COMMENT_STRING(masm,
                             "Check if the function scheduled an exception.");
     __ LoadRoot(scratch, RootIndex::kTheHoleValue);
-    __ Ld_d(scratch2, __ ExternalReferenceAsOperand(
-                          ER::exception_address(isolate), no_reg));
+    __ Ld_d(scratch2, __ AsMemOperand(IsolateFieldId::kException));
     __ Branch(&propagate_exception, ne, scratch, Operand(scratch2));
   }
 
-  __ AssertJSAny(return_value, scratch, scratch2,
-                 AbortReason::kAPICallReturnedInvalidObject);
+#ifndef V8_ENABLE_MEMORY_CORRUPTION_API
+  // This check doesn't make sense for sandbox testing since
+  // Sandbox.getObjectAt(..) might legitimately return non-JSAny values
+  // and this check just hinders debugging.
+  if (v8_flags.debug_code) {
+    Label ok;
+    if (handle_interceptor_result) {
+      __ Branch(&ok, eq, return_value, Operand(kNotInterceptedSentinel));
+    }
+    __ AssertJSAny(return_value, scratch, scratch2,
+                   AbortReason::kAPICallReturnedInvalidObject);
+    __ bind(&ok);
+  }
+#endif  // V8_ENABLE_MEMORY_CORRUPTION_API
 
   if (argc_operand == nullptr) {
     DCHECK_NE(slots_to_drop_on_return, 0);
@@ -5500,11 +6301,10 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, bool with_profiling,
   if (with_profiling) {
     ASM_CODE_COMMENT_STRING(masm, "Call the api function via thunk wrapper.");
     __ bind(&profiler_or_side_effects_check_enabled);
-    // Additional parameter is the address of the actual callback function.
+    // Additional parameter if provided.
     if (thunk_arg.is_valid()) {
-      MemOperand thunk_arg_mem_op = __ ExternalReferenceAsOperand(
-          IsolateFieldId::kApiCallbackThunkArgument);
-      __ St_d(thunk_arg, thunk_arg_mem_op);
+      __ St_d(thunk_arg,
+              __ AsMemOperand(IsolateFieldId::kApiCallbackThunkArgument));
     }
     __ li(scratch, thunk_ref);
     __ StoreReturnAddressAndCall(scratch);

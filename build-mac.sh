@@ -42,6 +42,7 @@ use_lld=false
 clang_base_path=\"${CLANG_BASE_PATH}\"
 clang_version=\"${CLANG_VERSION}\"
 clang_use_chrome_plugins=false
+standalone_use_xcode_clang=true
 enable_rust=false
 chrome_pgo_phase=0
 is_component_build=false

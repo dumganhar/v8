@@ -10,11 +10,9 @@
 
 #include <optional>
 
-#include "src/execution/isolate-utils-inl.h"
 #include "src/numbers/hash-seed-inl.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/objects-inl.h"
-#include "src/objects/oddball.h"
 #include "src/objects/property-cell-inl.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -24,27 +22,12 @@ namespace v8::internal {
 
 template <typename Derived, typename Shape>
 Tagged<Object> Dictionary<Derived, Shape>::ValueAt(InternalIndex entry) {
-  PtrComprCageBase cage_base = GetPtrComprCageBase();
-  return ValueAt(cage_base, entry);
-}
-
-template <typename Derived, typename Shape>
-Tagged<Object> Dictionary<Derived, Shape>::ValueAt(PtrComprCageBase cage_base,
-                                                   InternalIndex entry) {
   return this->get(DerivedHashTable::EntryToIndex(entry) +
                    Derived::kEntryValueIndex);
 }
 
 template <typename Derived, typename Shape>
 Tagged<Object> Dictionary<Derived, Shape>::ValueAt(InternalIndex entry,
-                                                   SeqCstAccessTag tag) {
-  PtrComprCageBase cage_base = GetPtrComprCageBase();
-  return ValueAt(cage_base, entry, tag);
-}
-
-template <typename Derived, typename Shape>
-Tagged<Object> Dictionary<Derived, Shape>::ValueAt(PtrComprCageBase cage_base,
-                                                   InternalIndex entry,
                                                    SeqCstAccessTag tag) {
   return this->get(
       DerivedHashTable::EntryToIndex(entry) + Derived::kEntryValueIndex, tag);
@@ -58,18 +41,20 @@ std::optional<Tagged<Object>> Dictionary<Derived, Shape>::TryValueAt(
   SLOW_DCHECK(Isolate::Current()->heap()->IsPendingAllocation(Tagged(this)));
   // We can read length() in a non-atomic way since we are reading an
   // initialized object which is not pending allocation.
-  if (DerivedHashTable::EntryToIndex(entry) + Derived::kEntryValueIndex >=
-      this->length()) {
+  if (static_cast<uint32_t>(DerivedHashTable::EntryToIndex(entry) +
+                            Derived::kEntryValueIndex) >=
+      this->ulength().value()) {
     return {};
   }
   return ValueAt(entry);
 }
 
 template <typename Derived, typename Shape>
-void Dictionary<Derived, Shape>::ValueAtPut(InternalIndex entry,
-                                            Tagged<Object> value) {
+void Dictionary<Derived, Shape>::ValueAtPut(
+    InternalIndex entry, Tagged<Object> value,
+    WriteBarrierMode write_barrier_mode) {
   this->set(DerivedHashTable::EntryToIndex(entry) + Derived::kEntryValueIndex,
-            value);
+            value, write_barrier_mode);
 }
 
 template <typename Derived, typename Shape>
@@ -137,14 +122,14 @@ int BaseNameDictionary<Derived, Shape>::Hash() const {
 bool NumberDictionary::requires_slow_elements() {
   Tagged<Object> max_index_object = get(kMaxNumberKeyIndex);
   if (!IsSmi(max_index_object)) return false;
-  return 0 != (Smi::ToInt(max_index_object) & kRequiresSlowElementsMask);
+  return 0 != (Smi::ToUInt(max_index_object) & kRequiresSlowElementsMask);
 }
 
 uint32_t NumberDictionary::max_number_key() {
   DCHECK(!requires_slow_elements());
   Tagged<Object> max_index_object = get(kMaxNumberKeyIndex);
   if (!IsSmi(max_index_object)) return 0;
-  uint32_t value = static_cast<uint32_t>(Smi::ToInt(max_index_object));
+  uint32_t value = Smi::ToUInt(max_index_object);
   return value >> kRequiresSlowElementsTagSize;
 }
 
@@ -154,9 +139,11 @@ void NumberDictionary::set_requires_slow_elements() {
 
 template <typename Derived, typename Shape>
 void Dictionary<Derived, Shape>::ClearEntry(InternalIndex entry) {
+  DisallowGarbageCollection no_gc;
   Tagged<Object> the_hole = GetReadOnlyRoots().the_hole_value();
   PropertyDetails details = PropertyDetails::Empty();
-  Cast<Derived>(this)->SetEntry(entry, the_hole, the_hole, details);
+  Cast<Derived>(this)->SetEntry(entry, the_hole, the_hole, details,
+                                SKIP_WRITE_BARRIER, no_gc);
 }
 
 template <typename Derived, typename Shape>
@@ -164,13 +151,22 @@ void Dictionary<Derived, Shape>::SetEntry(InternalIndex entry,
                                           Tagged<Object> key,
                                           Tagged<Object> value,
                                           PropertyDetails details) {
+  DisallowGarbageCollection no_gc;
+  WriteBarrierModeScope write_barrier_scope = this->GetWriteBarrierMode(no_gc);
+  Cast<Derived>(this)->SetEntry(entry, key, value, details,
+                                *write_barrier_scope, no_gc);
+}
+
+template <typename Derived, typename Shape>
+void Dictionary<Derived, Shape>::SetEntry(
+    InternalIndex entry, Tagged<Object> key, Tagged<Object> value,
+    PropertyDetails details, WriteBarrierMode mode,
+    const DisallowGarbageCollection& no_gc) {
   DCHECK(Dictionary::kEntrySize == 2 || Dictionary::kEntrySize == 3);
   DCHECK(!IsName(key) || details.dictionary_index() > 0 || !Shape::kHasDetails);
   int index = DerivedHashTable::EntryToIndex(entry);
-  DisallowGarbageCollection no_gc;
-  WriteBarrierModeScope mode = this->GetWriteBarrierMode(no_gc);
-  this->set(index + Derived::kEntryKeyIndex, key, *mode);
-  this->set(index + Derived::kEntryValueIndex, value, *mode);
+  this->set(index + Derived::kEntryKeyIndex, key, mode);
+  this->set(index + Derived::kEntryValueIndex, value, mode);
   if (Shape::kHasDetails) DetailsAtPut(entry, details);
 }
 
@@ -209,13 +205,7 @@ DirectHandle<Map> GlobalDictionary::GetMap(RootsTable& roots) {
 }
 
 Tagged<Name> NameDictionary::NameAt(InternalIndex entry) {
-  PtrComprCageBase cage_base = GetPtrComprCageBase();
-  return NameAt(cage_base, entry);
-}
-
-Tagged<Name> NameDictionary::NameAt(PtrComprCageBase cage_base,
-                                    InternalIndex entry) {
-  return Cast<Name>(KeyAt(cage_base, entry));
+  return Cast<Name>(KeyAt(entry));
 }
 
 DirectHandle<Map> NameDictionary::GetMap(RootsTable& roots) {
@@ -234,40 +224,30 @@ BIT_FIELD_ACCESSORS(NameDictionary, flags, may_have_interesting_properties,
                     NameDictionary::MayHaveInterestingPropertiesBit)
 
 Tagged<PropertyCell> GlobalDictionary::CellAt(InternalIndex entry) {
-  PtrComprCageBase cage_base = GetPtrComprCageBase();
-  return CellAt(cage_base, entry);
-}
-
-Tagged<PropertyCell> GlobalDictionary::CellAt(PtrComprCageBase cage_base,
-                                              InternalIndex entry) {
-  DCHECK(IsPropertyCell(KeyAt(cage_base, entry), cage_base));
-  return Cast<PropertyCell>(KeyAt(cage_base, entry));
+  DCHECK(IsPropertyCell(KeyAt(entry)));
+  return Cast<PropertyCell>(KeyAt(entry));
 }
 
 Tagged<Name> GlobalDictionary::NameAt(InternalIndex entry) {
-  PtrComprCageBase cage_base = GetPtrComprCageBase();
-  return NameAt(cage_base, entry);
-}
-
-Tagged<Name> GlobalDictionary::NameAt(PtrComprCageBase cage_base,
-                                      InternalIndex entry) {
-  return CellAt(cage_base, entry)->name(cage_base);
+  return CellAt(entry)->name();
 }
 
 Tagged<Object> GlobalDictionary::ValueAt(InternalIndex entry) {
-  PtrComprCageBase cage_base = GetPtrComprCageBase();
-  return ValueAt(cage_base, entry);
-}
-
-Tagged<Object> GlobalDictionary::ValueAt(PtrComprCageBase cage_base,
-                                         InternalIndex entry) {
-  return CellAt(cage_base, entry)->value(cage_base);
+  return CellAt(entry)->value();
 }
 
 void GlobalDictionary::SetEntry(InternalIndex entry, Tagged<Object> key,
                                 Tagged<Object> value, PropertyDetails details) {
+  DisallowGarbageCollection no_gc;
+  SetEntry(entry, key, value, details, UPDATE_WRITE_BARRIER, no_gc);
+}
+
+void GlobalDictionary::SetEntry(InternalIndex entry, Tagged<Object> key,
+                                Tagged<Object> value, PropertyDetails details,
+                                WriteBarrierMode mode,
+                                const DisallowGarbageCollection& no_gc) {
   DCHECK_EQ(key, Cast<PropertyCell>(value)->name());
-  set(EntryToIndex(entry) + kEntryKeyIndex, value);
+  set(EntryToIndex(entry) + kEntryKeyIndex, value, mode);
   DetailsAtPut(entry, details);
 }
 

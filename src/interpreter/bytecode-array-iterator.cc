@@ -4,9 +4,11 @@
 
 #include "src/interpreter/bytecode-array-iterator.h"
 
+#include "include/v8config.h"
 #include "src/codegen/bailout-reason.h"
 #include "src/interpreter/bytecode-decoder.h"
 #include "src/interpreter/interpreter-intrinsics.h"
+#include "src/objects/feedback-vector-inl.h"
 #include "src/objects/feedback-vector.h"
 #include "src/objects/objects-inl.h"
 
@@ -27,7 +29,7 @@ BytecodeArrayIterator::BytecodeArrayIterator(
                       ? LocalHeap::Current()
                       : Isolate::Current()->main_thread_local_heap()) {
   local_heap_->AddGCEpilogueCallback(UpdatePointersCallback, this);
-  UpdateOperandScale();
+  UpdateCurrentBytecode();
   if (initial_offset != 0) {
     AdvanceTo(initial_offset);
   }
@@ -35,7 +37,7 @@ BytecodeArrayIterator::BytecodeArrayIterator(
 
 BytecodeArrayIterator::BytecodeArrayIterator(
     Handle<BytecodeArray> bytecode_array, int initial_offset,
-    DisallowGarbageCollection& no_gc)
+    DisallowGarbageCollection& no_gc V8_LIFETIME_BOUND)
     : bytecode_array_(bytecode_array),
       start_(reinterpret_cast<uint8_t*>(
           bytecode_array_->GetFirstBytecodeAddress())),
@@ -45,7 +47,7 @@ BytecodeArrayIterator::BytecodeArrayIterator(
       prefix_size_(0),
       local_heap_(nullptr) {
   // Don't add a GC callback, since we're in a no_gc scope.
-  UpdateOperandScale();
+  UpdateCurrentBytecode();
   if (initial_offset != 0) {
     AdvanceTo(initial_offset);
   }
@@ -58,8 +60,9 @@ BytecodeArrayIterator::~BytecodeArrayIterator() {
 }
 
 void BytecodeArrayIterator::AdvanceTo(int offset) {
-  DCHECK_GE(offset, current_offset());
-  while (current_offset() != offset && cursor_ < end_) {
+  DCHECK(base::IsInRange(cursor_ - prefix_size_, start_, start_ + offset));
+  DCHECK_LE(current_offset(), offset);
+  while (current_offset() < offset) {
     Advance();
   }
   // Make sure we're always at a valid offset.
@@ -68,7 +71,7 @@ void BytecodeArrayIterator::AdvanceTo(int offset) {
 
 void BytecodeArrayIterator::SetOffset(int offset) {
   DCHECK_GE(offset, 0);
-  if (offset < current_offset()) {
+  if (!base::IsInRange(cursor_ - prefix_size_, start_, start_ + offset)) {
     Reset();
   }
   // Advance to the given offset instead of just setting cursor_.
@@ -78,14 +81,14 @@ void BytecodeArrayIterator::SetOffset(int offset) {
 
 void BytecodeArrayIterator::Reset() {
   cursor_ = start_;
-  UpdateOperandScale();
+  UpdateCurrentBytecode();
 }
 
 // protected
 void BytecodeArrayIterator::SetOffsetUnchecked(int offset) {
   DCHECK_GE(offset, 0);
   cursor_ = start_ + offset;
-  UpdateOperandScale();
+  UpdateCurrentBytecode();
 }
 
 // static
@@ -264,7 +267,8 @@ RegisterList BytecodeArrayIterator::GetRegisterListOperand(
   return RegisterList(first.index(), count);
 }
 
-int BytecodeArrayIterator::GetRegisterOperandRange(int operand_index) const {
+uint32_t BytecodeArrayIterator::GetRegisterOperandRange(
+    int operand_index) const {
   DCHECK_LE(operand_index, Bytecodes::NumberOfOperands(current_bytecode()));
   const OperandType* operand_types =
       Bytecodes::GetOperandTypes(current_bytecode());
@@ -314,18 +318,28 @@ AbortReason BytecodeArrayIterator::GetAbortReasonOperand(
       GetUnsignedOperand(operand_index, operand_type));
 }
 
+Tagged<Object> BytecodeArrayIterator::GetConstantAtIndex(int index) const {
+  Tagged<TrustedFixedArray> constant_pool = bytecode_array()->constant_pool();
+  CHECK_WITH_MSG(
+      base::IsInHalfOpenRange(index, 0u, constant_pool->ulength().value()),
+      "Constant pool index out of bounds");
+  return constant_pool->get(index);
+}
+
 Handle<Object> BytecodeArrayIterator::GetConstantAtIndex(
     int index, Isolate* isolate) const {
-  return handle(bytecode_array()->constant_pool()->get(index), isolate);
+  return handle(GetConstantAtIndex(index), isolate);
 }
 
 Handle<Object> BytecodeArrayIterator::GetConstantAtIndex(
     int index, LocalIsolate* isolate) const {
-  return handle(bytecode_array()->constant_pool()->get(index), isolate);
+  return handle(GetConstantAtIndex(index), isolate);
 }
 
 Tagged<Smi> BytecodeArrayIterator::GetConstantAtIndexAsSmi(int index) const {
-  return Cast<Smi>(bytecode_array()->constant_pool()->get(index));
+  Tagged<Object> object = GetConstantAtIndex(index);
+  CHECK_WITH_MSG(IsSmi(object), "Constant pool entry is not a Smi");
+  return Cast<Smi>(object);
 }
 
 Handle<Object> BytecodeArrayIterator::GetConstantForOperand(
@@ -394,32 +408,54 @@ void BytecodeArrayIterator::UpdatePointers() {
   if (start != start_) {
     start_ = start;
     uint8_t* end = start + bytecode_array_->length();
-    size_t distance_to_end = end_ - cursor_;
-    cursor_ = end - distance_to_end;
+    if (cursor_ != nullptr) {
+      size_t distance_to_end = end_ - cursor_;
+      cursor_ = end - distance_to_end;
+    }
     end_ = end;
   }
 }
 
-uint32_t BytecodeArrayIterator::GetEmbeddedFeedback(int operand_index) const {
+uint8_t BytecodeArrayIterator::GetEmbeddedFeedback(int operand_index) const {
   DCHECK_GE(operand_index, 0);
   DCHECK_LT(operand_index, Bytecodes::NumberOfOperands(current_bytecode()));
-  DCHECK_EQ(OperandType::kFlag16,
+  DCHECK_EQ(OperandType::kEmbeddedFeedback,
             Bytecodes::GetOperandType(current_bytecode(), operand_index));
   Address embedded_feedback_start = reinterpret_cast<Address>(cursor_) +
                                     current_operand_offset(operand_index);
-  return BytecodeDecoder::RacyDecodeEmbeddedFeedback(embedded_feedback_start,
-                                                     OperandSize::kShort);
+  return BytecodeDecoder::RacyDecodeEmbeddedFeedback(embedded_feedback_start);
 }
 
-CompareOperationHint BytecodeArrayIterator::GetEmbeddedCompareOperationHint() {
-  DCHECK(Bytecodes::IsCompareWithEmbeddedFeedback(current_bytecode()));
-  uint32_t type_feedback = GetEmbeddedFeedback(1);
-  return v8::internal::CompareOperationHintFromFeedback(type_feedback);
+// static
+CompareOperationHint EmbeddedFeedbackHintTraits<
+    CompareOperationFeedback>::FromFeedback(uint32_t feedback_value) {
+  return v8::internal::CompareOperationHintFromFeedback(feedback_value);
 }
+
+// static
+BinaryOperationHint EmbeddedFeedbackHintTraits<
+    BinaryOperationFeedback>::FromFeedback(uint32_t feedback_value) {
+  return v8::internal::BinaryOperationHintFromFeedback(feedback_value);
+}
+
+template <typename Feedback>
+typename EmbeddedFeedbackHintTraits<Feedback>::Hint
+BytecodeArrayIterator::GetEmbeddedOperationHint() {
+  using Traits = EmbeddedFeedbackHintTraits<Feedback>;
+  DCHECK(Traits::IsWithEmbeddedFeedbackOp(current_bytecode()));
+  uint32_t type_feedback = Feedback::DecodeTypeIndex(
+      static_cast<typename Feedback::TypeIndex>(GetEmbeddedFeedback(1)));
+  return Traits::FromFeedback(type_feedback);
+}
+
+template CompareOperationHint
+BytecodeArrayIterator::GetEmbeddedOperationHint<CompareOperationFeedback>();
+template BinaryOperationHint
+BytecodeArrayIterator::GetEmbeddedOperationHint<BinaryOperationFeedback>();
 
 int BytecodeArrayIterator::GetEmbeddedFeedbackOffset(int operand_index) const {
   DCHECK_EQ(Bytecodes::GetOperandType(current_bytecode(), operand_index),
-            OperandType::kFlag16);
+            OperandType::kEmbeddedFeedback);
   return BytecodeArray::kHeaderSize - kHeapObjectTag + current_offset() +
          prefix_size_ + current_operand_offset(operand_index);
 }

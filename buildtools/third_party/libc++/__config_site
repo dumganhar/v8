@@ -25,7 +25,12 @@
 #define _LIBCPP_HAS_THREADS 1
 #define _LIBCPP_HAS_MONOTONIC_CLOCK 1
 #define _LIBCPP_HAS_TERMINAL 1
+
+#ifdef ANDROID_HOST_MUSL
+#define _LIBCPP_HAS_MUSL_LIBC 1
+#else
 #define _LIBCPP_HAS_MUSL_LIBC 0
+#endif
 
 #ifdef _WIN32
 #define _LIBCPP_HAS_THREAD_API_PTHREAD 0
@@ -72,6 +77,10 @@
 #define _LIBCPP_ASSERTION_SEMANTIC_DEFAULT \
     _LIBCPP_ASSERTION_SEMANTIC_HARDENING_DEPENDENT
 
+#define _LIBCPP_LIBC_PICOLIBC 0
+#define _LIBCPP_LIBC_NEWLIB 0
+#define _LIBCPP_LIBC_LLVM_LIBC 0
+
 // Settings below aren't part of __config_site upstream.
 // We set them here since we want them to take effect everywhere,
 // unconditionally.
@@ -97,5 +106,8 @@
 
 // Disable header include for parallel algorithms.
 #define _LIBCPP_HAS_NO_INCOMPLETE_PSTL
+
+// TODO(thakis): If upstream adds a "latest" magic number, switch to that.
+#define _LIBCPP_AVAILABILITY_MINIMUM_HEADER_VERSION 999
 
 #endif // _LIBCPP_CONFIG_SITE

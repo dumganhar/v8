@@ -12,8 +12,7 @@ load("./cros.star", "cros")
 load("./devtools_frontend.star", "devtools_frontend")
 load("./nasm_linux.star", "nasm")
 load("./proto_linux.star", "proto")
-load("./reproxy.star", "reproxy")
-load("./typescript_unix.star", "typescript")
+load("./reclient.star", "reclient")
 load("./v8.star", "v8")
 
 def __filegroups(ctx):
@@ -24,7 +23,6 @@ def __filegroups(ctx):
     fg.update(devtools_frontend.filegroups(ctx))
     fg.update(nasm.filegroups(ctx))
     fg.update(proto.filegroups(ctx))
-    fg.update(typescript.filegroups(ctx))
     fg["third_party/perfetto/python:python"] = {
         "type": "glob",
         "includes": ["*.py"],
@@ -42,7 +40,6 @@ __handlers.update(cros.handlers)
 __handlers.update(devtools_frontend.handlers)
 __handlers.update(nasm.handlers)
 __handlers.update(proto.handlers)
-__handlers.update(typescript.handlers)
 
 def __step_config(ctx, step_config):
     config.check(ctx)
@@ -51,51 +48,45 @@ def __step_config(ctx, step_config):
         step_config = android.step_config(ctx, step_config)
 
     # cros rules are necessary only for the Siso's builtin RBE client mode.
-    if not reproxy.enabled(ctx):
+    if not reclient.enabled(ctx):
         step_config = cros.step_config(ctx, step_config)
 
     step_config = clang.step_config(ctx, step_config)
     step_config = devtools_frontend.step_config(ctx, step_config)
     step_config = nasm.step_config(ctx, step_config)
     step_config = proto.step_config(ctx, step_config)
-    step_config = typescript.step_config(ctx, step_config)
     step_config = v8.step_config(ctx, step_config)
 
     step_config["rules"].extend([
         {
             "name": "write_buildflag_header",
             "command_prefix": "python3 ../../build/write_buildflag_header.py",
-            "remote": config.get(ctx, "cog"),
-            "canonicalize_dir": True,
+            "remote": config.get(ctx, "cog") or config.get(ctx, "default-remote"),
             "timeout": "2m",
         },
         {
             "name": "write_build_date_header",
             "command_prefix": "python3 ../../base/write_build_date_header.py",
-            "remote": config.get(ctx, "cog"),
-            "canonicalize_dir": True,
+            "remote": config.get(ctx, "cog") or config.get(ctx, "default-remote"),
             "timeout": "2m",
         },
         {
             "name": "version_py",
             "command_prefix": "python3 ../../build/util/version.py",
-            "remote": config.get(ctx, "cog"),
-            "canonicalize_dir": True,
+            "remote": config.get(ctx, "cog") or config.get(ctx, "default-remote"),
             "timeout": "2m",
         },
         {
             "name": "perfetto/touch_file",
             "command_prefix": "python3 ../../third_party/perfetto/tools/touch_file.py",
-            "remote": config.get(ctx, "cog"),
+            "remote": config.get(ctx, "cog") or config.get(ctx, "default-remote"),
             "replace": True,
-            "canonicalize_dir": True,
             "timeout": "2m",
         },
         {
             "name": "perfetto/write_buildflag_header",
             "command_prefix": "python3 ../../third_party/perfetto/gn/write_buildflag_header.py",
-            "remote": config.get(ctx, "cog"),
-            "canonicalize_dir": True,
+            "remote": config.get(ctx, "cog") or config.get(ctx, "default-remote"),
             "timeout": "2m",
         },
         {
@@ -105,23 +96,20 @@ def __step_config(ctx, step_config):
                 "third_party/perfetto/python:python",
                 "third_party/perfetto/src/trace_processor:trace_processor",
             ],
-            "remote": config.get(ctx, "cog"),
-            "canonicalize_dir": True,
+            "remote": config.get(ctx, "cog") or config.get(ctx, "default-remote"),
             "timeout": "2m",
         },
         {
             "name": "perfetto/gen_cc_proto_descriptor",
             "command_prefix": "python3 ../../third_party/perfetto/tools/gen_cc_proto_descriptor.py",
-            "remote": config.get(ctx, "cog"),
-            "canonicalize_dir": True,
+            "remote": config.get(ctx, "cog") or config.get(ctx, "default-remote"),
             "timeout": "2m",
         },
         {
             # b/331716896: local fails due to link(2) error.
             "name": "generate_fontconfig_cache",
             "command_prefix": "python3 ../../build/gn_run_binary.py generate_fontconfig_caches",
-            "remote": config.get(ctx, "cog"),
-            "canonicalize_dir": True,
+            "remote": config.get(ctx, "cog") or config.get(ctx, "default-remote"),
             "timeout": "2m",
         },
     ])

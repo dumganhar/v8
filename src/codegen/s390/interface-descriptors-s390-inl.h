@@ -138,9 +138,11 @@ constexpr Register DefineKeyedOwnDescriptor::FlagsRegister() { return r7; }
 constexpr Register StoreTransitionDescriptor::MapRegister() { return r7; }
 
 // static
-constexpr Register ApiGetterDescriptor::HolderRegister() { return r2; }
+constexpr Register CallApiGetterDescriptor::NameRegister() {
+  return kCArgRegs[0];
+}
 // static
-constexpr Register ApiGetterDescriptor::CallbackRegister() { return r5; }
+constexpr Register CallApiGetterDescriptor::CallbackRegister() { return r5; }
 
 // static
 constexpr Register GrowArrayElementsDescriptor::ObjectRegister() { return r2; }
@@ -320,8 +322,8 @@ constexpr auto BinaryOp_BaselineDescriptor::registers() {
 }
 
 // static
-constexpr auto BinarySmiOp_BaselineDescriptor::registers() {
-  return RegisterArray(r2, r3, r4);
+constexpr auto BinaryOp_WithEmbeddedFeedbackOffsetDescriptor::registers() {
+  return RegisterArray(r3, r2, r4);
 }
 
 // static

@@ -5,10 +5,12 @@
 #include "src/profiler/profile-generator.h"
 
 #include <algorithm>
+#include <atomic>
 #include <vector>
 
 #include "include/v8-profiler.h"
 #include "src/base/hashing.h"
+#include "src/base/iterator.h"
 #include "src/base/lazy-instance.h"
 #include "src/codegen/source-position.h"
 #include "src/objects/shared-function-info-inl.h"
@@ -269,7 +271,15 @@ CpuProfileDeoptInfo CodeEntry::GetDeoptInfo() {
 
 CodeEntry::RareData* CodeEntry::EnsureRareData() {
   if (!rare_data_) {
-    rare_data_.reset(new RareData());
+    // On platforms with store-store reordering, we need to ensure that the
+    // field initializations in RareData complete before the pointer (in the
+    // std::unique_ptr) becomes visible. Using an std::atomic for rare_data_
+    // would also work, but would penalize every read, also on platforms with
+    // no store-store reordering (like x64).
+    // See http://crbug.com/513435594 for additional details.
+    RareData* rare_data = new RareData();
+    std::atomic_thread_fence(std::memory_order_release);
+    rare_data_.reset(rare_data);
   }
   return rare_data_.get();
 }
@@ -345,8 +355,9 @@ CpuProfileNode::SourceType ProfileNode::source_type() const {
       entry_ == CodeEntry::root_entry()) {
     return CpuProfileNode::kInternal;
   }
-  if (entry_ == CodeEntry::unresolved_entry())
+  if (entry_ == CodeEntry::unresolved_entry()) {
     return CpuProfileNode::kUnresolved;
+  }
 
   // Otherwise, resolve based on logger tag.
   switch (entry_->code_tag()) {
@@ -428,10 +439,11 @@ void ProfileNode::Print(int indent) const {
   base::OS::Print("%5u %*s %s:%d:%d %d %d #%d", self_ticks_, indent, "",
                   entry_->name(), line_and_column.line, line_and_column.column,
                   source_type(), entry_->script_id(), id());
-  if (entry_->resource_name()[0] != '\0')
+  if (entry_->resource_name()[0] != '\0') {
     base::OS::Print(" %s:%d:%d", entry_->resource_name(),
                     entry_->line_and_column().line,
                     entry_->line_and_column().column);
+  }
   base::OS::Print("\n");
   for (const CpuProfileDeoptInfo& info : deopt_infos_) {
     base::OS::Print(
@@ -479,10 +491,10 @@ ProfileNode* ProfileTree::AddPathFromEnd(const std::vector<CodeEntry*>& path,
                                          LineAndColumn pos, bool update_stats) {
   ProfileNode* node = root_;
   CodeEntry* last_entry = nullptr;
-  for (auto it = path.rbegin(); it != path.rend(); ++it) {
-    if (*it == nullptr) continue;
-    last_entry = *it;
-    node = node->FindOrAddChild(*it, LineAndColumn{});
+  for (CodeEntry* entry : base::Reversed(path)) {
+    if (entry == nullptr) continue;
+    last_entry = entry;
+    node = node->FindOrAddChild(entry, LineAndColumn{});
   }
   if (last_entry && last_entry->has_deopt_info()) {
     node->CollectDeoptInfo(last_entry);
@@ -502,12 +514,12 @@ ProfileNode* ProfileTree::AddPathFromEnd(const ProfileStackTrace& path,
   ProfileNode* node = root_;
   CodeEntry* last_entry = nullptr;
   LineAndColumn parent_pos = {};
-  for (auto it = path.rbegin(); it != path.rend(); ++it) {
-    if (it->code_entry == nullptr) continue;
-    last_entry = it->code_entry;
-    node = node->FindOrAddChild(it->code_entry, parent_pos);
-    parent_pos = mode == ProfilingMode::kCallerLineNumbers ? it->line_and_column
-                                                           : LineAndColumn{};
+  for (const auto& [entry, frame_pos] : base::Reversed(path)) {
+    if (entry == nullptr) continue;
+    last_entry = entry;
+    node = node->FindOrAddChild(entry, parent_pos);
+    parent_pos =
+        mode == ProfilingMode::kCallerLineNumbers ? frame_pos : LineAndColumn{};
   }
   if (last_entry && last_entry->has_deopt_info()) {
     node->CollectDeoptInfo(last_entry);
@@ -813,8 +825,9 @@ void FlattenNodesTree(const v8::CpuProfileNode* node,
                       std::vector<const v8::CpuProfileNode*>* nodes) {
   nodes->emplace_back(node);
   const int childrenCount = node->GetChildrenCount();
-  for (int i = 0; i < childrenCount; i++)
+  for (int i = 0; i < childrenCount; i++) {
     FlattenNodesTree(node->GetChild(i), nodes);
+  }
 }
 
 }  // namespace
@@ -845,17 +858,18 @@ void CpuProfileJSONSerializer::SerializePositionTicks(
 
 void CpuProfileJSONSerializer::SerializeCallFrame(
     const v8::CpuProfileNode* node) {
-  writer_->AddString("\"functionName\":\"");
-  writer_->AddString(node->GetFunctionNameStr());
-  writer_->AddString("\",\"lineNumber\":");
+  writer_->AddString("\"functionName\":");
+  writer_->AddJsonEscapedString(
+      reinterpret_cast<const unsigned char*>(node->GetFunctionNameStr()));
+  writer_->AddString(",\"lineNumber\":");
   writer_->AddNumber(node->GetLineNumber() - 1);
   writer_->AddString(",\"columnNumber\":");
   writer_->AddNumber(node->GetColumnNumber() - 1);
   writer_->AddString(",\"scriptId\":");
   writer_->AddNumber(node->GetScriptId());
-  writer_->AddString(",\"url\":\"");
-  writer_->AddString(node->GetScriptResourceNameStr());
-  writer_->AddCharacter('"');
+  writer_->AddString(",\"url\":");
+  writer_->AddJsonEscapedString(
+      reinterpret_cast<const unsigned char*>(node->GetScriptResourceNameStr()));
 }
 
 void CpuProfileJSONSerializer::SerializeChildren(const v8::CpuProfileNode* node,
@@ -887,9 +901,9 @@ void CpuProfileJSONSerializer::SerializeNode(const v8::CpuProfileNode* node) {
 
   const char* deoptReason = node->GetBailoutReason();
   if (deoptReason && deoptReason[0] && strcmp(deoptReason, "no reason")) {
-    writer_->AddString(",\"deoptReason\":\"");
-    writer_->AddString(deoptReason);
-    writer_->AddCharacter('"');
+    writer_->AddString(",\"deoptReason\":");
+    writer_->AddJsonEscapedString(
+        reinterpret_cast<const unsigned char*>(deoptReason));
   }
 
   unsigned lineCount = node->GetHitLineCount();

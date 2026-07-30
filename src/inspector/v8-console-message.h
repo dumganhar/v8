@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <span>
 #include <tuple>
 
 #include "include/v8-local-handle.h"
@@ -52,7 +53,7 @@ class V8ConsoleMessage {
   static std::unique_ptr<V8ConsoleMessage> createForConsoleAPI(
       v8::Local<v8::Context> v8Context, int contextId, int groupId,
       V8InspectorImpl* inspector, double timestamp, ConsoleAPIType,
-      v8::MemorySpan<const v8::Local<v8::Value>> arguments,
+      std::span<const v8::Local<v8::Value>> arguments,
       const String16& consoleContext, std::unique_ptr<V8StackTraceImpl>);
 
   static std::unique_ptr<V8ConsoleMessage> createForException(
@@ -79,7 +80,7 @@ class V8ConsoleMessage {
  private:
   V8ConsoleMessage(V8MessageOrigin, double timestamp, const String16& message);
 
-  using Arguments = std::vector<std::unique_ptr<v8::Global<v8::Value>>>;
+  using Arguments = std::vector<std::shared_ptr<v8::Global<v8::Value>>>;
   std::unique_ptr<protocol::Array<protocol::Runtime::RemoteObject>>
   wrapArguments(V8InspectorSessionImpl*, bool generatePreview) const;
   std::unique_ptr<protocol::Runtime::RemoteObject> wrapException(
@@ -96,7 +97,9 @@ class V8ConsoleMessage {
   String16 m_url;
   unsigned m_lineNumber;
   unsigned m_columnNumber;
-  std::unique_ptr<V8StackTraceImpl> m_stackTrace;
+  // V8ConsoleMessage needs to be copyable to prevent a UAF. See
+  // https://crbug.com/485672657.
+  std::shared_ptr<V8StackTraceImpl> m_stackTrace;
   int m_scriptId;
   int m_contextId;
   ConsoleAPIType m_type;

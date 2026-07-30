@@ -13,7 +13,7 @@
 
 #include "src/base/build_config.h"
 #include "src/common/globals.h"
-#include "src/heap/mutable-page-metadata.h"
+#include "src/heap/mutable-page.h"
 #include "src/heap/remembered-set-inl.h"
 #include "src/heap/young-generation-marking-visitor-inl.h"
 #include "src/objects/heap-object.h"
@@ -94,8 +94,8 @@ void YoungGenerationRememberedSetsMarkingWorklist::MarkingItem::Process(
 template <typename Visitor>
 void YoungGenerationRememberedSetsMarkingWorklist::MarkingItem::
     MarkUntypedPointers(Visitor* visitor) {
-  TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.gc"),
-               "MarkingItem::MarkUntypedPointers");
+  TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("v8.gc"),
+              "MarkingItem::MarkUntypedPointers");
   auto callback = [this, visitor](MaybeObjectSlot slot) {
     return CheckAndMarkObject(visitor, slot);
   };
@@ -123,8 +123,8 @@ void YoungGenerationRememberedSetsMarkingWorklist::MarkingItem::
 template <typename Visitor>
 void YoungGenerationRememberedSetsMarkingWorklist::MarkingItem::
     MarkTypedPointers(Visitor* visitor) {
-  TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.gc"),
-               "MarkingItem::MarkTypedPointers");
+  TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("v8.gc"),
+              "MarkingItem::MarkTypedPointers");
   DCHECK_NULL(background_slot_set_);
   DCHECK_NOT_NULL(typed_slot_set_);
   const auto slot_count = RememberedSet<OLD_TO_NEW>::IterateTyped(

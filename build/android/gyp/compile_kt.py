@@ -109,6 +109,8 @@ def _ParseOptions(argv):
       help='Subdirectory within target_gen_dir to place extracted srcjars and '
       'annotation processor output for codesearch to find.')
   parser.add_argument('--classpath', action='append', help='Classpath to use.')
+  parser.add_argument('--compiler-plugin-jar',
+                      help='Path to compiler plugin JAR.')
   parser.add_argument(
       '--chromium-code',
       action='store_true',
@@ -147,6 +149,8 @@ def main(argv):
   kotlinc_cmd = [build_utils.KOTLINC_PATH]
 
   kotlinc_cmd += [
+      "-jvm-target",
+      "11",
       '-no-jdk',  # Avoid depending on the bundled JDK.
       # Avoid depending on the bundled Kotlin stdlib. This may have a version
       # skew with the one in //third_party/android_deps (which is the one we
@@ -158,6 +162,10 @@ def main(argv):
       # build_utils.JavaCmd. This may help prevent OOMs.
       '-J-Xmx1G',
   ]
+  if args.compiler_plugin_jar:
+    kotlinc_cmd += [
+        f'-Xplugin={args.compiler_plugin_jar}',
+    ]
 
   if args.generated_dir:
     # Delete any stale files in the generated directory. The purpose of

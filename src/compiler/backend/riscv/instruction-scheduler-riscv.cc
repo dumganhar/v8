@@ -44,6 +44,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kRiscvShl64:
     case kRiscvShr64:
     case kRiscvSub64:
+    case kRiscvAdd128:
+    case kRiscvSub128:
     case kRiscvFloat64RoundDown:
     case kRiscvFloat64RoundTiesEven:
     case kRiscvFloat64RoundTruncate:
@@ -104,10 +106,10 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kRiscvDivD:
     case kRiscvDivS:
     case kRiscvDivU32:
-    case kRiscvFEq:
-    case kRiscvFNe:
-    case kRiscvFLt:
-    case kRiscvFLe:
+    case kRiscvVFEq:
+    case kRiscvVFNe:
+    case kRiscvVFLt:
+    case kRiscvVFLe:
     case kRiscvFMin:
     case kRiscvFMax:
     case kRiscvF64x2Abs:
@@ -169,6 +171,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kRiscvFloat32RoundTiesEven:
     case kRiscvFloat32RoundTruncate:
     case kRiscvFloat32RoundUp:
+    case kRiscvFloat64ToFloat16RawBits:
+    case kRiscvFloat16RawBitsToFloat64:
     case kRiscvFloat64ExtractLowWord32:
     case kRiscvFloat64ExtractHighWord32:
     case kRiscvFloat64InsertLowWord32:
@@ -268,6 +272,13 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kRiscvVfsubVv:
     case kRiscvVfmulVv:
     case kRiscvVfdivVv:
+    case kRiscvF16x8Splat:
+    case kRiscvF16x8ExtractLane:
+    case kRiscvF16x8ReplaceLane:
+    case kRiscvF16x8Abs:
+    case kRiscvF16x8Sqrt:
+    case kRiscvF16x8Pmin:
+    case kRiscvF16x8Pmax:
     case kRiscvSar32:
     case kRiscvSignExtendByte:
     case kRiscvSignExtendShort:
@@ -296,7 +307,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kRiscvAtomicLoadDecompressTaggedSigned:
     case kRiscvAtomicLoadDecompressTagged:
     case kRiscvAtomicStoreCompressTagged:
-    case kRiscvLoadDecompressProtected:
+    case kRiscvLoadDecompressTrapping:
 #elif V8_TARGET_ARCH_RISCV32
     case kRiscvWord32AtomicPairLoad:
 #endif
@@ -307,14 +318,9 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kRiscvLhu:
     case kRiscvLw:
     case kRiscvLoadFloat:
+    case kRiscvLoadHalf:
     case kRiscvRvvLd:
     case kRiscvPeek:
-    case kRiscvUld:
-    case kRiscvULoadDouble:
-    case kRiscvUlh:
-    case kRiscvUlhu:
-    case kRiscvUlw:
-    case kRiscvULoadFloat:
     case kRiscvS128LoadSplat:
     case kRiscvS128Load64ExtendU:
     case kRiscvS128Load64ExtendS:
@@ -323,7 +329,6 @@ int InstructionScheduler::GetTargetInstructionFlags(
 
 #if V8_TARGET_ARCH_RISCV64
     case kRiscvSd:
-    case kRiscvUsd:
     case kRiscvWord64AtomicStoreWord64:
     case kRiscvWord64AtomicAddUint64:
     case kRiscvWord64AtomicSubUint64:
@@ -354,10 +359,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kRiscvStoreToStackSlot:
     case kRiscvSw:
     case kRiscvStoreFloat:
-    case kRiscvUStoreDouble:
-    case kRiscvUsh:
-    case kRiscvUsw:
-    case kRiscvUStoreFloat:
+    case kRiscvStoreHalf:
     case kRiscvSync:
     case kRiscvS128StoreLane:
       return kHasSideEffect;
@@ -694,38 +696,6 @@ int AdjustBaseAndOffsetLatency() {
 
 int AlignedMemoryLatency() { return AdjustBaseAndOffsetLatency() + 1; }
 
-int UlhuLatency() {
-  return AdjustBaseAndOffsetLatency() + 2 * AlignedMemoryLatency() + 2;
-}
-
-int UlwLatency() {
-  // Estimated max.
-  return AdjustBaseAndOffsetLatency() + 3;
-}
-
-int UlwuLatency() { return UlwLatency() + 1; }
-
-int UldLatency() {
-  // Estimated max.
-  return AdjustBaseAndOffsetLatency() + 3;
-}
-
-int ULoadFloatLatency() { return UlwLatency() + Latency::MOVT_FREG; }
-
-int ULoadDoubleLatency() { return UldLatency() + Latency::MOVT_DREG; }
-
-int UshLatency() {
-  // Estimated max.
-  return AdjustBaseAndOffsetLatency() + 2 + 2 * AlignedMemoryLatency();
-}
-
-int UswLatency() { return AdjustBaseAndOffsetLatency() + 2; }
-
-int UsdLatency() { return AdjustBaseAndOffsetLatency() + 2; }
-
-int UStoreFloatLatency() { return Latency::MOVF_FREG + UswLatency(); }
-
-int UStoreDoubleLatency() { return Latency::MOVF_HIGH_DREG + UsdLatency(); }
 
 int LoadFloatLatency() {
   return AdjustBaseAndOffsetLatency() + Latency::LOAD_FLOAT;
@@ -1135,6 +1105,9 @@ int InstructionScheduler::GetInstructionLatency(const Instruction* instr) {
     case kRiscvSub32:
     case kRiscvSub64:
       return Sub64Latency(instr->InputAt(1)->IsRegister());
+    case kRiscvAdd128:
+    case kRiscvSub128:
+      return Add64Latency(instr->InputAt(1)->IsRegister()) * 4;
     case kRiscvMulHigh64:
       return Mulh64Latency();
     case kRiscvMul64:
@@ -1287,6 +1260,8 @@ int InstructionScheduler::GetInstructionLatency(const Instruction* instr) {
     case kRiscvFloat32RoundTruncate:
     case kRiscvFloat32RoundUp:
     case kRiscvFloat32RoundTiesEven:
+    case kRiscvFloat64ToFloat16RawBits:
+    case kRiscvFloat16RawBitsToFloat64:
       return Float32RoundLatency();
     case kRiscvFloat32Max:
       return Float32MaxLatency();
@@ -1389,37 +1364,16 @@ int InstructionScheduler::GetInstructionLatency(const Instruction* instr) {
     case kRiscvSh:
     case kRiscvSw:
       return AlignedMemoryLatency();
+    case kRiscvLoadHalf:
     case kRiscvLoadFloat:
-      return ULoadFloatLatency();
+      return LoadFloatLatency();
     case kRiscvLoadDouble:
       return LoadDoubleLatency();
+    case kRiscvStoreHalf:
     case kRiscvStoreFloat:
       return StoreFloatLatency();
     case kRiscvStoreDouble:
       return StoreDoubleLatency();
-    case kRiscvUlhu:
-    case kRiscvUlh:
-      return UlhuLatency();
-#if V8_TARGET_ARCH_RISCV64
-    case kRiscvUld:
-      return UldLatency();
-    case kRiscvUsd:
-      return UsdLatency();
-#endif
-    case kRiscvUlw:
-      return UlwLatency();
-    case kRiscvULoadFloat:
-      return ULoadFloatLatency();
-    case kRiscvULoadDouble:
-      return ULoadDoubleLatency();
-    case kRiscvUsh:
-      return UshLatency();
-    case kRiscvUsw:
-      return UswLatency();
-    case kRiscvUStoreFloat:
-      return UStoreFloatLatency();
-    case kRiscvUStoreDouble:
-      return UStoreDoubleLatency();
     case kRiscvPeek: {
       int latency = 0;
       if (instr->OutputAt(0)->IsFPRegister()) {
@@ -1488,7 +1442,7 @@ int InstructionScheduler::GetInstructionLatency(const Instruction* instr) {
     case kRiscvAssertEqual:
       return AssertLatency();
 #ifdef V8_TARGET_ARCH_RISCV64
-    case kRiscvLoadDecompressProtected:
+    case kRiscvLoadDecompressTrapping:
       return 11;
 #endif
     default:

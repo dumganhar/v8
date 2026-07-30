@@ -80,12 +80,8 @@ V8_NOINLINE
 
 DISABLE_TSAN
 #endif
-uint32_t BytecodeDecoder::RacyDecodeEmbeddedFeedback(Address operand_start,
-                                                     OperandSize operand_size) {
-  DCHECK(operand_size == OperandSize::kShort);
-  uint16_t value;
-  memcpy(&value, reinterpret_cast<const void*>(operand_start), sizeof(value));
-  return value;
+uint8_t BytecodeDecoder::RacyDecodeEmbeddedFeedback(Address operand_start) {
+  return *reinterpret_cast<const uint8_t*>(operand_start);
 }
 
 namespace {
@@ -182,6 +178,11 @@ std::ostream& BytecodeDecoder::Decode(std::ostream& os,
         // print the feedback itself inline.
         os << "FBV["
            << DecodeUnsignedOperand(operand_start, op_type, operand_scale)
+           << "]";
+        break;
+      case interpreter::OperandType::kEmbeddedFeedback:
+        os << "EmbeddedFeedback["
+           << static_cast<uint32_t>(RacyDecodeEmbeddedFeedback(operand_start))
            << "]";
         break;
       case interpreter::OperandType::kContextSlot:

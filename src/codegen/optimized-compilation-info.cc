@@ -33,7 +33,10 @@ OptimizedCompilationInfo::OptimizedCompilationInfo(
   DCHECK_EQ(*shared, closure->shared());
   DCHECK(shared->is_compiled());
   DCHECK_IMPLIES(is_osr(), IsOptimizing());
+  // TODO(dmercadier): get the BytecodeArray from a trusted place rather than
+  // from the SharedFunctionInfo.
   bytecode_array_ = handle(shared->GetBytecodeArray(isolate), isolate);
+
   shared_info_ = shared;
   closure_ = closure;
   canonical_handles_ = std::make_unique<CanonicalHandlesMap>(
@@ -66,7 +69,7 @@ OptimizedCompilationInfo::OptimizedCompilationInfo(
       builtin_(builtin),
       zone_(zone),
       optimization_id_(kNoOptimizationId),
-      debug_name_(debug_name) {
+      debug_name_(debug_name.begin(), debug_name.end()) {
   DCHECK_IMPLIES(builtin_ != Builtin::kNoBuiltinId,
                  (code_kind_ == CodeKind::BUILTIN ||
                   code_kind_ == CodeKind::BYTECODE_HANDLER));
@@ -171,11 +174,9 @@ std::unique_ptr<char[]> OptimizedCompilationInfo::GetDebugName() const {
   if (!shared_info().is_null()) {
     return shared_info()->DebugNameCStr();
   }
-  base::Vector<const char> name_vec = debug_name_;
-  if (name_vec.empty()) name_vec = base::ArrayVector("unknown");
-  std::unique_ptr<char[]> name(new char[name_vec.length() + 1]);
-  memcpy(name.get(), name_vec.begin(), name_vec.length());
-  name[name_vec.length()] = '\0';
+  const std::string& name_str = debug_name_.empty() ? "unknown" : debug_name_;
+  std::unique_ptr<char[]> name(new char[name_str.length() + 1]);
+  memcpy(name.get(), name_str.c_str(), name_str.length() + 1);
   return name;
 }
 

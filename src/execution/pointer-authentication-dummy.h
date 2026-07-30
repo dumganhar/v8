@@ -28,7 +28,7 @@ V8_INLINE Address PointerAuthentication::StripPAC(Address pc) { return pc; }
 
 // Store {new_pc} to {pc_address} without signing.
 V8_INLINE void PointerAuthentication::ReplacePC(Address* pc_address,
-                                                Address new_pc, int) {
+                                                Address new_pc, int, int) {
   *pc_address = new_pc;
 }
 
@@ -42,7 +42,7 @@ V8_INLINE Address PointerAuthentication::MoveSignedPC(Isolate*, Address pc,
                                                       Address, Address) {
 #if V8_ENABLE_WEBASSEMBLY
   // Only used by wasm deoptimizations and growable stacks.
-  CHECK(v8_flags.wasm_deopt || v8_flags.experimental_wasm_growable_stacks);
+  CHECK(v8_flags.wasm_deopt || v8_flags.wasm_growable_stacks);
   return pc;
 #else
   UNREACHABLE();

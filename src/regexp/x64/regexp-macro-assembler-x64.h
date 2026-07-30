@@ -5,12 +5,14 @@
 #ifndef V8_REGEXP_X64_REGEXP_MACRO_ASSEMBLER_X64_H_
 #define V8_REGEXP_X64_REGEXP_MACRO_ASSEMBLER_X64_H_
 
+#include "src/base/functional/function-ref.h"
 #include "src/codegen/macro-assembler.h"
 #include "src/regexp/regexp-macro-assembler.h"
 #include "src/zone/zone-chunk-list.h"
 
 namespace v8 {
 namespace internal {
+namespace regexp {
 
 class V8_EXPORT_PRIVATE RegExpMacroAssemblerX64
     : public NativeRegExpMacroAssembler {
@@ -54,14 +56,22 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerX64
   void CheckBitInTable(Handle<ByteArray> table, Label* on_bit_set) override;
   void SkipUntilBitInTable(int cp_offset, Handle<ByteArray> table,
                            Handle<ByteArray> nibble_table, int advance_by,
-                           Label* on_match, Label* on_no_match) override;
+                           int bounds_check_offset, Label* on_match,
+                           Label* on_no_match) override;
   bool SkipUntilBitInTableUseSimd(int advance_by) override;
+  bool SkipUntilCharAndUseSimd(int advance_by) override;
+  void SkipUntilCharAndSimd(int cp_offset, int advance_by, unsigned character,
+                            unsigned mask, int bounds_check_offset,
+                            Label* on_match, Label* on_no_match) override;
   void SkipUntilOneOfMasked(int cp_offset, int advance_by, unsigned both_chars,
                             unsigned both_mask, int max_offset, unsigned chars1,
                             unsigned mask1, unsigned chars2, unsigned mask2,
                             Label* on_match1, Label* on_match2,
                             Label* on_failure) override;
   bool SkipUntilOneOfMaskedUseSimd(int advance_by);
+  bool SkipUntilOneOfMasked3UseSimd(
+      const SkipUntilOneOfMasked3Args& args) override;
+  void SkipUntilOneOfMasked3(const SkipUntilOneOfMasked3Args& args) override;
   // Checks whether the given offset from the current position is before
   // the end of the string.
   void CheckPosition(int cp_offset, Label* on_outside_input) override;
@@ -71,8 +81,8 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerX64
   void BindJumpTarget(Label* label) override;
 
   void Fail() override;
-  DirectHandle<HeapObject> GetCode(DirectHandle<String> source,
-                                   RegExpFlags flags) override;
+  DirectHandle<HeapObject> GetCode(DirectHandle<RegExpData> re_data,
+                                   Flags flags) override;
   void GoTo(Label* label) override;
   void IfRegisterGE(int reg, int comparand, Label* if_ge) override;
   void IfRegisterLT(int reg, int comparand, Label* if_lt) override;
@@ -173,13 +183,15 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerX64
   static constexpr int kBackupRsiOffset = kFrameTypeOffset - kSystemPointerSize;
   static constexpr int kBackupRdiOffset = kBackupRsiOffset - kSystemPointerSize;
   static constexpr int kBackupRbxOffset = kBackupRdiOffset - kSystemPointerSize;
-  static constexpr int kNumCalleeSaveRegisters = 3;
-  static constexpr int kLastCalleeSaveRegister = kBackupRbxOffset;
+  static constexpr int kBackupR12Offset = kBackupRbxOffset - kSystemPointerSize;
+  static constexpr int kNumCalleeSaveRegisters = 4;
+  static constexpr int kLastCalleeSaveRegister = kBackupR12Offset;
 #else
   static constexpr int kBackupRbxOffset =
       kNumOutputRegistersOffset - kSystemPointerSize;
-  static constexpr int kNumCalleeSaveRegisters = 1;
-  static constexpr int kLastCalleeSaveRegister = kBackupRbxOffset;
+  static constexpr int kBackupR12Offset = kBackupRbxOffset - kSystemPointerSize;
+  static constexpr int kNumCalleeSaveRegisters = 2;
+  static constexpr int kLastCalleeSaveRegister = kBackupR12Offset;
 #endif
 
   // When adding local variables remember to push space for them in
@@ -227,7 +239,7 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerX64
 
   // The register containing the backtrack stack top. Provides a meaningful
   // name to the register.
-  static constexpr Register backtrack_stackpointer() { return rcx; }
+  static constexpr Register backtrack_stackpointer() { return rbx; }
 
   // The registers containing a self pointer to this code's InstructionStream
   // object.
@@ -264,24 +276,25 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerX64
   inline void SafeReturn();
 
   // Pushes the value of a register on the backtrack stack. Decrements the
-  // stack pointer (rcx) by a word size and stores the register's value there.
+  // backtrack_stackpointer by a word size and stores the register's value
+  // there.
   inline void Push(Register source);
 
-  // Pushes a value on the backtrack stack. Decrements the stack pointer (rcx)
-  // by a word size and stores the value there.
+  // Pushes a value on the backtrack stack. Decrements the
+  // backtrack_stackpointer by a word size and stores the value there.
   inline void Push(Immediate value);
 
   // Pushes the InstructionStream object relative offset of a label on the
-  // backtrack stack (i.e., a backtrack target). Decrements the stack pointer
-  // (rcx) by a word size and stores the value there.
+  // backtrack stack (i.e., a backtrack target). Decrements the
+  // backtrace_stackpointer by a word size and stores the value there.
   inline void Push(Label* label);
 
-  // Pops a value from the backtrack stack. Reads the word at the stack pointer
-  // (rcx) and increments it by a word size.
+  // Pops a value from the backtrack stack. Reads the word at the
+  // backtrack_stackpointer and increments it by a word size.
   inline void Pop(Register target);
 
   // Drops the top value from the backtrack stack without reading it.
-  // Increments the stack pointer (rcx) by a word size.
+  // Increments the backtrack_stackpointer by a word size.
   inline void Drop();
 
   void LoadRegExpStackPointerFromMemory(Register dst);
@@ -290,6 +303,14 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerX64
   void PopRegExpBasePointer(Register scratch_pointer_out, Register scratch);
 
   inline void ReadPositionFromRegister(Register dst, int reg);
+
+  void EmitSkipUntilBitInTableSimdHelper(
+      int cp_offset, int advance_by, Handle<ByteArray> nibble_table_handle,
+      int bounds_check_offset, Label* scalar_fallback,
+      base::FunctionRef<void(Register, Register)> on_match);
+  void SplatToXMM(XMMRegister dst, uint64_t splat_value, Register scratch);
+  void SplatCharactersToXMM(XMMRegister dst, uint32_t value,
+                            int character_count, Register scratch);
 
   Isolate* isolate() const { return masm_.isolate(); }
 
@@ -323,6 +344,7 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerX64
   Label fallback_label_;
 };
 
+}  // namespace regexp
 }  // namespace internal
 }  // namespace v8
 

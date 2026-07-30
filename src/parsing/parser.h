@@ -160,8 +160,8 @@ class V8_EXPORT_PRIVATE Parser : public NON_EXPORTED_BASE(ParserBase<Parser>) {
   void DeserializeScopeChain(
       IsolateT* isolate, ParseInfo* info,
       MaybeDirectHandle<ScopeInfo> maybe_outer_scope_info,
-      Scope::DeserializationMode mode =
-          Scope::DeserializationMode::kScopesOnly);
+      Scope::DeserializationMode mode = Scope::DeserializationMode::kScopesOnly,
+      DirectHandle<Script> script = DirectHandle<Script>());
 
   // Move statistics to Isolate
   void UpdateStatistics(Isolate* isolate, DirectHandle<Script> script);
@@ -232,7 +232,8 @@ class V8_EXPORT_PRIVATE Parser : public NON_EXPORTED_BASE(ParserBase<Parser>) {
       int initializer_end_pos, const AstRawString* class_name);
 
   // Called by ParseProgram after setting up the scanner.
-  FunctionLiteral* DoParseProgram(Isolate* isolate, ParseInfo* info);
+  FunctionLiteral* DoParseProgram(Isolate* isolate, ParseInfo* info,
+                                  int eval_from_position);
 
   // Parse with the script as if the source is implicitly wrapped in a function.
   // We manually construct the AST and scopes for a top-level function and the
@@ -453,8 +454,8 @@ class V8_EXPORT_PRIVATE Parser : public NON_EXPORTED_BASE(ParserBase<Parser>) {
   // cases where we detect an error. It returns false, if we needed to stop
   // parsing or could not identify an error correctly, meaning the caller needs
   // to fully reparse. In this case it resets the scanner and preparser state.
-  bool SkipFunction(const AstRawString* function_name, FunctionKind kind,
-                    FunctionSyntaxKind function_syntax_kind,
+  bool SkipFunction(int func_id, const AstRawString* function_name,
+                    FunctionKind kind, FunctionSyntaxKind function_syntax_kind,
                     DeclarationScope* function_scope, int* num_parameters,
                     int* function_length,
                     ProducedPreparseData** produced_preparsed_scope_data);

@@ -13,10 +13,7 @@
 namespace v8 {
 namespace internal {
 
-#define V8_CAN_UNMAP_HOLES_BOOL \
-  (V8_STATIC_ROOTS_BOOL || V8_STATIC_ROOTS_GENERATION_BOOL)
-
-V8_OBJECT class Hole : public HeapObjectLayout {
+V8_OBJECT class Hole : public HeapObject {
  public:
   DECL_VERIFIER(Hole)
   DECL_PRINTER(Hole)
@@ -24,7 +21,6 @@ V8_OBJECT class Hole : public HeapObjectLayout {
   class BodyDescriptor;
 
  private:
-#if V8_CAN_UNMAP_HOLES_BOOL
   friend class Heap;
   friend class Isolate;
 
@@ -34,11 +30,7 @@ V8_OBJECT class Hole : public HeapObjectLayout {
   static_assert(kPayloadSize % kMinimumOSPageSize == 0);
 
   char payload_[kPayloadSize];
-#endif
 } V8_OBJECT_END;
-
-static_assert(V8_CAN_UNMAP_HOLES_BOOL ||
-              sizeof(Hole) == sizeof(HeapObjectLayout));
 
 #define DEFINE_HOLE_TYPE(Name, name, Root) \
   V8_OBJECT class Name : public Hole {     \

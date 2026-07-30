@@ -4,10 +4,13 @@
 
 #include "src/snapshot/read-only-deserializer.h"
 
+#include <limits>
+
 #include "src/handles/handles-inl.h"
 #include "src/heap/heap-inl.h"
 #include "src/heap/read-only-heap.h"
 #include "src/logging/counters-scopes.h"
+#include "src/numbers/hash-seed.h"
 #include "src/objects/objects-inl.h"
 #include "src/objects/slots.h"
 #include "src/snapshot/embedded/embedded-data-inl.h"
@@ -49,7 +52,7 @@ class ReadOnlyHeapImageDeserializer final {
           DeserializeReadOnlyRootsTable();
           break;
         case Bytecode::kFinalizeReadOnlySpace:
-          ro_space()->FinalizeSpaceForDeserialization();
+          ro_space()->FinalizeSpaceForDeserialization(source_->GetUint30());
           return;
       }
     }
@@ -78,7 +81,7 @@ class ReadOnlyHeapImageDeserializer final {
 
   void DeserializeSegment() {
     uint32_t page_index = source_->GetUint30();
-    ReadOnlyPageMetadata* page = PageAt(page_index);
+    ReadOnlyPage* page = PageAt(page_index);
 
     // Copy over raw contents.
     Address start = page->area_start() + source_->GetUint30();
@@ -95,12 +98,13 @@ class ReadOnlyHeapImageDeserializer final {
           const_cast<uint8_t*>(source_->data() + source_->position());
       ro::BitSet tagged_slots(data, tagged_slots_size_in_bits);
       DecodeTaggedSlots(start, tagged_slots);
+      CHECK_LE(tagged_slots.size_in_bytes(), std::numeric_limits<int>::max());
       source_->Advance(static_cast<int>(tagged_slots.size_in_bytes()));
     }
   }
 
   Address Decode(ro::EncodedTagged encoded) const {
-    ReadOnlyPageMetadata* page = PageAt(encoded.page_index);
+    ReadOnlyPage* page = PageAt(encoded.page_index);
     return page->OffsetToAddress(encoded.offset * kTaggedSize);
   }
 
@@ -122,7 +126,7 @@ class ReadOnlyHeapImageDeserializer final {
     }
   }
 
-  ReadOnlyPageMetadata* PageAt(size_t index) const {
+  ReadOnlyPage* PageAt(size_t index) const {
     DCHECK_LT(index, ro_space()->pages().size());
     return ro_space()->pages()[index];
   }
@@ -162,8 +166,6 @@ void ReadOnlyDeserializer::DeserializeIntoIsolate() {
   HandleScope scope(isolate());
 
   ReadOnlyHeapImageDeserializer::Deserialize(isolate(), source());
-  ReadOnlyHeap* ro_heap = isolate()->read_only_heap();
-  ro_heap->read_only_space()->RepairFreeSpacesAfterDeserialization();
   PostProcessNewObjects();
 
   ReadOnlyRoots roots(isolate());
@@ -174,16 +176,16 @@ void ReadOnlyDeserializer::DeserializeIntoIsolate() {
 #endif
 
   if (should_rehash()) {
-    isolate()->heap()->InitializeHashSeed();
+    HashSeed::InitializeRoots(isolate());
     Rehash();
   }
 
   if (V8_UNLIKELY(v8_flags.profile_deserialization)) {
     // ATTENTION: The Memory.json benchmark greps for this exact output. Do not
     // change it without also updating Memory.json.
-    const int bytes = source()->length();
+    const size_t bytes = source()->length();
     const double ms = timer.Elapsed().InMillisecondsF();
-    PrintF("[Deserializing read-only space (%d bytes) took %0.3f ms]\n", bytes,
+    PrintF("[Deserializing read-only space (%zu bytes) took %0.3f ms]\n", bytes,
            ms);
   }
 }
@@ -218,12 +220,11 @@ class ObjectPostProcessor final {
   V(InterceptorInfo)              \
   V(JSExternalObject)             \
   V(FunctionTemplateInfo)         \
-  V(Code)                         \
-  V(SharedFunctionInfo)
+  V(Code)
 
   V8_INLINE void PostProcessIfNeeded(Tagged<HeapObject> o,
                                      InstanceType instance_type) {
-    DCHECK_EQ(o->map(isolate_)->instance_type(), instance_type);
+    DCHECK_EQ(o->map()->instance_type(), instance_type);
 #define V(TYPE)                                       \
   if (InstanceTypeChecker::Is##TYPE(instance_type)) { \
     return PostProcess##TYPE(TrustedCast<TYPE>(o));   \
@@ -308,10 +309,10 @@ class ObjectPostProcessor final {
   }
   void PostProcessAccessorInfo(Tagged<AccessorInfo> o) {
     DecodeExternalPointerSlot(
-        o, o->RawExternalPointerField(AccessorInfo::kSetterOffset,
+        o, o->RawExternalPointerField(offsetof(AccessorInfo, setter_),
                                       kAccessorInfoSetterTag));
     DecodeExternalPointerSlot(
-        o, o->RawExternalPointerField(AccessorInfo::kGetterOffset,
+        o, o->RawExternalPointerField(offsetof(AccessorInfo, getter_),
                                       kAccessorInfoGetterTag));
     if (USE_SIMULATOR_BOOL) {
       o->RestoreCallbackRedirectionAfterDeserialization(isolate_);
@@ -320,29 +321,34 @@ class ObjectPostProcessor final {
   void PostProcessInterceptorInfo(Tagged<InterceptorInfo> o) {
     const bool is_named = o->is_named();
 
-#define PROCESS_FIELD(Name, name)                            \
-  DecodeLazilyInitializedExternalPointerSlot(                \
-      o, o->RawExternalPointerField(                         \
-             InterceptorInfo::k##Name##Offset,               \
-             is_named ? kApiNamedProperty##Name##CallbackTag \
-                      : kApiIndexedProperty##Name##CallbackTag));
+#define PROCESS_NAMED_FIELD(Name, name)                                 \
+  DecodeLazilyInitializedExternalPointerSlot(                           \
+      o, o->RawExternalPointerField(offsetof(InterceptorInfo, name##_), \
+                                    kApiNamedProperty##Name##CallbackTag));
 
-    INTERCEPTOR_INFO_CALLBACK_LIST(PROCESS_FIELD)
-#undef PROCESS_FIELD
+#define PROCESS_INDEXED_FIELD(Name, name)                               \
+  DecodeLazilyInitializedExternalPointerSlot(                           \
+      o, o->RawExternalPointerField(offsetof(InterceptorInfo, name##_), \
+                                    kApiIndexedProperty##Name##CallbackTag));
+
+    if (is_named) {
+      NAMED_INTERCEPTOR_INFO_CALLBACK_LIST(PROCESS_NAMED_FIELD)
+    } else {
+      INDEXED_INTERCEPTOR_INFO_CALLBACK_LIST(PROCESS_INDEXED_FIELD)
+    }
+#undef PROCESS_NAMED_FIELD
+#undef PROCESS_INDEXED_FIELD
+
     if (USE_SIMULATOR_BOOL) {
       o->RestoreCallbackRedirectionAfterDeserialization(isolate_);
     }
   }
   void PostProcessJSExternalObject(Tagged<JSExternalObject> o) {
     DecodeExternalPointerSlot(
-        o, o->RawExternalPointerField(
-               JSExternalObject::kValueOffset,
-               {kFirstExternalTypeTag, kLastExternalTypeTag}));
+        o, ExternalPointerSlot(&o->value_, kExternalObjectValueTagRange));
   }
   void PostProcessFunctionTemplateInfo(Tagged<FunctionTemplateInfo> o) {
-    DecodeExternalPointerSlot(
-        o, o->RawExternalPointerField(FunctionTemplateInfo::kCallbackOffset,
-                                      kFunctionTemplateInfoCallbackTag));
+    DecodeExternalPointerSlot(o, ExternalPointerSlot(&o->callback_));
     if (USE_SIMULATOR_BOOL) {
       o->RestoreCallbackRedirectionAfterDeserialization(isolate_);
     }
@@ -383,7 +389,7 @@ class ObjectPostProcessor final {
     DCHECK(o->is_builtin());
     DCHECK(!o->has_instruction_stream());
     Builtin builtin = o->builtin_id();
-    // Mark disabled bultins as such (RO space serializer resets this flag).
+    // Mark disabled builtins as such (RO space serializer resets this flag).
     DCHECK(!o->is_disabled_builtin());
     if (Builtins::IsDisabled(builtin)) {
       o->set_is_disabled_builtin(true);
@@ -394,10 +400,6 @@ class ObjectPostProcessor final {
 #if V8_ENABLE_GEARBOX
     UpdateGearboxPlaceholderBuiltin(o);
 #endif
-  }
-  void PostProcessSharedFunctionInfo(Tagged<SharedFunctionInfo> o) {
-    // Reset the id to avoid collisions - it must be unique in this isolate.
-    o->set_unique_id(isolate_->GetAndIncNextUniqueSfiId());
   }
 
   Isolate* const isolate_;
@@ -422,15 +424,22 @@ void ReadOnlyDeserializer::PostProcessNewObjects() {
   // heap and search for objects that need post-processing.
   //
   // See also Deserializer<IsolateT>::PostProcessNewObject.
-  PtrComprCageBase cage_base(isolate());
 #ifdef V8_COMPRESS_POINTERS
   ExternalPointerTable::UnsealReadOnlySegmentScope unseal_scope(
       &isolate()->external_pointer_table());
 #endif  // V8_COMPRESS_POINTERS
+#ifdef V8_ENABLE_SANDBOX
+  TrustedPointerTable::UnsealReadOnlySegmentScope trusted_unseal_scope(
+      &isolate()->trusted_pointer_table());
+#endif  // V8_ENABLE_SANDBOX
   ObjectPostProcessor post_processor(isolate());
   ReadOnlyHeapObjectIterator it(isolate()->read_only_heap());
+#ifdef V8_ENABLE_SANDBOX
+  std::vector<ReadOnlyArtifacts::TrustedPointerRegistryEntry>
+      trusted_pointer_entries;
+#endif  // V8_ENABLE_SANDBOX
   for (Tagged<HeapObject> o = it.Next(); !o.is_null(); o = it.Next()) {
-    const InstanceType instance_type = o->map(cage_base)->instance_type();
+    const InstanceType instance_type = o->map()->instance_type();
     if (should_rehash()) {
       if (InstanceTypeChecker::IsString(instance_type)) {
         Tagged<String> str = Cast<String>(o);
@@ -442,8 +451,24 @@ void ReadOnlyDeserializer::PostProcessNewObjects() {
     }
 
     post_processor.PostProcessIfNeeded(o, instance_type);
+
+#ifdef V8_ENABLE_SANDBOX
+    if (IsExposedTrustedObject(o)) {
+      SharedFlag shared = SharedFlag(HeapLayout::InAnySharedSpace(o));
+      IndirectPointerTag tag =
+          IndirectPointerTagFromInstanceType(instance_type, shared);
+      Tagged<ExposedTrustedObject> exposed =
+          TrustedCast<ExposedTrustedObject>(o);
+      TrustedPointerHandle handle = exposed->self_indirect_pointer_handle();
+      trusted_pointer_entries.emplace_back(handle, exposed.ptr(), tag);
+    }
+#endif  // V8_ENABLE_SANDBOX
   }
   post_processor.Finalize();
+#ifdef V8_ENABLE_SANDBOX
+  isolate()->read_only_artifacts()->set_trusted_pointer_registry(
+      std::move(trusted_pointer_entries));
+#endif  // V8_ENABLE_SANDBOX
 }
 
 }  // namespace internal

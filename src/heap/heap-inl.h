@@ -27,7 +27,7 @@
 #include "src/heap/memory-allocator.h"
 #include "src/heap/memory-chunk-inl.h"
 #include "src/heap/memory-chunk-layout.h"
-#include "src/heap/mutable-page-metadata.h"
+#include "src/heap/mutable-page.h"
 #include "src/heap/new-spaces-inl.h"
 #include "src/heap/paged-spaces-inl.h"
 #include "src/heap/read-only-heap.h"
@@ -35,8 +35,10 @@
 #include "src/heap/spaces-inl.h"
 #include "src/objects/allocation-site-inl.h"
 #include "src/objects/cell-inl.h"
-#include "src/objects/objects-inl.h"
+#include "src/objects/map-word-inl.h"
+#include "src/objects/object-predicates-inl.h"
 #include "src/objects/slots-inl.h"
+#include "src/objects/templates.h"
 #include "src/objects/visitors-inl.h"
 #include "src/roots/static-roots.h"
 #include "src/utils/allocation.h"
@@ -66,7 +68,9 @@ bool Heap::IsMainThread() const {
   return isolate()->thread_id() == ThreadId::Current();
 }
 
-uint64_t Heap::external_memory() const { return external_memory_.total(); }
+uint64_t Heap::external_memory() const {
+  return external_memory_total_.load(std::memory_order_relaxed);
+}
 
 RootsTable& Heap::roots_table() { return isolate()->roots_table(); }
 
@@ -131,7 +135,7 @@ void Heap::SetMessageListeners(Tagged<ArrayList> value) {
 }
 
 void Heap::SetFunctionsMarkedForManualOptimization(Tagged<Object> hash_table) {
-  DCHECK(IsObjectHashTable(hash_table) || IsUndefined(hash_table, isolate()));
+  DCHECK(IsObjectHashTable(hash_table) || IsUndefined(hash_table));
   roots_table()[RootIndex::kFunctionsMarkedForManualOptimization] =
       hash_table.ptr();
 }
@@ -142,6 +146,14 @@ void Heap::SetSmiStringCache(Tagged<SmiStringCache> cache) {
 
 void Heap::SetDoubleStringCache(Tagged<DoubleStringCache> cache) {
   set_double_string_cache(cache);
+}
+
+void Heap::SetCachedBigIntDivisor(Tagged<BigInt> divisor) {
+  set_cached_bigint_divisor(divisor);
+}
+
+void Heap::SetNextCachedBigIntDivisor(Tagged<BigInt> divisor) {
+  set_next_cached_bigint_divisor(divisor);
 }
 
 #if V8_ENABLE_WEBASSEMBLY
@@ -179,12 +191,7 @@ Address Heap::code_range_base() {
 }
 
 int Heap::MaxRegularHeapObjectSize(AllocationType allocation) {
-  if (allocation == AllocationType::kCode) {
-    DCHECK_EQ(MemoryChunkLayout::MaxRegularCodeObjectSize(),
-              max_regular_code_object_size_);
-    return max_regular_code_object_size_;
-  }
-  return kMaxRegularHeapObjectSize;
+  return heap_allocator_->MaxRegularHeapObjectSize(allocation);
 }
 
 AllocationResult Heap::AllocateRaw(int size_in_bytes, AllocationType type,
@@ -270,8 +277,7 @@ Heap* Heap::FromWritableHeapObject(Tagged<HeapObject> obj) {
   // TODO(leszeks): It's probably not right to use the current Isolate to infer
   // the current heap from an object, rather than reading the heap from the
   // current isolate directly.
-  MemoryChunkMetadata* chunk =
-      MemoryChunkMetadata::FromHeapObject(Isolate::Current(), obj);
+  BasePage* chunk = BasePage::FromHeapObject(Isolate::Current(), obj);
   // RO_SPACE can be shared between heaps, so we can't use RO_SPACE objects to
   // find a heap. The exception is when the ReadOnlySpace is writeable, during
   // bootstrapping, so explicitly allow this case.

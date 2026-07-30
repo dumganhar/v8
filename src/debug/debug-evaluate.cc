@@ -4,6 +4,7 @@
 
 #include "src/debug/debug-evaluate.h"
 
+#include "src/base/iterator.h"
 #include "src/builtins/accessors.h"
 #include "src/codegen/assembler-inl.h"
 #include "src/codegen/compiler.h"
@@ -147,8 +148,8 @@ MaybeDirectHandle<Object> DebugEvaluate::WithTopmostArguments(
 
   // Materialize receiver.
   DirectHandle<Object> this_value(it.frame()->receiver(), isolate);
-  DCHECK_EQ(it.frame()->IsConstructor(), IsTheHole(*this_value, isolate));
-  if (!IsTheHole(*this_value, isolate)) {
+  DCHECK_EQ(it.frame()->IsConstructor(), IsTheHole(*this_value));
+  if (!IsTheHole(*this_value)) {
     DirectHandle<String> this_str = factory->this_string();
     JSObject::SetOwnPropertyIgnoreAttributes(materialized, this_str, this_value,
                                              NONE)
@@ -249,9 +250,8 @@ DebugEvaluate::ContextBuilder::ContextBuilder(Isolate* isolate,
       IsNativeContext(*evaluation_context_)
           ? DirectHandle<ScopeInfo>::null()
           : direct_handle(evaluation_context_->scope_info(), isolate);
-  for (auto rit = context_chain_.rbegin(); rit != context_chain_.rend();
-       rit++) {
-    ContextChainElement element = *rit;
+  bool first = true;
+  for (ContextChainElement element : base::Reversed(context_chain_)) {
     scope_info = ScopeInfo::CreateForWithScope(isolate, scope_info);
     scope_info->SetIsDebugEvaluateScope();
 
@@ -259,7 +259,7 @@ DebugEvaluate::ContextBuilder::ContextBuilder(Isolate* isolate,
     // itself, we don't need (and don't have) a blocklist.
     const bool paused_scope_is_script_scope =
         scope_iterator_.Done() || scope_iterator_.InInnerScope();
-    if (rit == context_chain_.rbegin() && !paused_scope_is_script_scope) {
+    if (first && !paused_scope_is_script_scope) {
       // The DebugEvaluateContext we create for the closure scope is the only
       // DebugEvaluateContext with a block list. This means we'll retrieve
       // the existing block list from the paused function scope
@@ -273,6 +273,7 @@ DebugEvaluate::ContextBuilder::ContextBuilder(Isolate* isolate,
       isolate_->LocalsBlockListCacheSet(scope_info, Handle<ScopeInfo>::null(),
                                         Cast<StringSet>(block_list));
     }
+    first = false;
 
     evaluation_context_ = factory->NewDebugEvaluateContext(
         evaluation_context_, scope_info, element.materialized_object,
@@ -290,7 +291,8 @@ void DebugEvaluate::ContextBuilder::UpdateValues() {
                                   ENUMERABLE_STRINGS)
               .ToHandleChecked();
 
-      for (int i = 0; i < keys->length(); i++) {
+      uint32_t keys_len = keys->ulength().value();
+      for (uint32_t i = 0; i < keys_len; i++) {
         DCHECK(IsString(keys->get(i)));
         Handle<String> key(Cast<String>(keys->get(i)), isolate_);
         DirectHandle<Object> value = JSReceiver::GetDataProperty(
@@ -746,6 +748,7 @@ DebugInfo::SideEffectState BuiltinGetSideEffectState(Builtin id) {
     case Builtin::kMathSign:
     case Builtin::kMathSin:
     case Builtin::kMathSinh:
+    case Builtin::kMathSumPrecise:
     case Builtin::kMathSqrt:
     case Builtin::kMathTan:
     case Builtin::kMathTanh:
@@ -937,10 +940,8 @@ DebugInfo::SideEffectState BuiltinGetSideEffectState(Builtin id) {
     case Builtin::kLocaleConstructor:
     case Builtin::kLocalePrototypeBaseName:
     case Builtin::kLocalePrototypeCalendar:
-    case Builtin::kLocalePrototypeCalendars:
     case Builtin::kLocalePrototypeCaseFirst:
     case Builtin::kLocalePrototypeCollation:
-    case Builtin::kLocalePrototypeCollations:
     case Builtin::kLocalePrototypeFirstDayOfWeek:
     case Builtin::kLocalePrototypeGetCalendars:
     case Builtin::kLocalePrototypeGetCollations:
@@ -950,20 +951,15 @@ DebugInfo::SideEffectState BuiltinGetSideEffectState(Builtin id) {
     case Builtin::kLocalePrototypeGetTimeZones:
     case Builtin::kLocalePrototypeGetWeekInfo:
     case Builtin::kLocalePrototypeHourCycle:
-    case Builtin::kLocalePrototypeHourCycles:
     case Builtin::kLocalePrototypeLanguage:
     case Builtin::kLocalePrototypeMaximize:
     case Builtin::kLocalePrototypeMinimize:
     case Builtin::kLocalePrototypeNumeric:
     case Builtin::kLocalePrototypeNumberingSystem:
-    case Builtin::kLocalePrototypeNumberingSystems:
     case Builtin::kLocalePrototypeRegion:
     case Builtin::kLocalePrototypeScript:
-    case Builtin::kLocalePrototypeTextInfo:
-    case Builtin::kLocalePrototypeTimeZones:
     case Builtin::kLocalePrototypeToString:
     case Builtin::kLocalePrototypeVariants:
-    case Builtin::kLocalePrototypeWeekInfo:
     // Intl.NumberFormat builtins.
     case Builtin::kNumberFormatConstructor:
     case Builtin::kNumberFormatInternalFormatNumber:
@@ -1416,8 +1412,8 @@ static bool TransitivelyCalledBuiltinHasNoSideEffect(Builtin caller,
     case Builtin::kArrayReduceLoopContinuation:
     case Builtin::kArrayReduceRightLoopContinuation:
     case Builtin::kArraySomeLoopContinuation:
-    case Builtin::kArrayTimSort:
-    case Builtin::kArrayTimSortIntoCopy:
+    case Builtin::kArrayPowerSort:
+    case Builtin::kArrayPowerSortIntoCopy:
     case Builtin::kCall_ReceiverIsAny:
     case Builtin::kCall_ReceiverIsNotNullOrUndefined:
     case Builtin::kCall_ReceiverIsNullOrUndefined:
@@ -1463,7 +1459,7 @@ static bool TransitivelyCalledBuiltinHasNoSideEffect(Builtin caller,
     case Builtin::kRecordWriteSaveFP:
     case Builtin::kRecordWriteIgnoreFP:
     case Builtin::kSetOrSetIteratorToList:
-    case Builtin::kStringAdd_CheckNone:
+    case Builtin::kStringAdd_NoMapCheck:
     case Builtin::kStringEqual:
     case Builtin::kStringIndexOf:
     case Builtin::kStringRepeat:

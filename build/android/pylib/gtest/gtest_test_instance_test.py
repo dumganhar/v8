@@ -351,6 +351,51 @@ class GtestTestInstanceTests(unittest.TestCase):
                      actual[0].GetName())
     self.assertEqual(base_test_result.ResultType.SKIP, actual[0].GetType())
 
+  def testParseGTestListTestsJSON_example(self):
+    actual = gtest_test_instance.ParseGTestListTestsJSON(None)
+    self.assertEqual({}, actual)
+
+    actual = gtest_test_instance.ParseGTestListTestsJSON('invalid json')
+    self.assertEqual({}, actual)
+
+    raw_json = """
+      {
+        "testsuites": [
+          {
+            "name": "SuiteOne",
+            "testsuite": [
+              {
+                "name": "TestOne",
+                "file": "../../path/to/file_one.cc",
+                "line": 10
+              },
+              {
+                "name": "TestTwo",
+                "file": "path/to/file_two.cc",
+                "line": 20
+              }
+            ]
+          },
+          {
+            "name": "SuiteTwo",
+            "testsuite": [
+              {
+                "name": "TestThree",
+                "file": "../../path/to/file_three.cc",
+                "line": 30
+              }
+            ]
+          }
+        ]
+      }"""
+    actual = gtest_test_instance.ParseGTestListTestsJSON(raw_json)
+    expected = {
+        'SuiteOne.TestOne': '//path/to/file_one.cc',
+        'SuiteOne.TestTwo': 'path/to/file_two.cc',
+        'SuiteTwo.TestThree': '//path/to/file_three.cc',
+    }
+    self.assertEqual(expected, actual)
+
   def testTestNameWithoutDisabledPrefix_disabled(self):
     test_name_list = [
       'A.DISABLED_B',
@@ -422,6 +467,29 @@ class GtestTestInstanceTests(unittest.TestCase):
     for test_name, expected in test_data:
       actual = gtest_test_instance.IsPreTest(test_name)
       self.assertEqual(expected, actual)
+
+  def testFilterTestNames_withPrePrefixStripping(self):
+    test_list = [
+        'Suite.Test',
+        'Suite.PRE_Test',
+        'Suite.PRE_PRE_Test',
+        'Other.Test',
+    ]
+    actual = gtest_test_instance.unittest_util.FilterTestNames(
+        test_list, 'Suite.Test', gtest_test_instance.TestNameWithoutPrefixes)
+    expected = ['Suite.Test', 'Suite.PRE_Test', 'Suite.PRE_PRE_Test']
+    self.assertEqual(expected, actual)
+
+    actual = gtest_test_instance.unittest_util.FilterTestNames(
+        test_list, 'Suite.PRE_Test',
+        gtest_test_instance.TestNameWithoutPrefixes)
+    expected = ['Suite.PRE_Test']
+    self.assertEqual(expected, actual)
+
+    actual = gtest_test_instance.unittest_util.FilterTestNames(
+        test_list, '-Suite.Test', gtest_test_instance.TestNameWithoutPrefixes)
+    expected = ['Other.Test']
+    self.assertEqual(expected, actual)
 
 
 if __name__ == '__main__':

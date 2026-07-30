@@ -151,9 +151,11 @@ constexpr Register DefineKeyedOwnDescriptor::FlagsRegister() { return r11; }
 constexpr Register StoreTransitionDescriptor::MapRegister() { return r11; }
 
 // static
-constexpr Register ApiGetterDescriptor::HolderRegister() { return rcx; }
+constexpr Register CallApiGetterDescriptor::NameRegister() {
+  return kCArgRegs[0];
+}
 // static
-constexpr Register ApiGetterDescriptor::CallbackRegister() { return rbx; }
+constexpr Register CallApiGetterDescriptor::CallbackRegister() { return rbx; }
 
 // static
 constexpr Register GrowArrayElementsDescriptor::ObjectRegister() { return rax; }
@@ -322,6 +324,13 @@ constexpr auto Compare_BaselineDescriptor::registers() {
   return RegisterArray(rdx, rax, rbx);
 }
 
+#ifdef V8_ENABLE_SPARKPLUG_PLUS
+// static
+constexpr auto CompareAndTryPatchCodeDescriptor::registers() {
+  return RegisterArray(rdx, rax, rbx, rdi);
+}
+#endif  // V8_ENABLE_SPARKPLUG_PLUS
+
 // static
 constexpr auto Compare_WithEmbeddedFeedbackOffsetDescriptor::registers() {
   return RegisterArray(rdx, rax, rbx);
@@ -333,8 +342,8 @@ constexpr auto BinaryOp_BaselineDescriptor::registers() {
 }
 
 // static
-constexpr auto BinarySmiOp_BaselineDescriptor::registers() {
-  return RegisterArray(rax, rdx, rbx);
+constexpr auto BinaryOp_WithEmbeddedFeedbackOffsetDescriptor::registers() {
+  return RegisterArray(rdx, rax, rbx);
 }
 
 // static

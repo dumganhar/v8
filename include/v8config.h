@@ -413,6 +413,7 @@ path. Add it with -I<path> to the command line
     (V8_HAS_CPP_ATTRIBUTE(no_unique_address))
 #endif
 # define V8_HAS_CPP_ATTRIBUTE_LIFETIME_BOUND (V8_HAS_CPP_ATTRIBUTE(clang::lifetimebound))
+# define V8_HAS_CPP_ATTRIBUTE_GSL_POINTER (V8_HAS_CPP_ATTRIBUTE(gsl::Pointer))
 
 # define V8_HAS_BUILTIN_ADD_OVERFLOW (__has_builtin(__builtin_add_overflow))
 # define V8_HAS_BUILTIN_ASSUME (__has_builtin(__builtin_assume))
@@ -432,6 +433,7 @@ path. Add it with -I<path> to the command line
 # define V8_HAS_BUILTIN_SUB_OVERFLOW (__has_builtin(__builtin_sub_overflow))
 # define V8_HAS_BUILTIN_UADD_OVERFLOW (__has_builtin(__builtin_uadd_overflow))
 # define V8_HAS_BUILTIN_UNREACHABLE (__has_builtin(__builtin_unreachable))
+# define V8_HAS_BUILTIN_DEDUP_PACK (__has_builtin(__builtin_dedup_pack))
 
 // Clang has no __has_feature for computed gotos.
 // GCC doc: https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html
@@ -477,6 +479,7 @@ path. Add it with -I<path> to the command line
 # define V8_HAS_BUILTIN_FRAME_ADDRESS 1
 # define V8_HAS_BUILTIN_POPCOUNT 1
 # define V8_HAS_BUILTIN_UNREACHABLE 1
+# define V8_HAS_BUILTIN_DEDUP_PACK 0
 
 // GCC doc: https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html
 #define V8_HAS_COMPUTED_GOTO 1
@@ -503,7 +506,7 @@ path. Add it with -I<path> to the command line
 #if !defined(DEBUG) && V8_HAS_ATTRIBUTE_ALWAYS_INLINE
 # define V8_INLINE inline __attribute__((always_inline))
 #elif !defined(DEBUG) && V8_HAS___FORCEINLINE
-# define V8_INLINE __forceinline
+# define V8_INLINE inline __forceinline
 #else
 # define V8_INLINE inline
 #endif
@@ -541,9 +544,8 @@ path. Add it with -I<path> to the command line
 # define V8_ASSUME USE
 #endif
 
-// Prefer c++20 std::assume_aligned. Don't use it on MSVC though, because it's
-// not happy with our large 4GB alignment values.
-#if __cplusplus >= 202002L && defined(__cpp_lib_assume_aligned) && !V8_CC_MSVC
+// Prefer c++20 std::assume_aligned.
+#if __cplusplus >= 202002L && defined(__cpp_lib_assume_aligned)
 # define V8_ASSUME_ALIGNED(ptr, alignment) \
   std::assume_aligned<(alignment)>(ptr)
 #elif V8_HAS_BUILTIN_ASSUME_ALIGNED
@@ -709,6 +711,16 @@ path. Add it with -I<path> to the command line
   __attribute__((used, visibility("default")))
 #else
 #define V8_SYMBOL_USED /* NOT SUPPORTED */
+#endif
+
+// Annotate a class indicating it represents a non-owning pointer.
+// This is used by Clang's lifetime-safety analysis to catch dangling pointers
+// by tracking the lifetime of the borrowed resources.
+// https://clang.llvm.org/docs/AttributeReference.html#pointer
+#if V8_HAS_CPP_ATTRIBUTE_GSL_POINTER
+#define V8_GSL_POINTER [[gsl::Pointer]]
+#else
+#define V8_GSL_POINTER /* NOT SUPPORTED */
 #endif
 
 

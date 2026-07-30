@@ -36,7 +36,7 @@
 
 #if V8_TARGET_ARCH_MIPS64
 
-#include "src/base/cpu.h"
+#include "src/base/cpu/cpu.h"
 #include "src/codegen/flush-instruction-cache.h"
 #include "src/codegen/machine-type.h"
 #include "src/codegen/mips64/assembler-mips64-inl.h"
@@ -51,26 +51,30 @@ namespace internal {
 // preprocessor symbols CAN_USE_FPU_INSTRUCTIONS
 // can be defined to enable FPU instructions when building the
 // snapshot.
-static unsigned CpuFeaturesImpliedByCompiler() {
-  unsigned answer = 0;
+static CpuFeatureSet CpuFeaturesImpliedByCompiler() {
+  CpuFeatureSet answer;
 #ifdef CAN_USE_FPU_INSTRUCTIONS
-  answer |= 1u << FPU;
+  answer.Add(FPU);
 #endif  // def CAN_USE_FPU_INSTRUCTIONS
 
   // If the compiler is allowed to use FPU then we can use FPU too in our code
   // generation even when generating snapshots.  This won't work for cross
   // compilation.
 #if defined(__mips__) && defined(__mips_hard_float) && __mips_hard_float != 0
-  answer |= 1u << FPU;
+  answer.Add(FPU);
 #endif
 
   return answer;
 }
 
-bool CpuFeatures::SupportsWasmSimd128() {
+bool CpuFeatures::SupportsSimd128() {
   // TODO(mips64): enable wasm simd after turboshaft isel supports simd
   // instructions.
+#if V8_ENABLE_SIMD128
   return false;
+#else
+  return false;
+#endif  // V8_ENABLE_SIMD128
 }
 
 void CpuFeatures::ProbeImpl(bool cross_compile) {
@@ -83,18 +87,18 @@ void CpuFeatures::ProbeImpl(bool cross_compile) {
     // code generation.
 #ifndef __mips__
   // For the simulator build, use FPU.
-  supported_ |= 1u << FPU;
+  supported_.Add(FPU);
 #if defined(_MIPS_ARCH_MIPS64R6) && defined(_MIPS_MSA)
-  supported_ |= 1u << MIPS_SIMD;
+  supported_.Add(MIPS_SIMD);
 #endif
 #else
   // Probe for additional features at runtime.
   base::CPU cpu;
-  if (cpu.has_fpu()) supported_ |= 1u << FPU;
+  if (cpu.has_fpu()) supported_.Add(FPU);
 #if defined(_MIPS_MSA)
-  supported_ |= 1u << MIPS_SIMD;
+  supported_.Add(MIPS_SIMD);
 #else
-  if (cpu.has_msa()) supported_ |= 1u << MIPS_SIMD;
+  if (cpu.has_msa()) supported_.Add(MIPS_SIMD);
 #endif
 #endif
 
@@ -102,11 +106,10 @@ void CpuFeatures::ProbeImpl(bool cross_compile) {
   // This variable is only used for certain archs to query SupportWasmSimd128()
   // at runtime in builtins using an extern ref. Other callers should use
   // CpuFeatures::SupportWasmSimd128().
-  CpuFeatures::supports_wasm_simd_128_ = CpuFeatures::SupportsWasmSimd128();
+  CpuFeatures::supports_simd_128_ = CpuFeatures::SupportsSimd128();
 }
 
-void CpuFeatures::PrintTarget() {}
-void CpuFeatures::PrintFeatures() {}
+void CpuFeatures::PrintInformation() {}
 
 int ToNumber(Register reg) {
   DCHECK(reg.is_valid());
@@ -3758,13 +3761,7 @@ int Assembler::RelocateInternalReference(
 void Assembler::GrowBuffer() {
   // Compute new buffer size.
   int old_size = buffer_->size();
-  int new_size = std::min(2 * old_size, old_size + 1 * MB);
-
-  // Some internal data structures overflow for very large buffers,
-  // they must ensure that kMaximalBufferSize is not too large.
-  if (new_size > kMaximalBufferSize) {
-    V8::FatalProcessOutOfMemory(nullptr, "Assembler::GrowBuffer");
-  }
+  int new_size = ComputeNewBufferSize(BufferGrowthStrategy::kDoubleCapped1MB);
 
   // Set up new buffer.
   std::unique_ptr<AssemblerBuffer> new_buffer = buffer_->Grow(new_size);

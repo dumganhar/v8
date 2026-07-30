@@ -10,6 +10,7 @@
 
 #include "src/api/api-inl.h"
 #include "src/base/ieee754.h"
+#include "src/base/iterator.h"
 #include "src/base/utils/random-number-generator.h"
 #include "src/execution/frames-inl.h"
 #include "src/execution/isolate.h"
@@ -27,8 +28,9 @@ namespace internal {
 // Let u be a uniformly distributed random number between 0 and 1, then
 // next_sample = (- ln u) / λ
 intptr_t SamplingHeapProfiler::Observer::GetNextSampleInterval(uint64_t rate) {
-  if (v8_flags.sampling_heap_profiler_suppress_randomness)
+  if (v8_flags.sampling_heap_profiler_suppress_randomness) {
     return static_cast<intptr_t>(rate);
+  }
   double u = random_->NextDouble();
   double next = (-base::ieee754::log(u)) * rate;
   return next < kTaggedSize
@@ -77,7 +79,7 @@ void SamplingHeapProfiler::SampleObject(Address soon_object, size_t size) {
   DisallowGarbageCollection no_gc;
 
   // Check if the area is iterable by confirming that it starts with a map.
-  DCHECK(IsMap(HeapObject::FromAddress(soon_object)->map(isolate_), isolate_));
+  DCHECK(IsMap(HeapObject::FromAddress(soon_object)->map()));
 
   HandleScope scope(isolate_);
   Tagged<HeapObject> heap_object = HeapObject::FromAddress(soon_object);
@@ -216,8 +218,7 @@ SamplingHeapProfiler::AllocationNode* SamplingHeapProfiler::AddStack() {
 
   // We need to process the stack in reverse order as the top of the stack is
   // the first element in the list.
-  for (auto it = stack.rbegin(); it != stack.rend(); ++it) {
-    Tagged<SharedFunctionInfo> shared = *it;
+  for (Tagged<SharedFunctionInfo> shared : base::Reversed(stack)) {
     const char* name = this->names()->GetCopy(shared->DebugNameCStr().get());
     int script_id = v8::UnboundScript::kNoScriptId;
     if (IsScript(shared->script())) {
@@ -312,9 +313,10 @@ SamplingHeapProfiler::BuildSamples() const {
   samples.reserve(samples_.size());
   for (const auto& it : samples_) {
     const Sample* sample = it.second.get();
+    const bool is_live = !sample->global.IsEmpty();
     samples.emplace_back(v8::AllocationProfile::Sample{
         sample->owner->id_, sample->size, ScaleSample(sample->size, 1).count,
-        sample->sample_id});
+        sample->sample_id, is_live});
   }
   return samples;
 }

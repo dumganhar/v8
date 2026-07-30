@@ -12,23 +12,9 @@
 #include "src/execution/isolate.h"
 #include "src/execution/local-isolate.h"
 #include "src/handles/handles.h"
-#include "src/heap/page-metadata-inl.h"
-#include "src/heap/read-only-heap-inl.h"
-#include "src/objects/api-callbacks.h"
-#include "src/objects/cell.h"
-#include "src/objects/descriptor-array.h"
-#include "src/objects/feedback-vector.h"
-#include "src/objects/heap-number.h"
-#include "src/objects/hole.h"
-#include "src/objects/literal-objects.h"
-#include "src/objects/map.h"
 #include "src/objects/oddball.h"
-#include "src/objects/property-array.h"
-#include "src/objects/property-cell.h"
-#include "src/objects/scope-info.h"
 #include "src/objects/slots.h"
 #include "src/objects/string.h"
-#include "src/objects/swiss-name-dictionary.h"
 #include "src/objects/tagged.h"
 #include "src/roots/static-roots.h"
 
@@ -79,7 +65,7 @@ IndirectHandle<Object> RootsTable::handle_at(RootIndex index) {
   return IndirectHandle<Object>(&(*this)[index]);
 }
 
-ReadOnlyRoots GetReadOnlyRoots() {
+V8_RO_CONST ReadOnlyRoots GetReadOnlyRoots() {
   ReadOnlyHeap* shared_ro_heap =
       IsolateGroup::current()->shared_read_only_heap();
   // If this check fails in code that runs during initialization use
@@ -102,22 +88,24 @@ ReadOnlyRoots::ReadOnlyRoots(LocalIsolate* isolate)
 // have the right type, and to avoid the heavy #includes that would be
 // required for checked casts.
 
-#define ROOT_ACCESSOR(Type, name, CamelName)                        \
-  Tagged<Type> ReadOnlyRoots::name() const {                        \
-    return unchecked_##name();                                      \
-  }                                                                 \
-  Tagged<Type> ReadOnlyRoots::unchecked_##name() const {            \
-    return UncheckedCast<Type>(object_at(RootIndex::k##CamelName)); \
+#define ROOT_ACCESSOR(Type, name, CamelName)                         \
+  V8_RO_CONST Tagged<Type> ReadOnlyRoots::name() const {             \
+    return unchecked_##name();                                       \
+  }                                                                  \
+  V8_RO_CONST Tagged<Type> ReadOnlyRoots::unchecked_##name() const { \
+    return UncheckedCast<Type>(object_at(RootIndex::k##CamelName));  \
   }
 READ_ONLY_ROOT_LIST(ROOT_ACCESSOR)
 #undef ROOT_ACCESSOR
 
-Tagged<Boolean> ReadOnlyRoots::boolean_value(bool value) const {
+V8_RO_CONST Tagged<Boolean> ReadOnlyRoots::boolean_value(bool value) const {
   return value ? Tagged<Boolean>(true_value()) : Tagged<Boolean>(false_value());
 }
 
-Tagged<String> ReadOnlyRoots::single_character_string(int code) const {
-  return Cast<String>(object_at(RootsTable::SingleCharacterStringIndex(code)));
+V8_RO_CONST Tagged<String> ReadOnlyRoots::single_character_string(
+    int code) const {
+  return UncheckedCast<String>(
+      object_at(RootsTable::SingleCharacterStringIndex(code)));
 }
 
 Address ReadOnlyRoots::first_name_for_protector() const {
@@ -133,18 +121,12 @@ bool ReadOnlyRoots::IsNameForProtector(Tagged<HeapObject> object) const {
                          last_name_for_protector());
 }
 
-void ReadOnlyRoots::VerifyNameForProtectorsPages() const {
-  // The symbols and strings that can cause protector invalidation should
-  // reside on the same page so we can do a fast range check.
-  CHECK_EQ(PageMetadata::FromAddress(first_name_for_protector()),
-           PageMetadata::FromAddress(last_name_for_protector()));
-}
-
-Tagged<Object> ReadOnlyRoots::object_at(RootIndex root_index) const {
+V8_RO_CONST Tagged<Object> ReadOnlyRoots::object_at(
+    RootIndex root_index) const {
   return Tagged<Object>(address_at(root_index));
 }
 
-Address ReadOnlyRoots::address_at(RootIndex root_index) const {
+V8_RO_CONST Address ReadOnlyRoots::address_at(RootIndex root_index) const {
 #if V8_STATIC_ROOTS_BOOL
   return V8HeapCompressionScheme::DecompressTagged(
       StaticReadOnlyRootsPointerTable[static_cast<int>(root_index)]);

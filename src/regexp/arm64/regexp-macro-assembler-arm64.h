@@ -5,6 +5,7 @@
 #ifndef V8_REGEXP_ARM64_REGEXP_MACRO_ASSEMBLER_ARM64_H_
 #define V8_REGEXP_ARM64_REGEXP_MACRO_ASSEMBLER_ARM64_H_
 
+#include "src/base/functional/function-ref.h"
 #include "src/base/strings.h"
 #include "src/codegen/arm64/assembler-arm64.h"
 #include "src/codegen/macro-assembler.h"
@@ -12,6 +13,7 @@
 
 namespace v8 {
 namespace internal {
+namespace regexp {
 
 class V8_EXPORT_PRIVATE RegExpMacroAssemblerARM64
     : public NativeRegExpMacroAssembler {
@@ -58,14 +60,22 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerARM64
   void CheckBitInTable(Handle<ByteArray> table, Label* on_bit_set) override;
   void SkipUntilBitInTable(int cp_offset, Handle<ByteArray> table,
                            Handle<ByteArray> nibble_table, int advance_by,
-                           Label* on_match, Label* on_no_match) override;
+                           int bounds_check_offset, Label* on_match,
+                           Label* on_no_match) override;
   bool SkipUntilBitInTableUseSimd(int advance_by) override;
+  bool SkipUntilCharAndUseSimd(int advance_by) override;
+  void SkipUntilCharAndSimd(int cp_offset, int advance_by, unsigned character,
+                            unsigned mask, int bounds_check_offset,
+                            Label* on_match, Label* on_no_match) override;
   void SkipUntilOneOfMasked(int cp_offset, int advance_by, unsigned both_chars,
                             unsigned both_mask, int max_offset, unsigned chars1,
                             unsigned mask1, unsigned chars2, unsigned mask2,
                             Label* on_match1, Label* on_match2,
                             Label* on_failure) override;
   bool SkipUntilOneOfMaskedUseSimd(int advance_by);
+  bool SkipUntilOneOfMasked3UseSimd(
+      const SkipUntilOneOfMasked3Args& args) override;
+  void SkipUntilOneOfMasked3(const SkipUntilOneOfMasked3Args& args) override;
 
   // Checks whether the given offset from the current position is before
   // the end of the string.
@@ -74,8 +84,8 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerARM64
                                Label* on_no_match) override;
   void BindJumpTarget(Label* label = nullptr) override;
   void Fail() override;
-  DirectHandle<HeapObject> GetCode(DirectHandle<String> source,
-                                   RegExpFlags flags) override;
+  DirectHandle<HeapObject> GetCode(DirectHandle<RegExpData> re_data,
+                                   Flags flags) override;
   void GoTo(Label* label) override;
   void IfRegisterGE(int reg, int comparand, Label* if_ge) override;
   void IfRegisterLT(int reg, int comparand, Label* if_lt) override;
@@ -307,6 +317,11 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerARM64
   void PushRegExpBasePointer(Register stack_pointer, Register scratch);
   void PopRegExpBasePointer(Register stack_pointer_out, Register scratch);
 
+  void EmitSkipUntilBitInTableSimdHelper(
+      int cp_offset, int advance_by, Handle<ByteArray> nibble_table_handle,
+      int bounds_check_offset, Label* scalar_fallback,
+      base::FunctionRef<void(Register, Register)> on_match);
+
   Isolate* isolate() const { return masm_->isolate(); }
 
   const std::unique_ptr<MacroAssembler> masm_;
@@ -330,6 +345,7 @@ class V8_EXPORT_PRIVATE RegExpMacroAssemblerARM64
   Label fallback_label_;
 };
 
+}  // namespace regexp
 }  // namespace internal
 }  // namespace v8
 
