@@ -151,3 +151,137 @@ jobs:
         with:
           name: v8-android-${{ matrix.arch }}
           path: dist
+
+  release-macos:
+    name: Release macOS
+    if: github.event_name == 'release'
+    needs: macos
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: v8-macos-arm64
+          path: artifacts/arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: v8-macos-x64
+          path: artifacts/x64
+      - name: Build universal package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release/v8-mac/include
+          lipo -create \
+            artifacts/arm64/libv8_monolith.a \
+            artifacts/x64/libv8_monolith.a \
+            -output release/v8-mac/libv8_monolith.a
+          lipo -create \
+            artifacts/arm64/d8 \
+            artifacts/x64/d8 \
+            -output release/v8-mac/d8
+          cp -R artifacts/arm64/include/. release/v8-mac/include/
+          (cd release/v8-mac && zip -qry ../v8-mac.zip .)
+      - name: Upload package to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release upload "${{ github.event.release.tag_name }}"
+          release/v8-mac.zip
+          --clobber
+          --repo "${GITHUB_REPOSITORY}"
+
+  release-ios:
+    name: Release iOS
+    if: github.event_name == 'release'
+    needs: ios
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: v8-ios-arm64
+          path: artifacts/device-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: v8-ios-simulator-arm64
+          path: artifacts/simulator-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: v8-ios-x64
+          path: artifacts/simulator-x64
+      - name: Build device and universal simulator package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p \
+            release/v8-ios/include \
+            release/v8-ios/device/arm64 \
+            release/v8-ios/simulator/universal
+          cp artifacts/device-arm64/d8 release/v8-ios/device/arm64/
+          cp artifacts/device-arm64/libv8_monolith.a release/v8-ios/device/arm64/
+          cp -R artifacts/device-arm64/include/. release/v8-ios/include/
+          lipo -create \
+            artifacts/simulator-arm64/libv8_monolith.a \
+            artifacts/simulator-x64/libv8_monolith.a \
+            -output release/v8-ios/simulator/universal/libv8_monolith.a
+          lipo -create \
+            artifacts/simulator-arm64/d8 \
+            artifacts/simulator-x64/d8 \
+            -output release/v8-ios/simulator/universal/d8
+          (cd release/v8-ios && zip -qry ../v8-ios.zip .)
+      - name: Upload package to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release upload "${{ github.event.release.tag_name }}"
+          release/v8-ios.zip
+          --clobber
+          --repo "${GITHUB_REPOSITORY}"
+
+  release-android:
+    name: Release Android
+    if: github.event_name == 'release'
+    needs: android
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: v8-android-arm64
+          path: artifacts/arm64-v8a
+      - uses: actions/download-artifact@v4
+        with:
+          name: v8-android-arm
+          path: artifacts/armeabi-v7a
+      - uses: actions/download-artifact@v4
+        with:
+          name: v8-android-x64
+          path: artifacts/x86_64
+      - uses: actions/download-artifact@v4
+        with:
+          name: v8-android-x86
+          path: artifacts/x86
+      - name: Build multi-ABI package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release/v8-android/include
+          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
+            mkdir -p "release/v8-android/${abi}"
+            cp "artifacts/${abi}/d8" "release/v8-android/${abi}/"
+            cp "artifacts/${abi}/libv8_monolith.a" "release/v8-android/${abi}/"
+          done
+          cp -R artifacts/arm64-v8a/include/. release/v8-android/include/
+          (cd release/v8-android && zip -qry ../v8-android.zip .)
+      - name: Upload package to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release upload "${{ github.event.release.tag_name }}"
+          release/v8-android.zip
+          --clobber
+          --repo "${GITHUB_REPOSITORY}"
