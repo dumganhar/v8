@@ -212,25 +212,25 @@ jobs:
         with:
           name: v8-ios-x64
           path: artifacts/simulator-x64
-      - name: Build device and universal simulator package
+      - name: Build universal device and separate arm64 simulator package
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p \
             release/v8-ios/include \
-            release/v8-ios/device/arm64 \
-            release/v8-ios/simulator/universal
-          cp artifacts/device-arm64/d8 release/v8-ios/device/arm64/
-          cp artifacts/device-arm64/libv8_monolith.a release/v8-ios/device/arm64/
+            release/v8-ios/universal \
+            release/v8-ios/arm64-sim
           cp -R artifacts/device-arm64/include/. release/v8-ios/include/
           lipo -create \
-            artifacts/simulator-arm64/libv8_monolith.a \
+            artifacts/device-arm64/libv8_monolith.a \
             artifacts/simulator-x64/libv8_monolith.a \
-            -output release/v8-ios/simulator/universal/libv8_monolith.a
+            -output release/v8-ios/universal/libv8_monolith.a
           lipo -create \
-            artifacts/simulator-arm64/d8 \
+            artifacts/device-arm64/d8 \
             artifacts/simulator-x64/d8 \
-            -output release/v8-ios/simulator/universal/d8
+            -output release/v8-ios/universal/d8
+          cp artifacts/simulator-arm64/d8 release/v8-ios/arm64-sim/
+          cp artifacts/simulator-arm64/libv8_monolith.a release/v8-ios/arm64-sim/
           (cd release/v8-ios && zip -qry ../v8-ios.zip .)
       - name: Upload package to release
         env:
