@@ -173,7 +173,12 @@ declare_args() {
   if (target_os == "ios") {
     if (target_platform == "iphoneos") {
       # iOS executable code pages is in 18.4 SDK which the iOS + Blink targets.
-      v8_enable_lite_mode = !use_blink
+      # Force lite mode: use_blink (!is_ios, based on host_os) is forced to
+      # true on the host toolchain (which builds mksnapshot) by
+      # toolchain/mac/BUILD.gn, so mksnapshot would be non-lite while the
+      # library is lite, desyncing the snapshot builtin set from the library
+      # (crashing once 15.1 introduced SPARKPLUG_PLUS conditional builtins).
+      v8_enable_lite_mode = true
     } else if (target_platform == "tvos") {
       # tvOS runs in single process mode and is not allowed to use JIT.
       v8_enable_lite_mode = true
