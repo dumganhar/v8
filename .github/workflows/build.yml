@@ -42,6 +42,19 @@ jobs:
         env:
           GN: buildtools/mac/gn
         run: ./build-mac.sh "${{ matrix.arch }}"
+      - name: Verify d8 symbol visibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          symbols="$(nm -gU -C out/mac/d8)"
+          if ! grep -q 'v8::V8::Initialize' <<<"${symbols}"; then
+            echo 'd8 does not export the public v8::V8::Initialize symbol' >&2
+            exit 1
+          fi
+          if grep -q 'v8::internal::' <<<"${symbols}"; then
+            echo 'd8 exports hidden v8::internal symbols' >&2
+            exit 1
+          fi
       - name: Collect artifacts
         run: |
           mkdir -p dist/include
@@ -83,6 +96,19 @@ jobs:
             ./build-ios.sh arm64 simulator
           else
             ./build-ios.sh "${{ matrix.arch }}"
+          fi
+      - name: Verify d8 symbol visibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          symbols="$(nm -gU -C out/ios/obj/d8)"
+          if ! grep -q 'v8::V8::Initialize' <<<"${symbols}"; then
+            echo 'd8 does not export the public v8::V8::Initialize symbol' >&2
+            exit 1
+          fi
+          if grep -q 'v8::internal::' <<<"${symbols}"; then
+            echo 'd8 exports hidden v8::internal symbols' >&2
+            exit 1
           fi
       - name: Collect artifacts
         run: |
@@ -142,6 +168,22 @@ jobs:
           GN: buildtools/linux64/gn
           NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
         run: ./build-android.sh "${{ matrix.arch }}"
+      - name: Verify d8 symbol visibility
+        env:
+          NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          nm="${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+          symbols="$(${nm} --dynamic --defined-only --demangle out/android/d8)"
+          if ! grep -q 'v8::V8::Initialize' <<<"${symbols}"; then
+            echo 'd8 does not export the public v8::V8::Initialize symbol' >&2
+            exit 1
+          fi
+          if grep -q 'v8::internal::' <<<"${symbols}"; then
+            echo 'd8 exports hidden v8::internal symbols' >&2
+            exit 1
+          fi
       - name: Collect artifacts
         run: |
           mkdir -p dist/include
