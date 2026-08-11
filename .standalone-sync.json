@@ -167,7 +167,8 @@
     ".standalone-sync/patches/0007-ndk-r28c-cppgc-atomic-ref.patch",
     ".standalone-sync/patches/0008-xcode-clang-flags.patch",
     ".standalone-sync/patches/0009-ndk-clang19-toolchain-args.patch",
-    ".standalone-sync/patches/0010-ndk-r28c-remaining-compat.patch"
+    ".standalone-sync/patches/0010-ndk-r28c-remaining-compat.patch",
+    ".standalone-sync/patches/0011-hide-monolithic-symbols.patch"
   ],
   "local_paths": [
     ".github/workflows/build.yml",
