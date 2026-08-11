@@ -47,12 +47,8 @@ jobs:
         run: |
           set -euo pipefail
           symbols="$(nm -gU -C out/mac/d8)"
-          if ! grep -q 'v8::V8::Initialize' <<<"${symbols}"; then
-            echo 'd8 does not export the public v8::V8::Initialize symbol' >&2
-            exit 1
-          fi
-          if grep -q 'v8::internal::' <<<"${symbols}"; then
-            echo 'd8 exports hidden v8::internal symbols' >&2
+          if grep -qE '(^| )v8::' <<<"${symbols}"; then
+            echo 'd8 exports V8 symbols' >&2
             exit 1
           fi
       - name: Collect artifacts
@@ -102,12 +98,8 @@ jobs:
         run: |
           set -euo pipefail
           symbols="$(nm -gU -C out/ios/obj/d8)"
-          if ! grep -q 'v8::V8::Initialize' <<<"${symbols}"; then
-            echo 'd8 does not export the public v8::V8::Initialize symbol' >&2
-            exit 1
-          fi
-          if grep -q 'v8::internal::' <<<"${symbols}"; then
-            echo 'd8 exports hidden v8::internal symbols' >&2
+          if grep -qE '(^| )v8::' <<<"${symbols}"; then
+            echo 'd8 exports V8 symbols' >&2
             exit 1
           fi
       - name: Collect artifacts
@@ -176,12 +168,8 @@ jobs:
           set -euo pipefail
           nm="${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
           symbols="$(${nm} --dynamic --defined-only --demangle out/android/d8)"
-          if ! grep -q 'v8::V8::Initialize' <<<"${symbols}"; then
-            echo 'd8 does not export the public v8::V8::Initialize symbol' >&2
-            exit 1
-          fi
-          if grep -q 'v8::internal::' <<<"${symbols}"; then
-            echo 'd8 exports hidden v8::internal symbols' >&2
+          if grep -qE '(^| )v8::' <<<"${symbols}"; then
+            echo 'd8 exports V8 symbols' >&2
             exit 1
           fi
       - name: Collect artifacts
